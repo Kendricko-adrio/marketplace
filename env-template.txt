@@ -1,0 +1,16 @@
+# E-commerce Storefront Environment Variables Template
+# Copy this file to .env and fill in your values
+
+# Database Connection (PostgreSQL)
+# For local development: postgresql://postgres:password@localhost:5432/ecommerce
+# For Neon/Supabase: use the connection string provided by the service
+DATABASE_URL="postgresql://postgres:password@localhost:5432/ecommerce"
+
+# Better Auth
+# Generate a random secret: openssl rand -base64 32
+BETTER_AUTH_SECRET="your-secret-key-change-this-in-production"
+BETTER_AUTH_URL="http://localhost:3000"
+
+# Google OAuth (Optional - for Google Sign-In)
+GOOGLE_CLIENT_ID=""
+GOOGLE_CLIENT_SECRET=""

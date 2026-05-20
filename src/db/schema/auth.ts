@@ -1,5 +1,6 @@
 import { pgTable, text, timestamp, boolean } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+import { wishlists } from "./wishlist";
 
 // Better Auth - User table
 export const users = pgTable("user", {
@@ -60,6 +61,7 @@ export const verifications = pgTable("verification", {
 export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
   accounts: many(accounts),
+  wishlists: many(wishlists),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({

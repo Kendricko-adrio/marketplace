@@ -51,6 +51,8 @@ export default function ProductDetailPage() {
     null
   );
   const [addingToCart, setAddingToCart] = useState(false);
+  const [isWishlisted, setIsWishlisted] = useState(false);
+  const [wishlistLoading, setWishlistLoading] = useState(false);
 
   useEffect(() => {
     async function fetchProduct() {
@@ -80,6 +82,27 @@ export default function ProductDetailPage() {
     fetchProduct();
   }, [productId]);
 
+  // Check wishlist status
+  useEffect(() => {
+    async function checkWishlist() {
+      try {
+        const res = await fetch("/api/wishlist");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success) {
+            const wishlistedIds = data.data.items.map(
+              (item: { product: { id: string } }) => item.product.id
+            );
+            setIsWishlisted(wishlistedIds.includes(productId));
+          }
+        }
+      } catch (error) {
+        console.error("Error checking wishlist:", error);
+      }
+    }
+    checkWishlist();
+  }, [productId]);
+
   // Update selected variant when color/size changes
   useEffect(() => {
     if (!product) return;
@@ -94,6 +117,32 @@ export default function ProductDetailPage() {
       setSelectedVariant(matchingVariant);
     }
   }, [selectedColor, selectedSize, product]);
+
+  const handleToggleWishlist = async () => {
+    setWishlistLoading(true);
+
+    // Optimism update
+    const previousState = isWishlisted;
+    setIsWishlisted(!isWishlisted);
+
+    try {
+      const res = await fetch("/api/wishlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        // Revert on failure
+        setIsWishlisted(previousState);
+      }
+    } catch (error) {
+      console.error("Error toggling wishlist:", error);
+      setIsWishlisted(previousState);
+    } finally {
+      setWishlistLoading(false);
+    }
+  };
 
   const handleAddToCart = async () => {
     if (!selectedVariant) return;
@@ -324,9 +373,19 @@ export default function ProductDetailPage() {
             </Button>
 
             <div className="flex gap-2">
-              <Button variant="outline" size="icon" className="h-11 w-11">
-                <Heart className="w-5 h-5" />
-              </Button>
+              <Button
+              variant="outline"
+              size="icon"
+              className="h-11 w-11"
+              onClick={handleToggleWishlist}
+              disabled={wishlistLoading}
+            >
+              <Heart
+                className={`w-5 h-5 transition-colors ${
+                  isWishlisted ? "fill-red-500 text-red-500" : ""
+                }`}
+              />
+            </Button>
               <Button variant="outline" size="icon" className="h-11 w-11">
                 <Share2 className="w-5 h-5" />
               </Button>

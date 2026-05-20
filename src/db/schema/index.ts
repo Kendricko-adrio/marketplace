@@ -15,3 +15,6 @@ export * from "./marketing";
 
 // System schema
 export * from "./system";
+
+// Wishlist schema
+export * from "./wishlist";

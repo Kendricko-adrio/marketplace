@@ -2,6 +2,7 @@ import "dotenv/config";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "./schema";
+import bcrypt from "bcryptjs";
 
 // Helper to generate random ID
 function generateId(): string {
@@ -73,6 +74,27 @@ async function seed() {
         image: null,
       },
     ]);
+
+    // =====================
+    // ACCOUNTS (with passwords for email/password login)
+    // =====================
+    console.log("🔐 Creating accounts with passwords...");
+    const userCredentials = [
+      { userId: adminId, password: "admin123" },
+      { userId: staffId, password: "staff123" },
+      { userId: customerId, password: "password123" },
+    ];
+
+    for (const cred of userCredentials) {
+      const hashedPassword = await bcrypt.hash(cred.password, 10);
+      await db.insert(schema.accounts).values({
+        id: generateId(),
+        userId: cred.userId,
+        accountId: cred.userId,
+        providerId: "credential",
+        password: hashedPassword,
+      });
+    }
 
     // =====================
     // ADDRESSES

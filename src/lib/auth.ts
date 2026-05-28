@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { db } from "@/db";
 import * as schema from "@/db/schema";
+import bcrypt from "bcryptjs";
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -15,6 +16,14 @@ export const auth = betterAuth({
   }),
   emailAndPassword: {
     enabled: true,
+    password: {
+      hash: async (password) => {
+        return await bcrypt.hash(password, 10);
+      },
+      verify: async ({ hash, password }) => {
+        return await bcrypt.compare(password, hash);
+      },
+    },
     async sendResetPassword(data) {
       console.log("Reset password URL:", data.url);
       // TODO: Implement email sending

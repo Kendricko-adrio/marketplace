@@ -34,6 +34,7 @@ async function seed() {
     await db.delete(schema.categories);
     await db.delete(schema.vouchers);
     await db.delete(schema.banners);
+    await db.delete(schema.homepageSections);
     await db.delete(schema.addresses);
     await db.delete(schema.sessions);
     await db.delete(schema.accounts);
@@ -734,6 +735,69 @@ async function seed() {
         entityId: "sample-order-id",
         changes: { status: { from: "proses", to: "dikirim" } },
         ipAddress: "192.168.1.100",
+      },
+    ]);
+
+    // =====================
+    // HOMEPAGE SECTIONS
+    // =====================
+    console.log("🏠 Creating homepage sections...");
+    await db.insert(schema.homepageSections).values([
+      {
+        id: generateId(),
+        type: "banner",
+        title: "Banner Promo Akhir Tahun",
+        displayOrder: 0,
+        config: {
+          template: "hero",
+          images: [
+            {
+              url: "/images/banners/promo-akhir-tahun.jpg",
+              link: "/products?promo=akhir-tahun",
+              alt: "Promo Akhir Tahun",
+            },
+          ],
+          ctaText: "Belanja Sekarang",
+          ctaLink: "/products",
+        },
+        isActive: true,
+      },
+      {
+        id: generateId(),
+        type: "carousel_product",
+        title: "Flash Sale",
+        displayOrder: 1,
+        config: {
+          source: "flash_sale",
+          maxItems: 8,
+          autoplay: true,
+        },
+        isActive: true,
+      },
+      {
+        id: generateId(),
+        type: "category_grid",
+        title: "Kategori Pilihan",
+        displayOrder: 2,
+        config: {
+          categoryIds: [],
+          columns: 6,
+          showIcon: true,
+        },
+        isActive: true,
+      },
+      {
+        id: generateId(),
+        type: "product_grid",
+        title: "Produk Terlaris",
+        displayOrder: 3,
+        config: {
+          source: "best_seller",
+          columns: 4,
+          rows: 2,
+          showViewAll: true,
+        },
+        isActive: true,
       },
     ]);
 

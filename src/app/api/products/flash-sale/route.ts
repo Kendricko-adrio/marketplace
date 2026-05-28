@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { products, productVariants, productImages } from "@/db/schema";
-import { eq, and, asc, gt } from "drizzle-orm";
+import { eq, and, asc, gt, inArray } from "drizzle-orm";
 
 export async function GET() {
   try {
-    // Get products where isFlashSale is true and flashSaleEndsAt is in the future
     const flashSaleProducts = await db
       .select()
       .from(products)
@@ -18,51 +17,57 @@ export async function GET() {
       )
       .limit(8);
 
-    // Get default variant and image for each product
-    const productsWithDetails = await Promise.all(
-      flashSaleProducts.map(async (product) => {
-        const defaultVariant = await db
-          .select()
-          .from(productVariants)
-          .where(
-            and(
-              eq(productVariants.productId, product.id),
-              eq(productVariants.isDefault, true)
-            )
-          )
-          .limit(1);
+    if (flashSaleProducts.length === 0) {
+      return NextResponse.json({ success: true, data: [] });
+    }
 
-        const variant = defaultVariant[0];
-        let image = null;
+    const productIds = flashSaleProducts.map((p) => p.id);
 
-        if (variant) {
-          const images = await db
+    const defaultVariants = await db
+      .select()
+      .from(productVariants)
+      .where(
+        and(
+          inArray(productVariants.productId, productIds),
+          eq(productVariants.isDefault, true)
+        )
+      );
+
+    const variantIds = defaultVariants.map((v) => v.id);
+
+    const images =
+      variantIds.length > 0
+        ? await db
             .select()
             .from(productImages)
-            .where(eq(productImages.variantId, variant.id))
+            .where(inArray(productImages.variantId, variantIds))
             .orderBy(asc(productImages.displayOrder))
-            .limit(1);
-          image = images[0]?.url || null;
-        }
+        : [];
 
-        return {
-          id: product.id,
-          name: product.name,
-          slug: product.slug,
-          originalPrice: product.basePrice,
-          price: product.flashSalePrice || product.basePrice,
-          rating: product.rating,
-          sold: product.sold,
-          flashSaleEndsAt: product.flashSaleEndsAt,
-          image,
-        };
-      })
-    );
+    const variantMap = new Map(defaultVariants.map((v) => [v.productId, v]));
+    const imageMap = new Map<string, string>();
+    for (const img of images) {
+      if (!imageMap.has(img.variantId)) {
+        imageMap.set(img.variantId, img.url);
+      }
+    }
 
-    return NextResponse.json({
-      success: true,
-      data: productsWithDetails,
+    const data = flashSaleProducts.map((product) => {
+      const variant = variantMap.get(product.id);
+      return {
+        id: product.id,
+        name: product.name,
+        slug: product.slug,
+        originalPrice: product.basePrice,
+        price: product.flashSalePrice || product.basePrice,
+        rating: product.rating,
+        sold: product.sold,
+        flashSaleEndsAt: product.flashSaleEndsAt,
+        image: variant ? imageMap.get(variant.id) || null : null,
+      };
     });
+
+    return NextResponse.json({ success: true, data });
   } catch (error) {
     console.error("Error fetching flash sale products:", error);
     return NextResponse.json(

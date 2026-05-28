@@ -137,21 +137,21 @@ export default function AccountPage() {
                     date: "10 Jan 2024",
                     status: "Selesai",
                     total: "Rp 450.000",
-                    items: ["Wireless Headphones"],
+                    items: ["AirRunner Pro Running Shoes"],
                   },
                   {
                     id: "ODR-87654321",
                     date: "05 Jan 2024",
                     status: "Dikirim",
                     total: "Rp 1.200.000",
-                    items: ["Mechanical Keyboard"],
+                    items: ["Classic Leather Oxford Formal"],
                   },
                   {
                     id: "ODR-11223344",
                     date: "28 Des 2023",
                     status: "Dibatalkan",
                     total: "Rp 150.000",
-                    items: ["Mousepad XL"],
+                    items: ["Urban Chelsea Leather Boots"],
                   },
                 ].map((order) => (
                   <Card key={order.id} className="overflow-hidden">

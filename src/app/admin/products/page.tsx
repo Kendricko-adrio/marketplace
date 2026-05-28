@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
   Edit,
   Trash2,
@@ -48,6 +49,7 @@ interface Product {
 }
 
 export default function AdminProductsPage() {
+  const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -88,13 +90,34 @@ export default function AdminProductsPage() {
     return product.name.toLowerCase().includes(searchTerm.toLowerCase());
   });
 
+  async function handleDelete(id: string, name: string) {
+    const confirmed = window.confirm(
+      `Yakin ingin menghapus produk "${name}"? Tindakan ini tidak dapat dibatalkan.`
+    );
+    if (!confirmed) return;
+
+    try {
+      const res = await fetch(`/api/admin/products/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        fetchProducts();
+      } else {
+        alert(data.error || "Gagal menghapus produk");
+      }
+    } catch {
+      alert("Gagal menghapus produk");
+    }
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <h2 className="text-2xl font-bold tracking-tight">Produk</h2>
-        <Button className="gap-2">
-          <Plus className="h-4 w-4" /> Tambah Produk
-        </Button>
+        <Link href="/admin/products/new">
+          <Button className="gap-2">
+            <Plus className="h-4 w-4" /> Tambah Produk
+          </Button>
+        </Link>
       </div>
 
       <Card>
@@ -191,11 +214,23 @@ export default function AdminProductsPage() {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
                                 <DropdownMenuLabel>Aksi</DropdownMenuLabel>
-                                <DropdownMenuItem className="cursor-pointer gap-2">
+                                <DropdownMenuItem
+                                  className="cursor-pointer gap-2"
+                                  onSelect={() =>
+                                    router.push(
+                                      `/admin/products/${product.id}/edit`
+                                    )
+                                  }
+                                >
                                   <Edit className="h-4 w-4" /> Edit
                                 </DropdownMenuItem>
                                 <DropdownMenuSeparator />
-                                <DropdownMenuItem className="cursor-pointer gap-2 text-destructive focus:text-destructive focus:bg-destructive/10">
+                                <DropdownMenuItem
+                                  className="cursor-pointer gap-2 text-destructive focus:text-destructive focus:bg-destructive/10"
+                                  onSelect={() =>
+                                    handleDelete(product.id, product.name)
+                                  }
+                                >
                                   <Trash2 className="h-4 w-4" /> Hapus
                                 </DropdownMenuItem>
                               </DropdownMenuContent>

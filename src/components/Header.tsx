@@ -1,5 +1,6 @@
 "use client";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import {
   ShoppingCart,
@@ -23,12 +24,21 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuth } from "@/providers/auth-provider";
 import { signOut } from "@/lib/auth-client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 
 export default function Header() {
   const router = useRouter();
   const { user, isLoading, isAuthenticated } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      setScrolled(window.scrollY > 20);
+    };
+    window.addEventListener("scroll", handleScroll);
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,22 +63,29 @@ export default function Header() {
   };
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+    <header
+      className={`sticky top-0 z-50 w-full border-b border-white/10 transition-colors duration-300 ${
+        scrolled ? "bg-primary/70 backdrop-blur-md" : "bg-primary"
+      }`}
+    >
       <div className="container mx-auto flex h-16 items-center justify-between px-4">
         <div className="flex items-center gap-4">
           <Button
             variant="ghost"
             size="icon"
-            className="md:hidden"
+            className="md:hidden text-white hover:bg-white/10"
             aria-label="Menu"
           >
             <Menu className="h-6 w-6" />
           </Button>
-          <Link
-            href="/"
-            className="text-2xl font-bold tracking-tighter text-foreground"
-          >
-            Store<span className="text-primary">Front</span>
+          <Link href="/" className="flex items-center">
+            <Image
+              src="/adf-logo.png"
+              alt="ADF"
+              width={120}
+              height={40}
+              priority
+            />
           </Link>
         </div>
 
@@ -76,13 +93,13 @@ export default function Header() {
           onSubmit={handleSearch}
           className="hidden md:flex flex-1 max-w-xl mx-8 relative"
         >
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/70" />
           <Input
             type="text"
             placeholder="Cari produk..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 rounded-full bg-secondary/50 focus-visible:bg-background"
+            className="w-full pl-10 rounded-full bg-white/10 border-white/20 text-white placeholder:text-white/60 focus-visible:bg-white/20 focus-visible:border-white/40"
           />
         </form>
 
@@ -91,7 +108,7 @@ export default function Header() {
             <Button
               variant="ghost"
               size="icon"
-              className="relative text-foreground hover:text-primary transition-colors"
+              className="relative text-white hover:text-white/80 hover:bg-white/10 transition-colors"
             >
               <ShoppingCart className="h-6 w-6" />
             </Button>
@@ -99,21 +116,21 @@ export default function Header() {
 
           {isLoading ? (
             <Button variant="ghost" size="icon" disabled>
-              <User className="h-6 w-6 animate-pulse" />
+              <User className="h-6 w-6 animate-pulse text-white" />
             </Button>
           ) : isAuthenticated && user ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
-                  className="relative h-10 w-10 rounded-full p-0"
+                  className="relative h-10 w-10 rounded-full p-0 text-white hover:bg-white/10"
                 >
                   <Avatar className="h-9 w-9">
                     <AvatarImage
                       src={user.image || undefined}
                       alt={user.name}
                     />
-                    <AvatarFallback className="bg-primary text-primary-foreground">
+                    <AvatarFallback className="bg-white/20 text-white">
                       {getInitials(user.name)}
                     </AvatarFallback>
                   </Avatar>
@@ -164,12 +181,21 @@ export default function Header() {
           ) : (
             <div className="flex items-center gap-2">
               <Link href="/login">
-                <Button variant="ghost" size="sm">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-white hover:bg-white/10"
+                >
                   Masuk
                 </Button>
               </Link>
               <Link href="/register">
-                <Button size="sm">Daftar</Button>
+                <Button
+                  size="sm"
+                  className="bg-white text-primary hover:bg-white/90"
+                >
+                  Daftar
+                </Button>
               </Link>
             </div>
           )}

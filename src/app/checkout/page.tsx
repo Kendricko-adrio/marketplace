@@ -103,11 +103,17 @@ export default function CheckoutPage() {
         );
         const data = await res.json();
         if (data.success) {
-          setShippingOptions(data.data);
-          if (data.data.length > 0) {
-            const firstOption = `${data.data[0].courier}-${data.data[0].service}`;
+          const mapped = data.data.map((opt: any) => ({
+            courier: opt.carrier,
+            service: opt.service,
+            cost: opt.price,
+            estimatedDays: opt.eta,
+          }));
+          setShippingOptions(mapped);
+          if (mapped.length > 0) {
+            const firstOption = `${mapped[0].courier}-${mapped[0].service}`;
             setSelectedShipping(firstOption);
-            setShippingCost(data.data[0].cost);
+            setShippingCost(mapped[0].cost);
           }
         }
       } catch (error) {

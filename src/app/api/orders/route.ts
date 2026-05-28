@@ -6,16 +6,25 @@ import {
   carts,
   cartItems,
   productVariants,
+  productImages,
   vouchers,
+  addresses,
 } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, asc, desc } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { z } from "zod";
 
 const createOrderSchema = z.object({
-  addressId: z.string(),
-  shippingCarrier: z.string(),
+  shippingAddress: z.object({
+    recipientName: z.string().min(1),
+    phone: z.string().min(1),
+    address: z.string().min(1),
+    city: z.string().min(1),
+    district: z.string(),
+    postalCode: z.string(),
+  }),
+  shippingMethod: z.string().min(1),
   shippingCost: z.number(),
   voucherCode: z.string().optional(),
   paymentMethod: z.enum(["qris", "va"]),
@@ -38,19 +47,49 @@ export async function GET() {
       .select()
       .from(orders)
       .where(eq(orders.userId, session.user.id))
-      .orderBy(orders.createdAt);
+      .orderBy(desc(orders.createdAt));
 
-    // Get items for each order
+    // Get items for each order (with productId and first image)
     const ordersWithItems = await Promise.all(
       userOrders.map(async (order) => {
         const items = await db
-          .select()
+          .select({
+            id: orderItems.id,
+            orderId: orderItems.orderId,
+            variantId: orderItems.variantId,
+            productName: orderItems.productName,
+            variantInfo: orderItems.variantInfo,
+            price: orderItems.price,
+            quantity: orderItems.quantity,
+            createdAt: orderItems.createdAt,
+            productId: productVariants.productId,
+          })
           .from(orderItems)
+          .innerJoin(
+            productVariants,
+            eq(orderItems.variantId, productVariants.id)
+          )
           .where(eq(orderItems.orderId, order.id));
+
+        const itemsWithImages = await Promise.all(
+          items.map(async (item) => {
+            const images = await db
+              .select({ url: productImages.url })
+              .from(productImages)
+              .where(eq(productImages.variantId, item.variantId))
+              .orderBy(asc(productImages.displayOrder))
+              .limit(1);
+
+            return {
+              ...item,
+              imageUrl: images[0]?.url ?? null,
+            };
+          })
+        );
 
         return {
           ...order,
-          items,
+          items: itemsWithImages,
         };
       })
     );
@@ -92,12 +131,31 @@ export async function POST(request: NextRequest) {
     }
 
     const {
-      addressId,
-      shippingCarrier,
+      shippingAddress,
+      shippingMethod,
       shippingCost,
       voucherCode,
       paymentMethod,
     } = parsed.data;
+
+    // Create address record from inline checkout form
+    const nameParts = shippingAddress.recipientName.split(" ");
+    const firstName = nameParts[0] || "";
+    const lastName = nameParts.slice(1).join(" ") || "";
+
+    const addressId = crypto.randomUUID();
+    await db.insert(addresses).values({
+      id: addressId,
+      userId: session.user.id,
+      firstName,
+      lastName,
+      phone: shippingAddress.phone,
+      fullAddress: shippingAddress.address,
+      city: shippingAddress.city,
+      district: shippingAddress.district || "",
+      postalCode: shippingAddress.postalCode || "",
+      isDefault: false,
+    });
 
     // Get user's cart
     const cart = await db
@@ -188,7 +246,7 @@ export async function POST(request: NextRequest) {
       discount: discount.toString(),
       serviceFee: serviceFee.toString(),
       total: total.toString(),
-      shippingCarrier,
+      shippingCarrier: shippingMethod,
     });
 
     // Create order items

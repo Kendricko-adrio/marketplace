@@ -16,6 +16,7 @@ export const categories = pgTable("category", {
   slug: text("slug").notNull().unique(),
   description: text("description"),
   image: text("image"),
+  icon: text("icon"),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

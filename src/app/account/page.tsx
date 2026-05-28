@@ -1,6 +1,7 @@
 "use client";
-import { useState } from "react";
-import Link from "next/link";
+import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import Image from "next/image";
 import {
   User,
   Package,
@@ -11,6 +12,8 @@ import {
   Camera,
   Search,
   Filter,
+  Loader2,
+  PackageOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,9 +26,100 @@ import {
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { useSession } from "@/lib/auth-client";
+
+interface OrderItem {
+  id: string;
+  orderId: string;
+  variantId: string;
+  productName: string;
+  variantInfo: string | null;
+  price: string;
+  quantity: number;
+  createdAt: string;
+  productId: string;
+  imageUrl: string | null;
+}
+
+interface Order {
+  id: string;
+  userId: string;
+  status: string;
+  paymentMethod: string | null;
+  paymentStatus: string;
+  subtotal: string;
+  shippingCost: string;
+  discount: string;
+  serviceFee: string;
+  total: string;
+  createdAt: string;
+  items: OrderItem[];
+}
+
+const statusMap: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+  proses: { label: "Diproses", variant: "secondary" },
+  dikirim: { label: "Dikirim", variant: "outline" },
+  selesai: { label: "Selesai", variant: "default" },
+  batal: { label: "Dibatalkan", variant: "destructive" },
+};
+
+function formatDate(dateStr: string) {
+  return new Date(dateStr).toLocaleDateString("id-ID", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatRupiah(value: string) {
+  return `Rp ${parseFloat(value).toLocaleString("id-ID")}`;
+}
 
 export default function AccountPage() {
+  const router = useRouter();
+  const { data: session } = useSession();
   const [activeTab, setActiveTab] = useState("orders");
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const user = session?.user;
+  const initials = user?.name
+    ? user.name
+        .split(" ")
+        .map((w) => w[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 2)
+    : "??";
+
+  useEffect(() => {
+    if (activeTab !== "orders") return;
+
+    let cancelled = false;
+    async function fetchOrders() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch("/api/orders");
+        const data = await res.json();
+        if (cancelled) return;
+        if (data.success) {
+          setOrders(data.data);
+        } else {
+          setError(data.error || "Gagal memuat pesanan");
+        }
+      } catch {
+        if (!cancelled) setError("Terjadi kesalahan. Silakan coba lagi.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    fetchOrders();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -36,9 +130,9 @@ export default function AccountPage() {
             <CardContent className="flex flex-col items-center p-6 text-center">
               <div className="relative mb-4">
                 <Avatar className="w-24 h-24 border-4 border-background">
-                  <AvatarImage src="" />
+                  <AvatarImage src={user?.image ?? ""} />
                   <AvatarFallback className="text-2xl font-bold bg-primary text-primary-foreground">
-                    JD
+                    {initials}
                   </AvatarFallback>
                 </Avatar>
                 <Button
@@ -49,9 +143,9 @@ export default function AccountPage() {
                   <Camera className="h-4 w-4" />
                 </Button>
               </div>
-              <h2 className="font-bold text-lg">John Doe</h2>
+              <h2 className="font-bold text-lg">{user?.name ?? "Memuat..."}</h2>
               <p className="text-sm text-muted-foreground">
-                john.doe@example.com
+                {user?.email ?? ""}
               </p>
               <div className="mt-4 flex gap-2">
                 <Badge variant="outline" className="bg-background/50">
@@ -129,83 +223,114 @@ export default function AccountPage() {
                 </div>
               </div>
 
+              {/* Loading */}
+              {loading && (
+                <div className="flex items-center justify-center py-16">
+                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                </div>
+              )}
+
+              {/* Error */}
+              {!loading && error && (
+                <div className="text-center py-16 space-y-4">
+                  <p className="text-muted-foreground">{error}</p>
+                  <Button
+                    variant="outline"
+                    onClick={() => setActiveTab("orders")}
+                  >
+                    Coba Lagi
+                  </Button>
+                </div>
+              )}
+
+              {/* Empty */}
+              {!loading && !error && orders.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-4">
+                  <PackageOpen className="h-16 w-16" />
+                  <p className="text-lg">Belum ada pesanan</p>
+                  <Button onClick={() => router.push("/products")}>
+                    Mulai Belanja
+                  </Button>
+                </div>
+              )}
+
               {/* Order List */}
-              <div className="space-y-4">
-                {[
-                  {
-                    id: "ODR-12345678",
-                    date: "10 Jan 2024",
-                    status: "Selesai",
-                    total: "Rp 450.000",
-                    items: ["AirRunner Pro Running Shoes"],
-                  },
-                  {
-                    id: "ODR-87654321",
-                    date: "05 Jan 2024",
-                    status: "Dikirim",
-                    total: "Rp 1.200.000",
-                    items: ["Classic Leather Oxford Formal"],
-                  },
-                  {
-                    id: "ODR-11223344",
-                    date: "28 Des 2023",
-                    status: "Dibatalkan",
-                    total: "Rp 150.000",
-                    items: ["Urban Chelsea Leather Boots"],
-                  },
-                ].map((order) => (
-                  <Card key={order.id} className="overflow-hidden">
-                    <CardHeader className="bg-muted/30 py-3 px-6 flex flex-row items-center justify-between space-y-0">
-                      <div className="flex items-center gap-4 text-sm">
-                        <span className="font-semibold">{order.date}</span>
-                        <span className="text-muted-foreground">
-                          {order.id}
-                        </span>
-                      </div>
-                      <Badge
-                        variant={
-                          order.status === "Selesai"
-                            ? "default"
-                            : order.status === "Dibatalkan"
-                            ? "destructive"
-                            : "secondary"
-                        }
-                      >
-                        {order.status}
-                      </Badge>
-                    </CardHeader>
-                    <CardContent className="p-6">
-                      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                        <div className="flex gap-4">
-                          <div className="h-16 w-16 bg-muted rounded-md flex items-center justify-center text-muted-foreground">
-                            IMG
+              {!loading && !error && orders.length > 0 && (
+                <div className="space-y-4">
+                  {orders.map((order) => {
+                    const status = statusMap[order.status] ?? {
+                      label: order.status,
+                      variant: "secondary" as const,
+                    };
+                    const firstItem = order.items[0];
+                    const otherCount = order.items.length - 1;
+
+                    return (
+                      <Card key={order.id} className="overflow-hidden">
+                        <CardHeader className="bg-muted/30 py-3 px-6 flex flex-row items-center justify-between space-y-0">
+                          <div className="flex items-center gap-4 text-sm">
+                            <span className="font-semibold">
+                              {formatDate(order.createdAt)}
+                            </span>
+                            <span className="text-muted-foreground font-mono text-xs">
+                              {order.id.slice(0, 8)}...
+                            </span>
                           </div>
-                          <div>
-                            <h4 className="font-medium">{order.items[0]}</h4>
-                            <p className="text-sm text-muted-foreground">
-                              + 2 barang lainnya
-                            </p>
+                          <Badge variant={status.variant}>{status.label}</Badge>
+                        </CardHeader>
+                        <CardContent className="p-6">
+                          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                            <div className="flex gap-4">
+                              <div className="h-16 w-16 bg-muted rounded-md overflow-hidden flex items-center justify-center text-muted-foreground shrink-0">
+                                {firstItem?.imageUrl ? (
+                                  <Image
+                                    src={firstItem.imageUrl}
+                                    alt={firstItem.productName}
+                                    width={64}
+                                    height={64}
+                                    className="object-cover w-full h-full"
+                                  />
+                                ) : (
+                                  <Package className="h-6 w-6" />
+                                )}
+                              </div>
+                              <div>
+                                <h4 className="font-medium">
+                                  {firstItem?.productName ?? "Produk"}
+                                </h4>
+                                {otherCount > 0 && (
+                                  <p className="text-sm text-muted-foreground">
+                                    + {otherCount} barang lainnya
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-sm text-muted-foreground">
+                                Total Belanja
+                              </p>
+                              <p className="font-bold text-lg">
+                                {formatRupiah(order.total)}
+                              </p>
+                            </div>
                           </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-sm text-muted-foreground">
-                            Total Belanja
-                          </p>
-                          <p className="font-bold text-lg">{order.total}</p>
-                        </div>
-                      </div>
-                      <div className="flex justify-end gap-3 mt-6">
-                        <Button variant="outline" size="sm">
-                          Lihat Detail
-                        </Button>
-                        {order.status === "Selesai" && (
-                          <Button size="sm">Beli Lagi</Button>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
+                          <div className="flex justify-end gap-3 mt-6">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() =>
+                                router.push(`/account/orders/${order.id}`)
+                              }
+                            >
+                              Lihat Detail
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -222,18 +347,18 @@ export default function AccountPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <div className="text-sm font-medium">Nama Lengkap</div>
-                    <Input defaultValue="John Doe" />
+                    <Input defaultValue={user?.name ?? ""} />
                   </div>
                   <div className="space-y-2">
                     <div className="text-sm font-medium">Username</div>
-                    <Input defaultValue="johndoe123" />
+                    <Input defaultValue="" />
                   </div>
                 </div>
                 <div className="space-y-2">
                   <div className="text-sm font-medium">Email</div>
                   <div className="flex gap-2">
                     <Input
-                      defaultValue="john.doe@example.com"
+                      defaultValue={user?.email ?? ""}
                       disabled
                       className="bg-muted"
                     />
@@ -244,7 +369,7 @@ export default function AccountPage() {
                   <div className="text-sm font-medium">Nomor Telepon</div>
                   <div className="flex gap-2">
                     <Input
-                      defaultValue="081234567890"
+                      defaultValue=""
                       disabled
                       className="bg-muted"
                     />

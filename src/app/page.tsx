@@ -1,5 +1,6 @@
 import Link from "next/link";
 import ProductCard from "@/components/ProductCard";
+import CategoryIcon from "@/components/CategoryIcon";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
@@ -22,6 +23,7 @@ interface Category {
   id: string;
   name: string;
   slug: string;
+  icon?: string | null;
 }
 
 // Fetch functions
@@ -113,7 +115,7 @@ export default async function Home() {
           {categories.map((cat) => (
             <Link key={cat.id} href={`/products?category=${cat.slug}`}>
               <Card className="p-6 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-secondary/50 transition-colors border-none shadow-sm hover:shadow-md">
-                <div className="w-10 h-10 bg-muted rounded-full mb-2"></div>
+                <CategoryIcon name={cat.icon} className="w-10 h-10 mb-2" />
                 <span className="text-sm font-medium">{cat.name}</span>
               </Card>
             </Link>

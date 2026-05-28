@@ -135,6 +135,7 @@ async function seed() {
         name: "Sneakers",
         slug: "sneakers",
         description: "Koleksi sneakers trendy dan nyaman untuk gaya sehari-hari",
+        icon: "Footprints",
         isActive: true,
       },
       {
@@ -142,6 +143,7 @@ async function seed() {
         name: "Running Shoes",
         slug: "running-shoes",
         description: "Sepatu lari dengan teknologi terbaik untuk performa maksimal",
+        icon: "Zap",
         isActive: true,
       },
       {
@@ -149,6 +151,7 @@ async function seed() {
         name: "Formal Shoes",
         slug: "formal-shoes",
         description: "Sepatu formal elegan untuk acara resmi dan kantor",
+        icon: "Briefcase",
         isActive: true,
       },
       {
@@ -156,6 +159,7 @@ async function seed() {
         name: "Casual Shoes",
         slug: "casual-shoes",
         description: "Sepatu casual yang nyaman untuk aktivitas santai",
+        icon: "Shirt",
         isActive: true,
       },
       {
@@ -163,6 +167,7 @@ async function seed() {
         name: "Sandals",
         slug: "sandals",
         description: "Sandal stylish dan nyaman untuk cuaca panas",
+        icon: "Sun",
         isActive: true,
       },
       {
@@ -170,6 +175,7 @@ async function seed() {
         name: "Boots",
         slug: "boots",
         description: "Boots kokoh dan tahan lama untuk petualangan",
+        icon: "Mountain",
         isActive: true,
       },
     ]);

@@ -115,7 +115,7 @@ export default function AdminAnalyticsPage() {
               {[
                 {
                   user: "Admin Toko",
-                  action: "Memupdate stok produk Wireless Headphones",
+                  action: "Memupdate stok produk AirRunner Pro Running Shoes",
                   time: "2 menit lalu",
                 },
                 {

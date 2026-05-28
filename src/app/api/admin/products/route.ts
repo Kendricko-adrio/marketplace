@@ -7,7 +7,7 @@ import {
   categories,
   productImages,
 } from "@/db/schema";
-import { eq, desc, asc, sql } from "drizzle-orm";
+import { eq, desc, sql } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { z } from "zod";
@@ -119,6 +119,14 @@ const createProductSchema = z.object({
       stock: z.number().int().nonnegative(),
       sku: z.string(),
       isDefault: z.boolean().default(false),
+      images: z
+        .array(
+          z.object({
+            url: z.string(),
+            displayOrder: z.number().int().default(0),
+          })
+        )
+        .default([]),
     })
   ),
 });
@@ -178,8 +186,9 @@ export async function POST(request: NextRequest) {
 
     // Create variants
     for (const variant of variants) {
+      const variantId = crypto.randomUUID();
       await db.insert(productVariants).values({
-        id: crypto.randomUUID(),
+        id: variantId,
         productId,
         sku: variant.sku,
         color: variant.color,
@@ -188,6 +197,17 @@ export async function POST(request: NextRequest) {
         stock: variant.stock,
         isDefault: variant.isDefault,
       });
+
+      // Create images for this variant
+      for (let i = 0; i < variant.images.length; i++) {
+        const img = variant.images[i];
+        await db.insert(productImages).values({
+          id: crypto.randomUUID(),
+          variantId,
+          url: img.url,
+          displayOrder: img.displayOrder ?? i,
+        });
+      }
     }
 
     return NextResponse.json({

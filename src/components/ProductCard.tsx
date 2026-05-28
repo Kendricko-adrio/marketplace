@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import { ShoppingCart, Star } from "lucide-react";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -33,9 +34,21 @@ export default function ProductCard({
     <Card className="overflow-hidden h-full flex flex-col hover:shadow-lg transition-shadow duration-200">
       <Link
         href={`/products/${id}`}
-        className="relative block aspect-square bg-muted"
+        className="relative block aspect-square bg-muted overflow-hidden"
       >
-        {/* <Image src={image} alt={title} fill className="object-cover" /> */}
+        {image ? (
+          <Image
+            src={image}
+            alt={title}
+            fill
+            className="object-cover"
+            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+          />
+        ) : (
+          <div className="flex items-center justify-center h-full text-muted-foreground">
+            <ShoppingCart className="h-10 w-10 opacity-20" />
+          </div>
+        )}
         {discount > 0 && (
           <Badge className="absolute top-2 right-2 bg-destructive text-destructive-foreground hover:bg-destructive">
             {discount}%

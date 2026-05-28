@@ -8,11 +8,10 @@ import {
   productImages,
 } from "@/db/schema";
 import { eq, asc, inArray } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
 import { z } from "zod";
 import { unlink } from "fs/promises";
 import path from "path";
+import { withAuth } from "@/lib/auth-guard";
 
 async function deleteImageFiles(urls: string[]) {
   for (const url of urls) {
@@ -26,35 +25,12 @@ async function deleteImageFiles(urls: string[]) {
   }
 }
 
-async function checkAdmin() {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
-
-  if (!session) {
-    return { error: "Unauthorized", status: 401 };
-  }
-
-  if (session.user.role !== "admin" && session.user.role !== "staff") {
-    return { error: "Forbidden", status: 403 };
-  }
-
-  return { user: session.user };
-}
-
-export async function GET(
+export const GET = withAuth(async (
+  _ctx,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
+) => {
   try {
-    const adminCheck = await checkAdmin();
-    if ("error" in adminCheck) {
-      return NextResponse.json(
-        { success: false, error: adminCheck.error },
-        { status: adminCheck.status }
-      );
-    }
-
     const { id } = await params;
 
     const product = await db
@@ -118,7 +94,7 @@ export async function GET(
       { status: 500 }
     );
   }
-}
+}, ["admin", "staff"]);
 
 const variantSchema = z.object({
   id: z.string().optional(),
@@ -149,19 +125,12 @@ const updateProductSchema = z.object({
   variants: z.array(variantSchema),
 });
 
-export async function PUT(
+export const PUT = withAuth(async (
+  _ctx,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
+) => {
   try {
-    const adminCheck = await checkAdmin();
-    if ("error" in adminCheck) {
-      return NextResponse.json(
-        { success: false, error: adminCheck.error },
-        { status: adminCheck.status }
-      );
-    }
-
     const { id } = await params;
 
     const existing = await db
@@ -293,21 +262,14 @@ export async function PUT(
       { status: 500 }
     );
   }
-}
+}, ["admin", "staff"]);
 
-export async function DELETE(
+export const DELETE = withAuth(async (
+  _ctx,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
+) => {
   try {
-    const adminCheck = await checkAdmin();
-    if ("error" in adminCheck) {
-      return NextResponse.json(
-        { success: false, error: adminCheck.error },
-        { status: adminCheck.status }
-      );
-    }
-
     const { id } = await params;
 
     const existing = await db
@@ -348,4 +310,4 @@ export async function DELETE(
       { status: 500 }
     );
   }
-}
+}, ["admin", "staff"]);

@@ -1,38 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { orders, orderItems, users, addresses } from "@/db/schema";
-import { eq, desc, sql, and } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
-import { z } from "zod";
+import { orders, orderItems, users } from "@/db/schema";
+import { eq, desc, sql } from "drizzle-orm";
+import { withAuth } from "@/lib/auth-guard";
 
-// Middleware to check admin role
-async function checkAdmin() {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
-
-  if (!session) {
-    return { error: "Unauthorized", status: 401 };
-  }
-
-  if (session.user.role !== "admin" && session.user.role !== "staff") {
-    return { error: "Forbidden", status: 403 };
-  }
-
-  return { user: session.user };
-}
-
-export async function GET(request: NextRequest) {
+export const GET = withAuth(async (_ctx, request: NextRequest) => {
   try {
-    const adminCheck = await checkAdmin();
-    if ("error" in adminCheck) {
-      return NextResponse.json(
-        { success: false, error: adminCheck.error },
-        { status: adminCheck.status }
-      );
-    }
-
     const { searchParams } = new URL(request.url);
     const status = searchParams.get("status");
     const page = parseInt(searchParams.get("page") || "1");
@@ -100,4 +73,4 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+}, ["admin", "staff"]);

@@ -1,37 +1,11 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { orders, users, auditLogs } from "@/db/schema";
+import { orders, users } from "@/db/schema";
 import { sql, desc, gte, and, eq, count as countFn } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
+import { withAuth } from "@/lib/auth-guard";
 
-// Middleware to check admin role
-async function checkAdmin() {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
-
-  if (!session) {
-    return { error: "Unauthorized", status: 401 };
-  }
-
-  if (session.user.role !== "admin") {
-    return { error: "Forbidden", status: 403 };
-  }
-
-  return { user: session.user };
-}
-
-export async function GET() {
+export const GET = withAuth(async () => {
   try {
-    const adminCheck = await checkAdmin();
-    if ("error" in adminCheck) {
-      return NextResponse.json(
-        { success: false, error: adminCheck.error },
-        { status: adminCheck.status }
-      );
-    }
-
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
@@ -113,4 +87,4 @@ export async function GET() {
       { status: 500 }
     );
   }
-}
+}, ["admin", "staff"]);

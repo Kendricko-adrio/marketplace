@@ -1,40 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
 import crypto from "crypto";
+import { withAuth } from "@/lib/auth-guard";
 
 const UPLOAD_DIR = path.join(process.cwd(), "public", "uploads", "products");
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 const ALLOWED_TYPES = ["image/jpeg", "image/png", "image/webp", "image/gif"];
 
-async function checkAdmin() {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
-
-  if (!session) {
-    return { error: "Unauthorized", status: 401 };
-  }
-
-  if (session.user.role !== "admin" && session.user.role !== "staff") {
-    return { error: "Forbidden", status: 403 };
-  }
-
-  return { user: session.user };
-}
-
-export async function POST(request: NextRequest) {
+export const POST = withAuth(async (_ctx, request: NextRequest) => {
   try {
-    const adminCheck = await checkAdmin();
-    if ("error" in adminCheck) {
-      return NextResponse.json(
-        { success: false, error: adminCheck.error },
-        { status: adminCheck.status }
-      );
-    }
-
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
 
@@ -79,4 +54,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+}, ["admin", "staff"]);

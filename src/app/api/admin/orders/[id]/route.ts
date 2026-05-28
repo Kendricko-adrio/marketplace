@@ -2,40 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { orders, orderItems, addresses, auditLogs } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
 import { z } from "zod";
+import { withAuth } from "@/lib/auth-guard";
 
-// Middleware to check admin role
-async function checkAdmin() {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
-
-  if (!session) {
-    return { error: "Unauthorized", status: 401 };
-  }
-
-  if (session.user.role !== "admin" && session.user.role !== "staff") {
-    return { error: "Forbidden", status: 403 };
-  }
-
-  return { user: session.user };
-}
-
-export async function GET(
+export const GET = withAuth(async (
+  _ctx,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
+) => {
   try {
-    const adminCheck = await checkAdmin();
-    if ("error" in adminCheck) {
-      return NextResponse.json(
-        { success: false, error: adminCheck.error },
-        { status: adminCheck.status }
-      );
-    }
-
     const { id } = await params;
 
     const order = await db
@@ -81,26 +56,19 @@ export async function GET(
       { status: 500 }
     );
   }
-}
+}, ["admin", "staff"]);
 
 const updateOrderSchema = z.object({
   status: z.enum(["proses", "dikirim", "selesai", "batal"]).optional(),
   trackingNumber: z.string().optional(),
 });
 
-export async function PUT(
+export const PUT = withAuth(async (
+  { user },
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
+) => {
   try {
-    const adminCheck = await checkAdmin();
-    if ("error" in adminCheck) {
-      return NextResponse.json(
-        { success: false, error: adminCheck.error },
-        { status: adminCheck.status }
-      );
-    }
-
     const { id } = await params;
     const body = await request.json();
     const parsed = updateOrderSchema.safeParse(body);
@@ -147,7 +115,7 @@ export async function PUT(
     // Create audit log
     await db.insert(auditLogs).values({
       id: crypto.randomUUID(),
-      userId: adminCheck.user.id,
+      userId: user.id,
       action: "UPDATE_ORDER_STATUS",
       entityType: "order",
       entityId: id,
@@ -165,4 +133,4 @@ export async function PUT(
       { status: 500 }
     );
   }
-}
+}, ["admin", "staff"]);

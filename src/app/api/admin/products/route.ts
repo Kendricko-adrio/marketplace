@@ -8,37 +8,11 @@ import {
   productImages,
 } from "@/db/schema";
 import { eq, desc, sql } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
 import { z } from "zod";
+import { withAuth } from "@/lib/auth-guard";
 
-// Middleware to check admin role
-async function checkAdmin() {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
-
-  if (!session) {
-    return { error: "Unauthorized", status: 401 };
-  }
-
-  if (session.user.role !== "admin" && session.user.role !== "staff") {
-    return { error: "Forbidden", status: 403 };
-  }
-
-  return { user: session.user };
-}
-
-export async function GET(request: NextRequest) {
+export const GET = withAuth(async (_ctx, request: NextRequest) => {
   try {
-    const adminCheck = await checkAdmin();
-    if ("error" in adminCheck) {
-      return NextResponse.json(
-        { success: false, error: adminCheck.error },
-        { status: adminCheck.status }
-      );
-    }
-
     const { searchParams } = new URL(request.url);
     const page = parseInt(searchParams.get("page") || "1");
     const limit = parseInt(searchParams.get("limit") || "20");
@@ -102,7 +76,7 @@ export async function GET(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+}, ["admin", "staff"]);
 
 const createProductSchema = z.object({
   name: z.string().min(1),
@@ -131,16 +105,8 @@ const createProductSchema = z.object({
   ),
 });
 
-export async function POST(request: NextRequest) {
+export const POST = withAuth(async (_ctx, request: NextRequest) => {
   try {
-    const adminCheck = await checkAdmin();
-    if ("error" in adminCheck) {
-      return NextResponse.json(
-        { success: false, error: adminCheck.error },
-        { status: adminCheck.status }
-      );
-    }
-
     const body = await request.json();
     const parsed = createProductSchema.safeParse(body);
 
@@ -221,4 +187,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+}, ["admin", "staff"]);

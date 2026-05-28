@@ -8,6 +8,7 @@ import {
   Users,
   BarChart3,
   Tag,
+  Home,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ export default function AdminSidebar() {
 
   const links = [
     { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
+    { href: "/admin/home", label: "Halaman Depan", icon: Home },
     { href: "/admin/products", label: "Produk", icon: Package },
     { href: "/admin/orders", label: "Pesanan", icon: ShoppingBag },
     { href: "/admin/marketing", label: "Marketing", icon: Tag },

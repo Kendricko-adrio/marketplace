@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { orders, orderItems, users } from "@/db";
+import { clients, orders, orderItems } from "@/db";
 import { eq, desc, sql } from "drizzle-orm";
 import { withAuth } from "@/lib/auth-guard";
 
@@ -17,13 +17,13 @@ export const GET = withAuth(async (_ctx, request: NextRequest) => {
       .select({
         order: orders,
         user: {
-          id: users.id,
-          name: users.name,
-          email: users.email,
+          id: clients.id,
+          name: clients.name,
+          email: clients.email,
         },
       })
       .from(orders)
-      .innerJoin(users, eq(orders.userId, users.id))
+      .innerJoin(clients, eq(orders.userId, clients.id))
       .orderBy(desc(orders.createdAt))
       .limit(limit)
       .offset(offset);
@@ -73,4 +73,4 @@ export const GET = withAuth(async (_ctx, request: NextRequest) => {
       { status: 500 }
     );
   }
-}, ["admin", "staff"]);
+}, ["admin", "hq"]);

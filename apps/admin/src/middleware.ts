@@ -1,34 +1,20 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-// Routes that require authentication
-const protectedRoutes = ["/cart", "/checkout", "/account"];
-
-// Routes that require admin role (checked server-side in API)
+// Admin routes that require authentication
 const adminRoutes = ["/admin"];
 
 // Auth routes (redirect if already logged in)
-const authRoutes = ["/login", "/register"];
+const authRoutes = ["/login"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Get session token from cookies
-  const sessionToken = request.cookies.get("better-auth.session_token")?.value;
+  // Get session token from cookies (admin uses the "admin" prefix)
+  const sessionToken = request.cookies.get("admin.session_token")?.value;
   const isAuthenticated = !!sessionToken;
 
-  // Check if trying to access protected routes without auth
-  const isProtectedRoute = protectedRoutes.some((route) =>
-    pathname.startsWith(route)
-  );
-
-  if (isProtectedRoute && !isAuthenticated) {
-    const loginUrl = new URL("/login", request.url);
-    loginUrl.searchParams.set("callbackUrl", pathname);
-    return NextResponse.redirect(loginUrl);
-  }
-
-  // Check if trying to access admin routes
+  // Check if trying to access admin routes without auth
   const isAdminRoute = adminRoutes.some((route) => pathname.startsWith(route));
 
   if (isAdminRoute && !isAuthenticated) {
@@ -41,7 +27,7 @@ export function middleware(request: NextRequest) {
   const isAuthRoute = authRoutes.some((route) => pathname.startsWith(route));
 
   if (isAuthRoute && isAuthenticated) {
-    return NextResponse.redirect(new URL("/", request.url));
+    return NextResponse.redirect(new URL("/admin", request.url));
   }
 
   return NextResponse.next();

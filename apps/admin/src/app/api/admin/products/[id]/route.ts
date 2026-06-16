@@ -94,7 +94,7 @@ export const GET = withAuth(async (
       { status: 500 }
     );
   }
-}, ["admin", "staff"]);
+}, ["admin", "hq"]);
 
 const variantSchema = z.object({
   id: z.string().optional(),
@@ -262,7 +262,7 @@ export const PUT = withAuth(async (
       { status: 500 }
     );
   }
-}, ["admin", "staff"]);
+}, ["admin", "hq"]);
 
 export const DELETE = withAuth(async (
   _ctx,
@@ -310,4 +310,4 @@ export const DELETE = withAuth(async (
       { status: 500 }
     );
   }
-}, ["admin", "staff"]);
+}, ["admin", "hq"]);

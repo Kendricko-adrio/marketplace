@@ -3,15 +3,16 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { db } from "@/db";
 import * as schema from "@/db";
 import bcrypt from "bcryptjs";
+import { APIError } from "better-auth/api";
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
     schema: {
-      user: schema.users,
-      session: schema.sessions,
-      account: schema.accounts,
-      verification: schema.verifications,
+      user: schema.clients,
+      session: schema.clientSessions,
+      account: schema.clientAccounts,
+      verification: schema.clientVerifications,
     },
   }),
   emailAndPassword: {
@@ -35,12 +36,25 @@ export const auth = betterAuth({
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
     },
   },
-  user: {
-    additionalFields: {
-      role: {
-        type: "string",
-        defaultValue: "customer",
-        input: false,
+  advanced: {
+    cookiePrefix: "client",
+  },
+  databaseHooks: {
+    session: {
+      create: {
+        before: async (session, ctx) => {
+          if (!ctx) return;
+          const user = await ctx.context.internalAdapter.findUserById(
+            session.userId
+          );
+          // Reject if the user is not a client (e.g., admin trying to sign in on store)
+          if (!user || "role" in user) {
+            throw new APIError("FORBIDDEN", {
+              message: "Invalid credentials",
+              code: "INVALID_USER_TYPE",
+            });
+          }
+        },
       },
     },
   },

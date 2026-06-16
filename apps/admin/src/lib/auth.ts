@@ -3,17 +3,24 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { db } from "@/db";
 import * as schema from "@/db";
 import bcrypt from "bcryptjs";
+import { username } from "better-auth/plugins";
+import { APIError } from "better-auth/api";
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
     provider: "pg",
     schema: {
       user: schema.users,
-      session: schema.sessions,
-      account: schema.accounts,
-      verification: schema.verifications,
+      session: schema.adminSessions,
+      account: schema.adminAccounts,
+      verification: schema.adminVerifications,
     },
   }),
+  plugins: [
+    username({
+      minUsernameLength: 2,
+    }),
+  ],
   emailAndPassword: {
     enabled: true,
     password: {
@@ -29,18 +36,35 @@ export const auth = betterAuth({
       // TODO: Implement email sending
     },
   },
-  socialProviders: {
-    google: {
-      clientId: process.env.GOOGLE_CLIENT_ID || "",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
-    },
-  },
+  socialProviders: {},
   user: {
     additionalFields: {
       role: {
-        type: "string",
-        defaultValue: "customer",
+        type: ["admin", "hq"],
+        defaultValue: "admin",
         input: false,
+      },
+    },
+  },
+  advanced: {
+    cookiePrefix: "admin",
+  },
+  databaseHooks: {
+    session: {
+      create: {
+        before: async (session, ctx) => {
+          if (!ctx) return;
+          const user = (await ctx.context.internalAdapter.findUserById(
+            session.userId
+          )) as { role?: string } | null;
+          // Only admins/hq are allowed to create admin sessions
+          if (!user || !user.role || !["admin", "hq"].includes(user.role)) {
+            throw new APIError("FORBIDDEN", {
+              message: "Invalid credentials",
+              code: "INVALID_USER_TYPE",
+            });
+          }
+        },
       },
     },
   },

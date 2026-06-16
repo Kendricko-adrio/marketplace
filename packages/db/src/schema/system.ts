@@ -1,9 +1,9 @@
 import { pgTable, text, timestamp, integer, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
-import { users } from "./auth";
+import { clients, users } from "./auth";
 import { products } from "./products";
 
-// Audit Log table - tracks admin activities
+// Audit Log table - tracks admin activities (references admin users table)
 export const auditLogs = pgTable("audit_log", {
   id: text("id").primaryKey(),
   userId: text("user_id").references(() => users.id, { onDelete: "set null" }),
@@ -15,12 +15,12 @@ export const auditLogs = pgTable("audit_log", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
-// Reviews table
+// Reviews table (belongs to store clients)
 export const reviews = pgTable("review", {
   id: text("id").primaryKey(),
   userId: text("user_id")
     .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
+    .references(() => clients.id, { onDelete: "cascade" }),
   productId: text("product_id")
     .notNull()
     .references(() => products.id, { onDelete: "cascade" }),
@@ -39,9 +39,9 @@ export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
 }));
 
 export const reviewsRelations = relations(reviews, ({ one }) => ({
-  user: one(users, {
+  user: one(clients, {
     fields: [reviews.userId],
-    references: [users.id],
+    references: [clients.id],
   }),
   product: one(products, {
     fields: [reviews.productId],

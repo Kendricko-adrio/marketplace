@@ -10,8 +10,8 @@ const authRoutes = ["/login", "/register"];
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Get session token from cookies
-  const sessionToken = request.cookies.get("better-auth.session_token")?.value;
+  // Get session token from cookies (store uses the "client" prefix)
+  const sessionToken = request.cookies.get("client.session_token")?.value;
   const isAuthenticated = !!sessionToken;
 
   // Check if trying to access protected routes without auth
@@ -36,5 +36,5 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|public).*)"],
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|public).*)",],
 };

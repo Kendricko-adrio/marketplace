@@ -1,0 +1,36 @@
+{
+  "name": "@marketplace/db",
+  "version": "0.1.0",
+  "description": "Shared Drizzle ORM schema + migrations + seed for marketplace",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/",
+    "drizzle/"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "db:seed": "npx tsx src/seed.ts",
+    "db:check": "drizzle-kit check"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.1",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/pg": "^8.16.0",
+    "dotenv": "^17.2.3",
+    "drizzle-kit": "^0.31.8",
+    "tsx": "^4.19.0",
+    "typescript": "^5",
+    "bcryptjs": "^3.0.3"
+  },
+  "peerDependencies": {
+    "drizzle-orm": "^0.45.1"
+  }
+}

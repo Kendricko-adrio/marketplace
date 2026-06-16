@@ -1,78 +1,99 @@
-# AGENTS.md
-
-High-signal notes for agents working in this repo.
+# AGENTS.md — Marketplace Monorepo
 
 ## Tech Stack
 
 - Next.js 16.1.1 + React 19 + TypeScript (strict)
 - Tailwind CSS 3 + shadcn/ui
 - Drizzle ORM + PostgreSQL (`pg` driver)
-- Better Auth (Drizzle adapter, bcryptjs passwords, optional Google OAuth)
+- Better Auth (Drizzle adapter)
+- **npm workspaces** monorepo (apps/store, apps/admin, packages/db)
+
+## Project Structure
+
+```
+marketplace/
+├── apps/
+│   ├── store/          ← Customer-facing storefront (port 3000)
+│   │   └── src/app/    ← Next.js app router (products, cart, checkout, account)
+│   │
+│   └── admin/          ← Admin dashboard (port 3001)
+│       └── src/app/admin/ ← Next.js app router (dashboard, orders, products, users)
+│
+├── packages/
+│   └── db/             ← 🏛️ SHARED SCHEMA OWNER (packages/db)
+│       ├── src/schema/ ← All table definitions
+│       ├── src/index.ts← DB connection
+│       ├── drizzle.config.ts ← Schema owner config
+│       └── package.json ← name: "@marketplace/db"
+│
+├── docker-compose.yml  ← PostgreSQL 16
+├── package.json        ← Workspaces config + root scripts
+└── .env                ← Shared environment (DATABASE_URL, BETTER_AUTH_SECRET)
+```
 
 ## Dev Setup (order matters)
 
 1. `docker compose up -d` — starts PostgreSQL 16 on port 5432
-2. Ensure `.env` exists at root (it is already committed but gitignored; contains `DATABASE_URL` and auth secrets)
-3. `npm run db:push` — **required** before dev server works; pushes schema to DB
-4. `npm run db:seed` — optional; creates sample products, users, orders, vouchers, banners
-5. `npm run dev`
+2. `cp .env.example .env` — configure DATABASE_URL
+3. `npm install` — installs workspace deps (hoists to root)
+4. `npm run db:push` — pushes schema to DB (from packages/db)
+5. `npm run db:seed` — seeds sample data
+6. `npm run dev:store` — storefront on http://localhost:3000
+7. `npm run dev:admin` — admin on http://localhost:3001
 
 ## Database & Schema
 
-- Drizzle config: `drizzle.config.ts` reads `DATABASE_URL` from `.env` via `dotenv/config`
-- Schema is modular under `src/db/schema/` (auth, products, orders, cart, marketing, system)
-- **All schema modules are re-exported from `src/db/schema/index.ts`** — this is the entrypoint Drizzle uses
-- Seed script is `src/db/seed.ts` and is **destructive**: it clears all tables before inserting
+**OWNER: `packages/db/`**  
+Apps DO NOT own schema. They consume via workspace dependency.
+
+```ts
+// In store or admin — import from shared package
+import { db } from "@/db";  // resolves to src/db/index.ts
+import { users, products } from "@/db";  // re-exported from packages/db
+```
+
+**Schema changes:**
+1. Edit `packages/db/src/schema/*.ts`
+2. `npm run db:generate` — generate migration
+3. `npm run db:push` — apply to DB
+4. No sync needed — apps auto-use latest via workspace link
 
 ## Auth
 
-- Better Auth catch-all API route: `src/app/api/auth/[...all]/route.ts`
-- Custom middleware (`src/middleware.ts`) protects `/cart`, `/checkout`, `/account`, `/admin` by checking the `better-auth.session_token` cookie
-- Users have a `role` field: `customer` | `admin` | `staff`
-- Auth client: `src/lib/auth-client.ts`; provider wrapper: `src/providers/auth-provider.tsx`
+- Better Auth catch-all: both `apps/store/src/app/api/auth/[...all]` and `apps/admin/src/app/api/auth/[...all]`
+- Shared users table (in packages/db)
+- Roles: `customer` | `admin` | `staff`
+- Middleware in each app protects respective routes
 
-## Environment Variables
+## Workspace Scripts (run from ROOT)
 
-Key vars in `.env`:
-- `DATABASE_URL` — PostgreSQL connection string
-- `BETTER_AUTH_SECRET` — auth signing secret
-- `BETTER_AUTH_URL` — base URL of the app (e.g. `http://localhost:3000`)
-- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` — optional OAuth
+| Command | What it does |
+|---------|-------------|
+| `npm run dev:store` | Start storefront |
+| `npm run dev:admin` | Start admin panel |
+| `npm run dev:all` | Start both (requires `concurrently`) |
+| `npm run db:push` | Push schema to DB |
+| `npm run db:studio` | Drizzle Studio |
+| `npm run db:seed` | Seed sample data |
+| `npm run build` | Build store + admin |
 
-## Scripts
+## Path Aliases
 
-- `npm run dev` — Next.js dev server
-- `npm run build` — production build
-- `npm run lint` — runs `eslint` directly (not `next lint`)
-- `npm run db:generate` — generate Drizzle migrations
-- `npm run db:push` — push schema changes to DB
-- `npm run db:studio` — Drizzle Studio
-- `npm run db:seed` — seed sample data
-
-## Testing
-
-- **No test runner is configured.** Do not attempt to run tests.
+| Alias | Resolves to |
+|-------|------------|
+| `@/*` | `./src/*` (per app) |
+| `@/db` | `./src/db/index.ts` (per app) |
+| `@marketplace/db` | `../../packages/db/src/index.ts` |
 
 ## Conventions
 
-- Path alias `@/*` maps to `./src/*`
-- shadcn/ui components live in `src/components/ui/`
-- Tailwind CSS variables and base styles are in `src/app/globals.css`
-- ESLint 9 config extends `eslint-config-next` (core-web-vitals + typescript)
+- shadcn/ui components: `src/components/ui/`
+- Store-specific: `apps/store/src/components/`
+- Admin-specific: `apps/admin/src/components/`
+- Shared types/logic: consider `packages/shared/` (if needed)
 
-## Available Skills
+## ⚠️ RULES
 
-This repo includes local OpenCode skills under `.agents/skills/`:
-
-- **caveman** — Ultra-compressed communication mode. Cuts token usage ~75% by speaking like caveman while keeping full technical accuracy. Supports intensity levels: lite, full (default), ultra, wenyan-lite, wenyan-full, wenyan-ultra.
-- **better-auth-best-practices** — Configure Better Auth server and client, set up database adapters, manage sessions, add plugins, and handle environment variables.
-- **frontend-design** — Create distinctive, production-grade frontend interfaces with high design quality.
-- **nextjs** — Next.js App Router expert guidance for routing, Server Components, Server Actions, caching, layouts, middleware/proxy, data fetching, rendering strategies, and deployment.
-
-### Preferred Mode
-
-**Always use caveman skill with `full` mode** for maximum token efficiency. Switch levels with `/caveman lite|full|ultra` only when explicitly requested.
-
-## Knowledge Enrichment
-
-**Always use Context7** to enrich models' knowledge before making any technical decision or implementation in this project. Query Context7 for up-to-date documentation on libraries, frameworks, and APIs to ensure accuracy.
+- **Schema edits ONLY in `packages/db/`**
+- **Store and admin NEVER edit `packages/db/` — read-only consumers**
+- **Run `db:push` / `db:migrate` only from root via `npm run db:push`**

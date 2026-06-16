@@ -10,7 +10,7 @@
     "dev": "npm run dev:store",
     "dev:store": "cd apps/store && npm run dev",
     "dev:admin": "cd apps/admin && npm run dev",
-    "dev:all": "concurrently "cd apps/store && npm run dev" "cd apps/admin && npm run dev"",
+    "dev:all": "concurrently \"cd apps/store && npm run dev\" \"cd apps/admin && npm run dev\"",
     "build": "npm run build:store && npm run build:admin",
     "build:store": "cd apps/store && npm run build",
     "build:admin": "cd apps/admin && npm run build",
@@ -20,6 +20,7 @@
     "db:studio": "cd packages/db && npm run db:studio",
     "db:seed": "cd packages/db && npm run db:seed",
     "db:check": "cd packages/db && npm run db:check",
+    "db:reset": "cd packages/db && npm run db:reset",
     "lint": "cd apps/store && npm run lint && cd ../admin && npm run lint",
     "lint:store": "cd apps/store && npm run lint",
     "lint:admin": "cd apps/admin && npm run lint"

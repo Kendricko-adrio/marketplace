@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
-import { orders, users } from "@/db";
+import { clients, orders } from "@/db";
 import { sql, desc, gte, and, eq, count as countFn } from "drizzle-orm";
 import { withAuth } from "@/lib/auth-guard";
 
@@ -39,8 +39,7 @@ export const GET = withAuth(async () => {
     // Total customers
     const totalCustomers = await db
       .select({ count: countFn() })
-      .from(users)
-      .where(eq(users.role, "customer"));
+      .from(clients);
 
     // Orders by status
     const ordersByStatus = await db
@@ -51,17 +50,17 @@ export const GET = withAuth(async () => {
       .from(orders)
       .groupBy(orders.status);
 
-    // Recent orders
+    // Recent orders (joined with clients)
     const recentOrders = await db
       .select({
         id: orders.id,
         total: orders.total,
         status: orders.status,
         createdAt: orders.createdAt,
-        customer: users.name,
+        customer: clients.name,
       })
       .from(orders)
-      .innerJoin(users, eq(orders.userId, users.id))
+      .innerJoin(clients, eq(orders.userId, clients.id))
       .orderBy(desc(orders.createdAt))
       .limit(5);
 
@@ -87,4 +86,4 @@ export const GET = withAuth(async () => {
       { status: 500 }
     );
   }
-}, ["admin", "staff"]);
+}, ["admin", "hq"]);

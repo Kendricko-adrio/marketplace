@@ -2,13 +2,14 @@ import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { NextResponse } from "next/server";
 
-type Role = "admin" | "staff" | "customer";
+type Role = "admin" | "hq";
 
 export interface AuthContext {
   user: {
     id: string;
     name: string;
     email: string;
+    username?: string;
     role: Role;
     [key: string]: unknown;
   };

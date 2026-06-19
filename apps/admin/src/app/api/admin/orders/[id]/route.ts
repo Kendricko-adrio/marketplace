@@ -56,7 +56,7 @@ export const GET = withAuth(async (
       { status: 500 }
     );
   }
-}, ["admin", "staff"]);
+}, ["admin", "hq"]);
 
 const updateOrderSchema = z.object({
   status: z.enum(["proses", "dikirim", "selesai", "batal"]).optional(),
@@ -133,4 +133,4 @@ export const PUT = withAuth(async (
       { status: 500 }
     );
   }
-}, ["admin", "staff"]);
+}, ["admin", "hq"]);

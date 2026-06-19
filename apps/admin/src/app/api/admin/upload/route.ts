@@ -54,4 +54,4 @@ export const POST = withAuth(async (_ctx, request: NextRequest) => {
       { status: 500 }
     );
   }
-}, ["admin", "staff"]);
+}, ["admin", "hq"]);

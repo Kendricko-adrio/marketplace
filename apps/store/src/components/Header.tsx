@@ -49,6 +49,9 @@ export default function Header() {
 
   const handleLogout = async () => {
     await signOut();
+    // Clear the onboarding gate cookie so a different user logging in
+    // on the same browser is gated correctly until they complete onboarding.
+    document.cookie = "client.onboarding=; path=/; max-age=0";
     router.push("/");
     router.refresh();
   };

@@ -36,59 +36,101 @@ async function seed() {
     await db.delete(schema.vouchers);
     await db.delete(schema.banners);
     await db.delete(schema.addresses);
-    await db.delete(schema.sessions);
-    await db.delete(schema.accounts);
-    await db.delete(schema.verifications);
+    await db.delete(schema.clientSessions);
+    await db.delete(schema.clientAccounts);
+    await db.delete(schema.clientVerifications);
+    await db.delete(schema.clients);
+    await db.delete(schema.adminSessions);
+    await db.delete(schema.adminAccounts);
+    await db.delete(schema.adminVerifications);
     await db.delete(schema.users);
 
     // =====================
-    // USERS
+    // ADMIN USERS
     // =====================
-    console.log("👤 Creating users...");
+    console.log("👤 Creating admin users...");
     const adminId = generateId();
-    const staffId = generateId();
-    const customerId = generateId();
+    const hqId = generateId();
 
     await db.insert(schema.users).values([
       {
         id: adminId,
         name: "Admin Toko",
+        username: "admintoko",
+        displayUsername: "admintoko",
         email: "admin@store.com",
         emailVerified: true,
         role: "admin",
         image: null,
       },
       {
-        id: staffId,
-        name: "Staff Gudang",
-        email: "staff@store.com",
+        id: hqId,
+        name: "HQ Manager",
+        username: "hqmanager",
+        displayUsername: "hqmanager",
+        email: "hq@store.com",
         emailVerified: true,
-        role: "staff",
-        image: null,
-      },
-      {
-        id: customerId,
-        name: "John Doe",
-        email: "john@example.com",
-        emailVerified: true,
-        role: "customer",
+        role: "hq",
         image: null,
       },
     ]);
 
     // =====================
-    // ACCOUNTS (with passwords for email/password login)
+    // ADMIN ACCOUNTS (with passwords for email/username + password login)
     // =====================
-    console.log("🔐 Creating accounts with passwords...");
-    const userCredentials = [
+    console.log("🔐 Creating admin accounts with passwords...");
+    const adminCredentials = [
       { userId: adminId, password: "admin123" },
-      { userId: staffId, password: "staff123" },
-      { userId: customerId, password: "password123" },
+      { userId: hqId, password: "hq123" },
     ];
 
-    for (const cred of userCredentials) {
+    for (const cred of adminCredentials) {
       const hashedPassword = await bcrypt.hash(cred.password, 10);
-      await db.insert(schema.accounts).values({
+      await db.insert(schema.adminAccounts).values({
+        id: generateId(),
+        userId: cred.userId,
+        accountId: cred.userId,
+        providerId: "credential",
+        password: hashedPassword,
+      });
+    }
+
+    // =====================
+    // CLIENTS (store customers)
+    // =====================
+    console.log("👤 Creating clients...");
+    const customer1Id = generateId();
+    const customer2Id = generateId();
+
+    await db.insert(schema.clients).values([
+      {
+        id: customer1Id,
+        name: "John Doe",
+        email: "john@example.com",
+        emailVerified: true,
+        image: null,
+      },
+      {
+        id: customer2Id,
+        name: "Jane Smith",
+        email: "jane@example.com",
+        emailVerified: true,
+        image: null,
+      },
+    ]);
+
+    // =====================
+    // CLIENT ACCOUNTS (with passwords for email + password login)
+    // =====================
+    console.log("🔐 Creating client accounts with passwords...");
+    const clientCredentials = [
+      { userId: customer1Id, password: "password123" },
+      { userId: customer2Id, password: "password123" },
+    ];
+
+    for (const cred of clientCredentials) {
+      const hashedPassword = await bcrypt.hash(cred.password, 10);
+      await db.insert(schema.clientAccounts).values({
         id: generateId(),
         userId: cred.userId,
         accountId: cred.userId,
@@ -105,7 +147,7 @@ async function seed() {
     await db.insert(schema.addresses).values([
       {
         id: addressId,
-        userId: customerId,
+        userId: customer1Id,
         firstName: "John",
         lastName: "Doe",
         phone: "081234567890",
@@ -676,7 +718,7 @@ async function seed() {
 
       await db.insert(schema.orders).values({
         id: orderId,
-        userId: customerId,
+        userId: customer1Id,
         addressId: addressId,
         status: orderStatuses[i],
         paymentMethod: i % 2 === 0 ? "qris" : "va",
@@ -729,7 +771,7 @@ async function seed() {
       },
       {
         id: generateId(),
-        userId: staffId,
+        userId: hqId,
         action: "UPDATE_ORDER_STATUS",
         entityType: "order",
         entityId: "sample-order-id",
@@ -739,6 +781,15 @@ async function seed() {
     ]);
 
     console.log("✅ Seeding completed successfully!");
+    console.log("");
+    console.log("🔑 Admin credentials:");
+    console.log("  admintoko / admin123   (role: admin)");
+    console.log("  hqmanager / hq123      (role: hq)");
+    console.log("  Email login also works: admin@store.com / admin123, hq@store.com / hq123");
+    console.log("");
+    console.log("🛒 Client credentials:");
+    console.log("  john@example.com / password123");
+    console.log("  jane@example.com / password123");
   } catch (error) {
     console.error("❌ Seeding failed:", error);
     throw error;

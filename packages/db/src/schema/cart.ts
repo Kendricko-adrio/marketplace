@@ -1,15 +1,15 @@
 import { pgTable, text, timestamp, integer } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
-import { users } from "./auth";
+import { clients } from "./auth";
 import { productVariants } from "./products";
 
-// Cart table
+// Cart table (belongs to store clients)
 export const carts = pgTable("cart", {
   id: text("id").primaryKey(),
   userId: text("user_id")
     .notNull()
     .unique()
-    .references(() => users.id, { onDelete: "cascade" }),
+    .references(() => clients.id, { onDelete: "cascade" }),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
@@ -29,9 +29,9 @@ export const cartItems = pgTable("cart_item", {
 
 // Relations
 export const cartsRelations = relations(carts, ({ one, many }) => ({
-  user: one(users, {
+  user: one(clients, {
     fields: [carts.userId],
-    references: [users.id],
+    references: [clients.id],
   }),
   items: many(cartItems),
 }));

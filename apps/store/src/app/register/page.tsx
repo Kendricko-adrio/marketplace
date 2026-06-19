@@ -1,6 +1,5 @@
 "use client";
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,11 +13,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { signUp, signIn } from "@/lib/auth-client";
+import { signUp, signIn, authClient } from "@/lib/auth-client";
+
+const RESEND_COOLDOWN_SECONDS = 60;
 
 export default function RegisterPage() {
-  const router = useRouter();
-
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -26,11 +25,31 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // After successful signUp we show the "check your email" state.
+  const [emailSent, setEmailSent] = useState(false);
+
+  // Resend state
+  const [resending, setResending] = useState(false);
+  const [resendMessage, setResendMessage] = useState("");
+  const [cooldown, setCooldown] = useState(0);
+
+  const startCooldown = () => {
+    setCooldown(RESEND_COOLDOWN_SECONDS);
+    const interval = setInterval(() => {
+      setCooldown((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
 
-    // Validation
     if (password !== confirmPassword) {
       setError("Password tidak sama");
       return;
@@ -48,14 +67,16 @@ export default function RegisterPage() {
         email,
         password,
         name,
+        callbackURL: "/onboarding",
       });
 
       if (result.error) {
         setError(result.error.message || "Gagal mendaftar");
       } else {
-        // Auto login after registration
-        router.push("/");
-        router.refresh();
+        // Do NOT auto-login. Better Auth already sent the verification email
+        // (sendOnSignUp: true). Show the "check your email" screen.
+        setEmailSent(true);
+        startCooldown();
       }
     } catch (err) {
       console.error("Register error:", err);
@@ -65,14 +86,41 @@ export default function RegisterPage() {
     }
   };
 
+  const handleResendEmail = async () => {
+    if (cooldown > 0 || !email) return;
+    setResending(true);
+    setResendMessage("");
+
+    try {
+      const res = await authClient.sendVerificationEmail({
+        email,
+        callbackURL: "/onboarding",
+      });
+
+      if (res.error) {
+        setResendMessage(res.error.message || "Gagal mengirim ulang email.");
+      } else {
+        setResendMessage("Email verifikasi telah dikirim ulang.");
+        startCooldown();
+      }
+    } catch (err) {
+      console.error("Resend error:", err);
+      setResendMessage("Terjadi kesalahan. Silakan coba lagi.");
+    } finally {
+      setResending(false);
+    }
+  };
+
   const handleGoogleSignUp = async () => {
     setError("");
     setLoading(true);
 
     try {
+      // Google users skip email verification (auto-verified in db hook).
+      // After the callback, middleware will route them to /onboarding.
       await signIn.social({
         provider: "google",
-        callbackURL: "/",
+        callbackURL: "/onboarding",
       });
     } catch (err) {
       console.error("Google signup error:", err);
@@ -81,6 +129,63 @@ export default function RegisterPage() {
     }
   };
 
+  // ---------- "Check your email" state ----------
+  if (emailSent) {
+    return (
+      <div className="container mx-auto px-4 py-16 flex justify-center items-center min-h-[calc(100vh-4rem)]">
+        <Card className="w-full max-w-md shadow-lg border-muted/40">
+          <CardHeader className="space-y-1">
+            <CardTitle className="text-2xl font-bold text-center">
+              Cek Email Anda
+            </CardTitle>
+            <CardDescription className="text-center">
+              Kami telah mengirim tautan verifikasi ke{" "}
+              <strong className="text-foreground">{email}</strong>.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground text-center">
+              Klik tautan di dalam email untuk memverifikasi alamat Anda dan
+              melanjutkan ke pengisian data identitas. Tautan ini kedaluwarsa
+              dalam 1 jam.
+            </p>
+
+            {resendMessage && (
+              <div className="bg-muted text-foreground text-sm p-3 rounded-md text-center">
+                {resendMessage}
+              </div>
+            )}
+
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={handleResendEmail}
+              disabled={resending || cooldown > 0}
+            >
+              {resending
+                ? "Mengirim..."
+                : cooldown > 0
+                  ? `Kirim ulang dalam ${cooldown}s`
+                  : "Kirim ulang email verifikasi"}
+            </Button>
+          </CardContent>
+          <CardFooter className="flex justify-center">
+            <p className="text-sm text-muted-foreground">
+              Sudah punya akun?{" "}
+              <Link
+                href="/login"
+                className="text-primary hover:underline font-medium"
+              >
+                Masuk sekarang
+              </Link>
+            </p>
+          </CardFooter>
+        </Card>
+      </div>
+    );
+  }
+
+  // ---------- Default registration form ----------
   return (
     <div className="container mx-auto px-4 py-16 flex justify-center items-center min-h-[calc(100vh-4rem)]">
       <Card className="w-full max-w-md shadow-lg border-muted/40">

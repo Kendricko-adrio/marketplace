@@ -8,6 +8,11 @@ interface User {
   email: string;
   image?: string | null;
   role?: string;
+  emailVerified?: boolean;
+  onboardingCompleted?: boolean;
+  phone?: string | null;
+  birthDate?: string | null;
+  gender?: string | null;
 }
 
 interface Session {

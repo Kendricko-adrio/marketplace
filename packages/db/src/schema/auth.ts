@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, boolean, date } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 // =========================================================
@@ -11,6 +11,13 @@ export const clients = pgTable("client", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
+  // Identity / onboarding fields (filled post-signup or post-Google callback)
+  phone: text("phone"),
+  birthDate: date("birth_date"),
+  gender: text("gender"), // male | female | other
+  onboardingCompleted: boolean("onboarding_completed")
+    .notNull()
+    .default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });

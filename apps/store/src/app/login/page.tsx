@@ -14,7 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { signIn } from "@/lib/auth-client";
+import { signIn, authClient } from "@/lib/auth-client";
 
 function LoginForm() {
   const router = useRouter();
@@ -25,10 +25,14 @@ function LoginForm() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendMessage, setResendMessage] = useState("");
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setNeedsVerification(false);
     setLoading(true);
 
     try {
@@ -38,8 +42,20 @@ function LoginForm() {
       });
 
       if (result.error) {
-        setError(result.error.message || "Email atau password salah");
+        const msg = result.error.message || "Email atau password salah";
+        // Better Auth returns this when requireEmailVerification is on.
+        if (
+          msg.toLowerCase().includes("verify") ||
+          msg.toLowerCase().includes("verifikasi") ||
+          msg.toLowerCase().includes("email is not verified")
+        ) {
+          setNeedsVerification(true);
+          setError(msg);
+        } else {
+          setError(msg);
+        }
       } else {
+        // Let middleware route to /onboarding if needed, otherwise callbackUrl.
         router.push(callbackUrl);
         router.refresh();
       }
@@ -51,14 +67,39 @@ function LoginForm() {
     }
   };
 
+  const handleResendVerification = async () => {
+    if (!email) return;
+    setResending(true);
+    setResendMessage("");
+
+    try {
+      const res = await authClient.sendVerificationEmail({
+        email,
+        callbackURL: "/onboarding",
+      });
+
+      if (res.error) {
+        setResendMessage(res.error.message || "Gagal mengirim ulang email.");
+      } else {
+        setResendMessage("Email verifikasi telah dikirim ulang. Cek kotak masuk Anda.");
+      }
+    } catch (err) {
+      console.error("Resend verification error:", err);
+      setResendMessage("Terjadi kesalahan. Silakan coba lagi.");
+    } finally {
+      setResending(false);
+    }
+  };
+
   const handleGoogleLogin = async () => {
     setError("");
     setLoading(true);
 
     try {
+      // Google users skip email verification; middleware routes to /onboarding.
       await signIn.social({
         provider: "google",
-        callbackURL: callbackUrl,
+        callbackURL: "/onboarding",
       });
     } catch (err) {
       console.error("Google login error:", err);
@@ -82,6 +123,25 @@ function LoginForm() {
           {error && (
             <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-md">
               {error}
+            </div>
+          )}
+
+          {needsVerification && (
+            <div className="bg-muted text-foreground text-sm p-3 rounded-md space-y-2">
+              <p>
+                Email Anda belum diverifikasi. Silakan cek email Anda untuk
+                tautan verifikasi.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full"
+                onClick={handleResendVerification}
+                disabled={resending || !email}
+              >
+                {resending ? "Mengirim..." : "Kirim ulang email verifikasi"}
+              </Button>
+              {resendMessage && <p className="text-xs">{resendMessage}</p>}
             </div>
           )}
 

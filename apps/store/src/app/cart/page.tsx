@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Trash2, Plus, Minus, ArrowRight, ShoppingBag } from "lucide-react";
+import { Trash2, Plus, Minus, ArrowRight, ShoppingBag, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -10,14 +10,19 @@ interface CartItem {
   id: string;
   quantity: number;
   variantId: string;
+  branchId: string | null;
   variant: {
     id: string;
     sku: string;
     color: string | null;
     size: string | null;
     price: string;
-    stock: number;
   };
+  branch: {
+    id: string;
+    name: string;
+    city: string;
+  } | null;
   product: {
     id: string;
     name: string;
@@ -173,6 +178,13 @@ export default function CartPage() {
                         .join(" / ")}
                     </p>
                   )}
+                  {item.branch && (
+                    <p className="text-xs text-muted-foreground inline-flex items-center gap-1 mt-0.5">
+                      <MapPin className="h-3 w-3" />
+                      {item.branch.name}
+                      {item.branch.city ? ` · ${item.branch.city}` : ""}
+                    </p>
+                  )}
                   <div className="text-primary font-bold mt-1">
                     Rp {parseFloat(item.variant.price).toLocaleString("id-ID")}
                   </div>
@@ -197,8 +209,7 @@ export default function CartPage() {
                       className="h-8 w-8"
                       onClick={() => updateQuantity(item.id, item.quantity + 1)}
                       disabled={
-                        updating === item.id ||
-                        item.quantity >= item.variant.stock
+                        updating === item.id
                       }
                     >
                       <Plus className="h-3 w-3" />

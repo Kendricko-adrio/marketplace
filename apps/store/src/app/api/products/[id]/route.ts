@@ -7,8 +7,10 @@ import {
   categories,
   productImages,
   reviews,
+  branchStocks,
+  branches,
 } from "@/db";
-import { eq, and, asc, avg, count } from "drizzle-orm";
+import { eq, and, asc, avg, count, inArray, gt } from "drizzle-orm";
 
 export async function GET(
   request: NextRequest,
@@ -61,7 +63,7 @@ export async function GET(
       .where(eq(productVariants.productId, productData.id))
       .orderBy(asc(productVariants.isDefault));
 
-    const variantsWithImages = await Promise.all(
+    const variantsWithImagesAndStock = await Promise.all(
       variants.map(async (variant) => {
         const images = await db
           .select()
@@ -69,9 +71,30 @@ export async function GET(
           .where(eq(productImages.variantId, variant.id))
           .orderBy(asc(productImages.displayOrder));
 
+        // Get branches with stock > 0 for this variant
+        const branchStockRows = await db
+          .select({
+            branchId: branches.id,
+            name: branches.name,
+            code: branches.code,
+            city: branches.city,
+            stock: branchStocks.stock,
+          })
+          .from(branchStocks)
+          .innerJoin(branches, eq(branchStocks.branchId, branches.id))
+          .where(
+            and(
+              eq(branchStocks.productVariantId, variant.id),
+              eq(branches.status, "aktif"),
+              gt(branchStocks.stock, 0)
+            )
+          )
+          .orderBy(asc(branches.name));
+
         return {
           ...variant,
           images: images.map((img) => img.url),
+          branchStock: branchStockRows,
         };
       })
     );
@@ -106,7 +129,7 @@ export async function GET(
       data: {
         ...productData,
         categories: productCategories,
-        variants: variantsWithImages,
+        variants: variantsWithImagesAndStock,
         colors,
         sizes,
         reviews: {

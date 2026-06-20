@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { carts, cartItems, productVariants } from "@/db";
+import { carts, cartItems, branchStocks } from "@/db";
 import { eq, and } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
@@ -53,7 +53,7 @@ export async function PUT(
       );
     }
 
-    // Get cart item
+    // Get cart item (with branchId)
     const item = await db
       .select()
       .from(cartItems)
@@ -67,18 +67,26 @@ export async function PUT(
       );
     }
 
-    // Check stock
-    const variant = await db
-      .select()
-      .from(productVariants)
-      .where(eq(productVariants.id, item[0].variantId))
-      .limit(1);
+    // Check branch stock if the item is tied to a branch
+    if (item[0].branchId) {
+      const stockRow = await db
+        .select()
+        .from(branchStocks)
+        .where(
+          and(
+            eq(branchStocks.branchId, item[0].branchId),
+            eq(branchStocks.productVariantId, item[0].variantId)
+          )
+        )
+        .limit(1);
 
-    if (variant.length === 0 || variant[0].stock < quantity) {
-      return NextResponse.json(
-        { success: false, error: "Insufficient stock" },
-        { status: 400 }
-      );
+      const availableStock = stockRow[0]?.stock ?? 0;
+      if (quantity > availableStock) {
+        return NextResponse.json(
+          { success: false, error: "Insufficient stock at this branch" },
+          { status: 400 }
+        );
+      }
     }
 
     // Update quantity

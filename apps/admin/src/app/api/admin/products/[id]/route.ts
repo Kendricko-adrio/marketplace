@@ -101,7 +101,6 @@ const variantSchema = z.object({
   color: z.string().optional(),
   size: z.string().optional(),
   price: z.string(),
-  stock: z.number().int().nonnegative(),
   sku: z.string(),
   isDefault: z.boolean().default(false),
   images: z
@@ -208,7 +207,6 @@ export const PUT = withAuth(async (
             color: variant.color,
             size: variant.size,
             price: variant.price,
-            stock: variant.stock,
             sku: variant.sku,
             isDefault: variant.isDefault,
             updatedAt: new Date(),
@@ -223,7 +221,6 @@ export const PUT = withAuth(async (
           color: variant.color,
           size: variant.size,
           price: variant.price,
-          stock: variant.stock,
           sku: variant.sku,
           isDefault: variant.isDefault,
         });

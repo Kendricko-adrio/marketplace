@@ -21,7 +21,7 @@
     "paths": {
       "@/*": ["./src/*"],
       "@marketplace/db": ["../../packages/db/src/index.ts"],
-      "@marketplace/db/*": ["../../packages/db/src/*"],
+      "@marketplace/db/*": ["../../packages/db/*"],
       "@db/*": ["./src/db/*"]
     }
   },

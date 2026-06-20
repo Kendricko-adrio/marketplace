@@ -2,9 +2,17 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
-import { Star, ShoppingCart, Heart, Share2, Minus, Plus } from "lucide-react";
+import { Star, ShoppingCart, Heart, Share2, Minus, Plus, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+
+interface BranchStock {
+  branchId: string;
+  name: string;
+  code: string;
+  city: string;
+  stock: number;
+}
 
 interface ProductVariant {
   id: string;
@@ -12,9 +20,9 @@ interface ProductVariant {
   color: string | null;
   size: string | null;
   price: string;
-  stock: number;
   isDefault: boolean;
   images: string[];
+  branchStock: BranchStock[];
 }
 
 interface Product {
@@ -50,6 +58,7 @@ export default function ProductDetailPage() {
   const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(
     null
   );
+  const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
   const [addingToCart, setAddingToCart] = useState(false);
 
   useEffect(() => {
@@ -92,11 +101,12 @@ export default function ProductDetailPage() {
 
     if (matchingVariant) {
       setSelectedVariant(matchingVariant);
+      setSelectedBranchId(null);
     }
   }, [selectedColor, selectedSize, product]);
 
   const handleAddToCart = async () => {
-    if (!selectedVariant) return;
+    if (!selectedVariant || !selectedBranchId) return;
 
     setAddingToCart(true);
     try {
@@ -105,6 +115,7 @@ export default function ProductDetailPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           variantId: selectedVariant.id,
+          branchId: selectedBranchId,
           quantity,
         }),
       });
@@ -158,7 +169,16 @@ export default function ProductDetailPage() {
   const discount = Math.round(
     ((originalPrice - currentPrice) / originalPrice) * 100
   );
-  const inStock = (selectedVariant?.stock || 0) > 0;
+
+  const availableBranches = selectedVariant?.branchStock ?? [];
+  const selectedBranchStock = availableBranches.find(
+    (b) => b.branchId === selectedBranchId
+  );
+  const stockLabel = selectedBranchId
+    ? `Stok: ${selectedBranchStock?.stock ?? 0}`
+    : availableBranches.length > 0
+    ? "Pilih cabang"
+    : "Stok habis di semua cabang";
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -207,15 +227,7 @@ export default function ProductDetailPage() {
             <span>|</span>
             <span>{product.sold.toLocaleString()} Terjual</span>
             <span>|</span>
-            <span
-              className={
-                inStock
-                  ? "text-green-600 font-medium"
-                  : "text-red-600 font-medium"
-              }
-            >
-              {inStock ? `Stok: ${selectedVariant?.stock}` : "Stok Habis"}
-            </span>
+            <span className="text-green-600 font-medium">{stockLabel}</span>
           </div>
 
           <div className="mb-8">
@@ -282,6 +294,56 @@ export default function ProductDetailPage() {
             </div>
           )}
 
+          {/* Branch Picker */}
+          {availableBranches.length > 0 && (
+            <div className="mb-8">
+              <h3 className="mb-3 font-medium flex items-center gap-2">
+                <MapPin className="h-4 w-4" />
+                Pilih Cabang
+              </h3>
+              <div className="flex flex-col gap-2">
+                {availableBranches.map((b) => {
+                  const isSelected = selectedBranchId === b.branchId;
+                  return (
+                    <button
+                      key={b.branchId}
+                      type="button"
+                      onClick={() => setSelectedBranchId(b.branchId)}
+                      className={`flex items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors ${
+                        isSelected
+                          ? "border-primary bg-primary/5"
+                          : "border-input hover:bg-muted"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={`h-4 w-4 rounded-full border-2 flex items-center justify-center ${
+                            isSelected
+                              ? "border-primary"
+                              : "border-muted-foreground/40"
+                          }`}
+                        >
+                          {isSelected && (
+                            <div className="h-2 w-2 rounded-full bg-primary" />
+                          )}
+                        </div>
+                        <div>
+                          <div className="text-sm font-medium">{b.name}</div>
+                          <div className="text-xs text-muted-foreground">
+                            {b.city} · {b.code}
+                          </div>
+                        </div>
+                      </div>
+                      <Badge variant="secondary" className="ml-auto">
+                        Stok: {b.stock}
+                      </Badge>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Quantity & Actions */}
           <div className="flex flex-col sm:flex-row gap-4 mb-8">
             <div className="flex items-center border border-input rounded-md w-fit">
@@ -304,7 +366,9 @@ export default function ProductDetailPage() {
                 size="icon"
                 onClick={() =>
                   setQuantity(
-                    Math.min(selectedVariant?.stock || 99, quantity + 1)
+                    selectedBranchStock
+                      ? Math.min(selectedBranchStock.stock, quantity + 1)
+                      : quantity + 1
                   )
                 }
                 className="h-10 w-10 text-muted-foreground hover:text-foreground"
@@ -316,7 +380,7 @@ export default function ProductDetailPage() {
             <Button
               className="flex-1 gap-2"
               size="lg"
-              disabled={!inStock || addingToCart}
+              disabled={addingToCart || !selectedBranchId}
               onClick={handleAddToCart}
             >
               <ShoppingCart className="w-5 h-5" />

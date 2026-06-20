@@ -6,6 +6,7 @@ import {
   productVariants,
   products,
   productImages,
+  branches,
 } from "@/db";
 import { eq, and, asc } from "drizzle-orm";
 import { auth } from "@/lib/auth";
@@ -53,13 +54,18 @@ export async function GET() {
         id: cartItems.id,
         quantity: cartItems.quantity,
         variantId: cartItems.variantId,
+        branchId: cartItems.branchId,
         variant: {
           id: productVariants.id,
           sku: productVariants.sku,
           color: productVariants.color,
           size: productVariants.size,
           price: productVariants.price,
-          stock: productVariants.stock,
+        },
+        branch: {
+          id: branches.id,
+          name: branches.name,
+          city: branches.city,
         },
         product: {
           id: products.id,
@@ -70,6 +76,7 @@ export async function GET() {
       .from(cartItems)
       .innerJoin(productVariants, eq(cartItems.variantId, productVariants.id))
       .innerJoin(products, eq(productVariants.productId, products.id))
+      .leftJoin(branches, eq(cartItems.branchId, branches.id))
       .where(eq(cartItems.cartId, cart.id));
 
     // Get images for each item

@@ -6,8 +6,9 @@ import {
   productToCategory,
   categories,
   productImages,
+  branchStocks,
 } from "@/db";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, desc, sql, inArray, sum } from "drizzle-orm";
 import { z } from "zod";
 import { withAuth } from "@/lib/auth-guard";
 
@@ -48,7 +49,15 @@ export const GET = withAuth(async (_ctx, request: NextRequest) => {
           )
           .where(eq(productToCategory.productId, product.id));
 
-        const totalStock = variants.reduce((sum, v) => sum + v.stock, 0);
+        const variantIds = variants.map((v) => v.id);
+        let totalStock = 0;
+        if (variantIds.length > 0) {
+          const stockRows = await db
+            .select({ total: sum(branchStocks.stock) })
+            .from(branchStocks)
+            .where(inArray(branchStocks.productVariantId, variantIds));
+          totalStock = Number(stockRows[0]?.total || 0);
+        }
 
         return {
           ...product,
@@ -90,7 +99,6 @@ const createProductSchema = z.object({
       color: z.string().optional(),
       size: z.string().optional(),
       price: z.string(),
-      stock: z.number().int().nonnegative(),
       sku: z.string(),
       isDefault: z.boolean().default(false),
       images: z
@@ -153,16 +161,15 @@ export const POST = withAuth(async (_ctx, request: NextRequest) => {
     // Create variants
     for (const variant of variants) {
       const variantId = crypto.randomUUID();
-      await db.insert(productVariants).values({
-        id: variantId,
-        productId,
-        sku: variant.sku,
-        color: variant.color,
-        size: variant.size,
-        price: variant.price,
-        stock: variant.stock,
-        isDefault: variant.isDefault,
-      });
+        await db.insert(productVariants).values({
+          id: variantId,
+          productId,
+          sku: variant.sku,
+          color: variant.color,
+          size: variant.size,
+          price: variant.price,
+          isDefault: variant.isDefault,
+        });
 
       // Create images for this variant
       for (let i = 0; i < variant.images.length; i++) {

@@ -262,15 +262,6 @@ export async function POST(request: NextRequest) {
         price: item.product_variant.price,
         quantity: item.cart_item.quantity,
       });
-
-      // Reduce stock
-      await db
-        .update(productVariants)
-        .set({
-          stock: item.product_variant.stock - item.cart_item.quantity,
-          updatedAt: new Date(),
-        })
-        .where(eq(productVariants.id, item.product_variant.id));
     }
 
     // Clear cart

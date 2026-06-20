@@ -10,6 +10,7 @@ import {
   LogOut,
   Package,
   Settings,
+  MapPin,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -107,6 +108,16 @@ export default function Header() {
         </form>
 
         <div className="flex items-center gap-2">
+          <Link href="/branches">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="hidden md:inline-flex text-white hover:bg-white/10 gap-2"
+            >
+              <MapPin className="h-4 w-4" />
+              Cabang
+            </Button>
+          </Link>
           <Link href="/cart">
             <Button
               variant="ghost"

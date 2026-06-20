@@ -11,7 +11,6 @@ interface ApiVariant {
   color: string | null;
   size: string | null;
   price: string;
-  stock: number;
   sku: string;
   isDefault: boolean;
   images: { id: string; url: string; displayOrder: number }[];
@@ -62,7 +61,6 @@ export default function EditProductPage() {
             color: v.color ?? "",
             size: v.size ?? "",
             price: v.price,
-            stock: v.stock,
             sku: v.sku,
             isDefault: v.isDefault,
             images: v.images.map((img) => ({

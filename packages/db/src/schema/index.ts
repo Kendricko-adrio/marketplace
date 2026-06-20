@@ -4,6 +4,9 @@ export * from "./auth";
 // Products schema
 export * from "./products";
 
+// Branches schema
+export * from "./branches";
+
 // Orders schema
 export * from "./orders";
 

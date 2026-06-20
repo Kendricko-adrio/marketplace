@@ -27,7 +27,6 @@ export interface ProductVariant {
   color?: string;
   size?: string;
   price: string;
-  stock: number;
   sku: string;
   isDefault: boolean;
   images: ProductImage[];
@@ -78,7 +77,6 @@ export default function ProductForm({
         color: "",
         size: "",
         price: "",
-        stock: 0,
         sku: "",
         isDefault: true,
         images: [],
@@ -158,7 +156,6 @@ export default function ProductForm({
           color: "",
           size: "",
           price: "",
-          stock: 0,
           sku: "",
           isDefault: false,
           images: [],
@@ -377,7 +374,7 @@ export default function ProductForm({
               )}
             </div>
 
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <div className="space-y-2">
                 <Label>Warna</Label>
                 <Input
@@ -403,18 +400,6 @@ export default function ProductForm({
                   step="0.01"
                   value={variant.price}
                   onChange={(e) => updateVariant(index, { price: e.target.value })}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label>Stok</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  value={variant.stock}
-                  onChange={(e) =>
-                    updateVariant(index, { stock: parseInt(e.target.value) || 0 })
-                  }
                   required
                 />
               </div>

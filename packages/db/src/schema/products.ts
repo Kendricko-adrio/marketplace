@@ -63,7 +63,6 @@ export const productVariants = pgTable("product_variant", {
   color: text("color"),
   size: text("size"),
   price: numeric("price", { precision: 15, scale: 2 }).notNull(),
-  stock: integer("stock").notNull().default(0),
   isDefault: boolean("is_default").notNull().default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),

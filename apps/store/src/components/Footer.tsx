@@ -32,6 +32,12 @@ export default function Footer() {
             >
               Katalog
             </Link>
+            <Link
+              href="/branches"
+              className="text-sm text-muted-foreground hover:text-primary transition-colors"
+            >
+              Cabang Kami
+            </Link>
           </div>
         </div>
         <div>

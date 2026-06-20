@@ -28,11 +28,13 @@ async function seed() {
     await db.delete(schema.orders);
     await db.delete(schema.reviews);
     await db.delete(schema.auditLogs);
+    await db.delete(schema.branchStocks);
     await db.delete(schema.productImages);
     await db.delete(schema.productVariants);
     await db.delete(schema.productToCategory);
     await db.delete(schema.products);
     await db.delete(schema.categories);
+    await db.delete(schema.branches);
     await db.delete(schema.vouchers);
     await db.delete(schema.banners);
     await db.delete(schema.addresses);
@@ -228,6 +230,8 @@ async function seed() {
     // =====================
     console.log("📦 Creating products...");
 
+    const allVariantIds: string[] = [];
+
     const productsData = [
       {
         id: generateId(),
@@ -248,7 +252,6 @@ async function seed() {
             color: "Hitam",
             size: "42",
             price: "1200000",
-            stock: 50,
             sku: "AR-BLK-42",
             isDefault: true,
           },
@@ -256,7 +259,6 @@ async function seed() {
             color: "Putih",
             size: "42",
             price: "1200000",
-            stock: 30,
             sku: "AR-WHT-42",
             isDefault: false,
           },
@@ -264,7 +266,6 @@ async function seed() {
             color: "Hitam",
             size: "44",
             price: "1250000",
-            stock: 20,
             sku: "AR-BLK-44",
             isDefault: false,
           },
@@ -289,7 +290,6 @@ async function seed() {
             color: "Putih",
             size: "41",
             price: "850000",
-            stock: 40,
             sku: "SS-WHT-41",
             isDefault: true,
           },
@@ -297,7 +297,6 @@ async function seed() {
             color: "Hitam",
             size: "41",
             price: "850000",
-            stock: 25,
             sku: "SS-BLK-41",
             isDefault: false,
           },
@@ -305,7 +304,6 @@ async function seed() {
             color: "Putih",
             size: "43",
             price: "850000",
-            stock: 20,
             sku: "SS-WHT-43",
             isDefault: false,
           },
@@ -330,7 +328,6 @@ async function seed() {
             color: "Hitam",
             size: "41",
             price: "1500000",
-            stock: 30,
             sku: "OX-BLK-41",
             isDefault: true,
           },
@@ -338,7 +335,6 @@ async function seed() {
             color: "Coklat",
             size: "42",
             price: "1500000",
-            stock: 25,
             sku: "OX-BRN-42",
             isDefault: false,
           },
@@ -363,7 +359,6 @@ async function seed() {
             color: "Navy",
             size: "40",
             price: "450000",
-            stock: 80,
             sku: "CS-NVY-40",
             isDefault: true,
           },
@@ -371,7 +366,6 @@ async function seed() {
             color: "Abu-abu",
             size: "41",
             price: "450000",
-            stock: 60,
             sku: "CS-GRY-41",
             isDefault: false,
           },
@@ -394,7 +388,6 @@ async function seed() {
             color: "Coklat",
             size: "42",
             price: "1350000",
-            stock: 40,
             sku: "MH-BRN-42",
             isDefault: true,
           },
@@ -402,7 +395,6 @@ async function seed() {
             color: "Hitam",
             size: "43",
             price: "1350000",
-            stock: 30,
             sku: "MH-BLK-43",
             isDefault: false,
           },
@@ -410,7 +402,6 @@ async function seed() {
             color: "Coklat",
             size: "44",
             price: "1400000",
-            stock: 20,
             sku: "MH-BRN-44",
             isDefault: false,
           },
@@ -433,7 +424,6 @@ async function seed() {
             color: "Hitam",
             size: "41",
             price: "250000",
-            stock: 100,
             sku: "SD-BLK-41",
             isDefault: true,
           },
@@ -441,7 +431,6 @@ async function seed() {
             color: "Navy",
             size: "42",
             price: "250000",
-            stock: 80,
             sku: "SD-NVY-42",
             isDefault: false,
           },
@@ -464,7 +453,6 @@ async function seed() {
             color: "Hitam/Merah",
             size: "43",
             price: "1100000",
-            stock: 60,
             sku: "CB-BRD-43",
             isDefault: true,
           },
@@ -472,7 +460,6 @@ async function seed() {
             color: "Putih/Biru",
             size: "42",
             price: "1100000",
-            stock: 45,
             sku: "CB-WBL-42",
             isDefault: false,
           },
@@ -495,7 +482,6 @@ async function seed() {
             color: "Hitam",
             size: "41",
             price: "550000",
-            stock: 70,
             sku: "EW-BLK-41",
             isDefault: true,
           },
@@ -503,7 +489,6 @@ async function seed() {
             color: "Abu-abu",
             size: "42",
             price: "550000",
-            stock: 50,
             sku: "EW-GRY-42",
             isDefault: false,
           },
@@ -526,7 +511,6 @@ async function seed() {
             color: "Hijau Army",
             size: "42",
             price: "950000",
-            stock: 45,
             sku: "TB-GRN-42",
             isDefault: true,
           },
@@ -534,7 +518,6 @@ async function seed() {
             color: "Abu-abu",
             size: "43",
             price: "950000",
-            stock: 35,
             sku: "TB-GRY-43",
             isDefault: false,
           },
@@ -557,7 +540,6 @@ async function seed() {
             color: "Hitam",
             size: "41",
             price: "1600000",
-            stock: 30,
             sku: "UC-BLK-41",
             isDefault: true,
           },
@@ -565,7 +547,6 @@ async function seed() {
             color: "Coklat",
             size: "42",
             price: "1600000",
-            stock: 25,
             sku: "UC-BRN-42",
             isDefault: false,
           },
@@ -607,9 +588,11 @@ async function seed() {
           color: variant.color,
           size: variant.size,
           price: variant.price,
-          stock: variant.stock,
           isDefault: variant.isDefault,
         });
+
+        // Track variant id for branch stock seeding
+        allVariantIds.push(variantId);
 
         // Insert placeholder image for each variant
         await db.insert(schema.productImages).values({
@@ -617,6 +600,76 @@ async function seed() {
           variantId: variantId,
           url: '/images/products/shoes1.webp',
           displayOrder: 0,
+        });
+      }
+    }
+
+    // =====================
+    // BRANCHES + BRANCH STOCKS
+    // =====================
+    console.log("🏢 Creating branches...");
+
+    const standardHours = { open: "09:00", close: "21:00" };
+    const branchOperatingHours = {
+      monday: standardHours,
+      tuesday: standardHours,
+      wednesday: standardHours,
+      thursday: standardHours,
+      friday: standardHours,
+      saturday: standardHours,
+      sunday: null,
+    };
+
+    const branchIds = [generateId(), generateId(), generateId()];
+
+    await db.insert(schema.branches).values([
+      {
+        id: branchIds[0],
+        name: "Cabang Jakarta Pusat",
+        code: "JKT-01",
+        city: "Jakarta Pusat",
+        address: "Jl. Sudirman No. 45, Gambir, Jakarta Pusat 10110",
+        latitude: "-6.1944",
+        longitude: "106.8229",
+        operatingHours: branchOperatingHours,
+        googleMapsUrl:
+          "https://www.google.com/maps/search/?api=1&query=-6.1944,106.8229",
+        status: "aktif",
+      },
+      {
+        id: branchIds[1],
+        name: "Cabang Surabaya",
+        code: "SRB-01",
+        city: "Surabaya",
+        address: "Jl. Tunjungan No. 80, Genteng, Surabaya 60275",
+        latitude: "-7.2575",
+        longitude: "112.7521",
+        operatingHours: branchOperatingHours,
+        googleMapsUrl:
+          "https://www.google.com/maps/search/?api=1&query=-7.2575,112.7521",
+        status: "aktif",
+      },
+      {
+        id: branchIds[2],
+        name: "Cabang Bandung Dago",
+        code: "BDG-01",
+        city: "Bandung",
+        address: "Jl. Ir. H. Juanda No. 101, Coblong, Bandung 40135",
+        latitude: "-6.8888",
+        longitude: "107.6111",
+        operatingHours: branchOperatingHours,
+        googleMapsUrl: null,
+        status: "nonaktif",
+      },
+    ]);
+
+    console.log("📦 Seeding branch stocks per variant...");
+    for (const branchId of branchIds) {
+      for (const variantId of allVariantIds) {
+        await db.insert(schema.branchStocks).values({
+          branchId,
+          productVariantId: variantId,
+          stock: Math.floor(Math.random() * 50) + 5,
         });
       }
     }

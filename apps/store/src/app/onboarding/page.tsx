@@ -18,6 +18,7 @@ export default async function OnboardingPage() {
   const user = session.user as typeof session.user & {
     onboardingCompleted?: boolean;
   };
+
   if (user.onboardingCompleted) {
     redirect("/");
   }

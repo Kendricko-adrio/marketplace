@@ -35,6 +35,9 @@ function LoginForm() {
     setNeedsVerification(false);
     setLoading(true);
 
+    // Clear stale onboarding cookie so the gate evaluates fresh for this user.
+    document.cookie = "client.onboarding=; path=/; max-age=0";
+
     try {
       const result = await signIn.email({
         email,
@@ -95,11 +98,16 @@ function LoginForm() {
     setError("");
     setLoading(true);
 
+    // Clear stale onboarding cookie so the gate evaluates fresh for this user.
+    document.cookie = "client.onboarding=; path=/; max-age=0";
+
     try {
-      // Google users skip email verification; middleware routes to /onboarding.
+      // New Google users go to onboarding; returning users go home.
+      // (Middleware will still gate home if onboarding isn't done.)
       await signIn.social({
         provider: "google",
-        callbackURL: "/onboarding",
+        callbackURL: "/",
+        newUserCallbackURL: "/onboarding",
       });
     } catch (err) {
       console.error("Google login error:", err);

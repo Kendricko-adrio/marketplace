@@ -60,6 +60,9 @@ export default function RegisterPage() {
       return;
     }
 
+    // Clear stale onboarding cookie so the gate evaluates fresh for this user.
+    document.cookie = "client.onboarding=; path=/; max-age=0";
+
     setLoading(true);
 
     try {
@@ -115,12 +118,16 @@ export default function RegisterPage() {
     setError("");
     setLoading(true);
 
+    // Clear stale onboarding cookie so the gate evaluates fresh for this user.
+    document.cookie = "client.onboarding=; path=/; max-age=0";
+
     try {
       // Google users skip email verification (auto-verified in db hook).
-      // After the callback, middleware will route them to /onboarding.
+      // New users go to onboarding; returning users go home.
       await signIn.social({
         provider: "google",
-        callbackURL: "/onboarding",
+        callbackURL: "/",
+        newUserCallbackURL: "/onboarding",
       });
     } catch (err) {
       console.error("Google signup error:", err);

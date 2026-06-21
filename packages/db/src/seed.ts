@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config({ path: "../../.env" });
 import { drizzle } from "drizzle-orm/node-postgres";
+import { eq } from "drizzle-orm";
 import { Pool } from "pg";
 import * as schema from "./schema";
 import bcrypt from "bcryptjs";
@@ -662,6 +663,17 @@ async function seed() {
         status: "nonaktif",
       },
     ]);
+
+    // =====================
+    // ASSIGN BRANCHES TO ADMIN USERS
+    // =====================
+    console.log("🔗 Assigning branches to admin users...");
+    // admintoko -> Jakarta Pusat (branchIds[0]); hqmanager oversees all (null)
+    await db
+      .update(schema.users)
+      .set({ branchId: branchIds[0] })
+      .where(eq(schema.users.id, adminId));
+    // HQ manager branchId stays null (oversees all branches)
 
     console.log("📦 Seeding branch stocks per variant...");
     for (const branchId of branchIds) {

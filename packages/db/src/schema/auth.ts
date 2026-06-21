@@ -1,5 +1,6 @@
 import { pgTable, text, timestamp, boolean, date } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+import { branches } from "./branches";
 
 // =========================================================
 // STORE: Client (customer) authentication schema
@@ -95,6 +96,15 @@ export const users = pgTable("user", {
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
   role: text("role").notNull().default("admin"), // admin | hq
+  // Admin (branch staff) are scoped to one branch; HQ oversee all branches (null).
+  branchId: text("branch_id").references(() => branches.id, {
+    onDelete: "set null",
+  }),
+  // When true, the user must change their password on next login
+  // (set by HQ on user creation or password reset).
+  mustResetPassword: boolean("must_reset_password")
+    .notNull()
+    .default(false),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
@@ -140,9 +150,13 @@ export const adminVerifications = pgTable("admin_verification", {
 });
 
 // Relations for admin users
-export const usersRelations = relations(users, ({ many }) => ({
+export const usersRelations = relations(users, ({ many, one }) => ({
   sessions: many(adminSessions),
   accounts: many(adminAccounts),
+  branch: one(branches, {
+    fields: [users.branchId],
+    references: [branches.id],
+  }),
 }));
 
 export const adminSessionsRelations = relations(adminSessions, ({ one }) => ({

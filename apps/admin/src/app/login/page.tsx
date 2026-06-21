@@ -1,6 +1,7 @@
 "use client";
 import { useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -47,8 +48,33 @@ function AdminLoginForm() {
       if (result.error) {
         setError(result.error.message || "Email/username atau password salah");
       } else {
-        router.push(callbackUrl);
-        router.refresh();
+        // The sign-in cookie is set, but the Better Auth client session cache
+        // may not have refreshed yet. Fetch a dedicated server endpoint that
+        // reads the session server-side (cookie is sent automatically) to get
+        // the authoritative mustResetPassword value.
+        try {
+          const checkRes = await fetch("/api/admin/session-check", {
+            cache: "no-store",
+          });
+          const checkJson = await checkRes.json();
+          const mustReset = checkJson?.mustResetPassword === true;
+
+          if (mustReset) {
+            // Set a lightweight edge cookie so middleware can gate without a
+            // DB hit on every request. Not httpOnly so the client can clear it
+            // after a successful reset.
+            document.cookie = "admin.must_reset=1; path=/; max-age=600"; // 10 min
+            router.push("/reset-password?force=1");
+            router.refresh();
+          } else {
+            router.push(callbackUrl);
+            router.refresh();
+          }
+        } catch {
+          // If the check fails, default to the callback URL (safe fallback)
+          router.push(callbackUrl);
+          router.refresh();
+        }
       }
     } catch (err) {
       console.error("Admin login error:", err);
@@ -111,6 +137,15 @@ function AdminLoginForm() {
               {loading ? "Memproses..." : "Masuk"}
             </Button>
           </form>
+
+          <div className="text-center">
+            <Link
+              href="/forgot-password"
+              className="text-sm text-slate-400 hover:text-slate-200 underline underline-offset-4"
+            >
+              Lupa password?
+            </Link>
+          </div>
         </CardContent>
       </Card>
     </div>

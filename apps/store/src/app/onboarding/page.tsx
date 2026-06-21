@@ -1,4 +1,4 @@
-import { headers } from "next/headers";
+import { headers, cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { IdentityForm } from "@/components/onboarding/identity-form";
@@ -20,6 +20,13 @@ export default async function OnboardingPage() {
   };
 
   if (user.onboardingCompleted) {
+    // If the edge cookie is missing/expired, bounce through a route handler
+    // that re-syncs it before sending the user home. Without this, middleware
+    // would bounce us straight back here in an infinite redirect loop.
+    const cookieStore = await cookies();
+    if (cookieStore.get("client.onboarding")?.value !== "1") {
+      redirect("/api/onboarding/sync");
+    }
     redirect("/");
   }
 

@@ -25,15 +25,3 @@ export const vouchers = pgTable("voucher", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
-
-// Banners table
-export const banners = pgTable("banner", {
-  id: text("id").primaryKey(),
-  title: text("title").notNull(),
-  imageUrl: text("image_url").notNull(),
-  linkUrl: text("link_url"),
-  displayOrder: integer("display_order").notNull().default(0),
-  isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});

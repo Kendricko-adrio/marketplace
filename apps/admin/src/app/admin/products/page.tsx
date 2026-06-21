@@ -43,9 +43,11 @@ interface Product {
   slug: string;
   basePrice: string;
   status: string;
-  variants: number;
+  variants: { id: string; price: string; isDefault: boolean }[];
+  variantCount: number;
   totalStock: number;
   categories: string[];
+  images?: { url: string }[];
 }
 
 export default function AdminProductsPage() {
@@ -192,7 +194,7 @@ export default function AdminProductsPage() {
                             )}
                           </TableCell>
                           <TableCell className="text-center">
-                            {product.variants}
+                            {product.variantCount}
                           </TableCell>
                           <TableCell className="text-right">
                             {product.totalStock}

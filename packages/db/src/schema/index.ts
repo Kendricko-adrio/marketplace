@@ -16,5 +16,8 @@ export * from "./cart";
 // Marketing schema
 export * from "./marketing";
 
+// Homepage CMS schema
+export * from "./homepage";
+
 // System schema
 export * from "./system";

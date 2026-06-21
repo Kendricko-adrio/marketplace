@@ -20,8 +20,12 @@
     ],
     "paths": {
       "@/*": ["./src/*"],
+      "@/lib/utils": ["../../packages/ui/src/lib/utils.ts"],
+      "@/components/ui/*": ["../../packages/ui/src/components/ui/*"],
       "@marketplace/db": ["../../packages/db/src/index.ts"],
       "@marketplace/db/*": ["../../packages/db/*"],
+      "@marketplace/ui": ["../../packages/ui/src/index.ts"],
+      "@marketplace/ui/*": ["../../packages/ui/*"],
       "@db/*": ["./src/db/*"]
     }
   },

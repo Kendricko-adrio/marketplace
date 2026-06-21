@@ -5,6 +5,7 @@ import * as schema from "@/db";
 import bcrypt from "bcryptjs";
 import { username } from "better-auth/plugins";
 import { APIError } from "better-auth/api";
+import { sendResetPasswordEmail } from "@/lib/email";
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -32,8 +33,11 @@ export const auth = betterAuth({
       },
     },
     async sendResetPassword(data) {
-      console.log("Reset password URL:", data.url);
-      // TODO: Implement email sending
+      await sendResetPasswordEmail({
+        to: data.user.email,
+        name: data.user.name,
+        resetUrl: data.url,
+      });
     },
   },
   socialProviders: {},
@@ -42,6 +46,17 @@ export const auth = betterAuth({
       role: {
         type: ["admin", "hq"],
         defaultValue: "admin",
+        input: false,
+      },
+      branchId: {
+        type: "string",
+        required: false,
+        input: false,
+      },
+      mustResetPassword: {
+        type: "boolean",
+        required: false,
+        defaultValue: false,
         input: false,
       },
     },

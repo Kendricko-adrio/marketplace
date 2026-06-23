@@ -23,6 +23,7 @@ async function seed() {
   try {
     // Clear existing data
     console.log("🗑️  Clearing existing data...");
+    await db.delete(schema.staticPages);
     await db.delete(schema.homepageSectionProducts);
     await db.delete(schema.homepageSections);
     await db.delete(schema.cartItems);
@@ -881,6 +882,220 @@ async function seed() {
         quantity: qty,
       });
     }
+
+    // =====================
+    // STATIC PAGES (CMS)
+    // =====================
+    console.log("📄 Creating static pages...");
+    await db.insert(schema.staticPages).values([
+      {
+        id: generateId(),
+        slug: "about",
+        title: "Tentang Kami",
+        content: `# Tentang Kami
+
+Selamat datang di **StoreFront** — destinasi belanja online terpercaya untuk kebutuhan sehari-hari.
+
+## Cerita Kami
+
+StoreFront didirikan pada tahun 2024 dengan misi sederhana: memberikan pengalaman belanja yang **mudah, aman, dan terpercaya** bagi semua orang di Indonesia.
+
+Kami percaya bahwa teknologi seharusnya membuat hidup lebih mudah, bukan lebih rumit. Itulah sebabnya kami membangun platform yang fokus pada:
+
+- **Kemudahan** — navigasi yang intuitif dan proses checkout yang cepat
+- **Keamanan** — pembayaran terenkripsi dan perlindungan data pelanggan
+- **Kepercayaan** — produk asli, deskripsi jujur, dan layanan pelanggan yang responsif
+
+## Nilai-Nilai Kami
+
+1. Pelanggan adalah prioritas utama
+2. Kualitas di atas kuantitas
+3. Transparansi dalam setiap transaksi
+4. Dukungan untuk UMKM lokal
+
+> "Kami tidak hanya menjual produk, kami membangun kepercayaan."
+
+## Tim Kami
+
+Tim kami terdiri dari profesional yang berpengalaman di bidang e-commerce, teknologi, dan layanan pelanggan. Kami berkomitmen untuk terus berinovasi memberikan yang terbaik untuk Anda.
+
+Terima kasih telah memilih StoreFront. Selamat belanja!`,
+        isPublished: true,
+        displayOrder: 1,
+      },
+      {
+        id: generateId(),
+        slug: "contact",
+        title: "Hubungi Kami",
+        content: `# Hubungi Kami
+
+Kami selalu siap membantu Anda. Berikut adalah cara untuk menghubungi kami.
+
+## Layanan Pelanggan
+
+| Kanal | Detail | Jam Operasional |
+| - | - | - |
+| WhatsApp | 0812-3456-7890 | Senin–Sabtu, 09.00–21.00 WIB |
+| Email | support@storefront.id | Senin–Jumat, 09.00–18.00 WIB |
+| Live Chat | Tersedia di pojok kanan bawah | 24/7 |
+
+## Kantor Pusat
+
+**StoreFront HQ**
+
+Jl. Sudirman No. 45, Gambir
+
+Jakarta Pusat 10110
+
+Indonesia
+
+## Cabang Kami
+
+Kami memiliki cabang di beberapa kota besar:
+
+- Jakarta Pusat
+- Surabaya
+- Bandung
+
+Kunjungi halaman [Cabang Kami](/branches) untuk informasi lengkap alamat dan jam operasional.
+
+## Pertanyaan Umum
+
+Untuk pertanyaan umum, silakan sampaikan melalui WhatsApp atau email di atas. Tim kami akan merespons dalam **1×24 jam** pada hari kerja.`,
+        isPublished: true,
+        displayOrder: 2,
+      },
+      {
+        id: generateId(),
+        slug: "terms",
+        title: "Syarat & Ketentuan",
+        content: `# Syarat & Ketentuan
+
+Terakhir diperbarui: 2026
+
+Dengan mengakses dan menggunakan situs ini, Anda menyetujui syarat dan ketentuan berikut.
+
+## 1. Definisi
+
+- **"Kami"**, **"Toko"** merujuk pada StoreFront.
+- **"Anda"**, **"Pengguna"** merujuk pada pelanggan yang mengakses situs ini.
+- **"Layanan"** merujuk pada platform e-commerce yang disediakan.
+
+## 2. Penggunaan Akun
+
+1. Anda harus berusia minimal 17 tahun atau telah mendapat izin dari wali.
+2. Anda wajib memberikan informasi yang akurat saat mendaftar.
+3. Anda bertanggung jawab menjaga keamanan kata sandi akun Anda.
+
+## 3. Pembelian & Pembayaran
+
+| Metode | Keterangan |
+| - | - |
+| QRIS | Pembayaran instan via aplikasi e-wallet atau m-banking |
+| Virtual Account | Transfer bank dengan kode unik per transaksi |
+
+- Pesanan diproses setelah pembayaran dikonfirmasi.
+- Pembayaran gagal akan dibatalkan otomatis dalam 24 jam.
+
+## 4. Pengiriman
+
+- Estimasi pengiriman 1–5 hari kerja tergantung lokasi.
+- Biaya ongkir dihitung berdasarkan berat, volume, dan tujuan.
+- Nomor pelacakan akan dikirim setelah pesanan dikirim.
+
+## 5. Pengembalian & Refund
+
+1. Produk dapat dikembalikan dalam 7 hari setelah diterima.
+2. Produk harus dalam kondisi asli dan belum digunakan.
+3. Refund diproses dalam 3–5 hari kerja setelah verifikasi.
+
+## 6. Privasi Data
+
+Penggunaan data Anda diatur dalam [Kebijakan Privasi](/pages/privacy) kami.
+
+## 7. Perubahan Ketentuan
+
+Kami berhak mengubah syarat dan ketentuan ini kapan saja. Perubahan berlaku sejak dipublikasikan di situs ini.
+
+## 8. Hukum yang Berlaku
+
+Ketentuan ini diatur berdasarkan hukum Republik Indonesia.`,
+        isPublished: true,
+        displayOrder: 3,
+      },
+      {
+        id: generateId(),
+        slug: "privacy",
+        title: "Kebijakan Privasi",
+        content: `# Kebijakan Privasi
+
+Terakhir diperbarui: 2026
+
+StoreFront menghormati privasi Anda. Kebijakan ini menjelaskan bagaimana kami mengumpulkan, menggunakan, dan melindungi data pribadi Anda.
+
+## Data yang Kami Kumpulkan
+
+### Data yang Anda Berikan
+
+- **Nama**, **email**, dan **nomor telepon** saat mendaftar
+- **Alamat pengiriman** saat melakukan pemesanan
+- **Riwayat pembelian** untuk keperluan layanan
+
+### Data yang Dikumpulkan Otomatis
+
+- Alamat IP dan jenis perangkat
+- Aktivitas browsing di situs kami
+- Cookie dan teknologi pelacakan serupa
+
+## Penggunaan Data
+
+Kami menggunakan data Anda untuk:
+
+1. Memproses dan mengirim pesanan
+2. Berkomunikasi mengenai akun dan pesanan
+3. Meningkatkan layanan dan pengalaman belanja
+4. Mencegah penipuan dan aktivitas ilegal
+
+## Pembagian Data kepada Pihak Ketiga
+
+Kami **tidak menjual** data pribadi Anda. Data hanya dibagikan kepada:
+
+- **Penyedia layanan pengiriman** (untuk mengirim pesanan)
+- **Penyedia layanan pembayaran** (untuk memproses transaksi)
+- **Otoritas hukum** bila diwajibkan oleh hukum yang berlaku
+
+## Keamanan Data
+
+Kami menerapkan langkah teknis dan organisasi yang wajar untuk melindungi data Anda:
+
+- Enkripsi TLS/SSL pada semua transmisi data
+- Penyimpanan kata sandi dalam bentuk *hash* (bcrypt)
+- Akses terbatas hanya untuk personel yang berwenang
+
+## Hak Anda
+
+| Hak | Cara Mengajukan |
+| - | - |
+| Akses data | Email ke privacy@storefront.id |
+| Koreksi data | Melalui pengaturan akun atau email |
+| Penghapusan akun | Email ke privacy@storefront.id |
+| Penolakan pemasaran | Berhenti berlangganan via email |
+
+## Cookie
+
+Situs ini menggunakan cookie untuk menjaga sesi login dan meningkatkan pengalaman. Anda dapat menonaktifkan cookie melalui pengaturan peramban, namun beberapa fitur mungkin tidak berfungsi optimal.
+
+## Perubahan Kebijakan
+
+Kebijakan ini dapat diperbarui sewaktu-waktu. Perubahan akan dipublikasikan di halaman ini.
+
+## Hubungi Kami
+
+Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan subject **Permintaan Privasi**.`,
+        isPublished: true,
+        displayOrder: 4,
+      },
+    ]);
 
     // =====================
     // AUDIT LOGS

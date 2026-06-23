@@ -19,5 +19,8 @@ export * from "./marketing";
 // Homepage CMS schema
 export * from "./homepage";
 
+// Static pages schema
+export * from "./pages";
+
 // System schema
 export * from "./system";

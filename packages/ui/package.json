@@ -28,7 +28,10 @@
     "@radix-ui/react-separator": "^1.1.8",
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-switch": "^1.2.6",
-    "@radix-ui/react-tabs": "^1.1.13"
+    "@radix-ui/react-tabs": "^1.1.13",
+    "react-markdown": "^9.0.1",
+    "remark-gfm": "^4.0.0",
+    "rehype-sanitize": "^6.0.0"
   },
   "devDependencies": {
     "@types/node": "^20",

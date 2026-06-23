@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config({ path: "../../.env" });
 import { drizzle } from "drizzle-orm/node-postgres";
+import { eq } from "drizzle-orm";
 import { Pool } from "pg";
 import * as schema from "./schema";
 import bcrypt from "bcryptjs";
@@ -22,6 +23,8 @@ async function seed() {
   try {
     // Clear existing data
     console.log("🗑️  Clearing existing data...");
+    await db.delete(schema.homepageSectionProducts);
+    await db.delete(schema.homepageSections);
     await db.delete(schema.cartItems);
     await db.delete(schema.carts);
     await db.delete(schema.orderItems);
@@ -36,7 +39,6 @@ async function seed() {
     await db.delete(schema.categories);
     await db.delete(schema.branches);
     await db.delete(schema.vouchers);
-    await db.delete(schema.banners);
     await db.delete(schema.addresses);
     await db.delete(schema.clientSessions);
     await db.delete(schema.clientAccounts);
@@ -231,6 +233,7 @@ async function seed() {
     console.log("📦 Creating products...");
 
     const allVariantIds: string[] = [];
+    const allProductIds: string[] = [];
 
     const productsData = [
       {
@@ -570,6 +573,8 @@ async function seed() {
         flashSaleEndsAt: product.flashSaleEndsAt || null,
       });
 
+      allProductIds.push(product.id);
+
       // Insert product-category relations
       for (const catId of product.categoryIds) {
         await db.insert(schema.productToCategory).values({
@@ -663,6 +668,17 @@ async function seed() {
       },
     ]);
 
+    // =====================
+    // ASSIGN BRANCHES TO ADMIN USERS
+    // =====================
+    console.log("🔗 Assigning branches to admin users...");
+    // admintoko -> Jakarta Pusat (branchIds[0]); hqmanager oversees all (null)
+    await db
+      .update(schema.users)
+      .set({ branchId: branchIds[0] })
+      .where(eq(schema.users.id, adminId));
+    // HQ manager branchId stays null (oversees all branches)
+
     console.log("📦 Seeding branch stocks per variant...");
     for (const branchId of branchIds) {
       for (const variantId of allVariantIds) {
@@ -721,35 +737,102 @@ async function seed() {
     ]);
 
     // =====================
-    // BANNERS
+    // HOMEPAGE SECTIONS (CMS)
     // =====================
-    console.log("🖼️  Creating banners...");
-    await db.insert(schema.banners).values([
+    console.log("🏠 Creating homepage sections...");
+    const announcementId = generateId();
+    const bannerId = generateId();
+    const carouselId = generateId();
+    const promoCardsId = generateId();
+    const storeBannerId = generateId();
+
+    await db.insert(schema.homepageSections).values([
       {
-        id: generateId(),
-        title: "Promo Akhir Tahun Sepatu - Diskon hingga 70%",
-        imageUrl: "/images/banners/promo-akhir-tahun.jpg",
-        linkUrl: "/products?promo=akhir-tahun",
+        id: announcementId,
+        type: "announcement_bar",
+        title: null,
+        subtitle: null,
+        content: {
+          message:
+            "Gratis ongkir untuk pembelian di atas Rp 200.000!",
+          variant: "info",
+        },
         displayOrder: 1,
         isActive: true,
       },
       {
-        id: generateId(),
-        title: "Flash Sale Sneakers",
-        imageUrl: "/images/banners/flash-sale-sneakers.jpg",
-        linkUrl: "/products?category=sneakers&flashsale=true",
+        id: bannerId,
+        type: "banner",
+        title: "Promo Spesial Akhir Tahun",
+        subtitle: "Diskon hingga 70% untuk semua produk pilihan",
+        content: {
+          imageUrl: "",
+          altText: "Promo Akhir Tahun",
+          ctaText: "Belanja Sekarang",
+          ctaLink: "/products",
+        },
         displayOrder: 2,
         isActive: true,
       },
       {
-        id: generateId(),
-        title: "Gratis Ongkir Seluruh Indonesia",
-        imageUrl: "/images/banners/gratis-ongkir.jpg",
-        linkUrl: "/products",
+        id: carouselId,
+        type: "carousel_product",
+        title: "Produk Pilihan",
+        subtitle: "Produk rekomendasi terbaik untuk Anda",
+        content: {},
         displayOrder: 3,
-        isActive: false,
+        isActive: true,
+      },
+      {
+        id: promoCardsId,
+        type: "promo_cards",
+        title: "Kategori Pilihan",
+        subtitle: null,
+        content: {
+          cards: [
+            {
+              id: generateId(),
+              imageUrl: "",
+              title: "New Arrivals",
+              linkUrl: "/products",
+            },
+            {
+              id: generateId(),
+              imageUrl: "",
+              title: "Best Seller",
+              linkUrl: "/products",
+            },
+            {
+              id: generateId(),
+              imageUrl: "",
+              title: "Diskon Spesial",
+              linkUrl: "/products",
+            },
+          ],
+        },
+        displayOrder: 4,
+        isActive: true,
+      },
+      {
+        id: storeBannerId,
+        type: "store_banner",
+        title: "Cabang Kami",
+        subtitle: "Kunjungi toko fisik kami di kota terdekat",
+        content: {},
+        displayOrder: 5,
+        isActive: true,
       },
     ]);
+
+    // Link 4 products to the carousel section
+    const carouselProductIds = allProductIds.slice(0, 4);
+    for (let i = 0; i < carouselProductIds.length; i++) {
+      await db.insert(schema.homepageSectionProducts).values({
+        sectionId: carouselId,
+        productId: carouselProductIds[i],
+        displayOrder: i + 1,
+      });
+    }
 
     // =====================
     // SAMPLE ORDERS

@@ -8,7 +8,7 @@ import {
   productImages,
   branchStocks,
 } from "@/db";
-import { eq, desc, sql, inArray, sum } from "drizzle-orm";
+import { eq, desc, sql, inArray, sum, asc } from "drizzle-orm";
 import { z } from "zod";
 import { withAuth } from "@/lib/auth-guard";
 
@@ -59,11 +59,28 @@ export const GET = withAuth(async (_ctx, request: NextRequest) => {
           totalStock = Number(stockRows[0]?.total || 0);
         }
 
+        // Fetch images for each variant
+        let images: { url: string }[] = [];
+        if (variantIds.length > 0) {
+          const variantImages = await db
+            .select({ url: productImages.url })
+            .from(productImages)
+            .where(inArray(productImages.variantId, variantIds))
+            .orderBy(asc(productImages.displayOrder));
+          images = variantImages;
+        }
+
         return {
           ...product,
-          variants: variants.length,
+          variants: variants.map((v) => ({
+            id: v.id,
+            price: v.price,
+            isDefault: v.isDefault,
+          })),
+          variantCount: variants.length,
           totalStock,
           categories: productCategories.map((c) => c.name),
+          images,
         };
       })
     );

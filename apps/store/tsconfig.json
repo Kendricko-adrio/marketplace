@@ -20,8 +20,14 @@
     ],
     "paths": {
       "@/*": ["./src/*"],
+      "@/lib/utils": ["../../packages/ui/src/lib/utils.ts"],
+      "@/components/ui/*": ["../../packages/ui/src/components/ui/*"],
+      "@/components/ProductCard": ["../../packages/ui/src/components/store/ProductCard.tsx"],
+      "@/components/BranchCard": ["../../packages/ui/src/components/store/BranchCard.tsx"],
       "@marketplace/db": ["../../packages/db/src/index.ts"],
-      "@marketplace/db/*": ["../../packages/db/*"]
+      "@marketplace/db/*": ["../../packages/db/*"],
+      "@marketplace/ui": ["../../packages/ui/src/index.ts"],
+      "@marketplace/ui/*": ["../../packages/ui/*"]
     }
   },
   "include": [

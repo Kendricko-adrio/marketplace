@@ -44,19 +44,25 @@ export default function Footer() {
           <h4 className="font-semibold text-foreground mb-4">Tentang</h4>
           <div className="flex flex-col gap-2">
             <Link
-              href="/about"
+              href="/pages/about"
               className="text-sm text-muted-foreground hover:text-primary transition-colors"
             >
               Tentang Kami
             </Link>
             <Link
-              href="/privacy"
+              href="/pages/contact"
+              className="text-sm text-muted-foreground hover:text-primary transition-colors"
+            >
+              Hubungi Kami
+            </Link>
+            <Link
+              href="/pages/privacy"
               className="text-sm text-muted-foreground hover:text-primary transition-colors"
             >
               Privasi
             </Link>
             <Link
-              href="/terms"
+              href="/pages/terms"
               className="text-sm text-muted-foreground hover:text-primary transition-colors"
             >
               Syarat & Ketentuan

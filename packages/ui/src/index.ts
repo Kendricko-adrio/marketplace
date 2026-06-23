@@ -27,6 +27,9 @@ export type {
   DayHours,
 } from "./components/store/types";
 
+export { default as MarkdownRenderer } from "./components/markdown/MarkdownRenderer";
+export type { MarkdownRendererProps } from "./components/markdown/MarkdownRenderer";
+
 export { default as HomepageSectionRenderer } from "./components/homepage/HomepageSectionRenderer";
 export { default as BannerSection } from "./components/homepage/BannerSection";
 export { default as CarouselProductSection } from "./components/homepage/CarouselProductSection";

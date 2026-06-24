@@ -1,0 +1,649 @@
+# End-to-End Checkout & Order Fulfillment — AI Coding Prompt
+
+> **Project:** Marketplace (Next.js 16 + React 19 + PostgreSQL + Drizzle ORM + Better Auth + shadcn/ui)
+> **Phase:** Phase 1 — MVP Go-Live (Exposure Online + Pickup in Store)
+> **Scope:** 5 interdependent features implemented as a single cohesive checkout pipeline
+> **Repository:** `~/marketplace` (monorepo: `apps/store`, `apps/admin`, `packages/db`)
+
+---
+
+## 1. Context & Overview
+
+This prompt covers the **complete end-to-end checkout and order fulfillment flow** for a marketplace web app with a **pickup-in-store** model. Five Notion tickets are bundled into a single implementation session:
+
+| # | Feature | Ticket |
+|---|---|---|
+| 1 | **Cart per Branch** — enforce 1 cart = 1 branch | Cart per Branch |
+| 2 | **Checkout Pickup-Focused (Simplified Multi-step)** | Checkout Pickup |
+| 3 | **Midtrans Integration — QRIS Only** | Midtrans |
+| 4 | **Order Management — Admin List + Order Inquiry + Detail** | Order Management |
+| 5 | **Pickup in Store — 6-Digit Text Code + Verification + Email + Time Validation** | Pickup in Store |
+
+**High-level user story:**
+
+1. Customer adds items to a **branch-scoped cart**.
+2. Customer proceeds through a **4-step checkout**: contact info → pickup branch & time → QRIS payment → review & place order.
+3. Payment processed via **Midtrans QRIS** with webhook verification.
+4. Admin branch receives real-time notification, views the order, and confirms stock.
+5. Upon successful payment, the system **auto-generates a 6-digit pickup code** and emails it to the customer.
+6. Customer arrives at the branch, states the code; admin inputs it → order becomes **completed**.
+7. Both **customer and admin** can view/inquire past transactions.
+
+---
+
+## 2. Current Schema (Already Exists — Do NOT Re-create)
+
+The following tables are **already implemented** in `packages/db/src/schema/`. Only **modify** where indicated.
+
+### 2.1 `branches` (exists — do NOT recreate)
+
+```ts
+export const branches = pgTable("branch", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  code: text("code").notNull().unique(),
+  city: text("city").notNull(),
+  address: text("address").notNull(),
+  latitude: numeric("latitude", { precision: 10, scale: 7 }),
+  longitude: numeric("longitude", { precision: 10, scale: 7 }),
+  operatingHours: jsonb("operating_hours").$type<OperatingHours>().notNull().default({}),
+  googleMapsUrl: text("google_maps_url"),
+  status: text("status").notNull().default("aktif"), // aktif | nonaktif
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+```
+
+`OperatingHours` type (exists):
+```ts
+export type DayHours = { open: string; close: string } | null;
+export type OperatingHours = {
+  monday?: DayHours; tuesday?: DayHours; wednesday?: DayHours;
+  thursday?: DayHours; friday?: DayHours; saturday?: DayHours; sunday?: DayHours;
+};
+```
+
+Also exists: `branchStocks` table (many-to-many: branch × productVariant × stock).
+
+### 2.2 `carts` & `cartItems` (exists — modify `carts`)
+
+```ts
+// carts — ADD branchId
+export const carts = pgTable("cart", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().unique().references(() => clients.id, { onDelete: "cascade" }),
+  branchId: text("branch_id").references(() => branches.id), // ← ADD THIS
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+
+// cartItems — already has branchId
+export const cartItems = pgTable("cart_item", {
+  id: text("id").primaryKey(),
+  cartId: text("cart_id").notNull().references(() => carts.id, { onDelete: "cascade" }),
+  variantId: text("variant_id").notNull().references(() => productVariants.id, { onDelete: "cascade" }),
+  branchId: text("branch_id").references(() => branches.id, { onDelete: "cascade" }), // ← already exists
+  quantity: integer("quantity").notNull().default(1),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});
+```
+
+### 2.3 `orders` (exists — **MODIFY**)
+
+The current `orders` table uses **Indonesian** status values. **MUST be migrated to English** for consistency.
+
+**Modify `status`:**
+- **Current:** `default("proses")` with values `proses | dikirim | selesai | batal`
+- **New:** `default("pending_payment")` with values **`pending_payment | processing | ready_for_pickup | completed | cancelled`**
+
+**Modify `paymentStatus`:**
+- **Current:** `default("pending")` with values `pending | paid | failed`
+- **Keep as-is** — already in English.
+
+**Add columns:**
+- `branchId: text("branch_id").references(() => branches.id)` — the branch where pickup happens.
+- `pickupCode: text("pickup_code")` — 6-digit alphanumeric code, generated automatically upon payment success.
+- `pickupDate: timestamp("pickup_date")` — selected pickup date.
+- `pickupTime: text("pickup_time")` — selected pickup time (e.g., `"10:00"`).
+- `contactPhone: text("contact_phone").notNull()` — phone from checkout step 1.
+- `contactEmail: text("contact_email").notNull()` — email from checkout step 1.
+
+**Keep existing but nullable (Phase 2 will use):**
+- `addressId`, `shippingCarrier`, `trackingNumber`, `shippingCost` — all nullable, not used in Phase 1.
+
+**Relations to add:**
+- `orders.branch` → `branches`
+
+**IMPORTANT:** Write a Drizzle migration to convert any existing Indonesian status values in the database to their English equivalents before applying schema changes, or handle it in the migration script.
+
+### 2.4 Auth tables (exist — do NOT modify structure)
+
+- Store users: `clients` table (has `phone` field ✅)
+- Admin users: `users` table (has `role: admin | hq` and `branchId` ✅)
+
+---
+
+## 3. Feature Specifications
+
+### 3.1 Feature 1: Cart per Branch (Enforce 1 Cart = 1 Branch)
+
+**Current state:** `cartItems` already stores `branchId`, but `carts` (parent) does not. This means a cart can technically hold items from multiple branches.
+
+**Required changes:**
+
+1. **Add `branchId` to `carts` table** (see schema section 2.2).
+2. **Cart API modification** (`apps/store/src/app/api/cart/items/route.ts`):
+   - When adding the first item to a cart, set `carts.branchId` to that item's branch.
+   - When adding a subsequent item, if `carts.branchId` ≠ the new item's `branchId`, return error:
+     ```json
+     { "success": false, "error": "CART_BRANCH_MISMATCH", 
+       "message": "Your cart belongs to Branch A. Adding from Branch B will clear your cart." }
+     ```
+   - Frontend should show a confirmation modal on this error. If user confirms, clear the cart, set new `branchId`, then add the item.
+3. **Cart GET API** (`apps/store/src/app/api/cart/route.ts`):
+   - Include `branch` object in response (id, name, city, address).
+   - Show branch info at top of cart UI.
+4. **Cart UI** (`apps/store/src/app/cart/page.tsx`):
+   - Display branch name + address prominently.
+   - If cart is empty, show "Your cart is empty" + CTA to browse products.
+   - If items exist, show table with: image, name, variant (color/size), price, qty (± buttons), subtotal, delete.
+   - Show order summary: subtotal, service fee, total. No shipping cost (pickup = Rp 0).
+   - "Checkout" button → `/checkout`.
+
+---
+
+### 3.2 Feature 2: Checkout Pickup-Focused (4-Step Wizard)
+
+**Route:** `/checkout` (customer-facing, requires login)
+
+**Step indicator:** Show progress bar (Step 1 of 4, etc.).
+
+#### Step 1 — Contact Information
+
+- Fields: **Phone** (required, Indonesian format), **Email** (required, valid email).
+- Button: "Use from Profile" — pre-fills with `clients.phone` and `clients.email`.
+- "Next" button validates and proceeds to Step 2.
+
+#### Step 2 — Pickup Branch & Time
+
+- **Branch selection**: Dropdown of active branches (`status = "aktif"`). Show name + city + address.
+- The branch is pre-selected from the cart's `branchId` (readonly/hidden — user already chose via cart).
+- **Pickup date picker**: Calendar component. Disable:
+  - Past dates.
+  - Dates where the branch is closed (check `operatingHours` — if day is not in JSON or value is `null`, branch is closed).
+- **Pickup time dropdown**: Generated from `branch.operatingHours` for the selected day of week.
+  - Generate 30-minute intervals between `open` and `close`.
+  - Example: `09:00`, `09:30`, `10:00`, ... `17:00`.
+- Show summary: "Pickup at [Branch Name], [Address] on [Date] at [Time]".
+- "Next" button.
+
+#### Step 3 — Payment (QRIS)
+
+- Display: "Payment via QRIS" with QRIS icon/badge.
+- Show final order summary: items, branch, pickup time, total amount.
+- No other payment methods shown (Phase 1 = QRIS only).
+- "Place Order" button is disabled until user confirms.
+
+#### Step 4 — Review & Place Order
+
+- Actually, combine Step 3 review with order creation. On "Place Order":
+  1. Server-side validation of all fields.
+  2. Validate pickup date/time against `branch.operatingHours`.
+  3. Validate stock still available (re-check `branchStocks`).
+  4. Create `orders` row:
+     ```
+     id: uuid, userId, branchId, status: "pending_payment",
+     paymentMethod: "qris", paymentStatus: "pending",
+     contactPhone, contactEmail, pickupDate, pickupTime,
+     subtotal, serviceFee, total, createdAt
+     ```
+  5. Create `orderItems` rows from cart items.
+  6. Clear cart.
+  7. Call Midtrans API to create payment.
+  8. Return Midtrans Snap redirect URL or QRIS data.
+  9. Redirect customer to Midtrans payment page.
+
+**Post-payment:** Midtrans redirects to success/failure page. Webhook handles async confirmation.
+
+---
+
+### 3.3 Feature 3: Midtrans Integration — QRIS Only
+
+**New files to create:**
+
+#### `apps/store/src/lib/midtrans.ts`
+
+- Initialize Midtrans Snap client (server-side only).
+- Use environment variables: `MIDTRANS_SERVER_KEY`, `MIDTRANS_CLIENT_KEY`, `MIDTRANS_IS_PRODUCTION`.
+- Function `createQrisPayment(orderId, amount, customerDetails)` → returns `{ redirect_url, token }`.
+
+#### `apps/store/src/app/api/payments/midtrans/create/route.ts`
+
+- POST endpoint. Input: `{ orderId }`.
+- Validates order exists and belongs to current user.
+- Calls Midtrans to create Snap payment.
+- Returns `{ success: true, redirectUrl, token }`.
+
+#### `apps/store/src/app/api/webhooks/midtrans/route.ts`
+
+- POST endpoint. Receives Midtrans callback.
+- **Signature verification:** Use Midtrans server key + SHA256 to verify callback authenticity.
+- **Idempotency:** Check if order already `paymentStatus = "paid"` before processing.
+- **On success** (`transaction_status = settlement | capture`):
+  - Update `orders.paymentStatus = "paid"`.
+  - Update `orders.status = "processing"`.
+  - Deduct `branchStocks` stock for each order item (if not already deducted).
+  - **Auto-generate pickup code** (6 random alphanumeric chars, e.g., `A8X3K9`).
+  - Update `orders.status = "ready_for_pickup"`.
+  - Send **Email #1** to customer via existing Nodemailer (see Section 3.5.2).
+  - Emit real-time event to admin branch (WebSocket/SSE).
+- **On failure/expiry** (`deny | expire | cancel`):
+  - Update `orders.paymentStatus = "failed"`.
+  - Update `orders.status = "cancelled"`.
+  - Restore stock to `branchStocks`.
+
+**Environment variables needed:**
+```
+MIDTRANS_SERVER_KEY=SB-Mid-server-...
+MIDTRANS_CLIENT_KEY=SB-Mid-client-...
+MIDTRANS_IS_PRODUCTION=false
+```
+
+---
+
+### 3.4 Feature 4: Order Management — Admin
+
+**⚠️ CRITICAL RBAC RULE:**
+- **Admin Branch** (`role = "admin"` with `branchId` set): **CAN ONLY VIEW ORDERS FROM THEIR ASSIGNED BRANCH**. No exceptions. The API must hard-filter by `orders.branchId = users.branchId`.
+- **Admin HQ** (`role = "hq"` with `branchId = null`): **CAN VIEW ALL ORDERS FROM ALL BRANCHES**. HQ sees a branch filter dropdown.
+
+**Routes:**
+- `/admin/orders` — Order List + Inquiry
+- `/admin/orders/[id]` — Order Detail + Status Management
+
+#### 4.1 Order List (`/admin/orders`)
+
+- **Table columns:** Order ID, Customer Name, Branch, Items, Total, Status, Date.
+- **Filters:** Status (`pending_payment | processing | ready_for_pickup | completed | cancelled`), Branch dropdown (HQ only), Date Range (from/to).
+- **Search:** by order ID or customer name.
+- **RBAC enforcement:**
+  - Branch admin query MUST include: `.where(eq(orders.branchId, currentUser.branchId))`
+  - HQ sees all branches, with an optional branch filter.
+- **Sort:** newest first (default). Pagination: 20 per page.
+
+**API modification:** Update `apps/admin/src/app/api/admin/orders/route.ts`:
+- Add branch filtering for branch admins.
+- Add search, filter, pagination.
+
+#### 4.2 Order Detail (`/admin/orders/[id]`)
+
+- Display: customer info, contact phone/email, items (with images), branch info, pickup date/time, payment status, pickup code (if generated).
+- **Status Timeline / Stepper:**
+  1. 🟡 Order Placed (`pending_payment`)
+  2. 🟢 Paid (`paymentStatus = paid`)
+  3. 🔵 Processing (`processing`)
+  4. 🟠 Ready for Pickup (`ready_for_pickup` + pickup code)
+  5. 🟢 Completed (`completed`)
+
+- **Status Actions:**
+  - When `status = "ready_for_pickup"`: Show input field **"Customer Pickup Code"** + **"Verify & Complete"** button.
+    - Backend validates: `inputCode === orders.pickupCode`.
+    - If match → update status to `completed`, record completion time.
+    - Send **Email #2** (Order Completed) to customer.
+    - If no match → error toast: "Invalid pickup code. Please verify with the customer."
+  - When `status = "completed"`: Read-only. Show completion timestamp.
+  - When `status = "pending_payment"`: Read-only. Show "Waiting for payment".
+  - When `status = "processing"`: Read-only. Show "Order is being prepared". (Admin can see but does not manually transition to `ready_for_pickup` — this happens automatically via webhook.)
+
+#### 4.3 Order Inquiry
+
+- `/admin/orders` serves as inquiry with filters and search.
+- Export to CSV is optional (not required for Phase 1).
+
+---
+
+### 3.5 Feature 5: Pickup in Store + Customer Order View + Email + Time Validation
+
+#### 5.1 Pickup Code Generation & Verification
+
+- **Code generation:** Triggered **automatically** by Midtrans webhook when payment is successful.
+- **Code format:** 6 characters, uppercase alphanumeric `[A-Z0-9]`. Avoid ambiguous characters (0, O, I, 1) if possible.
+- **Collision check:** Ensure code is unique among orders with status `ready_for_pickup` or `completed`.
+- **Code expiry:** Not required for Phase 1. Code valid until order is completed.
+
+#### 5.2 Email Notifications (via Existing Nodemailer / Google SMTP)
+
+The project already uses **Google SMTP / Nodemailer** (`apps/store/src/lib/email.ts` and `apps/admin/src/lib/email.ts`). **Use only these — do NOT introduce Resend, SendGrid, AWS SES, or any other provider.**
+
+There are **exactly 2 emails**:
+
+**Email #1 — "Order Ready for Pickup"**
+- **Trigger:** Automatically sent by the Midtrans webhook after successful payment.
+- **Recipient:** Customer email (`orders.contactEmail`).
+- **Content:**
+  - Order summary (items, quantities, prices, total)
+  - Payment confirmation ("Your payment has been successfully received")
+  - **Pickup code in large bold monospace text** (e.g., `A8X3K9`)
+  - Branch name, full address, phone number
+  - Branch operating hours
+  - Pickup date and time selected during checkout
+  - Instructions: "Show this code to the branch staff when you arrive"
+- **Subject:** `Your Order is Ready for Pickup — #{orderId}`
+
+**Email #2 — "Order Completed"**
+- **Trigger:** Automatically sent when admin inputs the correct pickup code and order status becomes `completed`.
+- **Recipient:** Customer email.
+- **Content:**
+  - Order summary
+  - Thank you message
+  - Completion timestamp
+- **Subject:** `Your Order has been Completed — #{orderId}`
+
+**New file:** `apps/store/src/lib/email-templates-order.ts` (or append to existing `email-templates.ts`):
+- `pickupReadyEmailHTML({ order, pickupCode, branch })`
+- `pickupReadyEmailText({ order, pickupCode, branch })`
+- `orderCompletedEmailHTML({ order })`
+- `orderCompletedEmailText({ order })`
+
+**Implementation:** Use existing `sendEmail()` from `apps/store/src/lib/email.ts`. Ensure emails are sent from the **store** app (customer-facing).
+
+#### 5.3 Time Validation
+
+- **Checkout validation (server-side):** Before creating order, validate:
+  - `pickupDate` is not in the past.
+  - Day of week for `pickupDate` has non-null `operatingHours` entry.
+  - `pickupTime` is within `open` and `close` range for that day.
+- **Admin reference:** On order detail, display branch operating hours for admin reference.
+
+#### 5.4 Customer Order View
+
+**New routes:**
+- `/account/orders` — List all customer orders with status badges.
+- `/account/orders/[id]` — Order detail: items, branch info, pickup date/time, status stepper, pickup code (visible only when `status = ready_for_pickup` or `completed`).
+
+**API:**
+- `GET /api/orders` — list customer's own orders.
+- `GET /api/orders/[id]` — order detail (verify ownership: `orders.userId === currentUser.id`).
+
+---
+
+## 4. API Contract
+
+### 4.1 Cart
+
+```
+POST /api/cart/items          { variantId, branchId, quantity }
+PATCH /api/cart/items/[id]    { quantity }
+DELETE /api/cart/items/[id]
+GET /api/cart                 → { id, branch, items[], subtotal, serviceFee, total }
+```
+
+### 4.2 Checkout
+
+```
+POST /api/checkout/validate-step-1    { phone, email }
+POST /api/checkout/validate-step-2    { branchId, pickupDate, pickupTime }
+POST /api/checkout/place-order        { phone, email, pickupDate, pickupTime }
+  → { success, orderId, midtransRedirectUrl }
+```
+
+### 4.3 Payment
+
+```
+POST /api/payments/midtrans/create    { orderId }
+POST /api/webhooks/midtrans           { Midtrans callback payload }
+```
+
+### 4.4 Orders (Admin)
+
+```
+GET  /api/admin/orders?status=&branchId=&from=&to=&search=&page=
+GET  /api/admin/orders/[id]
+PATCH /api/admin/orders/[id]/status   { status, pickupCodeInput? }
+```
+
+### 4.5 Orders (Customer)
+
+```
+GET /api/orders                → { orders[] }
+GET /api/orders/[id]           → { order detail }
+```
+
+---
+
+## 5. RBAC Enforcement (⚠️ CRITICAL — Strictly Enforced)
+
+| Role | Permissions |
+|---|---|
+| **Customer** | Access `/cart`, `/checkout`, `/account/orders`, `/account/profile`. Can only view own orders via `/api/orders/*`. |
+| **Admin Branch** | **MUST ONLY SEE ORDERS FROM THEIR ASSIGNED BRANCH**. Access `/admin/orders` with automatic `branchId` filter. Can verify pickup codes. Receives real-time notifications for new orders in their branch. |
+| **Admin HQ** | Can see **ALL ORDERS FROM ALL BRANCHES**. Branch filter is available in UI. Can view all order details but **does NOT have pickup code verification UI** (read-only for status actions). |
+
+**Implementation:** Enforce at API route level using `withAuth` pattern from `apps/admin/src/lib/auth-guard.ts`. Branch admins MUST have their `branchId` checked against `orders.branchId` on **EVERY** query. Never rely on UI hiding alone.
+
+---
+
+## 6. Flow Diagrams (Mermaid)
+
+### 6.1 Overall Checkout to Fulfillment Flow
+
+```mermaid
+flowchart TD
+    A[Customer browses products] --> B["Add to Cart\nenforce 1 cart = 1 branch"]
+    B --> C[Go to /cart]
+    C --> D[Click Checkout]
+    D --> E["Step 1: Contact Info\nphone + email"]
+    E --> F["Step 2: Pickup Branch & Time\nvalidate operating hours"]
+    F --> G["Step 3: QRIS Payment\nMidtrans Snap"]
+    G --> H["Place Order → status=pending_payment"]
+    H --> I[Redirect to Midtrans]
+    I --> J{Payment Result}
+    J -->|Success| K["Webhook: payment_status=paid\nAuto-generate pickup_code\nstatus=ready_for_pickup"]
+    J -->|Fail| L[status=cancelled]
+    K --> M["Email #1 sent to customer\nOrder + Payment + Pickup Code"]
+    K --> N["Admin Branch notified\nWebSocket/SSE"]
+    N --> O[Admin prepares order]
+    O --> P[Customer arrives at branch]
+    P --> Q[States code to admin]
+    Q --> R[Admin inputs code]
+    R --> S{Code valid?}
+    S -->|Yes| T[Order status = completed]
+    T --> U["Email #2 sent\nOrder Completed"]
+    S -->|No| V["Error: Invalid code"]
+    U --> W["Customer & Admin can inquiry\ntransaction history"]
+```
+
+### 6.2 Cart Branch Enforcement Logic
+
+```mermaid
+flowchart TD
+    A[User clicks Add to Cart] --> B{Cart exists?}
+    B -->|No| C[Create cart with branchId]
+    B -->|Yes| D{carts.branchId == item.branchId?}
+    D -->|Yes| E[Add or update cartItems]
+    D -->|No| F[Return CART_BRANCH_MISMATCH]
+    F --> G[Show branch switch modal]
+    G -->|Confirm| H[Clear cart and set new branchId]
+    G -->|Cancel| I[Abort add to cart]
+    H --> E
+    E --> J[Validate stock vs branchStocks]
+```
+
+### 6.3 Admin Order Status Management
+
+```mermaid
+flowchart TD
+    A(Admin opens order detail page) --> B{Current Status}
+    B -->|pending_payment| C(Read only - Waiting for payment)
+    B -->|processing| D(Read only - Order being prepared)
+    B -->|ready_for_pickup| E(Input customer pickup code)
+    E --> F(Admin types code and clicks Verify)
+    F --> G{Code matches pickupCode?}
+    G -->|Yes| H(Update status to completed)
+    H --> I(Send Email 2 - Order Completed)
+    G -->|No| J(Show error - Invalid pickup code)
+    B -->|completed| K(Read only view)
+```
+
+### 6.4 Midtrans Webhook Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Customer
+    participant M as Midtrans
+    participant WH as /api/webhooks/midtrans
+    participant DB as PostgreSQL
+    participant N as Nodemailer/Gmail SMTP
+    participant WS as WebSocket/SSE
+
+    C->>M: Scan QRIS & Pay
+    M-->>WH: POST callback + signature
+    WH->>WH: Verify SHA256 signature
+    alt Valid & status=settlement
+        WH->>DB: Update payment_status=paid, status=processing
+        WH->>DB: Deduct branchStocks
+        WH->>DB: Generate pickupCode, status=ready_for_pickup
+        WH->>N: Queue Email #1 (Pickup Ready)
+        WH->>WS: Emit to admin branch room
+    else Invalid signature or failed
+        WH->>DB: Update payment_status=failed, status=cancelled
+        WH->>DB: Restore branchStocks
+    end
+    WH-->>M: HTTP 200 OK
+```
+
+---
+
+## 7. UI/UX Guidelines
+
+- Use existing **shadcn/ui** components from `packages/ui/src/components/ui/` (shared workspace package).
+- Use **Tailwind CSS** for styling. Follow existing design tokens (primary color: `#061E29`).
+- Checkout wizard: responsive stack on mobile, sidebar summary on desktop.
+- Admin table: sorting + pagination. Use `packages/ui/src/components/ui/table.tsx`.
+- Pickup code display: **monospace font, large bold text, copy-to-clipboard button**.
+- Error states: inline validation (Zod), toast notifications (Sonner or similar).
+- Loading: skeleton screens for tables, button loading spinners.
+
+---
+
+## 8. Testing & Acceptance Criteria
+
+### 8.1 Automated Tests (Write where applicable)
+
+- **Unit:** Zod schema validation, time validation logic, pickup code generation uniqueness.
+- **Integration:**
+  - Full checkout flow with mocked Midtrans.
+  - RBAC: branch admin cannot see other branch orders (assert 403 or empty result).
+  - HQ admin can see all branches.
+  - Cart branch switch behavior.
+  - Pickup code verification: correct → status `completed`; incorrect → error.
+  - Midtrans webhook signature verification.
+
+### 8.2 Manual QA Checklist
+
+| # | Test | Expected Result |
+|---|---|---|
+| 1 | Add Branch A item → add Branch B item | Modal: switch branch or cancel |
+| 2 | Cart shows branch name + address | Branch info visible |
+| 3 | Checkout Step 2: pick closed-day date | Error: branch closed |
+| 4 | Checkout Step 2: pick time outside hours | Error: time invalid |
+| 5 | Place order → pay via Midtrans Sandbox | Order `status = processing` then `ready_for_pickup` |
+| 6 | Email #1 received after payment | Contains order summary + pickup code + branch info |
+| 7 | Admin branch sees new order notification | Bell icon / SSE event |
+| 8 | Customer views `/account/orders/[id]` | Pickup code visible |
+| 9 | Admin inputs wrong code | Error toast |
+| 10 | Admin inputs correct code | Status = `completed`, Email #2 sent |
+| 11 | Branch admin `/admin/orders` | **ONLY** own branch orders visible |
+| 12 | HQ admin `/admin/orders` | **ALL** branches' orders visible |
+
+---
+
+## 9. Files & Code Organization
+
+Modify or create within the existing monorepo structure:
+
+```
+packages/db/src/schema/
+  branches.ts       ← exists (no changes needed)
+  cart.ts            ← ADD branchId to carts
+  orders.ts          ← MIGRATE status to English, ADD branchId/pickupCode/pickupDate/pickupTime/contactPhone/contactEmail
+  index.ts           ← ensure exports
+
+drizzle/
+  [new migration]    ← generate & apply
+
+apps/store/
+  src/app/checkout/page.tsx                    ← NEW: 4-step checkout wizard
+  src/app/checkout/steps/                      ← NEW: contact-step, pickup-step, payment-step, review-step
+  src/app/account/orders/page.tsx              ← NEW: customer order list
+  src/app/account/orders/[id]/page.tsx         ← NEW: customer order detail
+  src/app/api/checkout/*                       ← NEW: validation + place-order endpoints
+  src/app/api/payments/midtrans/create/route.ts ← NEW
+  src/app/api/webhooks/midtrans/route.ts       ← NEW
+  src/app/api/orders/route.ts                  ← NEW: customer orders list
+  src/app/api/orders/[id]/route.ts             ← NEW: customer order detail
+  src/lib/midtrans.ts                          ← NEW: Midtrans client setup
+  src/lib/email-templates-order.ts             ← NEW: order email templates (2 emails only)
+  src/app/cart/page.tsx                        ← MODIFY: add branch info, checkout button
+  src/app/api/cart/items/route.ts              ← MODIFY: enforce 1 cart = 1 branch
+
+apps/admin/
+  src/app/admin/orders/page.tsx                ← MODIFY: add filters, search, branch scoping
+  src/app/admin/orders/[id]/page.tsx           ← MODIFY: add status actions, pickup code input
+  src/app/api/admin/orders/route.ts            ← MODIFY: add branch filter, search, pagination
+  src/app/api/admin/orders/[id]/route.ts       ← MODIFY: add status update + code verification
+```
+
+---
+
+## 10. Environment Variables (.env.example)
+
+Create or update `apps/store/.env.example` and `apps/admin/.env.example` (or a root `.env.example`):
+
+```bash
+# ============================================
+# Database
+# ============================================
+DATABASE_URL=postgresql://user:password@localhost:5432/storefront
+
+# ============================================
+# Better Auth (Store)
+# ============================================
+BETTER_AUTH_SECRET=your-better-auth-secret-min-32-chars
+BETTER_AUTH_URL=http://localhost:3000
+
+# ============================================
+# Better Auth (Admin)
+# ============================================
+ADMIN_BETTER_AUTH_SECRET=your-admin-auth-secret-min-32-chars
+ADMIN_BETTER_AUTH_URL=http://localhost:3001
+
+# ============================================
+# Google OAuth (Store only)
+# ============================================
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+
+# ============================================
+# SMTP / Email (Google Gmail)
+# ============================================
+SMTP_USER=your-email@gmail.com
+SMTP_PASS=your-gmail-app-password
+SMTP_FROM=your-email@gmail.com
+
+# ============================================
+# Midtrans Payment (Sandbox for development)
+# ============================================
+MIDTRANS_SERVER_KEY=SB-Mid-server-xxxxxxxxxxxxxxxxxxxx
+MIDTRANS_CLIENT_KEY=SB-Mid-client-xxxxxxxxxxxxxxxxxxxx
+MIDTRANS_IS_PRODUCTION=false
+
+# ============================================
+# File Uploads (if using local storage)
+# ============================================
+UPLOAD_DIR=./uploads
+```
+
+---
+
+> **IMPORTANT:** This is a **Phase 1** implementation. Do not introduce Phase 2/3 features. Do not change the monorepo workspace structure. All schema changes must be done via Drizzle migrations. Re-use existing code patterns (Nodemailer/Google SMTP for email, `withAuth` for RBAC, shadcn/ui from `packages/ui`). All order statuses MUST be in English.

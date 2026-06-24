@@ -836,50 +836,116 @@ async function seed() {
     }
 
     // =====================
-    // SAMPLE ORDERS
+    // SAMPLE ORDERS (Phase 1 — pickup-in-store model)
     // =====================
     console.log("🛒 Creating sample orders...");
 
-    // Get a variant ID for order items
-    const variants = await db.select().from(schema.productVariants).limit(5);
+    // Get variants (with product name) for order items
+    const variants = await db
+      .select({
+        id: schema.productVariants.id,
+        productId: schema.productVariants.productId,
+        color: schema.productVariants.color,
+        size: schema.productVariants.size,
+        price: schema.productVariants.price,
+        productName: schema.products.name,
+      })
+      .from(schema.productVariants)
+      .innerJoin(
+        schema.products,
+        eq(schema.productVariants.productId, schema.products.id)
+      )
+      .limit(5);
 
-    const orderStatuses = ["selesai", "proses", "dikirim", "batal", "selesai"];
+    // English statuses for Phase 1 pickup flow
+    const orderStatuses = [
+      "completed",
+      "processing",
+      "ready_for_pickup",
+      "cancelled",
+      "completed",
+    ] as const;
+
+    const pickupBranchId = branchIds[0]; // Jakarta Pusat
+    const pickupDate = new Date(Date.now() + 24 * 60 * 60 * 1000); // tomorrow
+    const pickupTime = "14:00";
 
     for (let i = 0; i < 5; i++) {
       const orderId = generateId();
       const variant = variants[i % variants.length];
       const qty = Math.floor(Math.random() * 3) + 1;
       const subtotal = parseFloat(variant.price) * qty;
-      const shipping = 12000;
-      const total = subtotal + shipping + 1000;
+      // Phase 1 = pickup, no shipping cost
+      const total = subtotal + 1000;
+
+      const status = orderStatuses[i];
+      const isPaid = status !== "cancelled";
+      const hasPickupCode =
+        status === "ready_for_pickup" || status === "completed";
+
+      // 6-char pickup code (uppercase alphanumeric, no ambiguous chars)
+      const codeChars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+      const pickupCode = hasPickupCode
+        ? Array.from(
+            { length: 6 },
+            () => codeChars[Math.floor(Math.random() * codeChars.length)]
+          ).join("")
+        : null;
 
       await db.insert(schema.orders).values({
         id: orderId,
         userId: customer1Id,
-        addressId: addressId,
-        status: orderStatuses[i],
-        paymentMethod: i % 2 === 0 ? "qris" : "va",
-        paymentStatus: orderStatuses[i] === "batal" ? "failed" : "paid",
+        branchId: pickupBranchId,
+        status,
+        paymentMethod: "qris",
+        paymentStatus: isPaid ? "paid" : "failed",
+        pickupCode,
+        pickupDate,
+        pickupTime,
+        contactPhone: "081234567890",
+        contactEmail: "john@example.com",
         subtotal: subtotal.toString(),
-        shippingCost: shipping.toString(),
+        shippingCost: "0",
         discount: "0",
         serviceFee: "1000",
         total: total.toString(),
-        shippingCarrier: i % 2 === 0 ? "JNE" : "SiCepat",
-        trackingNumber:
-          orderStatuses[i] === "dikirim" || orderStatuses[i] === "selesai"
-            ? `TRK${Date.now()}${i}`
-            : null,
+        // Phase 2 shipping fields — null for pickup orders
+        shippingCarrier: null,
+        trackingNumber: null,
+        addressId: null,
       });
 
       await db.insert(schema.orderItems).values({
         id: generateId(),
         orderId: orderId,
         variantId: variant.id,
-        productName: "Sample Product",
+        productName: variant.productName,
         variantInfo: `${variant.color || ""} ${variant.size || ""}`.trim(),
         price: variant.price,
         quantity: qty,
+      });
+    }
+
+    // =====================
+    // SAMPLE CART (branch-scoped, 1 cart = 1 branch)
+    // =====================
+    console.log("🛒 Creating sample cart (branch-scoped)...");
+    const cartId = generateId();
+    await db.insert(schema.carts).values({
+      id: cartId,
+      userId: customer1Id,
+      branchId: pickupBranchId, // cart locked to Jakarta Pusat
+    });
+
+    // Add 2 items to the cart from the same branch
+    const cartVariants = variants.slice(0, 2);
+    for (const v of cartVariants) {
+      await db.insert(schema.cartItems).values({
+        id: generateId(),
+        cartId: cartId,
+        variantId: v.id,
+        branchId: pickupBranchId,
+        quantity: 1,
       });
     }
 
@@ -1126,7 +1192,7 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
         action: "UPDATE_ORDER_STATUS",
         entityType: "order",
         entityId: "sample-order-id",
-        changes: { status: { from: "proses", to: "dikirim" } },
+        changes: { status: { from: "processing", to: "completed" } },
         ipAddress: "192.168.1.100",
       },
     ]);

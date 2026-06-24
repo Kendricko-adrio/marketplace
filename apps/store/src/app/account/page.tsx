@@ -57,10 +57,11 @@ interface Order {
 }
 
 const statusMap: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
-  proses: { label: "Diproses", variant: "secondary" },
-  dikirim: { label: "Dikirim", variant: "outline" },
-  selesai: { label: "Selesai", variant: "default" },
-  batal: { label: "Dibatalkan", variant: "destructive" },
+  pending_payment: { label: "Pending Payment", variant: "outline" },
+  processing: { label: "Processing", variant: "secondary" },
+  ready_for_pickup: { label: "Ready for Pickup", variant: "default" },
+  completed: { label: "Completed", variant: "default" },
+  cancelled: { label: "Cancelled", variant: "destructive" },
 };
 
 function formatDate(dateStr: string) {

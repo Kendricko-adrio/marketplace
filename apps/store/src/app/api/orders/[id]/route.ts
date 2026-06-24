@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { orders, orderItems, productVariants, productImages, addresses } from "@/db";
+import {
+  orders,
+  orderItems,
+  productVariants,
+  productImages,
+  branches,
+} from "@/db";
 import { eq, and, asc } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 
 export async function GET(
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
@@ -24,8 +30,12 @@ export async function GET(
     const { id } = await params;
 
     const order = await db
-      .select()
+      .select({
+        order: orders,
+        branch: branches,
+      })
       .from(orders)
+      .leftJoin(branches, eq(orders.branchId, branches.id))
       .where(and(eq(orders.id, id), eq(orders.userId, session.user.id)))
       .limit(1);
 
@@ -36,18 +46,14 @@ export async function GET(
       );
     }
 
-    const orderData = order[0];
+    const orderData = order[0].order;
+    const branchData = order[0].branch;
 
-    // Get address
-    let address = null;
-    if (orderData.addressId) {
-      const addr = await db
-        .select()
-        .from(addresses)
-        .where(eq(addresses.id, orderData.addressId))
-        .limit(1);
-      address = addr[0] ?? null;
-    }
+    // Only expose pickup code when order is ready_for_pickup or completed
+    const pickupCode =
+      orderData.status === "ready_for_pickup" || orderData.status === "completed"
+        ? orderData.pickupCode
+        : null;
 
     // Get items with productId and images
     const items = await db
@@ -86,7 +92,8 @@ export async function GET(
       success: true,
       data: {
         ...orderData,
-        address,
+        pickupCode,
+        branch: branchData,
         items: itemsWithImages,
       },
     });

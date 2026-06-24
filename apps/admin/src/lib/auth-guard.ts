@@ -11,6 +11,7 @@ export interface AuthContext {
     email: string;
     username?: string;
     role: Role;
+    branchId: string | null;
     [key: string]: unknown;
   };
 }
@@ -40,6 +41,23 @@ export function withAuth(
       );
     }
 
-    return handler({ user: session.user as AuthContext["user"] }, ...args);
+    return handler(
+      { user: session.user as AuthContext["user"] },
+      ...args
+    );
   };
+}
+
+/**
+ * Determine the branch scope for the current admin user.
+ * - HQ (role="hq" or branchId=null): can see all branches → { mode: "all" }
+ * - Branch admin (role="admin" with branchId): → { mode: "own", branchId }
+ */
+export function getBranchScope(user: AuthContext["user"]):
+  | { mode: "all" }
+  | { mode: "own"; branchId: string } {
+  if (user.role === "hq" || !user.branchId) {
+    return { mode: "all" };
+  }
+  return { mode: "own", branchId: user.branchId };
 }

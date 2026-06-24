@@ -5,13 +5,15 @@ import Image from "next/image";
 import {
   ArrowLeft,
   Package,
-  Truck,
   CreditCard,
   MapPin,
+  Calendar,
+  Clock,
   Loader2,
   ShoppingBag,
   Copy,
   Check,
+  AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -31,15 +33,12 @@ interface OrderItem {
   imageUrl: string | null;
 }
 
-interface Address {
+interface Branch {
   id: string;
-  firstName: string;
-  lastName: string;
-  phone: string;
-  fullAddress: string;
+  name: string;
+  address: string;
   city: string;
-  district: string;
-  postalCode: string;
+  operatingHours: Record<string, unknown>;
 }
 
 interface OrderDetail {
@@ -48,15 +47,18 @@ interface OrderDetail {
   status: string;
   paymentMethod: string | null;
   paymentStatus: string;
+  pickupCode: string | null;
+  pickupDate: string | null;
+  pickupTime: string | null;
+  contactPhone: string;
+  contactEmail: string;
   subtotal: string;
   shippingCost: string;
   discount: string;
   serviceFee: string;
   total: string;
-  shippingCarrier: string | null;
-  trackingNumber: string | null;
   createdAt: string;
-  address: Address | null;
+  branch: Branch | null;
   items: OrderItem[];
 }
 
@@ -64,22 +66,28 @@ const statusMap: Record<
   string,
   { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
 > = {
-  proses: { label: "Diproses", variant: "secondary" },
-  dikirim: { label: "Dikirim", variant: "outline" },
-  selesai: { label: "Selesai", variant: "default" },
-  batal: { label: "Dibatalkan", variant: "destructive" },
+  pending_payment: { label: "Pending Payment", variant: "outline" },
+  processing: { label: "Processing", variant: "secondary" },
+  ready_for_pickup: { label: "Ready for Pickup", variant: "default" },
+  completed: { label: "Completed", variant: "default" },
+  cancelled: { label: "Cancelled", variant: "destructive" },
 };
 
-const paymentMethodMap: Record<string, string> = {
-  qris: "QRIS",
-  va: "Virtual Account",
-};
-
-const paymentStatusMap: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+const paymentStatusMap: Record<
+  string,
+  { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
+> = {
   pending: { label: "Menunggu", variant: "outline" },
   paid: { label: "Lunas", variant: "default" },
   failed: { label: "Gagal", variant: "destructive" },
 };
+
+const STATUS_STEPS = [
+  { key: "pending_payment", label: "Order Placed" },
+  { key: "processing", label: "Paid" },
+  { key: "ready_for_pickup", label: "Ready for Pickup" },
+  { key: "completed", label: "Completed" },
+];
 
 function formatRupiah(value: string) {
   return `Rp ${parseFloat(value).toLocaleString("id-ID")}`;
@@ -89,6 +97,14 @@ function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("id-ID", {
     day: "numeric",
     month: "long",
+    year: "numeric",
+  });
+}
+
+function formatDateTime(dateStr: string) {
+  return new Date(dateStr).toLocaleString("id-ID", {
+    day: "numeric",
+    month: "short",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
@@ -104,6 +120,7 @@ export default function OrderDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
 
   useEffect(() => {
     async function fetchOrder() {
@@ -129,6 +146,14 @@ export default function OrderDetailPage() {
     await navigator.clipboard.writeText(order.id);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  }
+
+  function copyPickupCode() {
+    if (order?.pickupCode) {
+      navigator.clipboard.writeText(order.pickupCode);
+      setCopiedCode(true);
+      setTimeout(() => setCopiedCode(false), 2000);
+    }
   }
 
   if (loading) {
@@ -166,7 +191,10 @@ export default function OrderDetailPage() {
     variant: "outline" as const,
   };
 
-  const discountNum = parseFloat(order.discount);
+  const currentStepIndex = STATUS_STEPS.findIndex(
+    (s) => s.key === order.status
+  );
+  const isCancelled = order.status === "cancelled";
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-4xl">
@@ -182,7 +210,7 @@ export default function OrderDetailPage() {
         <div>
           <h1 className="text-2xl font-bold">Detail Pesanan</h1>
           <p className="text-sm text-muted-foreground">
-            {formatDate(order.createdAt)}
+            {formatDateTime(order.createdAt)}
           </p>
         </div>
         <Badge variant={status.variant} className="ml-auto text-sm">
@@ -202,6 +230,108 @@ export default function OrderDetailPage() {
           )}
         </Button>
       </div>
+
+      {/* Status Stepper */}
+      {!isCancelled && (
+        <Card className="mb-6">
+          <CardContent className="p-6">
+            <div className="flex items-center justify-between">
+              {STATUS_STEPS.map((step, i) => {
+                const isComplete = currentStepIndex > i;
+                const isCurrent = currentStepIndex === i;
+                return (
+                  <div
+                    key={step.key}
+                    className="flex items-center flex-1 last:flex-none"
+                  >
+                    <div className="flex flex-col items-center gap-1">
+                      <div
+                        className={`flex h-10 w-10 items-center justify-center rounded-full border-2 ${
+                          isComplete
+                            ? "border-green-600 bg-green-600 text-white"
+                            : isCurrent
+                            ? "border-primary bg-primary text-primary-foreground"
+                            : "border-muted bg-background text-muted-foreground"
+                        }`}
+                      >
+                        {isComplete ? (
+                          <Check className="h-5 w-5" />
+                        ) : (
+                          <span className="text-sm font-medium">{i + 1}</span>
+                        )}
+                      </div>
+                      <span
+                        className={`text-xs text-center ${
+                          isCurrent ? "font-semibold" : "text-muted-foreground"
+                        }`}
+                      >
+                        {step.label}
+                      </span>
+                    </div>
+                    {i < STATUS_STEPS.length - 1 && (
+                      <div
+                        className={`flex-1 h-0.5 mx-2 ${
+                          isComplete ? "bg-green-600" : "bg-muted"
+                        }`}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {isCancelled && (
+        <Card className="mb-6">
+          <CardContent className="p-6 text-center">
+            <AlertCircle className="h-10 w-10 mx-auto text-destructive mb-2" />
+            <p className="font-semibold text-destructive">
+              Pesanan ini telah dibatalkan
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Pickup Code Block */}
+      {order.pickupCode &&
+        (order.status === "ready_for_pickup" ||
+          order.status === "completed") && (
+          <Card className="mb-6">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground mb-1">
+                    Kode Pickup Anda
+                  </p>
+                  <p className="font-mono text-3xl font-bold tracking-widest text-primary">
+                    {order.pickupCode}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-2">
+                    Tunjukkan kode ini kepada staf cabang saat pengambilan.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={copyPickupCode}
+                  className="gap-1"
+                >
+                  {copiedCode ? (
+                    <>
+                      <Check className="h-4 w-4" /> Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-4 w-4" /> Copy
+                    </>
+                  )}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Items + Summary */}
@@ -277,14 +407,8 @@ export default function OrderDetailPage() {
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Ongkos Kirim</span>
-                <span>{formatRupiah(order.shippingCost)}</span>
+                <span className="text-green-600">Gratis (Pickup)</span>
               </div>
-              {discountNum > 0 && (
-                <div className="flex justify-between text-sm text-green-600">
-                  <span>Diskon</span>
-                  <span>-{formatRupiah(order.discount)}</span>
-                </div>
-              )}
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Biaya Layanan</span>
                 <span>{formatRupiah(order.serviceFee)}</span>
@@ -298,50 +422,45 @@ export default function OrderDetailPage() {
           </Card>
         </div>
 
-        {/* Right: Shipping & Payment */}
+        {/* Right: Pickup + Payment Info */}
         <div className="space-y-6">
-          {/* Shipping Info */}
+          {/* Pickup Info */}
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
-                <Truck className="h-4 w-4" />
-                Pengiriman
+                <MapPin className="h-4 w-4" />
+                Pengambilan
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              {order.shippingCarrier && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Kurir</span>
-                  <span className="font-medium">{order.shippingCarrier}</span>
-                </div>
-              )}
-              {order.trackingNumber && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">No. Resi</span>
-                  <span className="font-mono text-xs">
-                    {order.trackingNumber}
-                  </span>
-                </div>
-              )}
-              {order.address && (
+              {order.branch ? (
                 <>
-                  <Separator />
                   <div className="flex items-start gap-2">
-                    <MapPin className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                    <MapPin className="h-4 w-4 text-primary mt-0.5 shrink-0" />
                     <div>
-                      <p className="font-medium">
-                        {order.address.firstName} {order.address.lastName}
-                      </p>
+                      <p className="font-medium">{order.branch.name}</p>
                       <p className="text-muted-foreground">
-                        {order.address.phone}
-                      </p>
-                      <p className="text-muted-foreground mt-1">
-                        {order.address.fullAddress}, {order.address.district},{" "}
-                        {order.address.city} {order.address.postalCode}
+                        {order.branch.address}, {order.branch.city}
                       </p>
                     </div>
                   </div>
+                  {order.pickupDate && (
+                    <div className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4 text-muted-foreground" />
+                      <span>{formatDate(order.pickupDate)}</span>
+                    </div>
+                  )}
+                  {order.pickupTime && (
+                    <div className="flex items-center gap-2">
+                      <Clock className="h-4 w-4 text-muted-foreground" />
+                      <span>{order.pickupTime}</span>
+                    </div>
+                  )}
                 </>
+              ) : (
+                <p className="text-muted-foreground">
+                  Lokasi pickup tidak tersedia
+                </p>
               )}
             </CardContent>
           </Card>
@@ -355,15 +474,12 @@ export default function OrderDetailPage() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
-              {order.paymentMethod && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Metode</span>
-                  <span className="font-medium">
-                    {paymentMethodMap[order.paymentMethod] ??
-                      order.paymentMethod}
-                  </span>
-                </div>
-              )}
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Metode</span>
+                <span className="font-medium uppercase">
+                  {order.paymentMethod || "—"}
+                </span>
+              </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Status</span>
                 <Badge variant={payStatus.variant}>{payStatus.label}</Badge>

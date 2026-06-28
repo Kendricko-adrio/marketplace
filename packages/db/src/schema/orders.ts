@@ -64,6 +64,8 @@ export const orders = pgTable("orders", {
     .notNull()
     .default("1000"),
   total: numeric("total", { precision: 15, scale: 2 }).notNull(),
+  // Midtrans transaction id (from Core API charge response), nullable until charge succeeds
+  midtransTransactionId: text("midtrans_transaction_id"),
   // Phase 2 shipping fields (nullable, unused in Phase 1)
   shippingCarrier: text("shipping_carrier"),
   trackingNumber: text("tracking_number"),

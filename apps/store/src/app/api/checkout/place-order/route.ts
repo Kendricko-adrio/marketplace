@@ -15,7 +15,7 @@ import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { z } from "zod";
 import { validatePickupSlot } from "@/lib/pickup-validation";
-import { createQrisPayment } from "@/lib/midtrans";
+import { createPayment } from "@/lib/midtrans";
 
 const placeOrderSchema = z.object({
   phone: z
@@ -157,80 +157,109 @@ export async function POST(request: NextRequest) {
     const serviceFee = 1000;
     const total = subtotal + serviceFee;
 
-    // ===== Create the order =====
+    // ===== Create the order, order items, call Midtrans, and clear cart — all atomically =====
     const orderId = crypto.randomUUID();
 
-    await db.insert(orders).values({
-      id: orderId,
-      userId: session.user.id,
-      branchId,
-      status: "pending_payment",
-      paymentMethod: "qris",
-      paymentStatus: "pending",
-      pickupDate: new Date(pickupDate + "T00:00:00"),
-      pickupTime,
-      contactPhone: phone,
-      contactEmail: email,
-      subtotal: subtotal.toString(),
-      shippingCost: "0",
-      discount: "0",
-      serviceFee: serviceFee.toString(),
-      total: total.toString(),
-    });
-
-    // ===== Create order items (with real product names) =====
-    for (const item of items) {
-      await db.insert(orderItems).values({
-        id: crypto.randomUUID(),
-        orderId,
-        variantId: item.variantId,
-        productName: item.productName,
-        variantInfo: `${item.variantColor || ""} ${item.variantSize || ""}`.trim(),
-        price: item.variantPrice,
-        quantity: item.quantity,
-      });
-    }
-
-    // ===== Clear the cart (keep the cart row, unlock branch) =====
-    await db.delete(cartItems).where(eq(cartItems.cartId, cart.id));
-    await db
-      .update(carts)
-      .set({ branchId: null, updatedAt: new Date() })
-      .where(eq(carts.id, cart.id));
-
-    // ===== Call Midtrans to create the QRIS payment =====
     try {
-      const midtransResult = await createQrisPayment(
-        orderId,
-        total,
-        {
-          first_name: session.user.name || "Customer",
-          email,
-          phone,
-        },
-        items.map((item) => ({
-          id: item.variantId,
-          name: item.productName,
-          price: parseFloat(item.variantPrice),
-          quantity: item.quantity,
-        }))
-      );
+      const midtransResult = await db.transaction(async (tx) => {
+        // ===== Create the order =====
+        await tx.insert(orders).values({
+          id: orderId,
+          userId: session.user.id,
+          branchId,
+          status: "pending_payment",
+          paymentMethod: "qris",
+          paymentStatus: "pending",
+          pickupDate: new Date(pickupDate + "T00:00:00"),
+          pickupTime,
+          contactPhone: phone,
+          contactEmail: email,
+          subtotal: subtotal.toString(),
+          shippingCost: "0",
+          discount: "0",
+          serviceFee: serviceFee.toString(),
+          total: total.toString(),
+        });
+
+        // ===== Create order items (with real product names) =====
+        for (const item of items) {
+          await tx.insert(orderItems).values({
+            id: crypto.randomUUID(),
+            orderId,
+            variantId: item.variantId,
+            productName: item.productName,
+            variantInfo: `${item.variantColor || ""} ${item.variantSize || ""}`.trim(),
+            price: item.variantPrice,
+            quantity: item.quantity,
+          });
+        }
+
+        // ===== Call Midtrans to create the payment (Core API or Snap) =====
+        // Any thrown error auto-rollbacks the transaction in Drizzle.
+        const paymentResult = await createPayment(
+          orderId,
+          total,
+          {
+            first_name: session.user.name || "Customer",
+            email,
+            phone,
+          },
+          [
+            ...items.map((item) => ({
+              id: item.variantId,
+              name: item.productName,
+              price: parseFloat(item.variantPrice),
+              quantity: item.quantity,
+            })),
+            {
+              id: "SERVICE_FEE",
+              name: "Service Fee",
+              price: serviceFee,
+              quantity: 1,
+            },
+          ]
+        );
+
+        // Persist the Midtrans transaction id (only available from Core API at creation time)
+        if (paymentResult.mode === "core") {
+          await tx
+            .update(orders)
+            .set({ midtransTransactionId: paymentResult.transactionId })
+            .where(eq(orders.id, orderId));
+        }
+
+        return paymentResult;
+      });
+
+      // ===== Clear the cart only AFTER payment creation succeeds =====
+      await db.delete(cartItems).where(eq(cartItems.cartId, cart.id));
+      await db
+        .update(carts)
+        .set({ branchId: null, updatedAt: new Date() })
+        .where(eq(carts.id, cart.id));
 
       return NextResponse.json({
         success: true,
+        mode: midtransResult.mode,
         orderId,
-        redirectUrl: midtransResult.redirectUrl,
-        token: midtransResult.token,
+        ...(midtransResult.mode === "core"
+          ? {
+              transactionId: midtransResult.transactionId,
+              qrString: midtransResult.qrString,
+              qrImageUrl: midtransResult.qrImageUrl,
+            }
+          : {
+              redirectUrl: midtransResult.redirectUrl,
+              token: midtransResult.token,
+            }),
       });
     } catch (midtransError) {
       console.error("Midtrans payment creation failed:", midtransError);
-      // Order is created but payment initiation failed — the customer can
-      // retry payment from the order detail page.
+      // Transaction rolled back — order & cart are preserved. Customer can retry.
       return NextResponse.json(
         {
           success: false,
-          error: "Failed to initiate payment. Please try again from your orders.",
-          orderId,
+          error: "Failed to initiate payment. Your cart is preserved — please try again.",
         },
         { status: 502 }
       );

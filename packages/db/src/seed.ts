@@ -909,6 +909,9 @@ async function seed() {
         discount: "0",
         serviceFee: "1000",
         total: total.toString(),
+        midtransTransactionId: isPaid
+          ? `midtrans-${orderId.slice(0, 12)}`
+          : null,
         // Phase 2 shipping fields — null for pickup orders
         shippingCarrier: null,
         trackingNumber: null,

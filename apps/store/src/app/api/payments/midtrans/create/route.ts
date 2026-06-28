@@ -4,7 +4,7 @@ import { orders, orderItems } from "@/db";
 import { eq } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
-import { createQrisPayment } from "@/lib/midtrans";
+import { createPayment } from "@/lib/midtrans";
 
 export async function POST(request: NextRequest) {
   try {
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
       .from(orderItems)
       .where(eq(orderItems.orderId, orderId));
 
-    const result = await createQrisPayment(
+    const result = await createPayment(
       orderId,
       parseFloat(order.total),
       {
@@ -82,18 +82,43 @@ export async function POST(request: NextRequest) {
         email: order.contactEmail,
         phone: order.contactPhone,
       },
-      items.map((item) => ({
-        id: item.variantId,
-        name: item.productName,
-        price: parseFloat(item.price),
-        quantity: item.quantity,
-      }))
+      [
+        ...items.map((item) => ({
+          id: item.variantId,
+          name: item.productName,
+          price: parseFloat(item.price),
+          quantity: item.quantity,
+        })),
+        {
+          id: "SERVICE_FEE",
+          name: "Service Fee",
+          price: parseFloat(order.serviceFee),
+          quantity: 1,
+        },
+      ]
     );
+
+    // Persist the Midtrans transaction id (only available from Core API at creation time)
+    if (result.mode === "core") {
+      await db
+        .update(orders)
+        .set({ midtransTransactionId: result.transactionId })
+        .where(eq(orders.id, orderId));
+    }
 
     return NextResponse.json({
       success: true,
-      redirectUrl: result.redirectUrl,
-      token: result.token,
+      mode: result.mode,
+      ...(result.mode === "core"
+        ? {
+            transactionId: result.transactionId,
+            qrString: result.qrString,
+            qrImageUrl: result.qrImageUrl,
+          }
+        : {
+            redirectUrl: result.redirectUrl,
+            token: result.token,
+          }),
     });
   } catch (error) {
     console.error("Error creating Midtrans payment:", error);

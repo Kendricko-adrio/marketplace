@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -25,6 +25,9 @@ import {
   Clock,
   CreditCard,
   User,
+  QrCode,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 import {
@@ -93,6 +96,17 @@ export default function CheckoutPage() {
 
   // Step 3 — Review
   const [confirmed, setConfirmed] = useState(false);
+
+  // QRIS payment state
+  interface QrPayment {
+    orderId: string;
+    qrImageUrl: string;
+  }
+  const [qrPayment, setQrPayment] = useState<QrPayment | null>(null);
+  const [paymentStatus, setPaymentStatus] = useState<
+    "idle" | "waiting" | "paid" | "failed"
+  >("idle");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ===== Fetch cart on mount =====
   useEffect(() => {
@@ -222,6 +236,59 @@ export default function CheckoutPage() {
     }
   };
 
+  // ===== Poll order status to detect QRIS payment =====
+  const startPolling = useCallback(
+    (orderId: string) => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      setPaymentStatus("waiting");
+      pollRef.current = setInterval(async () => {
+        try {
+          const res = await fetch(
+            `/api/checkout/order-status?orderId=${encodeURIComponent(orderId)}`
+          );
+          const data = await res.json();
+          if (!data.success) return;
+          if (data.paymentStatus === "paid") {
+            setPaymentStatus("paid");
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+          } else if (
+            data.paymentStatus === "failed" ||
+            data.status === "cancelled"
+          ) {
+            setPaymentStatus("failed");
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+          }
+        } catch {
+          // network blip — keep polling
+        }
+      }, 3000);
+    },
+    []
+  );
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  // Redirect to order detail when payment is confirmed
+  useEffect(() => {
+    if (paymentStatus === "paid" && qrPayment) {
+      const t = setTimeout(() => {
+        router.push(`/account/orders/${qrPayment.orderId}`);
+      }, 2500);
+      return () => clearTimeout(t);
+    }
+  }, [paymentStatus, qrPayment, router]);
+
   // ===== Place order =====
   const handlePlaceOrder = async () => {
     if (!confirmed) return;
@@ -233,11 +300,19 @@ export default function CheckoutPage() {
         body: JSON.stringify({ phone, email, pickupDate, pickupTime }),
       });
       const data = await res.json();
-      if (data.success && data.redirectUrl) {
-        // Redirect to Midtrans Snap payment page
-        window.location.href = data.redirectUrl;
-      } else {
+      if (!data.success) {
         alert(data.error || "Failed to place order.");
+        return;
+      }
+      if (data.mode === "snap" && data.redirectUrl) {
+        // Snap mode: redirect to Midtrans Snap payment page
+        window.location.href = data.redirectUrl;
+      } else if (data.mode === "core" && data.qrImageUrl) {
+        // Core mode: show QR code in-app and start polling for payment
+        setQrPayment({ orderId: data.orderId, qrImageUrl: data.qrImageUrl });
+        startPolling(data.orderId);
+      } else {
+        alert("Unexpected payment response. Please try again.");
       }
     } catch {
       alert("An error occurred. Please try again.");
@@ -631,7 +706,7 @@ export default function CheckoutPage() {
                   </Button>
                   <Button
                     onClick={handlePlaceOrder}
-                    disabled={!confirmed || submitting}
+                    disabled={!confirmed || submitting || !!qrPayment}
                     className="gap-2"
                     size="lg"
                   >
@@ -646,6 +721,71 @@ export default function CheckoutPage() {
                     )}
                   </Button>
                 </div>
+
+                {/* ===== QRIS Payment Section (shown after place-order succeeds) ===== */}
+                {qrPayment && (
+                  <div className="mt-6 rounded-lg border-2 border-primary/30 bg-primary/5 p-6 text-center">
+                    {paymentStatus === "paid" ? (
+                      <>
+                        <CheckCircle2 className="mx-auto mb-3 h-12 w-12 text-green-600" />
+                        <h3 className="text-lg font-bold text-green-700">
+                          Pembayaran Berhasil!
+                        </h3>
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          Pesanan Anda sedang diproses. Anda akan diarahkan
+                          ke halaman pesanan...
+                        </p>
+                      </>
+                    ) : paymentStatus === "failed" ? (
+                      <>
+                        <XCircle className="mx-auto mb-3 h-12 w-12 text-red-600" />
+                        <h3 className="text-lg font-bold text-red-700">
+                          Pembayaran Gagal
+                        </h3>
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          Pembayaran tidak dapat diselesaikan. Silakan coba
+                          lagi.
+                        </p>
+                        <Button
+                          className="mt-4"
+                          variant="outline"
+                          onClick={() => {
+                            setQrPayment(null);
+                            setPaymentStatus("idle");
+                          }}
+                        >
+                          Coba Lagi
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="mb-3 flex items-center justify-center gap-2">
+                          <QrCode className="h-5 w-5 text-primary" />
+                          <h3 className="text-lg font-bold">
+                            Scan QRIS untuk Membayar
+                          </h3>
+                        </div>
+                        <p className="mb-4 text-sm text-muted-foreground">
+                          Scan kode QR di bawah dengan aplikasi e-wallet apa pun
+                          yang mendukung QRIS (GoPay, OVO, DANA, ShopeePay, dll).
+                        </p>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={qrPayment.qrImageUrl}
+                          alt="QRIS Payment QR Code"
+                          className="mx-auto h-64 w-64 rounded-lg border bg-white p-2"
+                        />
+                        <div className="mt-4 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Menunggu pembayaran...
+                        </div>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Total: Rp {total.toLocaleString("id-ID")}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}

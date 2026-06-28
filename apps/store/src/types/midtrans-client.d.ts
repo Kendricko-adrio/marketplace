@@ -5,6 +5,12 @@ declare module "midtrans-client" {
     clientKey?: string;
   }
 
+  export interface CoreApiConfig {
+    isProduction: boolean;
+    serverKey: string;
+    clientKey?: string;
+  }
+
   export interface TransactionDetails {
     order_id: string;
     gross_amount: number;
@@ -39,6 +45,36 @@ declare module "midtrans-client" {
     redirect_url: string;
   }
 
+  export interface ChargeParameter {
+    payment_type: string;
+    transaction_details: TransactionDetails;
+    customer_details?: CustomerDetails;
+    item_details?: ItemDetail[];
+  }
+
+  export interface ChargeAction {
+    name: string;
+    method: string;
+    url: string;
+  }
+
+  export interface ChargeResponse {
+    status_code: string;
+    status_message: string;
+    transaction_id: string;
+    order_id: string;
+    merchant_id?: string;
+    gross_amount?: string;
+    currency?: string;
+    payment_type: string;
+    transaction_time?: string;
+    transaction_status: string;
+    fraud_status?: string;
+    actions?: ChargeAction[];
+    qr_string?: string;
+    acquirer?: string;
+  }
+
   export class Snap {
     constructor(config: SnapConfig);
     createTransaction(
@@ -50,6 +86,15 @@ declare module "midtrans-client" {
     createTransactionToken(parameter: TransactionParameter): Promise<string>;
   }
 
-  const _default: { Snap: typeof Snap };
+  export class CoreApi {
+    constructor(config: CoreApiConfig);
+    charge(parameter: ChargeParameter): Promise<ChargeResponse>;
+    capture(parameter: Record<string, unknown>): Promise<Record<string, unknown>>;
+    cardRegister(parameter: Record<string, unknown>): Promise<Record<string, unknown>>;
+    cardToken(parameter: Record<string, unknown>): Promise<Record<string, unknown>>;
+    cardPointInquiry(tokenId: string): Promise<Record<string, unknown>>;
+  }
+
+  const _default: { Snap: typeof Snap; CoreApi: typeof CoreApi };
   export default _default;
 }

@@ -1,88 +1,134 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { ArrowLeft, Loader2, Tag } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Loader2,
+  MapPin,
+  Calendar,
+  Clock,
+  CreditCard,
+  User,
+  QrCode,
+  CheckCircle2,
+  XCircle,
+} from "lucide-react";
+import { useSession } from "@/lib/auth-client";
+import {
+  getDayHours,
+  generateTimeSlots,
+  formatDateLabel,
+} from "@/lib/pickup-validation";
+import type { OperatingHours } from "@/db";
 
+// ===== Types =====
 interface CartItem {
   id: string;
   quantity: number;
+  variantId: string;
   variant: {
     id: string;
     color: string | null;
     size: string | null;
     price: string;
   };
-  product: {
-    id: string;
-    name: string;
-  };
+  product: { id: string; name: string };
   image: string | null;
 }
 
-interface ShippingOption {
-  courier: string;
-  service: string;
-  cost: number;
-  estimatedDays: string;
+interface CartBranch {
+  id: string;
+  name: string;
+  city: string;
+  address: string;
 }
 
-interface VoucherData {
-  code: string;
-  discount: number;
-  discountType: string;
+interface CartData {
+  id: string;
+  branch: CartBranch | null;
+  items: CartItem[];
+  itemCount: number;
+  subtotal: number;
 }
+
+interface BranchWithHours extends CartBranch {
+  operatingHours: OperatingHours;
+}
+
+const SERVICE_FEE = 1000;
 
 export default function CheckoutPage() {
   const router = useRouter();
+  const { data: session } = useSession();
 
-  // Cart state
-  const [cartItems, setCartItems] = useState<CartItem[]>([]);
-  const [subtotal, setSubtotal] = useState(0);
+  // ===== State =====
+  const [cart, setCart] = useState<CartData | null>(null);
+  const [branch, setBranch] = useState<BranchWithHours | null>(null);
   const [loading, setLoading] = useState(true);
-
-  // Shipping form
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [phone, setPhone] = useState("");
-  const [address, setAddress] = useState("");
-  const [city, setCity] = useState("Jakarta");
-  const [district, setDistrict] = useState("");
-  const [postal, setPostal] = useState("");
-
-  // Shipping options
-  const [shippingOptions, setShippingOptions] = useState<ShippingOption[]>([]);
-  const [selectedShipping, setSelectedShipping] = useState<string>("");
-  const [shippingCost, setShippingCost] = useState(0);
-
-  // Payment
-  const [paymentMethod, setPaymentMethod] = useState("qris");
-
-  // Voucher
-  const [voucherCode, setVoucherCode] = useState("");
-  const [voucherData, setVoucherData] = useState<VoucherData | null>(null);
-  const [voucherError, setVoucherError] = useState("");
-  const [applyingVoucher, setApplyingVoucher] = useState(false);
-
-  // Submit
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [submitting, setSubmitting] = useState(false);
 
-  // Fetch cart data
+  // Step 1 — Contact
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [contactError, setContactError] = useState("");
+
+  // Step 2 — Pickup
+  const [pickupDate, setPickupDate] = useState("");
+  const [pickupTime, setPickupTime] = useState("");
+  const [pickupError, setPickupError] = useState("");
+
+  // Step 3 — Review
+  const [confirmed, setConfirmed] = useState(false);
+
+  // QRIS payment state
+  interface QrPayment {
+    orderId: string;
+    qrImageUrl: string;
+  }
+  const [qrPayment, setQrPayment] = useState<QrPayment | null>(null);
+  const [paymentStatus, setPaymentStatus] = useState<
+    "idle" | "waiting" | "paid" | "failed"
+  >("idle");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ===== Fetch cart on mount =====
   useEffect(() => {
     async function fetchCart() {
       try {
         const res = await fetch("/api/cart");
         const data = await res.json();
-        if (data.success && data.data) {
-          setCartItems(data.data.items);
-          setSubtotal(data.data.subtotal);
+        if (data.success) {
+          setCart(data.data);
+          // If cart has no branch or is empty, redirect to cart page
+          if (!data.data.branch || data.data.items.length === 0) {
+            router.push("/cart");
+            return;
+          }
+          // Fetch full branch details (with operating hours)
+          const branchRes = await fetch(
+            `/api/branches/${data.data.branch.id}`
+          );
+          const branchData = await branchRes.json();
+          if (branchData.success) {
+            setBranch(branchData.data);
+          }
         }
       } catch (error) {
         console.error("Error fetching cart:", error);
@@ -91,175 +137,209 @@ export default function CheckoutPage() {
       }
     }
     fetchCart();
-  }, []);
+  }, [router]);
 
-  // Fetch shipping options when city changes
+  // Pre-fill contact from session
+  // Better Auth's client-side useSession type doesn't include custom
+  // additional fields (phone), so we cast to access it.
+  const sessionUser = session?.user as
+    | { name?: string; email?: string; phone?: string }
+    | undefined;
+
   useEffect(() => {
-    async function fetchShipping() {
-      if (!city) return;
-      try {
-        const res = await fetch(
-          `/api/checkout/shipping?destination=${encodeURIComponent(city)}`
-        );
-        const data = await res.json();
-        if (data.success) {
-          const mapped = data.data.map((opt: any) => ({
-            courier: opt.carrier,
-            service: opt.service,
-            cost: opt.price,
-            estimatedDays: opt.eta,
-          }));
-          setShippingOptions(mapped);
-          if (mapped.length > 0) {
-            const firstOption = `${mapped[0].courier}-${mapped[0].service}`;
-            setSelectedShipping(firstOption);
-            setShippingCost(mapped[0].cost);
-          }
-        }
-      } catch (error) {
-        console.error("Error fetching shipping:", error);
-      }
+    if (sessionUser) {
+      if (!phone && sessionUser.phone) setPhone(sessionUser.phone);
+      if (!email && sessionUser.email) setEmail(sessionUser.email);
     }
-    fetchShipping();
-  }, [city]);
+  }, [sessionUser, phone, email]);
 
-  const handleShippingChange = (value: string) => {
-    setSelectedShipping(value);
-    const option = shippingOptions.find(
-      (o) => `${o.courier}-${o.service}` === value
-    );
-    if (option) {
-      setShippingCost(option.cost);
+  // ===== Derived values for Step 2 =====
+  const todayStr = new Date().toISOString().split("T")[0];
+
+  const selectedDate = useMemo(() => {
+    if (!pickupDate) return null;
+    const [y, mo, d] = pickupDate.split("-").map(Number);
+    return new Date(y, mo - 1, d);
+  }, [pickupDate]);
+
+  const dayHours = useMemo(() => {
+    if (!branch || !selectedDate) return null;
+    return getDayHours(branch.operatingHours, selectedDate);
+  }, [branch, selectedDate]);
+
+  const timeSlots = useMemo(() => {
+    return generateTimeSlots(dayHours);
+  }, [dayHours]);
+
+  const subtotal = cart?.subtotal ?? 0;
+  const total = subtotal + SERVICE_FEE;
+
+  // ===== Step 1 validation =====
+  const validateStep1 = (): boolean => {
+    if (!phone || phone.length < 8) {
+      setContactError("Please enter a valid phone number.");
+      return false;
     }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setContactError("Please enter a valid email address.");
+      return false;
+    }
+    setContactError("");
+    return true;
   };
 
-  const applyVoucher = async () => {
-    if (!voucherCode.trim()) return;
+  // ===== Step 2 validation (client-side; server re-validates on place-order) =====
+  const validateStep2 = (): boolean => {
+    if (!pickupDate) {
+      setPickupError("Please select a pickup date.");
+      return false;
+    }
+    if (!pickupTime) {
+      setPickupError("Please select a pickup time.");
+      return false;
+    }
+    if (!dayHours) {
+      setPickupError("Branch is closed on the selected day.");
+      return false;
+    }
+    if (!timeSlots.includes(pickupTime)) {
+      setPickupError(
+        `Pickup time must be between ${dayHours.open} and ${dayHours.close}.`
+      );
+      return false;
+    }
+    setPickupError("");
+    return true;
+  };
 
-    setApplyingVoucher(true);
-    setVoucherError("");
-
+  // ===== Server-side validation for Step 2 (via validate-step-2 endpoint) =====
+  const handleNextFromStep2 = async () => {
+    if (!validateStep2() || !branch) return;
     try {
-      const res = await fetch("/api/vouchers/validate", {
+      const res = await fetch("/api/checkout/validate-step-2", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: voucherCode, subtotal }),
+        body: JSON.stringify({
+          branchId: branch.id,
+          pickupDate,
+          pickupTime,
+        }),
       });
       const data = await res.json();
-
       if (data.success) {
-        setVoucherData({
-          code: data.data.code,
-          discount: data.data.discount,
-          discountType: data.data.discountType,
-        });
+        setStep(3);
       } else {
-        setVoucherError(data.error);
-        setVoucherData(null);
+        setPickupError(data.error || "Invalid pickup slot.");
       }
-    } catch (error) {
-      setVoucherError("Gagal memvalidasi voucher");
-    } finally {
-      setApplyingVoucher(false);
+    } catch {
+      setPickupError("Failed to validate pickup slot. Please try again.");
     }
   };
 
-  const handleSubmit = async () => {
-    // Basic validation
-    if (!firstName || !phone || !address || !city || !selectedShipping) {
-      alert("Lengkapi semua field yang diperlukan");
-      return;
+  // ===== Poll order status to detect QRIS payment =====
+  const startPolling = useCallback(
+    (orderId: string) => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      setPaymentStatus("waiting");
+      pollRef.current = setInterval(async () => {
+        try {
+          const res = await fetch(
+            `/api/checkout/order-status?orderId=${encodeURIComponent(orderId)}`
+          );
+          const data = await res.json();
+          if (!data.success) return;
+          if (data.paymentStatus === "paid") {
+            setPaymentStatus("paid");
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+          } else if (
+            data.paymentStatus === "failed" ||
+            data.status === "cancelled"
+          ) {
+            setPaymentStatus("failed");
+            if (pollRef.current) {
+              clearInterval(pollRef.current);
+              pollRef.current = null;
+            }
+          }
+        } catch {
+          // network blip — keep polling
+        }
+      }, 3000);
+    },
+    []
+  );
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  // Redirect to order detail when payment is confirmed
+  useEffect(() => {
+    if (paymentStatus === "paid" && qrPayment) {
+      const t = setTimeout(() => {
+        router.push(`/account/orders/${qrPayment.orderId}`);
+      }, 2500);
+      return () => clearTimeout(t);
     }
+  }, [paymentStatus, qrPayment, router]);
 
+  // ===== Place order =====
+  const handlePlaceOrder = async () => {
+    if (!confirmed) return;
     setSubmitting(true);
-
     try {
-      // Create order
-      const orderRes = await fetch("/api/orders", {
+      const res = await fetch("/api/checkout/place-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          shippingAddress: {
-            recipientName: `${firstName} ${lastName}`.trim(),
-            phone,
-            address,
-            city,
-            district,
-            postalCode: postal,
-          },
-          shippingMethod: selectedShipping.split("-")[0],
-          shippingCost,
-          voucherCode: voucherData?.code,
-          paymentMethod,
-        }),
+        body: JSON.stringify({ phone, email, pickupDate, pickupTime }),
       });
-
-      const orderData = await orderRes.json();
-
-      if (!orderData.success) {
-        alert(orderData.error || "Gagal membuat pesanan");
-        setSubmitting(false);
+      const data = await res.json();
+      if (!data.success) {
+        alert(data.error || "Failed to place order.");
         return;
       }
-
-      // Process payment
-      const paymentRes = await fetch("/api/checkout/payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          orderId: orderData.data.orderId,
-          amount: orderData.data.total,
-          method: paymentMethod,
-        }),
-      });
-
-      const paymentData = await paymentRes.json();
-
-      if (paymentData.success) {
-        // Show payment info or redirect
-        if (paymentMethod === "qris") {
-          alert(
-            `Silakan scan QR Code untuk pembayaran.\n\nOrder ID: ${
-              orderData.data.orderId
-            }\nTotal: Rp ${orderData.data.total.toLocaleString("id-ID")}`
-          );
-        } else {
-          alert(
-            `Transfer ke Virtual Account:\n${
-              paymentData.data.vaNumber
-            }\nBank: ${
-              paymentData.data.bank
-            }\n\nTotal: Rp ${orderData.data.total.toLocaleString("id-ID")}`
-          );
-        }
-        router.push("/account?tab=orders");
+      if (data.mode === "snap" && data.redirectUrl) {
+        // Snap mode: redirect to Midtrans Snap payment page
+        window.location.href = data.redirectUrl;
+      } else if (data.mode === "core" && data.qrImageUrl) {
+        // Core mode: show QR code in-app and start polling for payment
+        setQrPayment({ orderId: data.orderId, qrImageUrl: data.qrImageUrl });
+        startPolling(data.orderId);
+      } else {
+        alert("Unexpected payment response. Please try again.");
       }
-    } catch (error) {
-      console.error("Checkout error:", error);
-      alert("Terjadi kesalahan saat checkout");
+    } catch {
+      alert("An error occurred. Please try again.");
     } finally {
       setSubmitting(false);
     }
   };
 
-  const discount = voucherData?.discount || 0;
-  const serviceFee = 1000;
-  const total = subtotal + shippingCost + serviceFee - discount;
-
+  // ===== Loading state =====
   if (loading) {
     return (
       <div className="container mx-auto px-4 py-8">
-        <div className="flex items-center justify-center min-h-[50vh]">
+        <div className="flex items-center justify-center py-20">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
         </div>
       </div>
     );
   }
 
-  if (cartItems.length === 0) {
+  // ===== Empty cart redirect =====
+  if (!cart || cart.items.length === 0 || !branch) {
     return (
       <div className="container mx-auto px-4 py-16 text-center">
         <h1 className="text-2xl font-bold mb-4">Keranjang Kosong</h1>
+        <p className="text-muted-foreground mb-8">
+          Tambahkan produk ke keranjang sebelum checkout.
+        </p>
         <Link href="/products">
           <Button>Mulai Belanja</Button>
         </Link>
@@ -268,299 +348,509 @@ export default function CheckoutPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8">
-      <div className="flex items-center gap-4 mb-8">
-        <Link href="/cart">
-          <Button variant="ghost" size="icon">
-            <ArrowLeft className="h-5 w-5" />
-          </Button>
-        </Link>
-        <h1 className="text-3xl font-bold">Checkout</h1>
+    <div className="container mx-auto px-4 py-8 max-w-5xl">
+      {/* Back link */}
+      <Link
+        href="/cart"
+        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground mb-6"
+      >
+        <ArrowLeft className="h-4 w-4" /> Kembali ke Keranjang
+      </Link>
+
+      <h1 className="text-3xl font-bold mb-6">Checkout</h1>
+
+      {/* Step Indicator */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between">
+          {[
+            { num: 1, label: "Kontak", icon: User },
+            { num: 2, label: "Ambil di Toko", icon: MapPin },
+            { num: 3, label: "Bayar & Pesan", icon: CreditCard },
+          ].map((s, i) => (
+            <div key={s.num} className="flex items-center flex-1 last:flex-none">
+              <div className="flex items-center gap-2">
+                <div
+                  className={`flex h-9 w-9 items-center justify-center rounded-full border-2 text-sm font-medium ${
+                    step >= s.num
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-muted text-muted-foreground"
+                  }`}
+                >
+                  {step > s.num ? (
+                    <Check className="h-4 w-4" />
+                  ) : (
+                    <s.icon className="h-4 w-4" />
+                  )}
+                </div>
+                <span
+                  className={`text-sm font-medium hidden sm:inline ${
+                    step >= s.num ? "text-foreground" : "text-muted-foreground"
+                  }`}
+                >
+                  {s.label}
+                </span>
+              </div>
+              {i < 2 && (
+                <div
+                  className={`flex-1 h-0.5 mx-2 sm:mx-4 ${
+                    step > s.num ? "bg-primary" : "bg-muted"
+                  }`}
+                />
+              )}
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <div className="lg:col-span-2 space-y-8">
-          {/* Alamat Pengiriman */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Alamat Pengiriman</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="firstName">Nama Depan *</Label>
-                  <Input
-                    id="firstName"
-                    value={firstName}
-                    onChange={(e) => setFirstName(e.target.value)}
-                    placeholder="Nama Depan"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="lastName">Nama Belakang</Label>
-                  <Input
-                    id="lastName"
-                    value={lastName}
-                    onChange={(e) => setLastName(e.target.value)}
-                    placeholder="Nama Belakang"
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="phone">Nomor Telepon (WA) *</Label>
-                <Input
-                  id="phone"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="08..."
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="address">Alamat Lengkap *</Label>
-                <Textarea
-                  id="address"
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  placeholder="Nama Jalan, No. Rumah, RT/RW"
-                  required
-                />
-              </div>
-              <div className="grid grid-cols-3 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="city">Kota *</Label>
-                  <Input
-                    id="city"
-                    value={city}
-                    onChange={(e) => setCity(e.target.value)}
-                    placeholder="Jakarta"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="district">Kecamatan</Label>
-                  <Input
-                    id="district"
-                    value={district}
-                    onChange={(e) => setDistrict(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="postal">Kode Pos</Label>
-                  <Input
-                    id="postal"
-                    value={postal}
-                    onChange={(e) => setPostal(e.target.value)}
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Metode Pengiriman */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Pengiriman</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {shippingOptions.length === 0 ? (
-                <p className="text-muted-foreground">
-                  Masukkan alamat untuk melihat opsi pengiriman
+        {/* Main step content */}
+        <div className="lg:col-span-2">
+          {/* Step 1 — Contact Information */}
+          {step === 1 && (
+            <Card>
+              <CardContent className="p-6">
+                <h2 className="text-xl font-bold mb-1">Informasi Kontak</h2>
+                <p className="text-sm text-muted-foreground mb-6">
+                  Kami akan mengirimkan kode pickup dan konfirmasi pesanan ke
+                  email Anda.
                 </p>
-              ) : (
-                <RadioGroup
-                  value={selectedShipping}
-                  onValueChange={handleShippingChange}
-                >
-                  {shippingOptions.map((option) => {
-                    const optionId = `${option.courier}-${option.service}`;
-                    return (
-                      <div
-                        key={optionId}
-                        className="flex items-center space-x-2 border p-4 rounded-lg cursor-pointer hover:bg-secondary/20 transition-colors"
-                      >
-                        <RadioGroupItem value={optionId} id={optionId} />
-                        <Label
-                          htmlFor={optionId}
-                          className="flex-1 flex justify-between cursor-pointer"
-                        >
-                          <div>
-                            <div className="font-semibold">
-                              {option.courier} {option.service}
-                            </div>
-                            <div className="text-sm text-muted-foreground">
-                              Estimasi {option.estimatedDays}
-                            </div>
-                          </div>
-                          <div className="font-bold">
-                            Rp {option.cost.toLocaleString("id-ID")}
-                          </div>
-                        </Label>
-                      </div>
-                    );
-                  })}
-                </RadioGroup>
-              )}
-            </CardContent>
-          </Card>
 
-          {/* Metode Pembayaran */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Pembayaran</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 gap-4">
-                <div
-                  onClick={() => setPaymentMethod("qris")}
-                  className={`cursor-pointer border-2 rounded-xl p-4 flex flex-col items-center gap-2 transition-all ${
-                    paymentMethod === "qris"
-                      ? "border-primary bg-primary/5"
-                      : "border-border hover:border-primary/50"
-                  }`}
-                >
-                  <span className="font-bold">QRIS</span>
-                  <span className="text-xs text-muted-foreground">
-                    Scan QR Code
-                  </span>
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="phone">Nomor Telepon *</Label>
+                    <Input
+                      id="phone"
+                      type="tel"
+                      placeholder="081234567890"
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="email">Email *</Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      placeholder="anda@email.com"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
+                  </div>
                 </div>
-                <div
-                  onClick={() => setPaymentMethod("va")}
-                  className={`cursor-pointer border-2 rounded-xl p-4 flex flex-col items-center gap-2 transition-all ${
-                    paymentMethod === "va"
-                      ? "border-primary bg-primary/5"
-                      : "border-border hover:border-primary/50"
-                  }`}
-                >
-                  <span className="font-bold">Virtual Account</span>
-                  <span className="text-xs text-muted-foreground">
-                    BCA, Mandiri, dll
-                  </span>
+
+                {contactError && (
+                  <p className="mt-4 text-sm text-destructive">{contactError}</p>
+                )}
+
+                {sessionUser?.phone && sessionUser?.email && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-4"
+                    onClick={() => {
+                      setPhone(sessionUser.phone || "");
+                      setEmail(sessionUser.email || "");
+                    }}
+                  >
+                    Isi dari Profil
+                  </Button>
+                )}
+
+                <div className="mt-6 flex justify-end">
+                  <Button
+                    onClick={() => validateStep1() && setStep(2)}
+                    className="gap-2"
+                  >
+                    Lanjut <ArrowRight className="h-4 w-4" />
+                  </Button>
                 </div>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Step 2 — Pickup Branch & Time */}
+          {step === 2 && (
+            <Card>
+              <CardContent className="p-6">
+                <h2 className="text-xl font-bold mb-1">Ambil di Toko</h2>
+                <p className="text-sm text-muted-foreground mb-6">
+                  Pilih tanggal dan waktu untuk pengambilan pesanan Anda.
+                </p>
+
+                {/* Branch info (read-only — locked from cart) */}
+                <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
+                  <div className="flex items-start gap-3">
+                    <MapPin className="mt-0.5 h-5 w-5 text-primary" />
+                    <div>
+                      <div className="font-semibold">{branch.name}</div>
+                      <div className="text-sm text-muted-foreground">
+                        {branch.address}, {branch.city}
+                      </div>
+                    </div>
+                    <Badge variant="secondary" className="ml-auto">
+                      Cabang Terpilih
+                    </Badge>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <Label htmlFor="pickupDate" className="flex items-center gap-2">
+                      <Calendar className="h-4 w-4" /> Tanggal Pickup *
+                    </Label>
+                    <Input
+                      id="pickupDate"
+                      type="date"
+                      min={todayStr}
+                      value={pickupDate}
+                      onChange={(e) => {
+                        setPickupDate(e.target.value);
+                        setPickupTime(""); // reset time when date changes
+                      }}
+                    />
+                    {selectedDate && !dayHours && (
+                      <p className="mt-1 text-sm text-destructive">
+                        Cabang tutup pada tanggal ini. Pilih tanggal lain.
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <Label className="flex items-center gap-2">
+                      <Clock className="h-4 w-4" /> Waktu Pickup *
+                    </Label>
+                    {pickupDate && dayHours ? (
+                      <Select
+                        value={pickupTime}
+                        onValueChange={setPickupTime}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Pilih waktu" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {timeSlots.map((slot) => (
+                            <SelectItem key={slot} value={slot}>
+                              {slot}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Select disabled>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Pilih tanggal dahulu" />
+                        </SelectTrigger>
+                        <SelectContent />
+                      </Select>
+                    )}
+                    {pickupDate && dayHours && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        Jam operasional: {dayHours.open} - {dayHours.close}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Pickup summary */}
+                  {pickupDate && pickupTime && (
+                    <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+                      <span className="text-muted-foreground">
+                        Pengambilan:
+                      </span>{" "}
+                      <span className="font-medium">
+                        {formatDateLabel(pickupDate)} pukul {pickupTime}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {pickupError && (
+                  <p className="mt-4 text-sm text-destructive">{pickupError}</p>
+                )}
+
+                <div className="mt-6 flex justify-between">
+                  <Button variant="outline" onClick={() => setStep(1)}>
+                    Kembali
+                  </Button>
+                  <Button onClick={handleNextFromStep2} className="gap-2">
+                    Lanjut <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Step 3 — Review & Place Order */}
+          {step === 3 && (
+            <Card>
+              <CardContent className="p-6">
+                <h2 className="text-xl font-bold mb-1">Pembayaran QRIS</h2>
+                <p className="text-sm text-muted-foreground mb-6">
+                  Periksa pesanan Anda, lalu konfirmasi untuk melanjutkan ke
+                  pembayaran QRIS via Midtrans.
+                </p>
+
+                {/* Payment method badge */}
+                <div className="mb-6 flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
+                  <CreditCard className="h-6 w-6 text-primary" />
+                  <div>
+                    <div className="font-semibold">QRIS</div>
+                    <div className="text-xs text-muted-foreground">
+                      Bayar dengan scan QR code via e-wallet atau m-banking
+                    </div>
+                  </div>
+                </div>
+
+                {/* Order summary */}
+                <div className="space-y-3 mb-6">
+                  <h3 className="font-semibold">Ringkasan Pesanan</h3>
+                  {cart.items.map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex items-center gap-3 rounded-lg border p-3"
+                    >
+                      <div className="h-14 w-14 rounded-md bg-secondary/50 flex-shrink-0 relative overflow-hidden">
+                        {item.image && (
+                          <Image
+                            src={item.image}
+                            alt={item.product.name}
+                            fill
+                            className="object-cover"
+                          />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium line-clamp-1">
+                          {item.product.name}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {[item.variant.color, item.variant.size]
+                            .filter(Boolean)
+                            .join(" / ")}{" "}
+                          · Qty {item.quantity}
+                        </div>
+                      </div>
+                      <div className="text-sm font-medium">
+                        Rp{" "}
+                        {(
+                          parseFloat(item.variant.price) * item.quantity
+                        ).toLocaleString("id-ID")}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Pickup + contact summary */}
+                <div className="space-y-2 mb-6 rounded-lg border bg-muted/30 p-4 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Cabang</span>
+                    <span className="font-medium">{branch.name}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Pickup</span>
+                    <span className="font-medium">
+                      {formatDateLabel(pickupDate)} · {pickupTime}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Telepon</span>
+                    <span className="font-medium">{phone}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Email</span>
+                    <span className="font-medium">{email}</span>
+                  </div>
+                </div>
+
+                {/* Price breakdown */}
+                <div className="space-y-2 mb-6">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">
+                      Subtotal ({cart.itemCount} barang)
+                    </span>
+                    <span>Rp {subtotal.toLocaleString("id-ID")}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Biaya Layanan</span>
+                    <span>Rp {SERVICE_FEE.toLocaleString("id-ID")}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Ongkos Kirim</span>
+                    <span className="text-green-600">Gratis (Pickup)</span>
+                  </div>
+                  <hr className="border-t border-dashed border-muted-foreground/30 my-2" />
+                  <div className="flex justify-between font-bold">
+                    <span>Total Bayar</span>
+                    <span className="text-primary">
+                      Rp {total.toLocaleString("id-ID")}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Confirmation checkbox */}
+                <label className="flex items-start gap-3 mb-6 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={confirmed}
+                    onChange={(e) => setConfirmed(e.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-input"
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    Saya telah memeriksa pesanan dan menyetujui syarat & ketentuan.
+                    Saya akan mengambil pesanan di cabang dan waktu yang dipilih.
+                  </span>
+                </label>
+
+                <div className="flex justify-between">
+                  <Button variant="outline" onClick={() => setStep(2)}>
+                    Kembali
+                  </Button>
+                  <Button
+                    onClick={handlePlaceOrder}
+                    disabled={!confirmed || submitting || !!qrPayment}
+                    className="gap-2"
+                    size="lg"
+                  >
+                    {submitting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" /> Memproses...
+                      </>
+                    ) : (
+                      <>
+                        Bayar Sekarang <ArrowRight className="h-4 w-4" />
+                      </>
+                    )}
+                  </Button>
+                </div>
+
+                {/* ===== QRIS Payment Section (shown after place-order succeeds) ===== */}
+                {qrPayment && (
+                  <div className="mt-6 rounded-lg border-2 border-primary/30 bg-primary/5 p-6 text-center">
+                    {paymentStatus === "paid" ? (
+                      <>
+                        <CheckCircle2 className="mx-auto mb-3 h-12 w-12 text-green-600" />
+                        <h3 className="text-lg font-bold text-green-700">
+                          Pembayaran Berhasil!
+                        </h3>
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          Pesanan Anda sedang diproses. Anda akan diarahkan
+                          ke halaman pesanan...
+                        </p>
+                      </>
+                    ) : paymentStatus === "failed" ? (
+                      <>
+                        <XCircle className="mx-auto mb-3 h-12 w-12 text-red-600" />
+                        <h3 className="text-lg font-bold text-red-700">
+                          Pembayaran Gagal
+                        </h3>
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          Pembayaran tidak dapat diselesaikan. Silakan coba
+                          lagi.
+                        </p>
+                        <Button
+                          className="mt-4"
+                          variant="outline"
+                          onClick={() => {
+                            setQrPayment(null);
+                            setPaymentStatus("idle");
+                          }}
+                        >
+                          Coba Lagi
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="mb-3 flex items-center justify-center gap-2">
+                          <QrCode className="h-5 w-5 text-primary" />
+                          <h3 className="text-lg font-bold">
+                            Scan QRIS untuk Membayar
+                          </h3>
+                        </div>
+                        <p className="mb-4 text-sm text-muted-foreground">
+                          Scan kode QR di bawah dengan aplikasi e-wallet apa pun
+                          yang mendukung QRIS (GoPay, OVO, DANA, ShopeePay, dll).
+                        </p>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={qrPayment.qrImageUrl}
+                          alt="QRIS Payment QR Code"
+                          className="mx-auto h-64 w-64 rounded-lg border bg-white p-2"
+                        />
+                        <div className="mt-4 flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                          Menunggu pembayaran...
+                        </div>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          Total: Rp {total.toLocaleString("id-ID")}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </div>
 
-        {/* Ringkasan */}
+        {/* Sticky order summary sidebar (desktop) */}
         <div>
-          <Card className="sticky top-24 bg-secondary/30 border-none shadow-md">
+          <Card className="sticky top-24 border-none shadow-md bg-secondary/30">
             <CardContent className="p-6">
-              <h3 className="text-xl font-bold mb-4">Pesanan Anda</h3>
+              <h3 className="text-lg font-bold mb-4">Ringkasan</h3>
 
-              {/* Cart items mini */}
-              <div className="space-y-3 mb-6 max-h-48 overflow-y-auto">
-                {cartItems.map((item) => (
-                  <div key={item.id} className="flex gap-3">
-                    <div className="w-12 h-12 bg-secondary rounded relative overflow-hidden flex-shrink-0">
-                      {item.image && (
-                        <Image
-                          src={item.image}
-                          alt=""
-                          fill
-                          className="object-cover"
-                        />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">
-                        {item.product.name}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        x{item.quantity}
-                      </p>
-                    </div>
+              <div className="space-y-2 mb-4">
+                {cart.items.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex justify-between text-sm"
+                  >
+                    <span className="text-muted-foreground line-clamp-1 pr-2">
+                      {item.product.name} ×{item.quantity}
+                    </span>
+                    <span className="flex-shrink-0">
+                      Rp{" "}
+                      {(
+                        parseFloat(item.variant.price) * item.quantity
+                      ).toLocaleString("id-ID")}
+                    </span>
                   </div>
                 ))}
               </div>
 
-              {/* Voucher */}
-              <div className="mb-4">
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="Kode Voucher"
-                    value={voucherCode}
-                    onChange={(e) =>
-                      setVoucherCode(e.target.value.toUpperCase())
-                    }
-                    disabled={!!voucherData}
-                  />
-                  <Button
-                    variant="outline"
-                    onClick={applyVoucher}
-                    disabled={applyingVoucher || !!voucherData}
-                  >
-                    {applyingVoucher ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Tag className="h-4 w-4" />
-                    )}
-                  </Button>
-                </div>
-                {voucherError && (
-                  <p className="text-xs text-destructive mt-1">
-                    {voucherError}
-                  </p>
-                )}
-                {voucherData && (
-                  <p className="text-xs text-green-600 mt-1">
-                    Voucher {voucherData.code} diterapkan
-                  </p>
-                )}
-              </div>
+              <hr className="border-t border-dashed border-muted-foreground/30 my-3" />
 
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">
-                    Subtotal ({cartItems.length} barang)
-                  </span>
+                  <span className="text-muted-foreground">Subtotal</span>
                   <span>Rp {subtotal.toLocaleString("id-ID")}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Ongkos Kirim</span>
-                  <span>Rp {shippingCost.toLocaleString("id-ID")}</span>
+                  <span className="text-muted-foreground">Biaya Layanan</span>
+                  <span>Rp {SERVICE_FEE.toLocaleString("id-ID")}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-muted-foreground">Biaya Layanan</span>
-                  <span>Rp {serviceFee.toLocaleString("id-ID")}</span>
+                  <span className="text-muted-foreground">Ongkos Kirim</span>
+                  <span className="text-green-600">Gratis</span>
                 </div>
-                {discount > 0 && (
-                  <div className="flex justify-between text-green-600">
-                    <span>Diskon Voucher</span>
-                    <span>-Rp {discount.toLocaleString("id-ID")}</span>
-                  </div>
-                )}
               </div>
 
-              <hr className="border-t border-dashed border-muted-foreground/30 my-4" />
+              <hr className="border-t border-dashed border-muted-foreground/30 my-3" />
 
-              <div className="flex justify-between mb-6">
-                <span className="text-lg font-bold">Total</span>
-                <span className="text-lg font-bold text-primary">
+              <div className="flex justify-between font-bold">
+                <span>Total</span>
+                <span className="text-primary">
                   Rp {total.toLocaleString("id-ID")}
                 </span>
               </div>
 
-              <Button
-                className="w-full"
-                size="lg"
-                onClick={handleSubmit}
-                disabled={submitting}
-              >
-                {submitting ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Memproses...
-                  </>
-                ) : (
-                  "Bayar Sekarang"
-                )}
-              </Button>
-              <p className="mt-4 text-xs text-muted-foreground text-center">
-                Dengan membayar, Anda menyetujui Syarat & Ketentuan yang
-                berlaku.
-              </p>
+              {branch && (
+                <div className="mt-4 flex items-start gap-2 rounded-lg bg-primary/5 p-3 text-xs">
+                  <MapPin className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-medium">{branch.name}</div>
+                    <div className="text-muted-foreground">{branch.city}</div>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

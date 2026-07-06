@@ -1,21 +1,31 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { orders, orderItems, addresses, auditLogs } from "@/db";
-import { eq } from "drizzle-orm";
-import { z } from "zod";
-import { withAuth } from "@/lib/auth-guard";
+import { orders, orderItems, branches, clients, productVariants, productImages } from "@/db";
+import { eq, asc } from "drizzle-orm";
+import { withAuth, getBranchScope } from "@/lib/auth-guard";
 
 export const GET = withAuth(async (
   _ctx,
-  request: NextRequest,
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) => {
   try {
     const { id } = await params;
+    const scope = getBranchScope(_ctx.user);
 
     const order = await db
-      .select()
+      .select({
+        order: orders,
+        customer: {
+          id: clients.id,
+          name: clients.name,
+          email: clients.email,
+        },
+        branch: branches,
+      })
       .from(orders)
+      .innerJoin(clients, eq(orders.userId, clients.id))
+      .leftJoin(branches, eq(orders.branchId, branches.id))
       .where(eq(orders.id, id))
       .limit(1);
 
@@ -26,110 +36,60 @@ export const GET = withAuth(async (
       );
     }
 
+    // RBAC: branch admin can only view their own branch's orders
+    if (scope.mode === "own" && order[0].order.branchId !== scope.branchId) {
+      return NextResponse.json(
+        { success: false, error: "Forbidden — order belongs to a different branch" },
+        { status: 403 }
+      );
+    }
+
+    // Get order items with variant + image
     const items = await db
-      .select()
+      .select({
+        id: orderItems.id,
+        orderId: orderItems.orderId,
+        variantId: orderItems.variantId,
+        productName: orderItems.productName,
+        variantInfo: orderItems.variantInfo,
+        price: orderItems.price,
+        quantity: orderItems.quantity,
+        createdAt: orderItems.createdAt,
+        productId: productVariants.productId,
+      })
       .from(orderItems)
+      .innerJoin(productVariants, eq(orderItems.variantId, productVariants.id))
       .where(eq(orderItems.orderId, id));
 
-    let address = null;
-    if (order[0].addressId) {
-      const addressResult = await db
-        .select()
-        .from(addresses)
-        .where(eq(addresses.id, order[0].addressId))
-        .limit(1);
-      address = addressResult[0] || null;
-    }
+    const itemsWithImages = await Promise.all(
+      items.map(async (item) => {
+        const images = await db
+          .select({ url: productImages.url })
+          .from(productImages)
+          .where(eq(productImages.variantId, item.variantId))
+          .orderBy(asc(productImages.displayOrder))
+          .limit(1);
+
+        return {
+          ...item,
+          imageUrl: images[0]?.url ?? null,
+        };
+      })
+    );
 
     return NextResponse.json({
       success: true,
       data: {
-        ...order[0],
-        items,
-        address,
+        ...order[0].order,
+        customer: order[0].customer,
+        branch: order[0].branch,
+        items: itemsWithImages,
       },
     });
   } catch (error) {
     console.error("Error fetching order:", error);
     return NextResponse.json(
       { success: false, error: "Failed to fetch order" },
-      { status: 500 }
-    );
-  }
-}, ["admin", "hq"]);
-
-const updateOrderSchema = z.object({
-  status: z.enum(["proses", "dikirim", "selesai", "batal"]).optional(),
-  trackingNumber: z.string().optional(),
-});
-
-export const PUT = withAuth(async (
-  { user },
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) => {
-  try {
-    const { id } = await params;
-    const body = await request.json();
-    const parsed = updateOrderSchema.safeParse(body);
-
-    if (!parsed.success) {
-      return NextResponse.json(
-        { success: false, error: "Invalid request body" },
-        { status: 400 }
-      );
-    }
-
-    // Get current order
-    const currentOrder = await db
-      .select()
-      .from(orders)
-      .where(eq(orders.id, id))
-      .limit(1);
-
-    if (currentOrder.length === 0) {
-      return NextResponse.json(
-        { success: false, error: "Order not found" },
-        { status: 404 }
-      );
-    }
-
-    const updates: Record<string, unknown> = { updatedAt: new Date() };
-    const changes: Record<string, { from: unknown; to: unknown }> = {};
-
-    if (parsed.data.status) {
-      changes.status = { from: currentOrder[0].status, to: parsed.data.status };
-      updates.status = parsed.data.status;
-    }
-
-    if (parsed.data.trackingNumber) {
-      changes.trackingNumber = {
-        from: currentOrder[0].trackingNumber,
-        to: parsed.data.trackingNumber,
-      };
-      updates.trackingNumber = parsed.data.trackingNumber;
-    }
-
-    await db.update(orders).set(updates).where(eq(orders.id, id));
-
-    // Create audit log
-    await db.insert(auditLogs).values({
-      id: crypto.randomUUID(),
-      userId: user.id,
-      action: "UPDATE_ORDER_STATUS",
-      entityType: "order",
-      entityId: id,
-      changes,
-    });
-
-    return NextResponse.json({
-      success: true,
-      message: "Order updated",
-    });
-  } catch (error) {
-    console.error("Error updating order:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to update order" },
       { status: 500 }
     );
   }

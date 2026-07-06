@@ -10,6 +10,9 @@ const addItemSchema = z.object({
   variantId: z.string(),
   branchId: z.string(),
   quantity: z.number().int().positive().default(1),
+  // When true, an existing cart locked to a different branch will be cleared
+  // and re-locked to the incoming branchId before adding the item.
+  forceReplace: z.boolean().optional().default(false),
 });
 
 // Helper to get or create cart
@@ -30,7 +33,7 @@ async function getOrCreateCart(userId: string) {
     userId,
   });
 
-  return { id: newCartId, userId, updatedAt: new Date() };
+  return { id: newCartId, userId, branchId: null, updatedAt: new Date() };
 }
 
 export async function POST(request: NextRequest) {
@@ -56,7 +59,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { variantId, branchId, quantity } = parsed.data;
+    const { variantId, branchId, quantity, forceReplace } = parsed.data;
 
     // Check if variant exists
     const variant = await db
@@ -101,6 +104,56 @@ export async function POST(request: NextRequest) {
     const availableStock = stockRow[0]?.stock ?? 0;
 
     const cart = await getOrCreateCart(session.user.id);
+
+    // ===== Enforce 1 cart = 1 branch =====
+    // If the cart is already locked to a different branch, reject unless the
+    // client explicitly requests a force-replace (clears the cart first).
+    if (cart.branchId && cart.branchId !== branchId) {
+      if (!forceReplace) {
+        // Fetch the current branch info so the frontend can show it in the
+        // confirmation modal.
+        const currentBranch = await db
+          .select({
+            id: branches.id,
+            name: branches.name,
+            city: branches.city,
+            address: branches.address,
+          })
+          .from(branches)
+          .where(eq(branches.id, cart.branchId!))
+          .limit(1);
+
+        return NextResponse.json(
+          {
+            success: false,
+            error: "CART_BRANCH_MISMATCH",
+            message:
+              "Your cart belongs to a different branch. Adding this item will clear your cart.",
+            currentBranch: currentBranch[0] ?? null,
+            newBranch: {
+              id: branch[0].id,
+              name: branch[0].name,
+              city: branch[0].city,
+              address: branch[0].address,
+            },
+          },
+          { status: 409 }
+        );
+      }
+
+      // forceReplace: clear all items and re-lock the cart to the new branch
+      await db.delete(cartItems).where(eq(cartItems.cartId, cart.id));
+      await db
+        .update(carts)
+        .set({ branchId, updatedAt: new Date() })
+        .where(eq(carts.id, cart.id));
+    } else if (!cart.branchId) {
+      // Cart is empty / unlocked → lock it to this branch
+      await db
+        .update(carts)
+        .set({ branchId, updatedAt: new Date() })
+        .where(eq(carts.id, cart.id));
+    }
 
     // Check if same (variant + branch) line already in cart
     const existingItem = await db

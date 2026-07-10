@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { orders, orderItems, branches, clients, productVariants, productImages } from "@/db";
 import { eq, asc } from "drizzle-orm";
-import { withAuth, getBranchScope } from "@/lib/auth-guard";
+import { withPermission, getBranchScope } from "@/lib/auth-guard";
 
-export const GET = withAuth(async (
+export const GET = withPermission(async (
   _ctx,
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -15,7 +15,30 @@ export const GET = withAuth(async (
 
     const order = await db
       .select({
-        order: orders,
+        order: {
+          id: orders.id,
+          userId: orders.userId,
+          branchId: orders.branchId,
+          addressId: orders.addressId,
+          voucherId: orders.voucherId,
+          status: orders.status,
+          paymentMethod: orders.paymentMethod,
+          paymentStatus: orders.paymentStatus,
+          pickupDate: orders.pickupDate,
+          pickupTime: orders.pickupTime,
+          contactPhone: orders.contactPhone,
+          contactEmail: orders.contactEmail,
+          subtotal: orders.subtotal,
+          shippingCost: orders.shippingCost,
+          discount: orders.discount,
+          serviceFee: orders.serviceFee,
+          total: orders.total,
+          midtransTransactionId: orders.midtransTransactionId,
+          shippingCarrier: orders.shippingCarrier,
+          trackingNumber: orders.trackingNumber,
+          createdAt: orders.createdAt,
+          updatedAt: orders.updatedAt,
+        },
         customer: {
           id: clients.id,
           name: clients.name,
@@ -93,4 +116,4 @@ export const GET = withAuth(async (
       { status: 500 }
     );
   }
-}, ["admin", "hq"]);
+}, "orders", "view");

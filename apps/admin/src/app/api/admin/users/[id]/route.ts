@@ -3,12 +3,12 @@ import { db } from "@/db";
 import { users, branches, adminSessions, adminAccounts } from "@/db";
 import { eq, and } from "drizzle-orm";
 import { z } from "zod";
-import { withAuth } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/auth-guard";
 
 // -----------------------------
 // GET /api/admin/users/:id
 // -----------------------------
-export const GET = withAuth(async (_ctx, _request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
+export const GET = withPermission(async (_ctx, _request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
   try {
     const { id } = await params;
     const row = await db
@@ -48,7 +48,7 @@ export const GET = withAuth(async (_ctx, _request: NextRequest, { params }: { pa
       { status: 500 }
     );
   }
-}, ["hq"]);
+}, "users", "view");
 
 // -----------------------------
 // PATCH /api/admin/users/:id
@@ -60,7 +60,7 @@ const updateUserSchema = z.object({
   branchId: z.string().nullable().optional(),
 });
 
-export const PATCH = withAuth(async (ctx, request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
+export const PATCH = withPermission(async (ctx, request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
   try {
     const { id } = await params;
     const body = await request.json();
@@ -179,12 +179,12 @@ export const PATCH = withAuth(async (ctx, request: NextRequest, { params }: { pa
       { status: 500 }
     );
   }
-}, ["hq"]);
+}, "users", "edit");
 
 // -----------------------------
 // DELETE /api/admin/users/:id
 // -----------------------------
-export const DELETE = withAuth(async (ctx, _request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
+export const DELETE = withPermission(async (ctx, _request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
   try {
     const { id } = await params;
 
@@ -240,4 +240,4 @@ export const DELETE = withAuth(async (ctx, _request: NextRequest, { params }: { 
       { status: 500 }
     );
   }
-}, ["hq"]);
+}, "users", "delete");

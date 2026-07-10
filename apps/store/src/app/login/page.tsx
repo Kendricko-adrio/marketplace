@@ -196,7 +196,9 @@ function LoginForm() {
 
           <form onSubmit={handleEmailLogin} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email" className="mb-1.5 block">
+                Email
+              </Label>
               <Input
                 id="email"
                 type="email"
@@ -209,7 +211,9 @@ function LoginForm() {
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label htmlFor="password">Password</Label>
+                <Label htmlFor="password" className="mb-1.5 block">
+                  Password
+                </Label>
                 <Link
                   href="/forgot-password"
                   className="text-xs text-primary hover:underline"

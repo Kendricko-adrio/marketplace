@@ -24,3 +24,6 @@ export * from "./pages";
 
 // System schema
 export * from "./system";
+
+// RBAC permissions schema
+export * from "./permissions";

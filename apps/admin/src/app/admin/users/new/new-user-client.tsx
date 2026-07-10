@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import UserForm, { type UserFormData, type BranchOption } from "@/components/admin/UserForm";
 import {
   CredentialsDialog,
@@ -52,8 +53,11 @@ export function NewUserClient({ branches }: NewUserClientProps) {
             : undefined,
       });
       setCredsOpen(true);
+      toast.success("Pengguna berhasil dibuat");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Terjadi kesalahan");
+      const msg = err instanceof Error ? err.message : "Terjadi kesalahan";
+      setError(msg);
+      toast.error(msg);
       throw err;
     } finally {
       setSubmitting(false);

@@ -409,10 +409,6 @@ export default function OrderDetailPage() {
                 <span className="text-muted-foreground">Ongkos Kirim</span>
                 <span className="text-green-600">Gratis (Pickup)</span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Biaya Layanan</span>
-                <span>{formatRupiah(order.serviceFee)}</span>
-              </div>
               <Separator />
               <div className="flex justify-between font-bold text-lg">
                 <span>Total</span>

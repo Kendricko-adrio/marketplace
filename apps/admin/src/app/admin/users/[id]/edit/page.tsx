@@ -13,6 +13,10 @@ import { db } from "@/db";
 import { users, branches } from "@/db";
 import { eq } from "drizzle-orm";
 import { EditUserClient } from "./edit-user-client";
+import { auth } from "@/lib/auth";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +26,17 @@ export default async function EditUserPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+
+  const session = await auth.api.getSession({ headers: await headers() });
+
+  if (!session) {
+    redirect(`/login?callbackUrl=/admin/users/${id}/edit`);
+  }
+
+  const permissions = await getPermissionsForRole(session.user.role);
+  if (!checkPermission(permissions, "users", "edit")) {
+    redirect("/admin/users?error=forbidden");
+  }
 
   const user = await db
     .select({

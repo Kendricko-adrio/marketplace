@@ -2,18 +2,12 @@
 
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 
 export type DayHours = { open: string; close: string } | null;
 
@@ -54,11 +48,6 @@ const DAY_KEYS = [
   { key: "saturday", label: "Sabtu" },
   { key: "sunday", label: "Minggu" },
 ] as const;
-
-const STATUS_OPTIONS: { value: BranchFormData["status"]; label: string }[] = [
-  { value: "aktif", label: "Aktif" },
-  { value: "nonaktif", label: "Nonaktif" },
-];
 
 export default function BranchForm({
   mode,
@@ -133,8 +122,15 @@ export default function BranchForm({
         ...formData,
         code: formData.code.toUpperCase(),
       });
+      toast.success(
+        mode === "create"
+          ? "Cabang berhasil dibuat"
+          : "Perubahan cabang tersimpan"
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Terjadi kesalahan");
+      const msg = err instanceof Error ? err.message : "Terjadi kesalahan";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }
@@ -221,25 +217,25 @@ export default function BranchForm({
               onChange={(e) => updateField("googleMapsUrl", e.target.value)}
             />
           </div>
-          <div className="space-y-2">
+          <div className="space-y-2 sm:col-span-2">
             <Label htmlFor="status">Status</Label>
-            <Select
-              value={formData.status}
-              onValueChange={(value) =>
-                updateField("status", value as BranchFormData["status"])
-              }
-            >
-              <SelectTrigger id="status">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {STATUS_OPTIONS.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-3 rounded-lg border p-3">
+              <Switch
+                id="status"
+                checked={formData.status === "aktif"}
+                onCheckedChange={(checked) =>
+                  updateField("status", checked ? "aktif" : "nonaktif")
+                }
+              />
+              <Label
+                htmlFor="status"
+                className="font-normal cursor-pointer text-sm"
+              >
+                {formData.status === "aktif"
+                  ? "Cabang aktif (tampil di toko)"
+                  : "Cabang nonaktif (tidak tampil di toko)"}
+              </Label>
+            </div>
           </div>
         </div>
       </div>

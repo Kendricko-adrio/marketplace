@@ -12,10 +12,25 @@ import { db } from "@/db";
 import { branches } from "@/db";
 import { eq } from "drizzle-orm";
 import { NewUserClient } from "./new-user-client";
+import { auth } from "@/lib/auth";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
 export default async function NewUserPage() {
+  const session = await auth.api.getSession({ headers: await headers() });
+
+  if (!session) {
+    redirect("/login?callbackUrl=/admin/users/new");
+  }
+
+  const permissions = await getPermissionsForRole(session.user.role);
+  if (!checkPermission(permissions, "users", "edit")) {
+    redirect("/admin/users?error=forbidden");
+  }
+
   const activeBranches = await db
     .select({
       id: branches.id,

@@ -50,8 +50,6 @@ function CarouselProductCard({ product }: { product: HomepageProduct }) {
       price={price}
       originalPrice={originalPrice}
       image={product.image ?? ""}
-      rating={product.rating ? parseFloat(product.rating) : 0}
-      sold={product.sold}
       isFlashSale={product.isFlashSale}
     />
   );

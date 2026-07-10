@@ -24,12 +24,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuth } from "@/providers/auth-provider";
+import { useCart } from "@/providers/cart-provider";
 import { signOut } from "@/lib/auth-client";
 import { useState, useEffect } from "react";
 
 export default function Header() {
   const router = useRouter();
   const { user, isLoading, isAuthenticated } = useAuth();
+  const { itemCount } = useCart();
   const [searchQuery, setSearchQuery] = useState("");
   const [scrolled, setScrolled] = useState(false);
 
@@ -118,13 +120,18 @@ export default function Header() {
               Cabang
             </Button>
           </Link>
-          <Link href="/cart">
+          <Link href="/cart" aria-label="Keranjang">
             <Button
               variant="ghost"
               size="icon"
               className="relative text-white hover:text-white/80 hover:bg-white/10 transition-colors"
             >
               <ShoppingCart className="h-6 w-6" />
+              {itemCount > 0 && (
+                <span className="absolute -bottom-0.5 -right-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold leading-none text-white ring-2 ring-primary">
+                  {itemCount > 10 ? "10+" : itemCount}
+                </span>
+              )}
             </Button>
           </Link>
 

@@ -1,9 +1,11 @@
 "use client";
 import { useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 import HomepageSectionForm from "@/components/admin/homepage/HomepageSectionForm";
 import { Loader2 } from "lucide-react";
 import { Suspense } from "react";
+import { useAuth } from "@/providers/auth-provider";
 
 export default function NewHomepageSectionPage() {
   return (
@@ -22,7 +24,15 @@ export default function NewHomepageSectionPage() {
 function NewSectionContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { hasPermission, permissionsLoading } = useAuth();
   const type = searchParams.get("type") || "";
+
+  useEffect(() => {
+    if (permissionsLoading) return;
+    if (!hasPermission("homepage", "edit")) {
+      router.push("/admin/homepage?error=forbidden");
+    }
+  }, [hasPermission, permissionsLoading, router]);
 
   if (!type) {
     router.push("/admin/homepage");
@@ -42,6 +52,10 @@ function NewSectionContent() {
     router.push("/admin/homepage");
     router.refresh();
   };
+
+  if (permissionsLoading || !hasPermission("homepage", "edit")) {
+    return null;
+  }
 
   return (
     <div className="max-w-5xl space-y-6">

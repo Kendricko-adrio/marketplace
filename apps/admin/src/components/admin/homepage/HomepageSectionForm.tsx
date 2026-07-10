@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -60,8 +61,15 @@ export default function HomepageSectionForm({
         payload.productIds = productIds;
       }
       await onSubmit(payload);
+      toast.success(
+        mode === "create"
+          ? "Section berhasil dibuat"
+          : "Perubahan section tersimpan"
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Terjadi kesalahan");
+      const msg = err instanceof Error ? err.message : "Terjadi kesalahan";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }

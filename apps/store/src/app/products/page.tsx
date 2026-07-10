@@ -223,8 +223,6 @@ export default async function ProductsPage({
                     : undefined
                 }
                 image={product.image || ""}
-                rating={parseFloat(product.rating || "0")}
-                sold={product.sold}
                 isFlashSale={product.isFlashSale}
               />
             ))}

@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { homepageSections } from "@/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { withAuth } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/auth-guard";
 
 const reorderSchema = z.object({
   items: z.array(
@@ -14,7 +14,7 @@ const reorderSchema = z.object({
   ),
 });
 
-export const PATCH = withAuth(async (_ctx, request: NextRequest) => {
+export const PATCH = withPermission(async (_ctx, request: NextRequest) => {
   try {
     const body = await request.json();
     const parsed = reorderSchema.safeParse(body);
@@ -47,4 +47,4 @@ export const PATCH = withAuth(async (_ctx, request: NextRequest) => {
       { status: 500 }
     );
   }
-}, ["hq"]);
+}, "homepage", "edit");

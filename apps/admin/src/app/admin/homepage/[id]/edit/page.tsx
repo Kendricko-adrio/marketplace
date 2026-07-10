@@ -5,6 +5,7 @@ import HomepageSectionForm from "@/components/admin/homepage/HomepageSectionForm
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
+import { useAuth } from "@/providers/auth-provider";
 
 interface SectionData {
   id: string;
@@ -21,12 +22,19 @@ export default function EditHomepageSectionPage() {
   const params = useParams();
   const router = useRouter();
   const sectionId = params.id as string;
+  const { hasPermission, permissionsLoading } = useAuth();
 
   const [section, setSection] = useState<SectionData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (permissionsLoading) return;
+    if (!hasPermission("homepage", "edit")) {
+      router.push("/admin/homepage?error=forbidden");
+      return;
+    }
+
     const fetchSection = async () => {
       try {
         const res = await fetch(`/api/admin/homepage/${sectionId}`);
@@ -44,7 +52,25 @@ export default function EditHomepageSectionPage() {
       }
     };
     fetchSection();
-  }, [sectionId]);
+  }, [sectionId, hasPermission, permissionsLoading, router]);
+
+  const handleSubmit = async (data: Record<string, unknown>) => {
+    const res = await fetch(`/api/admin/homepage/${sectionId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    const result = await res.json();
+    if (!result.success) {
+      throw new Error(result.error || "Gagal memperbarui section");
+    }
+    router.push("/admin/homepage");
+    router.refresh();
+  };
+
+  if (permissionsLoading || !hasPermission("homepage", "edit")) {
+    return null;
+  }
 
   if (loading) {
     return (
@@ -66,20 +92,6 @@ export default function EditHomepageSectionPage() {
   }
 
   if (!section) return null;
-
-  const handleSubmit = async (data: Record<string, unknown>) => {
-    const res = await fetch(`/api/admin/homepage/${sectionId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-    const result = await res.json();
-    if (!result.success) {
-      throw new Error(result.error || "Gagal memperbarui section");
-    }
-    router.push("/admin/homepage");
-    router.refresh();
-  };
 
   return (
     <div className="max-w-5xl space-y-6">

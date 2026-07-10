@@ -1,9 +1,8 @@
 import Link from "next/link";
 import Image from "next/image";
-import { ShoppingCart, Star } from "lucide-react";
-import { Card, CardContent, CardFooter } from "../ui/card";
+import { ShoppingCart } from "lucide-react";
+import { Card, CardContent } from "../ui/card";
 import { Badge } from "../ui/badge";
-import { Button } from "../ui/button";
 
 interface ProductCardProps {
   id: string;
@@ -11,8 +10,6 @@ interface ProductCardProps {
   price: number;
   originalPrice?: number;
   image: string;
-  rating: number;
-  sold: number;
   isFlashSale?: boolean;
 }
 
@@ -22,8 +19,6 @@ export default function ProductCard({
   price,
   originalPrice,
   image,
-  rating,
-  sold,
   isFlashSale,
 }: ProductCardProps) {
   const discount = originalPrice
@@ -75,23 +70,8 @@ export default function ProductCard({
               </span>
             )}
           </div>
-
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <div className="flex items-center gap-1">
-              <Star className="h-3 w-3 fill-yellow-400 text-yellow-400" />
-              <span>{rating}</span>
-            </div>
-            <span>Terjual {sold}</span>
-          </div>
         </div>
       </CardContent>
-
-      <CardFooter className="p-4 pt-0">
-        <Button className="w-full gap-2" variant="outline">
-          <ShoppingCart className="h-4 w-4" />
-          <span>+ Keranjang</span>
-        </Button>
-      </CardFooter>
     </Card>
   );
 }

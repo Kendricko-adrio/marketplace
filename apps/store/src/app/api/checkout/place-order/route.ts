@@ -25,6 +25,8 @@ const placeOrderSchema = z.object({
   email: z.string().email("Valid email is required"),
   pickupDate: z.string(), // YYYY-MM-DD
   pickupTime: z.string(), // HH:mm
+  // Cart item ids the customer chose to checkout in this order.
+  selectedItemIds: z.array(z.string()).min(1, "Select at least one item to checkout"),
 });
 
 export async function POST(request: NextRequest) {
@@ -54,7 +56,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { phone, email, pickupDate, pickupTime } = parsed.data;
+    const { phone, email, pickupDate, pickupTime, selectedItemIds } =
+      parsed.data;
 
     // ===== Load the user's cart =====
     const cartRows = await db
@@ -63,16 +66,67 @@ export async function POST(request: NextRequest) {
       .where(eq(carts.userId, session.user.id))
       .limit(1);
 
-    if (cartRows.length === 0 || !cartRows[0].branchId) {
+    if (cartRows.length === 0) {
       return NextResponse.json(
-        { success: false, error: "Cart is empty or has no branch selected" },
+        { success: false, error: "Cart is empty" },
         { status: 400 }
       );
     }
 
     const cart = cartRows[0];
-    // branchId is guaranteed non-null by the guard above
-    const branchId: string = cart.branchId!;
+
+    // ===== Load the selected cart items with variant + product + branch =====
+    const items = await db
+      .select({
+        cartItemId: cartItems.id,
+        quantity: cartItems.quantity,
+        variantId: productVariants.id,
+        variantColor: productVariants.color,
+        variantSize: productVariants.size,
+        variantPrice: productVariants.price,
+        productId: products.id,
+        productName: products.name,
+        branchId: cartItems.branchId,
+      })
+      .from(cartItems)
+      .innerJoin(productVariants, eq(cartItems.variantId, productVariants.id))
+      .innerJoin(products, eq(productVariants.productId, products.id))
+      .where(eq(cartItems.cartId, cart.id));
+
+    const selectedItems = items.filter((item) =>
+      selectedItemIds.includes(item.cartItemId)
+    );
+
+    if (selectedItems.length === 0) {
+      return NextResponse.json(
+        { success: false, error: "No selected items to checkout" },
+        { status: 400 }
+      );
+    }
+
+    // ===== Enforce single-branch checkout =====
+    // All selected items must belong to the same branch.
+    const branchIds = new Set(
+      selectedItems.map((i) => i.branchId).filter((b): b is string => !!b)
+    );
+    if (branchIds.size === 0) {
+      return NextResponse.json(
+        { success: false, error: "Selected items have no branch assigned" },
+        { status: 400 }
+      );
+    }
+    if (branchIds.size > 1) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Tidak bisa checkout barang di branch yang berbeda. Pilih barang dari satu cabang saja.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const branchId = Array.from(branchIds)[0];
 
     // ===== Load the branch and validate operating hours =====
     const branch = await db
@@ -100,32 +154,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ===== Load cart items with variant + product details =====
-    const items = await db
-      .select({
-        cartItemId: cartItems.id,
-        quantity: cartItems.quantity,
-        variantId: productVariants.id,
-        variantColor: productVariants.color,
-        variantSize: productVariants.size,
-        variantPrice: productVariants.price,
-        productId: products.id,
-        productName: products.name,
-      })
-      .from(cartItems)
-      .innerJoin(productVariants, eq(cartItems.variantId, productVariants.id))
-      .innerJoin(products, eq(productVariants.productId, products.id))
-      .where(eq(cartItems.cartId, cart.id));
-
-    if (items.length === 0) {
-      return NextResponse.json(
-        { success: false, error: "Cart is empty" },
-        { status: 400 }
-      );
-    }
-
-    // ===== Re-check stock for each item =====
-    for (const item of items) {
+    // ===== Re-check stock for each selected item =====
+    for (const item of selectedItems) {
       const stockRow = await db
         .select()
         .from(branchStocks)
@@ -151,11 +181,11 @@ export async function POST(request: NextRequest) {
 
     // ===== Calculate totals =====
     let subtotal = 0;
-    for (const item of items) {
+    for (const item of selectedItems) {
       subtotal += parseFloat(item.variantPrice) * item.quantity;
     }
-    const serviceFee = 1000;
-    const total = subtotal + serviceFee;
+    const serviceFee = 0;
+    const total = subtotal;
 
     // ===== Create the order, order items, call Midtrans, and clear cart — all atomically =====
     const orderId = crypto.randomUUID();
@@ -182,7 +212,7 @@ export async function POST(request: NextRequest) {
         });
 
         // ===== Create order items (with real product names) =====
-        for (const item of items) {
+        for (const item of selectedItems) {
           await tx.insert(orderItems).values({
             id: crypto.randomUUID(),
             orderId,
@@ -205,18 +235,12 @@ export async function POST(request: NextRequest) {
             phone,
           },
           [
-            ...items.map((item) => ({
+            ...selectedItems.map((item) => ({
               id: item.variantId,
               name: item.productName,
               price: parseFloat(item.variantPrice),
               quantity: item.quantity,
             })),
-            {
-              id: "SERVICE_FEE",
-              name: "Service Fee",
-              price: serviceFee,
-              quantity: 1,
-            },
           ]
         );
 
@@ -231,12 +255,12 @@ export async function POST(request: NextRequest) {
         return paymentResult;
       });
 
-      // ===== Clear the cart only AFTER payment creation succeeds =====
-      await db.delete(cartItems).where(eq(cartItems.cartId, cart.id));
-      await db
-        .update(carts)
-        .set({ branchId: null, updatedAt: new Date() })
-        .where(eq(carts.id, cart.id));
+      // ===== Remove only the checked-out items from the cart AFTER payment creation succeeds =====
+      for (const itemId of selectedItemIds) {
+        await db
+          .delete(cartItems)
+          .where(and(eq(cartItems.id, itemId), eq(cartItems.cartId, cart.id)));
+      }
 
       return NextResponse.json({
         success: true,

@@ -7,9 +7,9 @@ import {
 } from "@/db";
 import { eq, asc, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { withAuth } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/auth-guard";
 
-export const GET = withAuth(
+export const GET = withPermission(
   async (_ctx, _request: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
     try {
       const { id } = await ctx.params;
@@ -74,7 +74,8 @@ export const GET = withAuth(
       );
     }
   },
-  ["hq"]
+  "homepage",
+  "view"
 );
 
 const updateSectionSchema = z.object({
@@ -95,7 +96,7 @@ const updateSectionSchema = z.object({
   productIds: z.array(z.string()).optional(),
 });
 
-export const PATCH = withAuth(
+export const PATCH = withPermission(
   async (_ctx, request: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
     try {
       const { id } = await ctx.params;
@@ -176,10 +177,11 @@ export const PATCH = withAuth(
       );
     }
   },
-  ["hq"]
+  "homepage",
+  "edit"
 );
 
-export const DELETE = withAuth(
+export const DELETE = withPermission(
   async (_ctx, _request: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
     try {
       const { id } = await ctx.params;
@@ -208,5 +210,6 @@ export const DELETE = withAuth(
       );
     }
   },
-  ["hq"]
+  "homepage",
+  "delete"
 );

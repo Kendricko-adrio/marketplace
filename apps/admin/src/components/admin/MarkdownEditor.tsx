@@ -8,7 +8,7 @@ import { TableRow } from "@tiptap/extension-table-row";
 import { TableCell } from "@tiptap/extension-table-cell";
 import { TableHeader } from "@tiptap/extension-table-header";
 import { Markdown, type MarkdownStorage } from "tiptap-markdown";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Bold,
   Italic,
@@ -26,6 +26,15 @@ import {
   Table as TableIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
 interface MarkdownEditorProps {
@@ -124,6 +133,10 @@ export function MarkdownEditor({
     },
   });
 
+  // Link dialog state (replaces window.prompt).
+  const [linkDialogOpen, setLinkDialogOpen] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+
   // Sync external value into the editor when it changes from the outside
   // (e.g. initial load). Avoids clobbering the cursor on every keystroke by
   // only setting when the serialized markdown differs.
@@ -140,14 +153,20 @@ export function MarkdownEditor({
   const setLink = useCallback(() => {
     if (!editor) return;
     const previous = editor.getAttributes("link").href as string | undefined;
-    const url = window.prompt("URL untuk tautan:", previous ?? "https://");
-    if (url === null) return;
+    setLinkUrl(previous ?? "https://");
+    setLinkDialogOpen(true);
+  }, [editor]);
+
+  const applyLink = useCallback(() => {
+    if (!editor) return;
+    const url = linkUrl.trim();
     if (url === "") {
       editor.chain().focus().extendMarkRange("link").unsetLink().run();
-      return;
+    } else {
+      editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
     }
-    editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
-  }, [editor]);
+    setLinkDialogOpen(false);
+  }, [editor, linkUrl]);
 
   if (!editor) {
     return (
@@ -282,6 +301,43 @@ export function MarkdownEditor({
       </div>
 
       <EditorContent editor={editor} />
+
+      <Dialog open={linkDialogOpen} onOpenChange={setLinkDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Tautan (Link)</DialogTitle>
+            <DialogDescription>
+              Masukkan URL untuk tautan. Kosongkan untuk menghapus tautan yang
+              ada.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            type="url"
+            placeholder="https://"
+            value={linkUrl}
+            onChange={(e) => setLinkUrl(e.target.value)}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                applyLink();
+              }
+            }}
+          />
+          <DialogFooter className="gap-2 sm:gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setLinkDialogOpen(false)}
+            >
+              Batal
+            </Button>
+            <Button type="button" onClick={applyLink}>
+              Terapkan
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <style jsx global>{`
         .prose-editor {

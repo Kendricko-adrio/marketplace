@@ -145,21 +145,6 @@ export async function DELETE(
       .delete(cartItems)
       .where(and(eq(cartItems.id, id), eq(cartItems.cartId, cart[0].id)));
 
-    // If the cart is now empty, unlock its branchId so the next add can
-    // target any branch (keeps the "1 cart = 1 branch" rule consistent).
-    const remaining = await db
-      .select({ id: cartItems.id })
-      .from(cartItems)
-      .where(eq(cartItems.cartId, cart[0].id))
-      .limit(1);
-
-    if (remaining.length === 0 && cart[0].branchId) {
-      await db
-        .update(carts)
-        .set({ branchId: null, updatedAt: new Date() })
-        .where(eq(carts.id, cart[0].id));
-    }
-
     return NextResponse.json({
       success: true,
       message: "Cart item removed",

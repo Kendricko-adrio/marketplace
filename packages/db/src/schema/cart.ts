@@ -5,21 +5,19 @@ import { productVariants } from "./products";
 import { branches } from "./branches";
 
 // Cart table (belongs to store clients).
-// branchId enforces the "1 cart = 1 branch" rule: all items in a cart must
-// belong to the same branch. Null only when the cart is empty.
+// A cart can hold items from multiple branches simultaneously. Each individual
+// cart item carries its own branchId; the checkout flow groups items by branch
+// and only allows a single branch's items per order.
 export const carts = pgTable("cart", {
   id: text("id").primaryKey(),
   userId: text("user_id")
     .notNull()
     .unique()
     .references(() => clients.id, { onDelete: "cascade" }),
-  branchId: text("branch_id").references(() => branches.id, {
-    onDelete: "set null",
-  }),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
-// Cart Items table
+// Cart Items table — each line is tagged with the branch it was added from.
 export const cartItems = pgTable("cart_item", {
   id: text("id").primaryKey(),
   cartId: text("cart_id")
@@ -41,10 +39,6 @@ export const cartsRelations = relations(carts, ({ one, many }) => ({
   user: one(clients, {
     fields: [carts.userId],
     references: [clients.id],
-  }),
-  branch: one(branches, {
-    fields: [carts.branchId],
-    references: [branches.id],
   }),
   items: many(cartItems),
 }));

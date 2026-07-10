@@ -11,7 +11,7 @@ import { eq, asc, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { unlink } from "fs/promises";
 import path from "path";
-import { withAuth } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/auth-guard";
 
 async function deleteImageFiles(urls: string[]) {
   for (const url of urls) {
@@ -25,7 +25,7 @@ async function deleteImageFiles(urls: string[]) {
   }
 }
 
-export const GET = withAuth(async (
+export const GET = withPermission(async (
   _ctx,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -94,7 +94,7 @@ export const GET = withAuth(async (
       { status: 500 }
     );
   }
-}, ["admin", "hq"]);
+}, "products", "view");
 
 const variantSchema = z.object({
   id: z.string().optional(),
@@ -124,7 +124,7 @@ const updateProductSchema = z.object({
   variants: z.array(variantSchema),
 });
 
-export const PUT = withAuth(async (
+export const PUT = withPermission(async (
   _ctx,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -259,9 +259,9 @@ export const PUT = withAuth(async (
       { status: 500 }
     );
   }
-}, ["admin", "hq"]);
+}, "products", "edit");
 
-export const DELETE = withAuth(async (
+export const DELETE = withPermission(async (
   _ctx,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -307,4 +307,4 @@ export const DELETE = withAuth(async (
       { status: 500 }
     );
   }
-}, ["admin", "hq"]);
+}, "products", "delete");

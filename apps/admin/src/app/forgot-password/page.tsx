@@ -50,13 +50,13 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4">
-      <Card className="w-full max-w-md shadow-lg border-slate-800 bg-slate-900 text-slate-100">
+    <div className="min-h-screen flex items-center justify-center bg-background px-4 py-16">
+      <Card className="w-full max-w-md shadow-lg border-muted/40">
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold text-center">
             Lupa Password
           </CardTitle>
-          <CardDescription className="text-center text-slate-400">
+          <CardDescription className="text-center text-muted-foreground">
             {sent
               ? "Tautan reset telah dikirim."
               : "Masukkan email akun admin Anda. Kami akan mengirim tautan untuk mereset password."}
@@ -72,16 +72,16 @@ export default function ForgotPasswordPage() {
           {sent ? (
             <div className="space-y-4">
               <div className="flex flex-col items-center gap-2 py-4">
-                <div className="h-12 w-12 rounded-full bg-slate-800 flex items-center justify-center">
-                  <Mail className="h-6 w-6 text-slate-300" />
+                <div className="h-12 w-12 rounded-full bg-muted flex items-center justify-center">
+                  <Mail className="h-6 w-6 text-muted-foreground" />
                 </div>
                 <CheckCircle2 className="h-5 w-5 text-green-500" />
-                <p className="text-sm text-slate-300 text-center">
+                <p className="text-sm text-foreground text-center">
                   Jika email <strong>{email}</strong> terdaftar sebagai akun
                   admin, tautan reset password telah dikirim. Periksa kotak
                   masuk Anda (termasuk folder spam).
                 </p>
-                <p className="text-xs text-slate-500 text-center">
+                <p className="text-xs text-muted-foreground text-center">
                   Tautan berlaku selama 1 jam.
                 </p>
               </div>
@@ -92,7 +92,7 @@ export default function ForgotPasswordPage() {
           ) : (
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="email" className="text-slate-300">
+                <Label htmlFor="email">
                   Email
                 </Label>
                 <Input
@@ -103,7 +103,6 @@ export default function ForgotPasswordPage() {
                   onChange={(e) => setEmail(e.target.value)}
                   required
                   disabled={loading}
-                  className="bg-slate-950 border-slate-700"
                 />
               </div>
               <Button type="submit" className="w-full" disabled={loading}>
@@ -113,7 +112,7 @@ export default function ForgotPasswordPage() {
               <div className="text-center">
                 <Link
                   href="/login"
-                  className="text-sm text-slate-400 hover:text-slate-200 underline underline-offset-4"
+                  className="text-sm text-primary hover:underline underline-offset-4"
                 >
                   Kembali ke Login
                 </Link>

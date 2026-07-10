@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 import { AuthProvider } from "@/providers/auth-provider";
 
@@ -19,6 +20,7 @@ export default function RootLayout({
     <html lang="id">
       <body className={inter.className}>
         <AuthProvider>{children}</AuthProvider>
+        <Toaster position="top-center" richColors closeButton />
       </body>
     </html>
   );

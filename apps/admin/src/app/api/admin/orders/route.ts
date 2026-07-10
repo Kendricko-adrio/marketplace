@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { clients, orders, orderItems, branches } from "@/db";
 import { eq, and, desc, sql, ilike, or, gte, lte } from "drizzle-orm";
-import { withAuth, getBranchScope } from "@/lib/auth-guard";
+import { withPermission, getBranchScope } from "@/lib/auth-guard";
 
-export const GET = withAuth(async (_ctx, request: NextRequest) => {
+export const GET = withPermission(async (_ctx, request: NextRequest) => {
   try {
     const { searchParams } = new URL(request.url);
     const status = searchParams.get("status");
@@ -132,4 +132,4 @@ export const GET = withAuth(async (_ctx, request: NextRequest) => {
       { status: 500 }
     );
   }
-}, ["admin", "hq"]);
+}, "orders", "view");

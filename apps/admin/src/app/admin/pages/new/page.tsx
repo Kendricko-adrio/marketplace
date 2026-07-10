@@ -9,10 +9,25 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageForm } from "@/components/admin/PageForm";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { auth } from "@/lib/auth";
+import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
-export default function NewPagePage() {
+export default async function NewPagePage() {
+  const session = await auth.api.getSession({ headers: await headers() });
+
+  if (!session) {
+    redirect("/login?callbackUrl=/admin/pages/new");
+  }
+
+  const permissions = await getPermissionsForRole(session.user.role);
+  if (!checkPermission(permissions, "pages", "edit")) {
+    redirect("/admin/pages?error=forbidden");
+  }
+
   return (
     <div className="space-y-6 max-w-5xl">
       <div>

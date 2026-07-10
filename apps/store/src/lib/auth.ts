@@ -1,10 +1,15 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { createAuthMiddleware } from "better-auth/api";
 import { db } from "@/db";
 import * as schema from "@/db";
 import bcrypt from "bcryptjs";
 import { APIError } from "better-auth/api";
 import { sendVerificationEmail } from "@/lib/email";
+
+// Password must be 8+ chars and contain at least one lowercase letter, one
+// uppercase letter, and one digit (alphanumeric complexity rule).
+const PASSWORD_COMPLEXITY_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/;
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -19,6 +24,8 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     requireEmailVerification: true,
+    minPasswordLength: 8,
+    maxPasswordLength: 128,
     password: {
       hash: async (password) => {
         return await bcrypt.hash(password, 10);
@@ -31,6 +38,22 @@ export const auth = betterAuth({
       console.log("Reset password URL:", data.url);
       // TODO: Implement reset password email (out of scope for this pass)
     },
+  },
+  hooks: {
+    before: createAuthMiddleware(async (ctx) => {
+      // Enforce alphanumeric + uppercase + lowercase complexity at the
+      // sign-up endpoint (Better Auth only enforces length by default).
+      if (ctx.path === "/sign-up/email" && ctx.method === "POST") {
+        const password = (ctx.body as { password?: string } | null)?.password ?? "";
+        if (password && !PASSWORD_COMPLEXITY_REGEX.test(password)) {
+          throw new APIError("BAD_REQUEST", {
+            message:
+              "Password harus mengandung huruf besar, huruf kecil, dan angka.",
+          });
+        }
+      }
+      return;
+    }),
   },
   emailVerification: {
     sendVerificationEmail: async ({ user, url }) => {

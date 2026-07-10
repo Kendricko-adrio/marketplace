@@ -2,17 +2,11 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
-import { Star, ShoppingCart, Heart, Share2, Minus, Plus, MapPin, AlertTriangle } from "lucide-react";
+import { toast } from "sonner";
+import { ShoppingCart, Heart, Share2, Minus, Plus, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
+import { useCart } from "@/providers/cart-provider";
 
 interface BranchStock {
   branchId: string;
@@ -40,23 +34,18 @@ interface Product {
   description: string | null;
   basePrice: string;
   status: string;
-  rating: string | null;
-  sold: number;
   isFlashSale: boolean;
   flashSalePrice: string | null;
   variants: ProductVariant[];
   colors: string[];
   sizes: string[];
-  reviews: {
-    average: number | string;
-    total: number;
-  };
 }
 
 export default function ProductDetailPage() {
   const params = useParams();
   const router = useRouter();
   const productId = params.id as string;
+  const { refreshCart } = useCart();
 
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
@@ -68,11 +57,6 @@ export default function ProductDetailPage() {
   );
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
   const [addingToCart, setAddingToCart] = useState(false);
-  // Branch-mismatch modal state (1 cart = 1 branch enforcement)
-  const [branchMismatch, setBranchMismatch] = useState<{
-    currentBranch: { id: string; name: string; city: string; address: string } | null;
-    newBranch: { id: string; name: string; city: string; address: string };
-  } | null>(null);
 
   useEffect(() => {
     async function fetchProduct() {
@@ -120,48 +104,31 @@ export default function ProductDetailPage() {
 
   const handleAddToCart = async () => {
     if (!selectedVariant || !selectedBranchId) return;
-    await addToCart(selectedVariant.id, selectedBranchId, quantity, false);
-  };
-
-  const addToCart = async (
-    variantId: string,
-    branchId: string,
-    qty: number,
-    forceReplace: boolean
-  ) => {
     setAddingToCart(true);
     try {
       const res = await fetch("/api/cart/items", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ variantId, branchId, quantity: qty, forceReplace }),
+        body: JSON.stringify({
+          variantId: selectedVariant.id,
+          branchId: selectedBranchId,
+          quantity,
+        }),
       });
 
       const data = await res.json();
       if (data.success) {
-        setBranchMismatch(null);
-        alert("Produk berhasil ditambahkan ke keranjang!");
-      } else if (data.error === "CART_BRANCH_MISMATCH") {
-        // Show the branch-switch confirmation modal
-        setBranchMismatch({
-          currentBranch: data.currentBranch ?? null,
-          newBranch: data.newBranch,
-        });
+        toast.success("Produk berhasil ditambahkan ke keranjang!");
+        refreshCart();
       } else {
-        alert(data.error || "Gagal menambahkan ke keranjang");
+        toast.error(data.error || "Gagal menambahkan ke keranjang");
       }
     } catch (error) {
       console.error("Error adding to cart:", error);
-      alert("Terjadi kesalahan. Silakan coba lagi.");
+      toast.error("Terjadi kesalahan. Silakan coba lagi.");
     } finally {
       setAddingToCart(false);
     }
-  };
-
-  const confirmBranchSwitch = async () => {
-    if (!selectedVariant || !selectedBranchId || !branchMismatch) return;
-    // Retry with forceReplace: true → clears old cart, locks to new branch
-    await addToCart(selectedVariant.id, selectedBranchId, quantity, true);
   };
 
   if (loading) {
@@ -248,15 +215,6 @@ export default function ProductDetailPage() {
           <h1 className="text-3xl font-bold mb-2">{product.name}</h1>
 
           <div className="flex items-center gap-4 mb-6 text-sm text-muted-foreground">
-            <div className="flex items-center gap-1 text-yellow-500">
-              <Star className="fill-yellow-500 w-4 h-4" />
-              <span className="font-bold text-foreground">
-                {parseFloat(product.rating || "0").toFixed(1)}
-              </span>
-            </div>
-            <span>|</span>
-            <span>{product.sold.toLocaleString()} Terjual</span>
-            <span>|</span>
             <span className="text-green-600 font-medium">{stockLabel}</span>
           </div>
 
@@ -453,79 +411,15 @@ export default function ProductDetailPage() {
         </div>
       </div>
 
-      {/* Branch Switch Confirmation Modal (1 cart = 1 branch enforcement) */}
-      <Dialog
-        open={!!branchMismatch}
-        onOpenChange={(open) => !open && setBranchMismatch(null)}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber-500" />
-              Ganti Cabang?
-            </DialogTitle>
-            <DialogDescription>
-              Keranjang Anda saat ini terikat ke cabang lain. Menambahkan produk
-              ini akan mengosongkan keranjang Anda dan mengikatnya ke cabang baru.
-            </DialogDescription>
-          </DialogHeader>
-
-          {branchMismatch && (
-            <div className="space-y-3 py-2">
-              {branchMismatch.currentBranch && (
-                <div className="rounded-lg border border-muted bg-muted/30 p-3">
-                  <div className="text-xs font-medium text-muted-foreground">
-                    Cabang saat ini (akan dikosongkan)
-                  </div>
-                  <div className="mt-1 flex items-center gap-2 text-sm font-medium">
-                    <MapPin className="h-4 w-4 text-muted-foreground" />
-                    {branchMismatch.currentBranch.name}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {branchMismatch.currentBranch.address},{" "}
-                    {branchMismatch.currentBranch.city}
-                  </div>
-                </div>
-              )}
-              <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
-                <div className="text-xs font-medium text-primary">
-                  Cabang baru
-                </div>
-                <div className="mt-1 flex items-center gap-2 text-sm font-medium">
-                  <MapPin className="h-4 w-4 text-primary" />
-                  {branchMismatch.newBranch.name}
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  {branchMismatch.newBranch.address},{" "}
-                  {branchMismatch.newBranch.city}
-                </div>
-              </div>
-            </div>
-          )}
-
-          <DialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              onClick={() => setBranchMismatch(null)}
-              disabled={addingToCart}
-            >
-              Batal
-            </Button>
-            <Button onClick={confirmBranchSwitch} disabled={addingToCart}>
-              {addingToCart ? "Memproses..." : "Ya, Ganti Cabang"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Branch Switch Confirmation Modal removed — cart now supports
+          items from multiple branches simultaneously. Branch grouping and
+          single-branch checkout is enforced on the checkout page. */}
 
       {/* Description */}
       <div className="mt-16">
         <div className="flex border-b border-border mb-8">
           <button className="px-8 py-4 border-b-2 border-primary text-primary font-bold bg-transparent">
             Deskripsi
-          </button>
-          <button className="px-8 py-4 text-muted-foreground font-medium hover:text-foreground transition-colors bg-transparent">
-            Ulasan ({product.reviews.total})
           </button>
         </div>
 

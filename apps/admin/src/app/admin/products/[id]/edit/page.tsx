@@ -3,8 +3,10 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import ProductForm from "@/components/admin/ProductForm";
 import type { ProductFormData } from "@/components/admin/ProductForm";
+import { useAuth } from "@/providers/auth-provider";
 
 interface ApiVariant {
   id: string;
@@ -31,19 +33,28 @@ export default function EditProductPage() {
   const params = useParams();
   const router = useRouter();
   const productId = params.id as string;
+  const { hasPermission, permissionsLoading } = useAuth();
 
   const [initialData, setInitialData] = useState<ProductFormData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (permissionsLoading) return;
+    if (!hasPermission("products", "edit")) {
+      router.push("/admin/products?error=forbidden");
+      return;
+    }
+
     async function fetchProduct() {
       try {
         const res = await fetch(`/api/admin/products/${productId}`);
         const data = await res.json();
 
         if (!data.success) {
-          setError(data.error || "Produk tidak ditemukan");
+          const msg = data.error || "Produk tidak ditemukan";
+          setError(msg);
+          toast.error(msg);
           return;
         }
 
@@ -71,14 +82,16 @@ export default function EditProductPage() {
           })),
         });
       } catch {
-        setError("Gagal memuat data produk");
+        const msg = "Gagal memuat data produk";
+        setError(msg);
+        toast.error(msg);
       } finally {
         setLoading(false);
       }
     }
 
     fetchProduct();
-  }, [productId]);
+  }, [productId, hasPermission, permissionsLoading, router]);
 
   async function handleSubmit(data: ProductFormData) {
     const res = await fetch(`/api/admin/products/${productId}`, {
@@ -94,6 +107,10 @@ export default function EditProductPage() {
     }
 
     router.push("/admin/products");
+  }
+
+  if (permissionsLoading || !hasPermission("products", "edit")) {
+    return null;
   }
 
   if (loading) {

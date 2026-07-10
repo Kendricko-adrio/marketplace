@@ -8,13 +8,13 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { cookies } from "next/headers";
 
-const phoneRegex = /^\+?[1-9]\d{6,14}$/;
+const phoneRegex = /^\+62\d{8,13}$/;
 
 const onboardingSchema = z.object({
   phone: z
     .string()
     .min(1, "Nomor telepon wajib diisi")
-    .regex(phoneRegex, "Format nomor telepon tidak valid (contoh: +628123456789)"),
+    .regex(phoneRegex, "Format nomor telepon tidak valid (contoh: +628123456789). Mulai dengan +62 tanpa angka 0 di depan."),
   birthDate: z.string().refine((val) => {
     if (!val) return false;
     const date = new Date(val);
@@ -22,7 +22,7 @@ const onboardingSchema = z.object({
     const age = (Date.now() - date.getTime()) / (1000 * 60 * 60 * 24 * 365.25);
     return age >= 13;
   }, "Anda harus berusia minimal 13 tahun"),
-  gender: z.enum(["male", "female", "other"], {
+  gender: z.enum(["male", "female"], {
     error: "Pilih jenis kelamin",
   }),
 });

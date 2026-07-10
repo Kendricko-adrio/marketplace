@@ -4,10 +4,6 @@ import type { NextRequest } from "next/server";
 // Admin routes that require authentication
 const adminRoutes = ["/admin"];
 
-// Auth routes (redirect if already logged in — but NOT the password reset
-// pages, which authenticated users with mustResetPassword must be able to visit)
-const authRoutes = ["/login"];
-
 // Routes that bypass the mustResetPassword gate (authenticated users who are
 // forced to change their password can still visit these).
 const mustResetBypassPrefixes = [
@@ -24,46 +20,34 @@ function isMustResetBypass(pathname: string): boolean {
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Get session token from cookies (admin uses the "admin" prefix)
+  // Get session token from cookies (admin uses the "admin" prefix).
+  // This is only a lightweight existence check; the actual session validity
+  // is verified by server components / API routes using auth.api.getSession().
   const sessionToken = request.cookies.get("admin.session_token")?.value;
   const isAuthenticated = !!sessionToken;
   const mustReset = request.cookies.get("admin.must_reset")?.value === "1";
 
-  // Check if trying to access admin routes without auth
   const isAdminRoute = adminRoutes.some((route) => pathname.startsWith(route));
 
+  // Unauthenticated users trying to access admin routes are sent to login.
   if (isAdminRoute && !isAuthenticated) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("callbackUrl", pathname);
     return NextResponse.redirect(loginUrl);
   }
 
-  // Must-reset gate: authenticated users who must change their password are
-  // forced to /reset-password?force=1 for everything except the bypass list.
+  // Must-reset gate: only applies to admin routes. The actual session validity
+  // is checked server-side; a stale cookie alone won't create a redirect loop
+  // because /login no longer redirects based solely on cookie presence.
   if (
+    isAdminRoute &&
     isAuthenticated &&
     mustReset &&
-    !isMustResetBypass(pathname) &&
-    !pathname.startsWith("/api/") &&
-    !pathname.startsWith("/_next")
+    !isMustResetBypass(pathname)
   ) {
     const url = new URL("/reset-password", request.url);
     url.searchParams.set("force", "1");
     return NextResponse.redirect(url);
-  }
-
-  // Redirect authenticated users away from auth pages — but only if they
-  // don't need to reset their password. A must-reset user landing on /login
-  // should also be sent to /reset-password.
-  const isAuthRoute = authRoutes.some((route) => pathname.startsWith(route));
-
-  if (isAuthRoute && isAuthenticated) {
-    if (mustReset) {
-      const url = new URL("/reset-password", request.url);
-      url.searchParams.set("force", "1");
-      return NextResponse.redirect(url);
-    }
-    return NextResponse.redirect(new URL("/admin", request.url));
   }
 
   return NextResponse.next();

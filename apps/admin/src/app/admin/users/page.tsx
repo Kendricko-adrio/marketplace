@@ -48,6 +48,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ResetPasswordDialog } from "@/components/admin/ResetPasswordDialog";
+import { useAuth } from "@/providers/auth-provider";
 import {
   Select,
   SelectContent,
@@ -88,6 +89,7 @@ export default function AdminUsersPage() {
   const [deleteTarget, setDeleteTarget] = useState<UserRow | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const { hasPermission } = useAuth();
 
   const fetchUsers = useCallback(async () => {
     setLoading(true);
@@ -162,11 +164,13 @@ export default function AdminUsersPage() {
             Kelola akun admin, peran, dan akses cabang.
           </p>
         </div>
-        <Button asChild className="gap-2">
-          <Link href="/admin/users/new">
-            <UserPlus className="h-4 w-4" /> Tambah Admin
-          </Link>
-        </Button>
+        {hasPermission("users", "edit") && (
+          <Button asChild className="gap-2">
+            <Link href="/admin/users/new">
+              <UserPlus className="h-4 w-4" /> Tambah Admin
+            </Link>
+          </Button>
+        )}
       </div>
 
       {error && (
@@ -313,25 +317,29 @@ export default function AdminUsersPage() {
                                 <Pencil className="mr-2 h-4 w-4" /> Edit
                               </Link>
                             </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => {
-                                setResetTarget(user);
-                                setResetOpen(true);
-                              }}
-                            >
-                              <KeyRound className="mr-2 h-4 w-4" /> Reset
-                              Password
-                            </DropdownMenuItem>
+                            {hasPermission("users", "edit") && (
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setResetTarget(user);
+                                  setResetOpen(true);
+                                }}
+                              >
+                                <KeyRound className="mr-2 h-4 w-4" /> Reset
+                                Password
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              className="text-destructive focus:text-destructive"
-                              onClick={() => {
-                                setDeleteTarget(user);
-                                setDeleteOpen(true);
-                              }}
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" /> Hapus
-                            </DropdownMenuItem>
+                            {hasPermission("users", "delete") && (
+                              <DropdownMenuItem
+                                className="text-destructive focus:text-destructive"
+                                onClick={() => {
+                                  setDeleteTarget(user);
+                                  setDeleteOpen(true);
+                                }}
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                              </DropdownMenuItem>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>

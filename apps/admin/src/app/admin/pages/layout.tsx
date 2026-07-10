@@ -1,9 +1,9 @@
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
+import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
 
-// HQ-only gate: all /admin/pages/* routes require the "hq" role.
-// Non-HQ admins are redirected to the dashboard.
+// Permission gate: all /admin/pages/* routes require canView on pages module.
 export default async function PagesLayout({
   children,
 }: {
@@ -17,7 +17,8 @@ export default async function PagesLayout({
     redirect("/login?callbackUrl=/admin/pages");
   }
 
-  if (session.user.role !== "hq") {
+  const permissions = await getPermissionsForRole(session.user.role);
+  if (!checkPermission(permissions, "pages", "view")) {
     redirect("/admin?error=forbidden");
   }
 

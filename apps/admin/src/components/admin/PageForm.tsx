@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, AlertCircle } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -96,10 +97,17 @@ export function PageForm({ mode, pageId, initialData }: PageFormProps) {
       if (!res.ok || !json.success) {
         throw new Error(json.error || "Gagal menyimpan halaman");
       }
+      toast.success(
+        mode === "create"
+          ? "Halaman berhasil dibuat"
+          : "Perubahan halaman tersimpan"
+      );
       router.push("/admin/pages");
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Terjadi kesalahan");
+      const msg = err instanceof Error ? err.message : "Terjadi kesalahan";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }

@@ -1,6 +1,7 @@
 "use client";
 import { useState, useRef } from "react";
 import { Upload, Loader2, Plus, Trash2, X } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { PromoCardsSection } from "@marketplace/ui";
@@ -84,12 +85,13 @@ export default function PromoCardsSectionForm({
           await deleteOldImage(card.imageUrl);
         }
         updateCard(id, "imageUrl", data.url);
+        toast.success("Gambar berhasil diunggah");
       } else {
-        alert(data.error || "Gagal upload gambar");
+        toast.error(data.error || "Gagal upload gambar");
       }
     } catch (error) {
       console.error("Error uploading:", error);
-      alert("Gagal upload gambar");
+      toast.error("Gagal upload gambar");
     } finally {
       setUploadingIndex(null);
     }

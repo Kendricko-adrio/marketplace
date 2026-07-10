@@ -36,11 +36,11 @@ function ResetPasswordContent() {
 
   if (!isEmailFlow && !isForcedFlow) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4">
-        <Card className="w-full max-w-md border-slate-800 bg-slate-900 text-slate-100">
+      <div className="min-h-screen flex items-center justify-center bg-background px-4 py-16">
+        <Card className="w-full max-w-md shadow-lg border-muted/40">
           <CardHeader>
             <CardTitle className="text-center">Tautan Tidak Valid</CardTitle>
-            <CardDescription className="text-center text-slate-400">
+            <CardDescription className="text-center text-muted-foreground">
               Tautan reset password tidak valid atau telah kedaluwarsa.
             </CardDescription>
           </CardHeader>
@@ -56,8 +56,8 @@ function ResetPasswordContent() {
 
   const validate = (): string | null => {
     if (newPassword.length < 8) return "Password minimal 8 karakter.";
-    if (!/[a-zA-Z]/.test(newPassword) || !/[0-9]/.test(newPassword)) {
-      return "Password harus mengandung huruf dan angka.";
+    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+/.test(newPassword)) {
+      return "Password harus mengandung huruf besar, huruf kecil, dan angka.";
     }
     if (newPassword !== confirmPassword) {
       return "Konfirmasi password tidak cocok.";
@@ -132,13 +132,13 @@ function ResetPasswordContent() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4">
-      <Card className="w-full max-w-md shadow-lg border-slate-800 bg-slate-900 text-slate-100">
+    <div className="min-h-screen flex items-center justify-center bg-background px-4 py-16">
+      <Card className="w-full max-w-md shadow-lg border-muted/40">
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold text-center">
             {success ? "Password Diperbarui" : "Reset Password"}
           </CardTitle>
-          <CardDescription className="text-center text-slate-400">
+          <CardDescription className="text-center text-muted-foreground">
             {isForcedFlow
               ? "Anda wajib mengganti kata sandi sebelum dapat melanjutkan."
               : "Masukkan kata sandi baru untuk akun Anda."}
@@ -156,7 +156,7 @@ function ResetPasswordContent() {
             <div className="space-y-4">
               <div className="flex flex-col items-center gap-2 py-4">
                 <CheckCircle2 className="h-12 w-12 text-green-500" />
-                <p className="text-sm text-slate-300 text-center">
+                <p className="text-sm text-foreground text-center">
                   Password berhasil diperbarui. Anda akan dialihkan...
                 </p>
               </div>
@@ -165,7 +165,7 @@ function ResetPasswordContent() {
             <form onSubmit={handleSubmit} className="space-y-4">
               {isForcedFlow && (
                 <div className="space-y-2">
-                  <Label htmlFor="current" className="text-slate-300">
+                  <Label htmlFor="current">
                     Password Saat Ini
                   </Label>
                   <Input
@@ -176,12 +176,11 @@ function ResetPasswordContent() {
                     onChange={(e) => setCurrentPassword(e.target.value)}
                     required
                     disabled={loading}
-                    className="bg-slate-950 border-slate-700"
                   />
                 </div>
               )}
               <div className="space-y-2">
-                <Label htmlFor="new" className="text-slate-300">
+                <Label htmlFor="new">
                   Password Baru
                 </Label>
                 <Input
@@ -192,15 +191,14 @@ function ResetPasswordContent() {
                   onChange={(e) => setNewPassword(e.target.value)}
                   required
                   disabled={loading}
-                  className="bg-slate-950 border-slate-700"
                   minLength={8}
                 />
-                <p className="text-xs text-slate-500">
-                  Minimal 8 karakter, mengandung huruf dan angka.
+                <p className="text-xs text-muted-foreground">
+                  Minimal 8 karakter, mengandung huruf besar, huruf kecil, dan angka.
                 </p>
               </div>
               <div className="space-y-2">
-                <Label htmlFor="confirm" className="text-slate-300">
+                <Label htmlFor="confirm">
                   Konfirmasi Password Baru
                 </Label>
                 <Input
@@ -211,7 +209,6 @@ function ResetPasswordContent() {
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   required
                   disabled={loading}
-                  className="bg-slate-950 border-slate-700"
                   minLength={8}
                 />
               </div>
@@ -231,7 +228,7 @@ function ResetPasswordContent() {
                     document.cookie = "admin.must_reset=; path=/; max-age=0";
                     router.push("/login");
                   }}
-                  className="block w-full text-center text-xs text-slate-500 hover:text-slate-300"
+                  className="block w-full text-center text-xs text-muted-foreground hover:text-foreground"
                 >
                   Keluar dan login sebagai user lain
                 </button>

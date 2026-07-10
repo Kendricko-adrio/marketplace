@@ -3,9 +3,9 @@ import { db } from "@/db";
 import { branches } from "@/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { withAuth } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/auth-guard";
 
-export const GET = withAuth(
+export const GET = withPermission(
   async (_ctx, request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
     try {
       const { id } = await params;
@@ -35,7 +35,8 @@ export const GET = withAuth(
       );
     }
   },
-  ["hq"]
+  "branches",
+  "view"
 );
 
 const dayHoursSchema = z
@@ -65,7 +66,7 @@ const updateBranchSchema = z.object({
   status: z.enum(["aktif", "nonaktif"]),
 });
 
-export const PUT = withAuth(
+export const PUT = withPermission(
   async (_ctx, request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
     try {
       const { id } = await params;
@@ -120,10 +121,11 @@ export const PUT = withAuth(
       );
     }
   },
-  ["hq"]
+  "branches",
+  "edit"
 );
 
-export const DELETE = withAuth(
+export const DELETE = withPermission(
   async (_ctx, request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
     try {
       const { id } = await params;
@@ -152,5 +154,6 @@ export const DELETE = withAuth(
       );
     }
   },
-  ["hq"]
+  "branches",
+  "delete"
 );

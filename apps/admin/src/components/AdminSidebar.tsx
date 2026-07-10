@@ -1,17 +1,15 @@
 "use client";
-import { useState, useSyncExternalStore } from "react";
+import React, { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import {
-  LayoutDashboard,
   Package,
   ShoppingBag,
   Users,
-  BarChart3,
-  Tag,
   Store,
   LayoutTemplate,
   FileText,
+  Shield,
   LogOut,
   Loader2,
   ChevronDown,
@@ -47,21 +45,34 @@ function useIsMounted(): boolean {
 export default function AdminSidebar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, hasPermission, permissionsLoading } = useAuth();
   const [loggingOut, setLoggingOut] = useState(false);
   const mounted = useIsMounted();
 
-  const links = [
-    { href: "/admin", label: "Dashboard", icon: LayoutDashboard },
-    { href: "/admin/products", label: "Produk", icon: Package },
-    { href: "/admin/orders", label: "Pesanan", icon: ShoppingBag },
-    { href: "/admin/branches", label: "Cabang", icon: Store },
-    { href: "/admin/homepage", label: "Homepage", icon: LayoutTemplate },
-    { href: "/admin/pages", label: "Halaman", icon: FileText },
-    { href: "/admin/marketing", label: "Marketing", icon: Tag },
-    { href: "/admin/users", label: "Pengguna", icon: Users },
-    { href: "/admin/analytics", label: "Analitik", icon: BarChart3 },
+  type SidebarLink = {
+    href: string;
+    label: string;
+    icon: React.ComponentType<{ size?: number }>;
+    module?: "products" | "orders" | "branches" | "homepage" | "pages" | "users";
+    hqOnly?: boolean;
+  };
+
+  const links: SidebarLink[] = [
+    { href: "/admin/products", label: "Produk", icon: Package, module: "products" },
+    { href: "/admin/orders", label: "Pesanan", icon: ShoppingBag, module: "orders" },
+    { href: "/admin/branches", label: "Cabang", icon: Store, module: "branches" },
+    { href: "/admin/homepage", label: "Homepage", icon: LayoutTemplate, module: "homepage" },
+    { href: "/admin/pages", label: "Halaman", icon: FileText, module: "pages" },
+    { href: "/admin/users", label: "Pengguna", icon: Users, module: "users" },
+    { href: "/admin/roles", label: "Hak Akses", icon: Shield, hqOnly: true },
   ];
+
+  const visibleLinks = links.filter((link) => {
+    if (link.hqOnly) return user?.role === "hq";
+    if (permissionsLoading) return true; // show skeleton until permissions load
+    if (!link.module) return false;
+    return hasPermission(link.module, "view");
+  });
 
   const handleLogout = async () => {
     setLoggingOut(true);
@@ -85,13 +96,13 @@ export default function AdminSidebar() {
   const displayEmail = mounted ? user?.email || displayName : "";
 
   return (
-    <aside className="w-64 h-screen bg-slate-900 text-slate-400 flex flex-col sticky top-0">
-      <div className="p-6 text-xl font-bold text-white border-b border-slate-800">
+    <aside className="w-64 h-screen bg-card text-muted-foreground flex flex-col sticky top-0 border-r">
+      <div className="p-6 text-xl font-bold text-foreground border-b">
         Admin<span className="text-primary">Panel</span>
       </div>
 
       <nav className="flex-1 p-4 flex flex-col gap-2">
-        {links.map((link) => {
+        {visibleLinks.map((link) => {
           const Icon = link.icon;
           // Exact match for /admin, startsWith for sub-routes
           const isActive =
@@ -107,7 +118,8 @@ export default function AdminSidebar() {
                   "w-full justify-start gap-3",
                   isActive
                     ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                    : "hover:bg-slate-800 hover:text-white"
+                    : "hover:bg-accent hover:text-accent-foreground",
+                  permissionsLoading && link.module && "opacity-60"
                 )}
               >
                 <Icon size={20} />
@@ -118,18 +130,18 @@ export default function AdminSidebar() {
         })}
       </nav>
 
-      <div className="p-4 border-t border-slate-800">
+      <div className="p-4 border-t">
         {mounted ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="flex items-center gap-3 w-full text-left hover:bg-slate-800 rounded-md p-2 transition-colors">
+              <button className="flex items-center gap-3 w-full text-left hover:bg-accent rounded-md p-2 transition-colors">
                 <Avatar className="h-10 w-10">
                   <AvatarFallback className="bg-primary text-primary-foreground font-bold">
                     {initial}
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-semibold text-white truncate">
+                  <div className="text-sm font-semibold text-foreground truncate">
                     {displayName}
                   </div>
                   <div className="text-xs truncate">{roleLabel}</div>
@@ -164,7 +176,7 @@ export default function AdminSidebar() {
               </AvatarFallback>
             </Avatar>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-semibold text-white truncate">
+              <div className="text-sm font-semibold text-foreground truncate">
                 {displayName}
               </div>
               <div className="text-xs truncate">{roleLabel}</div>

@@ -62,7 +62,7 @@ export const orders = pgTable("orders", {
     .default("0"),
   serviceFee: numeric("service_fee", { precision: 15, scale: 2 })
     .notNull()
-    .default("1000"),
+    .default("0"),
   total: numeric("total", { precision: 15, scale: 2 }).notNull(),
   // Midtrans transaction id (from Core API charge response), nullable until charge succeeds
   midtransTransactionId: text("midtrans_transaction_id"),

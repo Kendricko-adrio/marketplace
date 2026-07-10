@@ -3,8 +3,10 @@
 import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import BranchForm from "@/components/admin/BranchForm";
 import type { BranchFormData } from "@/components/admin/BranchForm";
+import { useAuth } from "@/providers/auth-provider";
 
 interface ApiBranch {
   id: string;
@@ -23,19 +25,28 @@ export default function EditBranchPage() {
   const params = useParams();
   const router = useRouter();
   const branchId = params.id as string;
+  const { hasPermission, permissionsLoading } = useAuth();
 
   const [initialData, setInitialData] = useState<BranchFormData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (permissionsLoading) return;
+    if (!hasPermission("branches", "edit")) {
+      router.push("/admin/branches?error=forbidden");
+      return;
+    }
+
     async function fetchBranch() {
       try {
         const res = await fetch(`/api/admin/branches/${branchId}`);
         const data = await res.json();
 
         if (!data.success) {
-          setError(data.error || "Cabang tidak ditemukan");
+          const msg = data.error || "Cabang tidak ditemukan";
+          setError(msg);
+          toast.error(msg);
           return;
         }
 
@@ -53,14 +64,16 @@ export default function EditBranchPage() {
           status: branch.status as "aktif" | "nonaktif",
         });
       } catch {
-        setError("Gagal memuat data cabang");
+        const msg = "Gagal memuat data cabang";
+        setError(msg);
+        toast.error(msg);
       } finally {
         setLoading(false);
       }
     }
 
     fetchBranch();
-  }, [branchId]);
+  }, [branchId, hasPermission, permissionsLoading, router]);
 
   async function handleSubmit(data: BranchFormData) {
     const res = await fetch(`/api/admin/branches/${branchId}`, {
@@ -76,6 +89,10 @@ export default function EditBranchPage() {
     }
 
     router.push("/admin/branches");
+  }
+
+  if (permissionsLoading || !hasPermission("branches", "edit")) {
+    return null;
   }
 
   if (loading) {

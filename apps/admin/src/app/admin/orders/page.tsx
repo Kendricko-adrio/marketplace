@@ -2,6 +2,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Eye, Search, MoreHorizontal, Loader2, MapPin } from "lucide-react";
+import { useAuth } from "@/providers/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -61,28 +62,26 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-const STATUS_BADGES: Record<
-  string,
-  "default" | "secondary" | "destructive" | "outline"
-> = {
-  pending_payment: "outline",
-  processing: "secondary",
-  ready_for_pickup: "default",
-  completed: "default",
-  cancelled: "destructive",
+const STATUS_BADGES: Record<string, string> = {
+  pending_payment:
+    "bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-100",
+  processing: "bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-100",
+  ready_for_pickup:
+    "bg-violet-100 text-violet-700 border-violet-200 hover:bg-violet-100",
+  completed: "bg-green-100 text-green-700 border-green-200 hover:bg-green-100",
+  cancelled: "bg-red-100 text-red-700 border-red-200 hover:bg-red-100",
 };
 
-const PAYMENT_BADGES: Record<
-  string,
-  "default" | "secondary" | "destructive" | "outline"
-> = {
-  pending: "outline",
-  paid: "default",
-  failed: "destructive",
+const PAYMENT_BADGES: Record<string, string> = {
+  pending:
+    "bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-100",
+  paid: "bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-100",
+  failed: "bg-red-100 text-red-700 border-red-200 hover:bg-red-100",
 };
 
 export default function AdminOrdersPage() {
   const router = useRouter();
+  const { hasPermission } = useAuth();
   const [orders, setOrders] = useState<Order[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
@@ -162,7 +161,7 @@ export default function AdminOrdersPage() {
     setSearchQuery(value);
     setPage(1);
     if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => fetchOrders(), 300);
+    searchTimer.current = setTimeout(() => fetchOrders(), 1000);
   };
 
   // 30s polling — only on relevant tabs and when tab is visible
@@ -321,14 +320,14 @@ export default function AdminOrdersPage() {
                           </TableCell>
                           <TableCell>
                             <Badge
-                              variant={STATUS_BADGES[order.status] || "secondary"}
+                              className={STATUS_BADGES[order.status]}
                             >
                               {STATUS_LABELS[order.status] || order.status}
                             </Badge>
                           </TableCell>
                           <TableCell>
                             <Badge
-                              variant={PAYMENT_BADGES[order.paymentStatus] || "outline"}
+                              className={PAYMENT_BADGES[order.paymentStatus]}
                             >
                               {order.paymentStatus}
                             </Badge>
@@ -353,6 +352,16 @@ export default function AdminOrdersPage() {
                                 >
                                   <Eye className="h-4 w-4" /> View Detail
                                 </DropdownMenuItem>
+                                {hasPermission("orders", "edit") && (
+                                  <DropdownMenuItem
+                                    className="cursor-pointer gap-2"
+                                    onSelect={() =>
+                                      router.push(`/admin/orders/${order.id}?verify=1`)
+                                    }
+                                  >
+                                    <MapPin className="h-4 w-4" /> Verifikasi Pickup
+                                  </DropdownMenuItem>
+                                )}
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </TableCell>

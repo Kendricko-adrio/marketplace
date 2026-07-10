@@ -11,6 +11,7 @@ import {
   Loader2,
   MapPin,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -37,6 +38,8 @@ import {
   CardTitle,
   CardDescription,
 } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useAuth } from "@/providers/auth-provider";
 
 interface Branch {
   id: string;
@@ -49,11 +52,14 @@ interface Branch {
 
 export default function AdminBranchesPage() {
   const router = useRouter();
+  const { hasPermission } = useAuth();
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [deleteTarget, setDeleteTarget] = useState<Branch | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     fetchBranches();
@@ -93,24 +99,25 @@ export default function AdminBranchesPage() {
     );
   });
 
-  async function handleDelete(id: string, name: string) {
-    const confirmed = window.confirm(
-      `Yakin ingin menghapus cabang "${name}"? Tindakan ini tidak dapat dibatalkan.`
-    );
-    if (!confirmed) return;
-
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      const res = await fetch(`/api/admin/branches/${id}`, {
+      const res = await fetch(`/api/admin/branches/${deleteTarget.id}`, {
         method: "DELETE",
       });
       const data = await res.json();
       if (data.success) {
+        toast.success("Cabang berhasil dihapus");
+        setDeleteTarget(null);
         fetchBranches();
       } else {
-        alert(data.error || "Gagal menghapus cabang");
+        toast.error(data.error || "Gagal menghapus cabang");
       }
     } catch {
-      alert("Gagal menghapus cabang");
+      toast.error("Gagal menghapus cabang");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -118,11 +125,13 @@ export default function AdminBranchesPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <h2 className="text-2xl font-bold tracking-tight">Cabang</h2>
-        <Link href="/admin/branches/new">
-          <Button className="gap-2">
-            <Plus className="h-4 w-4" /> Tambah Cabang
-          </Button>
-        </Link>
+        {hasPermission("branches", "edit") && (
+          <Link href="/admin/branches/new">
+            <Button className="gap-2">
+              <Plus className="h-4 w-4" /> Tambah Cabang
+            </Button>
+          </Link>
+        )}
       </div>
 
       <Card>
@@ -203,25 +212,29 @@ export default function AdminBranchesPage() {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
                                 <DropdownMenuLabel>Aksi</DropdownMenuLabel>
-                                <DropdownMenuItem
-                                  className="cursor-pointer gap-2"
-                                  onSelect={() =>
-                                    router.push(
-                                      `/admin/branches/${branch.id}/edit`
-                                    )
-                                  }
-                                >
-                                  <Edit className="h-4 w-4" /> Edit
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  className="cursor-pointer gap-2 text-destructive focus:text-destructive focus:bg-destructive/10"
-                                  onSelect={() =>
-                                    handleDelete(branch.id, branch.name)
-                                  }
-                                >
-                                  <Trash2 className="h-4 w-4" /> Hapus
-                                </DropdownMenuItem>
+                                {hasPermission("branches", "edit") && (
+                                  <DropdownMenuItem
+                                    className="cursor-pointer gap-2"
+                                    onSelect={() =>
+                                      router.push(
+                                        `/admin/branches/${branch.id}/edit`
+                                      )
+                                    }
+                                  >
+                                    <Edit className="h-4 w-4" /> Edit
+                                  </DropdownMenuItem>
+                                )}
+                                {hasPermission("branches", "delete") && hasPermission("branches", "edit") && (
+                                  <DropdownMenuSeparator />
+                                )}
+                                {hasPermission("branches", "delete") && (
+                                  <DropdownMenuItem
+                                    className="cursor-pointer gap-2 text-destructive focus:text-destructive focus:bg-destructive/10"
+                                    onSelect={() => setDeleteTarget(branch)}
+                                  >
+                                    <Trash2 className="h-4 w-4" /> Hapus
+                                  </DropdownMenuItem>
+                                )}
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </TableCell>
@@ -257,6 +270,22 @@ export default function AdminBranchesPage() {
           )}
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title="Hapus Cabang"
+        description={
+          deleteTarget
+            ? `Yakin ingin menghapus cabang "${deleteTarget.name}"? Tindakan ini tidak dapat dibatalkan.`
+            : null
+        }
+        confirmLabel="Hapus"
+        loading={deleting}
+        onConfirm={handleDelete}
+      />
     </div>
   );
 }

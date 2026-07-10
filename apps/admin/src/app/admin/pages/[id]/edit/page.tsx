@@ -13,6 +13,10 @@ import { db } from "@/db";
 import { staticPages } from "@/db";
 import { eq } from "drizzle-orm";
 import { PageForm } from "@/components/admin/PageForm";
+import { auth } from "@/lib/auth";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
+import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +26,17 @@ export default async function EditPagePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+
+  const session = await auth.api.getSession({ headers: await headers() });
+
+  if (!session) {
+    redirect(`/login?callbackUrl=/admin/pages/${id}/edit`);
+  }
+
+  const permissions = await getPermissionsForRole(session.user.role);
+  if (!checkPermission(permissions, "pages", "edit")) {
+    redirect("/admin/pages?error=forbidden");
+  }
 
   const rows = await db
     .select({
@@ -51,7 +66,7 @@ export default async function EditPagePage({
         </Button>
         <h2 className="text-2xl font-bold tracking-tight">Edit Halaman</h2>
         <p className="text-muted-foreground text-sm mt-1">
-          Ubah halaman <strong>{page.title}</strong> (
+          Ubah halaman <strong>{page.title}</strong> ({" "}
           <code className="font-mono text-xs">/pages/{page.slug}</code>).
         </p>
       </div>

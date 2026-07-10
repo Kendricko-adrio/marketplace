@@ -4,7 +4,7 @@ import { users, adminAccounts, adminSessions } from "@/db";
 import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import { withAuth } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/auth-guard";
 
 const PASSWORD_CHARS =
   "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
@@ -26,7 +26,7 @@ const resetPasswordSchema = z.object({
 
 // POST /api/admin/users/:id/reset-password
 // HQ resets a user's password. Returns the new plaintext password ONCE.
-export const POST = withAuth(
+export const POST = withPermission(
   async (_ctx, request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
     try {
       const { id } = await params;
@@ -123,5 +123,6 @@ export const POST = withAuth(
       );
     }
   },
-  ["hq"]
+  "users",
+  "edit"
 );

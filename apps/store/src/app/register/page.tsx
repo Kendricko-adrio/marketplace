@@ -60,6 +60,13 @@ export default function RegisterPage() {
       return;
     }
 
+    if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+/.test(password)) {
+      setError(
+        "Password harus mengandung huruf besar, huruf kecil, dan angka."
+      );
+      return;
+    }
+
     // Clear stale onboarding cookie so the gate evaluates fresh for this user.
     document.cookie = "client.onboarding=; path=/; max-age=0";
 
@@ -254,7 +261,9 @@ export default function RegisterPage() {
 
           <form onSubmit={handleRegister} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="name">Nama Lengkap</Label>
+              <Label htmlFor="name" className="mb-1.5 block">
+                Nama Lengkap
+              </Label>
               <Input
                 id="name"
                 type="text"
@@ -266,7 +275,9 @@ export default function RegisterPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
+              <Label htmlFor="email" className="mb-1.5 block">
+                Email
+              </Label>
               <Input
                 id="email"
                 type="email"
@@ -278,11 +289,13 @@ export default function RegisterPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password" className="mb-1.5 block">
+                Password
+              </Label>
               <Input
                 id="password"
                 type="password"
-                placeholder="Minimal 8 karakter"
+                placeholder="Huruf besar, kecil, & angka (min 8 karakter)"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
@@ -290,7 +303,9 @@ export default function RegisterPage() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Konfirmasi Password</Label>
+              <Label htmlFor="confirmPassword" className="mb-1.5 block">
+                Konfirmasi Password
+              </Label>
               <Input
                 id="confirmPassword"
                 type="password"

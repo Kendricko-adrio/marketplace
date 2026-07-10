@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -97,6 +98,12 @@ export default function UserForm({
           setLocalError("Password minimal 8 karakter.");
           return;
         }
+        if (!/(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+/.test(formData.password)) {
+          setLocalError(
+            "Password harus mengandung huruf besar, huruf kecil, dan angka."
+          );
+          return;
+        }
         if (formData.password !== confirmPassword) {
           setLocalError("Konfirmasi password tidak cocok.");
           return;
@@ -106,8 +113,13 @@ export default function UserForm({
 
     try {
       await onSubmit(formData);
+      if (mode === "edit") {
+        toast.success("Perubahan pengguna tersimpan");
+      }
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : "Terjadi kesalahan");
+      const msg = err instanceof Error ? err.message : "Terjadi kesalahan";
+      setLocalError(msg);
+      toast.error(msg);
     }
   }
 

@@ -1,7 +1,8 @@
 "use client";
-import { useState, Suspense } from "react";
+import { useState, Suspense, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,17 +13,34 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { signIn } from "@/lib/auth-client";
+import { signIn, useSession } from "@/lib/auth-client";
 
 function AdminLoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/admin";
+  const { data: session, isPending: sessionPending } = useSession();
 
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // If the user already has a valid session, redirect them away from the login
+  // page. This replaces the previous middleware-based redirect that caused
+  // redirect loops when a stale session cookie was present.
+  useEffect(() => {
+    if (sessionPending || !session) return;
+
+    const mustReset = (session.user as { mustResetPassword?: boolean }).mustResetPassword;
+    if (mustReset) {
+      document.cookie = "admin.must_reset=1; path=/; max-age=600";
+      router.push("/reset-password?force=1");
+    } else {
+      router.push(callbackUrl);
+    }
+    router.refresh();
+  }, [session, sessionPending, callbackUrl, router]);
 
   const isEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
@@ -84,14 +102,24 @@ function AdminLoginForm() {
     }
   };
 
+  // Show a brief loading state while the client session is being resolved so
+  // authenticated users don't see a flash of the login form before redirecting.
+  if (sessionPending) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background px-4 py-16">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950 px-4">
-      <Card className="w-full max-w-md shadow-lg border-slate-800 bg-slate-900 text-slate-100">
+    <div className="min-h-screen flex items-center justify-center bg-background px-4 py-16">
+      <Card className="w-full max-w-md shadow-lg border-muted/40">
         <CardHeader className="space-y-1">
           <CardTitle className="text-2xl font-bold text-center">
             Admin Login
           </CardTitle>
-          <CardDescription className="text-center text-slate-400">
+          <CardDescription className="text-center text-muted-foreground">
             Masuk sebagai admin dengan email atau username.
           </CardDescription>
         </CardHeader>
@@ -104,7 +132,7 @@ function AdminLoginForm() {
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="identifier" className="text-slate-300">
+              <Label htmlFor="identifier">
                 Email atau Username
               </Label>
               <Input
@@ -115,11 +143,10 @@ function AdminLoginForm() {
                 onChange={(e) => setIdentifier(e.target.value)}
                 required
                 disabled={loading}
-                className="bg-slate-950 border-slate-700"
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password" className="text-slate-300">
+              <Label htmlFor="password">
                 Password
               </Label>
               <Input
@@ -130,7 +157,6 @@ function AdminLoginForm() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={loading}
-                className="bg-slate-950 border-slate-700"
               />
             </div>
             <Button type="submit" className="w-full" disabled={loading}>
@@ -141,7 +167,7 @@ function AdminLoginForm() {
           <div className="text-center">
             <Link
               href="/forgot-password"
-              className="text-sm text-slate-400 hover:text-slate-200 underline underline-offset-4"
+              className="text-sm text-primary hover:underline underline-offset-4"
             >
               Lupa password?
             </Link>

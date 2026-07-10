@@ -3,12 +3,12 @@ import { db } from "@/db";
 import { staticPages } from "@/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { withAuth } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/auth-guard";
 
 // -----------------------------
 // GET /api/admin/pages — list pages (HQ only)
 // -----------------------------
-export const GET = withAuth(async () => {
+export const GET = withPermission(async () => {
   try {
     const rows = await db
       .select({
@@ -31,7 +31,7 @@ export const GET = withAuth(async () => {
       { status: 500 }
     );
   }
-}, ["hq"]);
+}, "pages", "view");
 
 // -----------------------------
 // POST /api/admin/pages — create page (HQ only)
@@ -52,7 +52,7 @@ const createPageSchema = z.object({
   displayOrder: z.number().int().min(0).default(0),
 });
 
-export const POST = withAuth(async (_ctx, request: NextRequest) => {
+export const POST = withPermission(async (_ctx, request: NextRequest) => {
   try {
     const body = await request.json();
     const parsed = createPageSchema.safeParse(body);
@@ -103,4 +103,4 @@ export const POST = withAuth(async (_ctx, request: NextRequest) => {
       { status: 500 }
     );
   }
-}, ["hq"]);
+}, "pages", "edit");

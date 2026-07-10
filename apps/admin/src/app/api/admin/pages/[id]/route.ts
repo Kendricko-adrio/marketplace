@@ -3,12 +3,12 @@ import { db } from "@/db";
 import { staticPages } from "@/db";
 import { eq, and, ne } from "drizzle-orm";
 import { z } from "zod";
-import { withAuth } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/auth-guard";
 
 // -----------------------------
 // GET /api/admin/pages/[id] — single page (HQ only)
 // -----------------------------
-export const GET = withAuth(
+export const GET = withPermission(
   async (
     _ctx,
     _request: NextRequest,
@@ -48,7 +48,8 @@ export const GET = withAuth(
       );
     }
   },
-  ["hq"]
+  "pages",
+  "view"
 );
 
 // -----------------------------
@@ -68,7 +69,7 @@ const updatePageSchema = z.object({
   displayOrder: z.number().int().min(0).optional(),
 });
 
-export const PUT = withAuth(
+export const PUT = withPermission(
   async (
     _ctx,
     request: NextRequest,
@@ -142,13 +143,14 @@ export const PUT = withAuth(
       );
     }
   },
-  ["hq"]
+  "pages",
+  "edit"
 );
 
 // -----------------------------
 // DELETE /api/admin/pages/[id] — delete page (HQ only)
 // -----------------------------
-export const DELETE = withAuth(
+export const DELETE = withPermission(
   async (
     _ctx,
     _request: NextRequest,
@@ -180,5 +182,6 @@ export const DELETE = withAuth(
       );
     }
   },
-  ["hq"]
+  "pages",
+  "delete"
 );

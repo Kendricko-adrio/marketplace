@@ -23,6 +23,7 @@ async function seed() {
   try {
     // Clear existing data
     console.log("🗑️  Clearing existing data...");
+    await db.delete(schema.permissions);
     await db.delete(schema.staticPages);
     await db.delete(schema.homepageSectionProducts);
     await db.delete(schema.homepageSections);
@@ -99,6 +100,64 @@ async function seed() {
         password: hashedPassword,
       });
     }
+
+    // =====================
+    // ADMIN PERMISSIONS (RBAC defaults)
+    // =====================
+    // HQ is treated as implicit superuser in application code, so only the
+    // "admin" role gets explicit rows here. Default: products + orders with
+    // view + edit (edit includes create), no delete, everything else denied.
+    console.log("🔒 Seeding admin role permissions...");
+    await db.insert(schema.permissions).values([
+      {
+        id: generateId(),
+        role: "admin",
+        module: "products",
+        canView: true,
+        canEdit: true,
+        canDelete: false,
+      },
+      {
+        id: generateId(),
+        role: "admin",
+        module: "orders",
+        canView: true,
+        canEdit: true,
+        canDelete: false,
+      },
+      {
+        id: generateId(),
+        role: "admin",
+        module: "branches",
+        canView: false,
+        canEdit: false,
+        canDelete: false,
+      },
+      {
+        id: generateId(),
+        role: "admin",
+        module: "homepage",
+        canView: false,
+        canEdit: false,
+        canDelete: false,
+      },
+      {
+        id: generateId(),
+        role: "admin",
+        module: "pages",
+        canView: false,
+        canEdit: false,
+        canDelete: false,
+      },
+      {
+        id: generateId(),
+        role: "admin",
+        module: "users",
+        canView: false,
+        canEdit: false,
+        canDelete: false,
+      },
+    ]);
 
     // =====================
     // CLIENTS (store customers)
@@ -235,6 +294,16 @@ async function seed() {
 
     const allVariantIds: string[] = [];
     const allProductIds: string[] = [];
+
+    // Available product images in /public/images/products
+    const productImages = [
+      "/images/products/shoes1.webp",
+      "/images/products/shoes2.jpg",
+      "/images/products/shoes3.jpg",
+      "/images/products/shoes4.jpg",
+      "/images/products/shoes5.webp",
+      "/images/products/shoes6.webp",
+    ];
 
     const productsData = [
       {
@@ -559,6 +628,8 @@ async function seed() {
     ];
 
     for (const product of productsData) {
+      const productIndex = productsData.indexOf(product);
+
       // Insert product
       await db.insert(schema.products).values({
         id: product.id,
@@ -585,7 +656,8 @@ async function seed() {
       }
 
       // Insert variants
-      for (const variant of product.variants) {
+      for (let variantIndex = 0; variantIndex < product.variants.length; variantIndex++) {
+        const variant = product.variants[variantIndex];
         const variantId = generateId();
         await db.insert(schema.productVariants).values({
           id: variantId,
@@ -600,13 +672,21 @@ async function seed() {
         // Track variant id for branch stock seeding
         allVariantIds.push(variantId);
 
-        // Insert placeholder image for each variant
-        await db.insert(schema.productImages).values({
-          id: generateId(),
-          variantId: variantId,
-          url: '/images/products/shoes1.webp',
-          displayOrder: 0,
-        });
+        // Insert multiple images per variant (3-4 images, starting from a
+        // rotating offset so different products get different image sets)
+        const imageCount = 3 + (variantIndex % 2); // 3 or 4 images
+        const startOffset =
+          (productIndex * 2 + variantIndex * 3) % productImages.length;
+
+        for (let imgIndex = 0; imgIndex < imageCount; imgIndex++) {
+          const imgOffset = (startOffset + imgIndex) % productImages.length;
+          await db.insert(schema.productImages).values({
+            id: generateId(),
+            variantId: variantId,
+            url: productImages[imgOffset],
+            displayOrder: imgIndex,
+          });
+        }
       }
     }
 
@@ -875,8 +955,8 @@ async function seed() {
       const variant = variants[i % variants.length];
       const qty = Math.floor(Math.random() * 3) + 1;
       const subtotal = parseFloat(variant.price) * qty;
-      // Phase 1 = pickup, no shipping cost
-      const total = subtotal + 1000;
+      // Phase 1 = pickup, no shipping cost, no service fee
+      const total = subtotal;
 
       const status = orderStatuses[i];
       const isPaid = status !== "cancelled";
@@ -907,7 +987,7 @@ async function seed() {
         subtotal: subtotal.toString(),
         shippingCost: "0",
         discount: "0",
-        serviceFee: "1000",
+        serviceFee: "0",
         total: total.toString(),
         midtransTransactionId: isPaid
           ? `midtrans-${orderId.slice(0, 12)}`
@@ -930,27 +1010,37 @@ async function seed() {
     }
 
     // =====================
-    // SAMPLE CART (branch-scoped, 1 cart = 1 branch)
+    // SAMPLE CART (multi-branch — items from different branches)
     // =====================
-    console.log("🛒 Creating sample cart (branch-scoped)...");
+    console.log("🛒 Creating sample cart (multi-branch)...");
     const cartId = generateId();
     await db.insert(schema.carts).values({
       id: cartId,
       userId: customer1Id,
-      branchId: pickupBranchId, // cart locked to Jakarta Pusat
     });
 
-    // Add 2 items to the cart from the same branch
-    const cartVariants = variants.slice(0, 2);
-    for (const v of cartVariants) {
-      await db.insert(schema.cartItems).values({
+    // Add 2 items to the cart: 1 from Jakarta Pusat, 1 from Surabaya.
+    // The new cart flow allows items from multiple branches; the checkout
+    // page groups them by branch and only lets the customer check out one
+    // branch's items per order.
+    const cartVariant1 = variants[0];
+    const cartVariant2 = variants[1] ?? variants[0];
+    await db.insert(schema.cartItems).values([
+      {
         id: generateId(),
         cartId: cartId,
-        variantId: v.id,
-        branchId: pickupBranchId,
+        variantId: cartVariant1.id,
+        branchId: branchIds[0], // Jakarta Pusat
         quantity: 1,
-      });
-    }
+      },
+      {
+        id: generateId(),
+        cartId: cartId,
+        variantId: cartVariant2.id,
+        branchId: branchIds[1], // Surabaya
+        quantity: 2,
+      },
+    ]);
 
     // =====================
     // STATIC PAGES (CMS)

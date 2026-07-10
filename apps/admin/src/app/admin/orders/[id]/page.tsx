@@ -11,15 +11,25 @@ import {
   Mail,
   Package,
   Loader2,
-  Copy,
   Check,
   AlertCircle,
+  PackageCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { toast } from "sonner";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useAuth } from "@/providers/auth-provider";
 
 interface OrderItem {
   id: string;
@@ -72,21 +82,28 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-const STATUS_BADGES: Record<
-  string,
-  "default" | "secondary" | "destructive" | "outline"
-> = {
-  pending_payment: "outline",
-  processing: "secondary",
-  ready_for_pickup: "default",
-  completed: "default",
-  cancelled: "destructive",
+const STATUS_BADGES: Record<string, string> = {
+  pending_payment:
+    "bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-100",
+  processing: "bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-100",
+  ready_for_pickup:
+    "bg-violet-100 text-violet-700 border-violet-200 hover:bg-violet-100",
+  completed: "bg-green-100 text-green-700 border-green-200 hover:bg-green-100",
+  cancelled: "bg-red-100 text-red-700 border-red-200 hover:bg-red-100",
+};
+
+const PAYMENT_BADGES: Record<string, string> = {
+  pending:
+    "bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-100",
+  paid: "bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-100",
+  failed: "bg-red-100 text-red-700 border-red-200 hover:bg-red-100",
 };
 
 export default function AdminOrderDetailPage() {
   const params = useParams();
   const router = useRouter();
   const orderId = params.id as string;
+  const { hasPermission } = useAuth();
 
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -95,14 +112,14 @@ export default function AdminOrderDetailPage() {
   const [codeInput, setCodeInput] = useState("");
   const [verifying, setVerifying] = useState(false);
   const [verifyError, setVerifyError] = useState("");
-  const [copied, setCopied] = useState(false);
+  const [pickupModalOpen, setPickupModalOpen] = useState(false);
 
   useEffect(() => {
-    async function fetchSession() {
+    async function fetchMe() {
       try {
-        const res = await fetch("/api/auth/getSession");
+        const res = await fetch("/api/admin/me");
         const data = await res.json();
-        if (data?.user) {
+        if (data?.success && data?.user) {
           setUserRole(data.user.role || "admin");
           setUserBranchId(data.user.branchId || null);
         }
@@ -110,7 +127,7 @@ export default function AdminOrderDetailPage() {
         // ignore
       }
     }
-    fetchSession();
+    fetchMe();
   }, []);
 
   useEffect(() => {
@@ -134,7 +151,7 @@ export default function AdminOrderDetailPage() {
     userRole === "admin" && !!userBranchId;
 
   const canVerifyPickup =
-    order?.status === "ready_for_pickup" && isBranchAdmin;
+    order?.status === "ready_for_pickup" && isBranchAdmin && hasPermission("orders", "edit");
 
   const handleVerify = async () => {
     if (!codeInput.trim()) return;
@@ -155,21 +172,17 @@ export default function AdminOrderDetailPage() {
           setOrder(refetchData.data);
         }
         setCodeInput("");
+        setPickupModalOpen(false);
+        toast.success("Order completed successfully");
       } else {
         setVerifyError(data.error || "Verification failed");
+        toast.error(data.error || "Verification failed");
       }
     } catch {
       setVerifyError("An error occurred. Please try again.");
+      toast.error("An error occurred. Please try again.");
     } finally {
       setVerifying(false);
-    }
-  };
-
-  const copyCode = () => {
-    if (order?.pickupCode) {
-      navigator.clipboard.writeText(order.pickupCode);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
     }
   };
 
@@ -228,11 +241,25 @@ export default function AdminOrderDetailPage() {
             {formatDate(order.createdAt)}
           </p>
         </div>
-        <div className="flex gap-2">
-          <Badge variant={STATUS_BADGES[order.status] || "secondary"}>
+        <div className="flex gap-2 items-center">
+          {canVerifyPickup && (
+            <Button
+              className="gap-2"
+              onClick={() => {
+                setVerifyError("");
+                setPickupModalOpen(true);
+              }}
+            >
+              <PackageCheck className="h-4 w-4" />
+              Customer Pick Up
+            </Button>
+          )}
+          <Badge className={STATUS_BADGES[order.status]}>
             {STATUS_LABELS[order.status] || order.status}
           </Badge>
-          <Badge variant="outline">{order.paymentStatus}</Badge>
+          <Badge className={PAYMENT_BADGES[order.paymentStatus]}>
+            {order.paymentStatus}
+          </Badge>
         </div>
       </div>
 
@@ -295,82 +322,6 @@ export default function AdminOrderDetailPage() {
             <p className="font-semibold text-destructive">
               This order was cancelled
             </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Pickup Code Block */}
-      {order.pickupCode &&
-        (order.status === "ready_for_pickup" ||
-          order.status === "completed") && (
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground mb-1">
-                    Pickup Code
-                  </p>
-                  <p className="font-mono text-3xl font-bold tracking-widest text-primary">
-                    {order.pickupCode}
-                  </p>
-                </div>
-                <Button variant="outline" size="sm" onClick={copyCode} className="gap-1">
-                  {copied ? (
-                    <>
-                      <Check className="h-4 w-4" /> Copied
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4" /> Copy
-                    </>
-                  )}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-      {/* Verify Pickup Code (branch admin only, when ready_for_pickup) */}
-      {canVerifyPickup && (
-        <Card>
-          <CardContent className="p-6">
-            <h3 className="font-semibold mb-1">Verify Customer Pickup Code</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Ask the customer for their 6-digit pickup code and enter it below
-              to complete the order.
-            </p>
-            <div className="flex gap-3">
-              <div className="flex-1">
-                <Label htmlFor="pickupCodeInput" className="sr-only">
-                  Pickup Code
-                </Label>
-                <Input
-                  id="pickupCodeInput"
-                  placeholder="e.g. A8X3K9"
-                  value={codeInput}
-                  onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
-                  maxLength={6}
-                  className="font-mono text-lg tracking-widest"
-                />
-              </div>
-              <Button
-                onClick={handleVerify}
-                disabled={verifying || !codeInput.trim()}
-                className="gap-2"
-              >
-                {verifying ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Check className="h-4 w-4" />
-                )}
-                Verify & Complete
-              </Button>
-            </div>
-            {verifyError && (
-              <p className="mt-3 text-sm text-destructive flex items-center gap-1">
-                <AlertCircle className="h-4 w-4" /> {verifyError}
-              </p>
-            )}
           </CardContent>
         </Card>
       )}
@@ -491,12 +442,6 @@ export default function AdminOrderDetailPage() {
               <span className="text-muted-foreground">Subtotal</span>
               <span>Rp {parseFloat(order.subtotal).toLocaleString("id-ID")}</span>
             </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Service Fee</span>
-              <span>
-                Rp {parseFloat(order.serviceFee).toLocaleString("id-ID")}
-              </span>
-            </div>
             <div className="flex justify-between font-bold pt-2 border-t">
               <span>Total</span>
               <span className="text-primary">
@@ -506,6 +451,78 @@ export default function AdminOrderDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Customer Pick Up Modal */}
+      <Dialog
+        open={pickupModalOpen}
+        onOpenChange={(v) => {
+          setPickupModalOpen(v);
+          if (!v) {
+            setVerifyError("");
+            setCodeInput("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>Customer Pick Up</DialogTitle>
+            <DialogDescription>
+              Ask the customer for their 6-digit pickup code and enter it below
+              to complete the order.
+            </DialogDescription>
+          </DialogHeader>
+
+          {verifyError && (
+            <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-md flex items-center gap-2">
+              <AlertCircle className="h-4 w-4 flex-shrink-0" /> {verifyError}
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label htmlFor="pickupCodeInput">Pickup Code</Label>
+            <Input
+              id="pickupCodeInput"
+              placeholder="e.g. A8X3K9"
+              value={codeInput}
+              onChange={(e) => setCodeInput(e.target.value.toUpperCase())}
+              maxLength={6}
+              className="font-mono text-lg tracking-widest text-center"
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && codeInput.trim() && !verifying) {
+                  handleVerify();
+                }
+              }}
+            />
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setPickupModalOpen(false);
+                setVerifyError("");
+                setCodeInput("");
+              }}
+              disabled={verifying}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleVerify}
+              disabled={verifying || !codeInput.trim()}
+              className="gap-2"
+            >
+              {verifying ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4" />
+              )}
+              Verify &amp; Complete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

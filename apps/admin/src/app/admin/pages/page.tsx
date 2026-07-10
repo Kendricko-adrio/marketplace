@@ -12,6 +12,7 @@ import {
   AlertCircle,
   Loader2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -38,6 +39,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useAuth } from "@/providers/auth-provider";
 
 interface PageRow {
   id: string;
@@ -49,10 +52,12 @@ interface PageRow {
 }
 
 export default function AdminPagesPage() {
+  const { hasPermission } = useAuth();
   const [pages, setPages] = useState<PageRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<PageRow | null>(null);
   const [deleting, setDeleting] = useState(false);
 
   const fetchPages = useCallback(async () => {
@@ -74,17 +79,21 @@ export default function AdminPagesPage() {
     fetchPages();
   }, [fetchPages]);
 
-  const handleDelete = async (page: PageRow) => {
-    if (!window.confirm(`Hapus halaman "${page.title}"? Tindakan ini tidak dapat dibatalkan.`))
-      return;
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
     setDeleting(true);
     try {
-      const res = await fetch(`/api/admin/pages/${page.id}`, { method: "DELETE" });
+      const res = await fetch(`/api/admin/pages/${deleteTarget.id}`, {
+        method: "DELETE",
+      });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error || "Gagal menghapus");
+      toast.success("Halaman berhasil dihapus");
+      setDeleteTarget(null);
       fetchPages();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Gagal menghapus");
+      const msg = err instanceof Error ? err.message : "Gagal menghapus";
+      toast.error(msg);
     } finally {
       setDeleting(false);
     }
@@ -106,11 +115,13 @@ export default function AdminPagesPage() {
             HQ yang dapat mengelola.
           </p>
         </div>
-        <Button asChild className="gap-2">
-          <Link href="/admin/pages/new">
-            <Plus className="h-4 w-4" /> Halaman Baru
-          </Link>
-        </Button>
+        {hasPermission("pages", "edit") && (
+          <Button asChild className="gap-2">
+            <Link href="/admin/pages/new">
+              <Plus className="h-4 w-4" /> Halaman Baru
+            </Link>
+          </Button>
+        )}
       </div>
 
       {error && (
@@ -200,19 +211,25 @@ export default function AdminPagesPage() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuLabel>Aksi</DropdownMenuLabel>
-                            <DropdownMenuItem asChild>
-                              <Link href={`/admin/pages/${page.id}/edit`}>
-                                <Pencil className="mr-2 h-4 w-4" /> Edit
-                              </Link>
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              className="text-destructive focus:text-destructive"
-                              disabled={deleting}
-                              onClick={() => handleDelete(page)}
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" /> Hapus
-                            </DropdownMenuItem>
+                            {hasPermission("pages", "edit") && (
+                              <DropdownMenuItem asChild>
+                                <Link href={`/admin/pages/${page.id}/edit`}>
+                                  <Pencil className="mr-2 h-4 w-4" /> Edit
+                                </Link>
+                              </DropdownMenuItem>
+                            )}
+                            {hasPermission("pages", "delete") && hasPermission("pages", "edit") && (
+                              <DropdownMenuSeparator />
+                            )}
+                            {hasPermission("pages", "delete") && (
+                              <DropdownMenuItem
+                                className="text-destructive focus:text-destructive"
+                                disabled={deleting}
+                                onClick={() => setDeleteTarget(page)}
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                              </DropdownMenuItem>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>
@@ -224,6 +241,22 @@ export default function AdminPagesPage() {
           </div>
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title="Hapus Halaman"
+        description={
+          deleteTarget
+            ? `Hapus halaman "${deleteTarget.title}"? Tindakan ini tidak dapat dibatalkan.`
+            : null
+        }
+        confirmLabel="Hapus"
+        loading={deleting}
+        onConfirm={handleDelete}
+      />
     </div>
   );
 }

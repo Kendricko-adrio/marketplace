@@ -8,9 +8,9 @@ import {
 } from "@/db";
 import { eq, asc, inArray, desc } from "drizzle-orm";
 import { z } from "zod";
-import { withAuth } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/auth-guard";
 
-export const GET = withAuth(async () => {
+export const GET = withPermission(async () => {
   try {
     const sections = await db
       .select()
@@ -77,7 +77,7 @@ export const GET = withAuth(async () => {
       { status: 500 }
     );
   }
-}, ["hq"]);
+}, "homepage", "view");
 
 const promoCardSchema = z.object({
   id: z.string(),
@@ -101,7 +101,7 @@ const createSectionSchema = z.object({
   productIds: z.array(z.string()).optional(),
 });
 
-export const POST = withAuth(async (_ctx, request: NextRequest) => {
+export const POST = withPermission(async (_ctx, request: NextRequest) => {
   try {
     const body = await request.json();
     const parsed = createSectionSchema.safeParse(body);
@@ -159,4 +159,4 @@ export const POST = withAuth(async (_ctx, request: NextRequest) => {
       { status: 500 }
     );
   }
-}, ["hq"]);
+}, "homepage", "edit");

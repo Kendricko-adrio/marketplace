@@ -19,6 +19,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Plus, GripVertical, Edit, Trash2, Eye, Loader2, ExternalLink } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -29,7 +30,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/providers/auth-provider";
 
 interface AdminSection {
   id: string;
@@ -60,10 +63,13 @@ const TYPE_DESCRIPTIONS: Record<string, string> = {
 
 export default function AdminHomepagePage() {
   const router = useRouter();
+  const { hasPermission } = useAuth();
   const [sections, setSections] = useState<AdminSection[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [reordering, setReordering] = useState(false);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -97,29 +103,36 @@ export default function AdminHomepagePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isActive }),
       });
+      toast.success(isActive ? "Section diaktifkan" : "Section dinonaktifkan");
     } catch (error) {
       console.error("Error toggling section:", error);
+      toast.error("Gagal mengubah status section");
       setSections((prev) =>
         prev.map((s) => (s.id === id ? { ...s, isActive: !isActive } : s))
       );
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm("Yakin ingin menghapus section ini?")) return;
+  const handleDelete = async () => {
+    if (!deleteId) return;
+    setDeleting(true);
     try {
-      const res = await fetch(`/api/admin/homepage/${id}`, {
+      const res = await fetch(`/api/admin/homepage/${deleteId}`, {
         method: "DELETE",
       });
       const data = await res.json();
       if (data.success) {
-        setSections((prev) => prev.filter((s) => s.id !== id));
+        setSections((prev) => prev.filter((s) => s.id !== deleteId));
+        toast.success("Section berhasil dihapus");
+        setDeleteId(null);
       } else {
-        alert(data.error || "Gagal menghapus section");
+        toast.error(data.error || "Gagal menghapus section");
       }
     } catch (error) {
       console.error("Error deleting section:", error);
-      alert("Gagal menghapus section");
+      toast.error("Gagal menghapus section");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -148,6 +161,7 @@ export default function AdminHomepagePage() {
       });
     } catch (error) {
       console.error("Error reordering sections:", error);
+      toast.error("Gagal menyimpan urutan");
       fetchSections();
     } finally {
       setReordering(false);
@@ -174,9 +188,11 @@ export default function AdminHomepagePage() {
               <Eye className="h-4 w-4" /> Preview
             </a>
           </Button>
-          <Button onClick={() => setShowAddDialog(true)} className="gap-2">
-            <Plus className="h-4 w-4" /> Tambah Section
-          </Button>
+          {hasPermission("homepage", "edit") && (
+            <Button onClick={() => setShowAddDialog(true)} className="gap-2">
+              <Plus className="h-4 w-4" /> Tambah Section
+            </Button>
+          )}
         </div>
       </div>
 
@@ -189,9 +205,11 @@ export default function AdminHomepagePage() {
           <p className="text-muted-foreground mb-4">
             Belum ada section. Tambahkan section pertama untuk homepage.
           </p>
-          <Button onClick={() => setShowAddDialog(true)} className="gap-2">
-            <Plus className="h-4 w-4" /> Tambah Section
-          </Button>
+          {hasPermission("homepage", "edit") && (
+            <Button onClick={() => setShowAddDialog(true)} className="gap-2">
+              <Plus className="h-4 w-4" /> Tambah Section
+            </Button>
+          )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -215,7 +233,7 @@ export default function AdminHomepagePage() {
                   section={section}
                   index={index}
                   onToggleActive={handleToggleActive}
-                  onDelete={handleDelete}
+                  onDelete={(id) => setDeleteId(id)}
                 />
               ))}
             </SortableContext>
@@ -250,6 +268,18 @@ export default function AdminHomepagePage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={!!deleteId}
+        onOpenChange={(open) => {
+          if (!open) setDeleteId(null);
+        }}
+        title="Hapus Section"
+        description="Yakin ingin menghapus section ini? Tindakan ini tidak dapat dibatalkan."
+        confirmLabel="Hapus"
+        loading={deleting}
+        onConfirm={handleDelete}
+      />
     </div>
   );
 }
@@ -266,6 +296,7 @@ function SortableSectionRow({
   onDelete: (id: string) => void;
 }) {
   const router = useRouter();
+  const { hasPermission } = useAuth();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: section.id });
 
@@ -312,28 +343,34 @@ function SortableSectionRow({
         </div>
       </div>
 
-      <Switch
-        checked={section.isActive}
-        onCheckedChange={(checked) => onToggleActive(section.id, checked)}
-      />
+      {hasPermission("homepage", "edit") && (
+        <Switch
+          checked={section.isActive}
+          onCheckedChange={(checked) => onToggleActive(section.id, checked)}
+        />
+      )}
 
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-8 w-8"
-        onClick={() => router.push(`/admin/homepage/${section.id}/edit`)}
-      >
-        <Edit className="h-4 w-4" />
-      </Button>
+      {hasPermission("homepage", "edit") && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8"
+          onClick={() => router.push(`/admin/homepage/${section.id}/edit`)}
+        >
+          <Edit className="h-4 w-4" />
+        </Button>
+      )}
 
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-8 w-8 text-destructive hover:text-destructive"
-        onClick={() => onDelete(section.id)}
-      >
-        <Trash2 className="h-4 w-4" />
-      </Button>
+      {hasPermission("homepage", "delete") && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 text-destructive hover:text-destructive"
+          onClick={() => onDelete(section.id)}
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      )}
     </div>
   );
 }

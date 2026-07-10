@@ -4,12 +4,12 @@ import { users, branches, adminSessions, adminAccounts } from "@/db";
 import { eq, ilike, and, desc, sql, or } from "drizzle-orm";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
-import { withAuth } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/auth-guard";
 
 // -----------------------------
 // GET /api/admin/users — list users (HQ only)
 // -----------------------------
-export const GET = withAuth(async (_ctx, request: NextRequest) => {
+export const GET = withPermission(async (_ctx, request: NextRequest) => {
   try {
     const { searchParams } = new URL(request.url);
     const search = searchParams.get("search")?.trim() || "";
@@ -77,7 +77,7 @@ export const GET = withAuth(async (_ctx, request: NextRequest) => {
       { status: 500 }
     );
   }
-}, ["hq"]);
+}, "users", "view");
 
 // -----------------------------
 // POST /api/admin/users — create user (HQ only)
@@ -141,7 +141,7 @@ async function generateUniqueUsername(
   }
 }
 
-export const POST = withAuth(async (ctx, request: NextRequest) => {
+export const POST = withPermission(async (ctx, request: NextRequest) => {
   try {
     const body = await request.json();
     const parsed = createUserSchema.safeParse(body);
@@ -263,4 +263,4 @@ export const POST = withAuth(async (ctx, request: NextRequest) => {
       { status: 500 }
     );
   }
-}, ["hq"]);
+}, "users", "edit");

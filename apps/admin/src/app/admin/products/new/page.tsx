@@ -1,11 +1,21 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 import ProductForm from "@/components/admin/ProductForm";
 import type { ProductFormData } from "@/components/admin/ProductForm";
+import { useAuth } from "@/providers/auth-provider";
 
 export default function NewProductPage() {
   const router = useRouter();
+  const { hasPermission, permissionsLoading } = useAuth();
+
+  useEffect(() => {
+    if (permissionsLoading) return;
+    if (!hasPermission("products", "edit")) {
+      router.push("/admin/products?error=forbidden");
+    }
+  }, [hasPermission, permissionsLoading, router]);
 
   async function handleSubmit(data: ProductFormData) {
     const res = await fetch("/api/admin/products", {
@@ -21,6 +31,10 @@ export default function NewProductPage() {
     }
 
     router.push("/admin/products");
+  }
+
+  if (permissionsLoading || !hasPermission("products", "edit")) {
+    return null;
   }
 
   return (

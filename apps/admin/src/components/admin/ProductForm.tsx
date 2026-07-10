@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Plus, Trash2, X, Upload, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -226,8 +227,15 @@ export default function ProductForm({
       }
 
       await onSubmit(formData);
+      toast.success(
+        mode === "create"
+          ? "Produk berhasil dibuat"
+          : "Perubahan produk tersimpan"
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Terjadi kesalahan");
+      const msg = err instanceof Error ? err.message : "Terjadi kesalahan";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }

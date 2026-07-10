@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +23,7 @@ export function IdentityForm() {
     completeOnboarding,
     initialState
   );
+  const [phoneLocal, setPhoneLocal] = useState("");
 
   // If onboarding succeeded, the action calls redirect() which throws on the
   // server but we still want to refresh client-side session data.
@@ -31,6 +32,14 @@ export function IdentityForm() {
       router.refresh();
     }
   }, [state?.success, router]);
+
+  // Strip leading 0 or +62 from user input so the +62 prefix is never duplicated.
+  function normalizePhoneLocal(raw: string): string {
+    let v = raw.replace(/[^\d]/g, "");
+    if (v.startsWith("62")) v = v.slice(2);
+    else if (v.startsWith("0")) v = v.slice(1);
+    return v;
+  }
 
   return (
     <Card className="w-full max-w-lg shadow-lg border-muted/40">
@@ -47,17 +56,30 @@ export function IdentityForm() {
         <form action={formAction} className="space-y-5">
           {/* Phone */}
           <div className="space-y-2">
-            <Label htmlFor="phone">Nomor Telepon</Label>
-            <Input
-              id="phone"
-              name="phone"
-              type="tel"
-              placeholder="+628123456789"
-              required
-              disabled={isPending}
-            />
+            <Label htmlFor="phone" className="mb-1.5 block">
+              Nomor Telepon
+            </Label>
+            <div className="flex">
+              <span className="inline-flex items-center px-3 rounded-l-md border border-r-0 border-input bg-muted text-muted-foreground text-sm">
+                +62
+              </span>
+              <Input
+                id="phone"
+                type="tel"
+                inputMode="numeric"
+                placeholder="81234567890"
+                required
+                disabled={isPending}
+                value={phoneLocal}
+                onChange={(e) =>
+                  setPhoneLocal(normalizePhoneLocal(e.target.value))
+                }
+                className="rounded-l-none"
+              />
+              <input type="hidden" name="phone" value={`+62${phoneLocal}`} />
+            </div>
             <p className="text-xs text-muted-foreground">
-              Termasuk kode negara. Digunakan untuk notifikasi pesanan.
+              Masukkan nomor tanpa kode negara. Contoh: 81234567890.
             </p>
             {state?.errors?.phone && (
               <p className="text-xs text-destructive">
@@ -68,7 +90,9 @@ export function IdentityForm() {
 
           {/* Birth date */}
           <div className="space-y-2">
-            <Label htmlFor="birthDate">Tanggal Lahir</Label>
+            <Label htmlFor="birthDate" className="mb-1.5 block">
+              Tanggal Lahir
+            </Label>
             <Input
               id="birthDate"
               name="birthDate"
@@ -88,7 +112,7 @@ export function IdentityForm() {
 
           {/* Gender */}
           <div className="space-y-2">
-            <Label>Jenis Kelamin</Label>
+            <Label className="mb-1.5 block">Jenis Kelamin</Label>
             <RadioGroup name="gender" required disabled={isPending}>
               <div className="flex items-center space-x-2">
                 <RadioGroupItem id="gender-male" value="male" />
@@ -100,12 +124,6 @@ export function IdentityForm() {
                 <RadioGroupItem id="gender-female" value="female" />
                 <Label htmlFor="gender-female" className="font-normal cursor-pointer">
                   Perempuan
-                </Label>
-              </div>
-              <div className="flex items-center space-x-2">
-                <RadioGroupItem id="gender-other" value="other" />
-                <Label htmlFor="gender-other" className="font-normal cursor-pointer">
-                  Lainnya
                 </Label>
               </div>
             </RadioGroup>

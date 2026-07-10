@@ -3,6 +3,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,6 +31,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
+import { useCart } from "@/providers/cart-provider";
 import {
   getDayHours,
   generateTimeSlots,
@@ -42,6 +44,7 @@ interface CartItem {
   id: string;
   quantity: number;
   variantId: string;
+  branchId: string | null;
   variant: {
     id: string;
     color: string | null;
@@ -50,32 +53,32 @@ interface CartItem {
   };
   product: { id: string; name: string };
   image: string | null;
-}
-
-interface CartBranch {
-  id: string;
-  name: string;
-  city: string;
-  address: string;
+  branch: {
+    id: string;
+    name: string;
+    city: string;
+  } | null;
 }
 
 interface CartData {
   id: string;
-  branch: CartBranch | null;
   items: CartItem[];
   itemCount: number;
   subtotal: number;
 }
 
-interface BranchWithHours extends CartBranch {
+interface BranchWithHours {
+  id: string;
+  name: string;
+  city: string;
+  address: string;
   operatingHours: OperatingHours;
 }
-
-const SERVICE_FEE = 1000;
 
 export default function CheckoutPage() {
   const router = useRouter();
   const { data: session } = useSession();
+  const { refreshCart } = useCart();
 
   // ===== State =====
   const [cart, setCart] = useState<CartData | null>(null);
@@ -83,6 +86,12 @@ export default function CheckoutPage() {
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [submitting, setSubmitting] = useState(false);
+
+  // Selected item IDs — passed from the cart page via sessionStorage.
+  // The cart page enforces single-branch selection before navigating here.
+  const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(
+    new Set()
+  );
 
   // Step 1 — Contact
   const [phone, setPhone] = useState("");
@@ -108,26 +117,35 @@ export default function CheckoutPage() {
   >("idle");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ===== Fetch cart on mount =====
+  // ===== Fetch cart + read selected item IDs on mount =====
   useEffect(() => {
+    // Read the selection made on the cart page from sessionStorage.
+    let ids: string[] = [];
+    try {
+      const stored = sessionStorage.getItem("checkoutSelectedItemIds");
+      if (stored) ids = JSON.parse(stored) as string[];
+    } catch {
+      // sessionStorage unavailable — fall back to empty selection
+    }
+
     async function fetchCart() {
       try {
         const res = await fetch("/api/cart");
         const data = await res.json();
         if (data.success) {
           setCart(data.data);
-          // If cart has no branch or is empty, redirect to cart page
-          if (!data.data.branch || data.data.items.length === 0) {
+          // Build the selected-item set from sessionStorage, intersected
+          // with the current cart contents (so stale IDs are dropped).
+          const validIds = new Set((data.data.items as CartItem[]).map((i) => i.id));
+          const filtered = new Set(
+            ids.filter((id) => validIds.has(id))
+          );
+          setSelectedItemIds(filtered);
+
+          if (data.data.items.length === 0 || filtered.size === 0) {
+            // Nothing to checkout — send the user back to the cart page.
             router.push("/cart");
             return;
-          }
-          // Fetch full branch details (with operating hours)
-          const branchRes = await fetch(
-            `/api/branches/${data.data.branch.id}`
-          );
-          const branchData = await branchRes.json();
-          if (branchData.success) {
-            setBranch(branchData.data);
           }
         }
       } catch (error) {
@@ -138,6 +156,54 @@ export default function CheckoutPage() {
     }
     fetchCart();
   }, [router]);
+
+  // ===== Derived: selected items & branch =====
+  const selectedItems = useMemo(() => {
+    if (!cart) return [];
+    return cart.items.filter((item) => selectedItemIds.has(item.id));
+  }, [cart, selectedItemIds]);
+
+  const selectedBranchId = useMemo(() => {
+    if (selectedItems.length === 0) return null;
+    const branchIds = new Set(
+      selectedItems.map((i) => i.branchId).filter((b): b is string => !!b)
+    );
+    return branchIds.size === 1 ? Array.from(branchIds)[0] : null;
+  }, [selectedItems]);
+
+  // Fetch full branch details (with operating hours) once the selected
+  // items are loaded. The cart page already enforces single-branch selection.
+  useEffect(() => {
+    if (!selectedBranchId) {
+      setBranch(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const branchRes = await fetch(`/api/branches/${selectedBranchId}`);
+      const branchData = await branchRes.json();
+      if (!cancelled && branchData.success) {
+        setBranch(branchData.data);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedBranchId]);
+
+  // ===== Step 1 validation (contact) =====
+  const validateStep1 = (): boolean => {
+    if (!phone || phone.length < 8) {
+      setContactError("Please enter a valid phone number.");
+      return false;
+    }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      setContactError("Please enter a valid email address.");
+      return false;
+    }
+    setContactError("");
+    return true;
+  };
 
   // Pre-fill contact from session
   // Better Auth's client-side useSession type doesn't include custom
@@ -153,7 +219,7 @@ export default function CheckoutPage() {
     }
   }, [sessionUser, phone, email]);
 
-  // ===== Derived values for Step 2 =====
+  // ===== Derived values for Step 2 (pickup) =====
   const todayStr = new Date().toISOString().split("T")[0];
 
   const selectedDate = useMemo(() => {
@@ -171,24 +237,17 @@ export default function CheckoutPage() {
     return generateTimeSlots(dayHours);
   }, [dayHours]);
 
-  const subtotal = cart?.subtotal ?? 0;
-  const total = subtotal + SERVICE_FEE;
+  const subtotal = useMemo(
+    () =>
+      selectedItems.reduce(
+        (sum, item) => sum + parseFloat(item.variant.price) * item.quantity,
+        0
+      ),
+    [selectedItems]
+  );
+  const total = subtotal;
 
-  // ===== Step 1 validation =====
-  const validateStep1 = (): boolean => {
-    if (!phone || phone.length < 8) {
-      setContactError("Please enter a valid phone number.");
-      return false;
-    }
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setContactError("Please enter a valid email address.");
-      return false;
-    }
-    setContactError("");
-    return true;
-  };
-
-  // ===== Step 2 validation (client-side; server re-validates on place-order) =====
+  // ===== Step 2 validation (pickup — client-side; server re-validates on place-order) =====
   const validateStep2 = (): boolean => {
     if (!pickupDate) {
       setPickupError("Please select a pickup date.");
@@ -297,13 +356,22 @@ export default function CheckoutPage() {
       const res = await fetch("/api/checkout/place-order", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone, email, pickupDate, pickupTime }),
+        body: JSON.stringify({
+          phone,
+          email,
+          pickupDate,
+          pickupTime,
+          selectedItemIds: Array.from(selectedItemIds),
+        }),
       });
       const data = await res.json();
       if (!data.success) {
-        alert(data.error || "Failed to place order.");
+        toast.error(data.error || "Failed to place order.");
         return;
       }
+      // Order placed successfully — refresh the navbar cart badge so it
+      // reflects the remaining items (the checked-out items are removed).
+      refreshCart();
       if (data.mode === "snap" && data.redirectUrl) {
         // Snap mode: redirect to Midtrans Snap payment page
         window.location.href = data.redirectUrl;
@@ -312,10 +380,10 @@ export default function CheckoutPage() {
         setQrPayment({ orderId: data.orderId, qrImageUrl: data.qrImageUrl });
         startPolling(data.orderId);
       } else {
-        alert("Unexpected payment response. Please try again.");
+        toast.error("Unexpected payment response. Please try again.");
       }
     } catch {
-      alert("An error occurred. Please try again.");
+      toast.error("An error occurred. Please try again.");
     } finally {
       setSubmitting(false);
     }
@@ -333,7 +401,7 @@ export default function CheckoutPage() {
   }
 
   // ===== Empty cart redirect =====
-  if (!cart || cart.items.length === 0 || !branch) {
+  if (!cart || cart.items.length === 0) {
     return (
       <div className="container mx-auto px-4 py-16 text-center">
         <h1 className="text-2xl font-bold mb-4">Keranjang Kosong</h1>
@@ -405,7 +473,7 @@ export default function CheckoutPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main step content */}
         <div className="lg:col-span-2">
-          {/* Step 1 — Contact Information */}
+          {/* Step 1 — Contact + Select items to checkout */}
           {step === 1 && (
             <Card>
               <CardContent className="p-6">
@@ -415,9 +483,48 @@ export default function CheckoutPage() {
                   email Anda.
                 </p>
 
+                {/* Selected items summary (read-only) */}
+                <div className="mb-6 rounded-lg border bg-muted/30 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium">
+                      Barang yang akan di-checkout
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {selectedItems.length} barang ·{" "}
+                      <Link
+                        href="/cart"
+                        className="text-primary hover:underline"
+                      >
+                        Ubah
+                      </Link>
+                    </span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {selectedItems.map((item) => (
+                      <div
+                        key={item.id}
+                        className="flex justify-between text-sm"
+                      >
+                        <span className="text-muted-foreground line-clamp-1 pr-2">
+                          {item.product.name} ×{item.quantity}
+                        </span>
+                        <span className="flex-shrink-0">
+                          Rp{" "}
+                          {(
+                            parseFloat(item.variant.price) * item.quantity
+                          ).toLocaleString("id-ID")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Contact fields */}
                 <div className="space-y-4">
                   <div>
-                    <Label htmlFor="phone">Nomor Telepon *</Label>
+                    <Label htmlFor="phone" className="mb-1.5 block">
+                      Nomor Telepon *
+                    </Label>
                     <Input
                       id="phone"
                       type="tel"
@@ -427,7 +534,9 @@ export default function CheckoutPage() {
                     />
                   </div>
                   <div>
-                    <Label htmlFor="email">Email *</Label>
+                    <Label htmlFor="email" className="mb-1.5 block">
+                      Email *
+                    </Label>
                     <Input
                       id="email"
                       type="email"
@@ -477,17 +586,18 @@ export default function CheckoutPage() {
                   Pilih tanggal dan waktu untuk pengambilan pesanan Anda.
                 </p>
 
-                {/* Branch info (read-only — locked from cart) */}
+                {/* Branch info (read-only — derived from selected items) */}
                 <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
                   <div className="flex items-start gap-3">
-                    <MapPin className="mt-0.5 h-5 w-5 text-primary" />
-                    <div>
-                      <div className="font-semibold">{branch.name}</div>
+                    <MapPin className="mt-0.5 h-5 w-5 flex-shrink-0 text-primary" />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-semibold">{branch?.name ?? "-"}</div>
                       <div className="text-sm text-muted-foreground">
-                        {branch.address}, {branch.city}
+                        {branch?.address ?? "-"}
+                        {branch?.city ? `, ${branch.city}` : ""}
                       </div>
                     </div>
-                    <Badge variant="secondary" className="ml-auto">
+                    <Badge variant="secondary" className="ml-3 shrink-0 whitespace-nowrap">
                       Cabang Terpilih
                     </Badge>
                   </div>
@@ -495,7 +605,7 @@ export default function CheckoutPage() {
 
                 <div className="space-y-4">
                   <div>
-                    <Label htmlFor="pickupDate" className="flex items-center gap-2">
+                    <Label htmlFor="pickupDate" className="flex items-center gap-2 mb-1.5">
                       <Calendar className="h-4 w-4" /> Tanggal Pickup *
                     </Label>
                     <Input
@@ -516,7 +626,7 @@ export default function CheckoutPage() {
                   </div>
 
                   <div>
-                    <Label className="flex items-center gap-2">
+                    <Label className="flex items-center gap-2 mb-1.5">
                       <Clock className="h-4 w-4" /> Waktu Pickup *
                     </Label>
                     {pickupDate && dayHours ? (
@@ -603,7 +713,7 @@ export default function CheckoutPage() {
                 {/* Order summary */}
                 <div className="space-y-3 mb-6">
                   <h3 className="font-semibold">Ringkasan Pesanan</h3>
-                  {cart.items.map((item) => (
+                  {selectedItems.map((item) => (
                     <div
                       key={item.id}
                       className="flex items-center gap-3 rounded-lg border p-3"
@@ -643,7 +753,7 @@ export default function CheckoutPage() {
                 <div className="space-y-2 mb-6 rounded-lg border bg-muted/30 p-4 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Cabang</span>
-                    <span className="font-medium">{branch.name}</span>
+                    <span className="font-medium">{branch?.name ?? "-"}</span>
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Pickup</span>
@@ -665,13 +775,9 @@ export default function CheckoutPage() {
                 <div className="space-y-2 mb-6">
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">
-                      Subtotal ({cart.itemCount} barang)
+                      Subtotal ({selectedItems.length} barang)
                     </span>
                     <span>Rp {subtotal.toLocaleString("id-ID")}</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Biaya Layanan</span>
-                    <span>Rp {SERVICE_FEE.toLocaleString("id-ID")}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Ongkos Kirim</span>
@@ -798,22 +904,29 @@ export default function CheckoutPage() {
               <h3 className="text-lg font-bold mb-4">Ringkasan</h3>
 
               <div className="space-y-2 mb-4">
-                {cart.items.map((item) => (
-                  <div
-                    key={item.id}
-                    className="flex justify-between text-sm"
-                  >
-                    <span className="text-muted-foreground line-clamp-1 pr-2">
-                      {item.product.name} ×{item.quantity}
-                    </span>
-                    <span className="flex-shrink-0">
-                      Rp{" "}
-                      {(
-                        parseFloat(item.variant.price) * item.quantity
-                      ).toLocaleString("id-ID")}
-                    </span>
-                  </div>
-                ))}
+                {(selectedItems.length > 0 ? selectedItems : cart.items).map(
+                  (item) => (
+                    <div
+                      key={item.id}
+                      className="flex justify-between text-sm"
+                    >
+                      <span className="text-muted-foreground line-clamp-1 pr-2">
+                        {item.product.name} ×{item.quantity}
+                      </span>
+                      <span className="flex-shrink-0">
+                        Rp{" "}
+                        {(
+                          parseFloat(item.variant.price) * item.quantity
+                        ).toLocaleString("id-ID")}
+                      </span>
+                    </div>
+                  )
+                )}
+                {selectedItems.length === 0 && (
+                  <p className="text-xs text-muted-foreground italic">
+                    Pilih barang untuk melihat ringkasan.
+                  </p>
+                )}
               </div>
 
               <hr className="border-t border-dashed border-muted-foreground/30 my-3" />
@@ -822,10 +935,6 @@ export default function CheckoutPage() {
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Subtotal</span>
                   <span>Rp {subtotal.toLocaleString("id-ID")}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Biaya Layanan</span>
-                  <span>Rp {SERVICE_FEE.toLocaleString("id-ID")}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Ongkos Kirim</span>

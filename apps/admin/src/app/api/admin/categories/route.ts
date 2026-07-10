@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { categories } from "@/db";
 import { eq } from "drizzle-orm";
-import { withAuth } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/auth-guard";
 
-export const GET = withAuth(async () => {
+export const GET = withPermission(async () => {
   try {
     const allCategories = await db
       .select()
@@ -20,4 +20,4 @@ export const GET = withAuth(async () => {
       { status: 500 }
     );
   }
-}, ["admin", "hq"]);
+}, "products", "view");

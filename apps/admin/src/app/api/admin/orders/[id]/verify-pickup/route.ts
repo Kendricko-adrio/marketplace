@@ -4,13 +4,13 @@ import { orders, auditLogs } from "@/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import crypto from "crypto";
-import { withAuth, getBranchScope } from "@/lib/auth-guard";
+import { withPermission, getBranchScope } from "@/lib/auth-guard";
 
 const verifyPickupSchema = z.object({
   pickupCodeInput: z.string().min(1).max(10),
 });
 
-export const POST = withAuth(async (
+export const POST = withPermission(async (
   { user },
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -91,8 +91,13 @@ export const POST = withAuth(async (
     // ===== Code matches → call the store's internal order-complete endpoint =====
     const storeUrl =
       process.env.STORE_INTERNAL_URL ||
-      process.env.NEXT_PUBLIC_APP_URL ||
       "http://localhost:3000";
+
+    if (!process.env.STORE_INTERNAL_URL) {
+      console.warn(
+        "STORE_INTERNAL_URL is not set; falling back to http://localhost:3000"
+      );
+    }
 
     const secret = crypto
       .createHmac("sha256", process.env.BETTER_AUTH_SECRET || "")
@@ -142,4 +147,4 @@ export const POST = withAuth(async (
       { status: 500 }
     );
   }
-}, ["admin", "hq"]);
+}, "orders", "edit");

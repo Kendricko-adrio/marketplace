@@ -10,6 +10,7 @@ import {
   Search,
   Loader2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -36,6 +37,8 @@ import {
   CardTitle,
   CardDescription,
 } from "@/components/ui/card";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useAuth } from "@/providers/auth-provider";
 
 interface Product {
   id: string;
@@ -52,11 +55,14 @@ interface Product {
 
 export default function AdminProductsPage() {
   const router = useRouter();
+  const { hasPermission } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     fetchProducts();
@@ -92,22 +98,25 @@ export default function AdminProductsPage() {
     return product.name.toLowerCase().includes(searchTerm.toLowerCase());
   });
 
-  async function handleDelete(id: string, name: string) {
-    const confirmed = window.confirm(
-      `Yakin ingin menghapus produk "${name}"? Tindakan ini tidak dapat dibatalkan.`
-    );
-    if (!confirmed) return;
-
+  async function handleDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
     try {
-      const res = await fetch(`/api/admin/products/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/admin/products/${deleteTarget.id}`, {
+        method: "DELETE",
+      });
       const data = await res.json();
       if (data.success) {
+        toast.success("Produk berhasil dihapus");
+        setDeleteTarget(null);
         fetchProducts();
       } else {
-        alert(data.error || "Gagal menghapus produk");
+        toast.error(data.error || "Gagal menghapus produk");
       }
     } catch {
-      alert("Gagal menghapus produk");
+      toast.error("Gagal menghapus produk");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -115,11 +124,13 @@ export default function AdminProductsPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <h2 className="text-2xl font-bold tracking-tight">Produk</h2>
-        <Link href="/admin/products/new">
-          <Button className="gap-2">
-            <Plus className="h-4 w-4" /> Tambah Produk
-          </Button>
-        </Link>
+        {hasPermission("products", "edit") && (
+          <Link href="/admin/products/new">
+            <Button className="gap-2">
+              <Plus className="h-4 w-4" /> Tambah Produk
+            </Button>
+          </Link>
+        )}
       </div>
 
       <Card>
@@ -216,25 +227,29 @@ export default function AdminProductsPage() {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end">
                                 <DropdownMenuLabel>Aksi</DropdownMenuLabel>
-                                <DropdownMenuItem
-                                  className="cursor-pointer gap-2"
-                                  onSelect={() =>
-                                    router.push(
-                                      `/admin/products/${product.id}/edit`
-                                    )
-                                  }
-                                >
-                                  <Edit className="h-4 w-4" /> Edit
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  className="cursor-pointer gap-2 text-destructive focus:text-destructive focus:bg-destructive/10"
-                                  onSelect={() =>
-                                    handleDelete(product.id, product.name)
-                                  }
-                                >
-                                  <Trash2 className="h-4 w-4" /> Hapus
-                                </DropdownMenuItem>
+                                {hasPermission("products", "edit") && (
+                                  <DropdownMenuItem
+                                    className="cursor-pointer gap-2"
+                                    onSelect={() =>
+                                      router.push(
+                                        `/admin/products/${product.id}/edit`
+                                      )
+                                    }
+                                  >
+                                    <Edit className="h-4 w-4" /> Edit
+                                  </DropdownMenuItem>
+                                )}
+                                {hasPermission("products", "delete") && hasPermission("products", "edit") && (
+                                  <DropdownMenuSeparator />
+                                )}
+                                {hasPermission("products", "delete") && (
+                                  <DropdownMenuItem
+                                    className="cursor-pointer gap-2 text-destructive focus:text-destructive focus:bg-destructive/10"
+                                    onSelect={() => setDeleteTarget(product)}
+                                  >
+                                    <Trash2 className="h-4 w-4" /> Hapus
+                                  </DropdownMenuItem>
+                                )}
                               </DropdownMenuContent>
                             </DropdownMenu>
                           </TableCell>
@@ -270,6 +285,22 @@ export default function AdminProductsPage() {
           )}
         </CardContent>
       </Card>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title="Hapus Produk"
+        description={
+          deleteTarget
+            ? `Yakin ingin menghapus produk "${deleteTarget.name}"? Tindakan ini tidak dapat dibatalkan.`
+            : null
+        }
+        confirmLabel="Hapus"
+        loading={deleting}
+        onConfirm={handleDelete}
+      />
     </div>
   );
 }

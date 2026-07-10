@@ -30,7 +30,7 @@ async function getOrCreateCart(userId: string) {
     userId,
   });
 
-  return { id: newCartId, userId, branchId: null, updatedAt: new Date() };
+  return { id: newCartId, userId, updatedAt: new Date() };
 }
 
 export async function GET() {
@@ -48,28 +48,7 @@ export async function GET() {
 
     const cart = await getOrCreateCart(session.user.id);
 
-    // Get cart-level branch (the branch the cart is locked to)
-    let cartBranch: {
-      id: string;
-      name: string;
-      city: string;
-      address: string;
-    } | null = null;
-    if (cart.branchId) {
-      const branchRow = await db
-        .select({
-          id: branches.id,
-          name: branches.name,
-          city: branches.city,
-          address: branches.address,
-        })
-        .from(branches)
-        .where(eq(branches.id, cart.branchId!))
-        .limit(1);
-      cartBranch = branchRow[0] ?? null;
-    }
-
-    // Get cart items with product details
+    // Get cart items with product details (each item carries its own branchId)
     const items = await db
       .select({
         id: cartItems.id,
@@ -126,7 +105,6 @@ export async function GET() {
       success: true,
       data: {
         id: cart.id,
-        branch: cartBranch,
         items: itemsWithImages,
         itemCount: itemsWithImages.length,
         subtotal,
@@ -162,10 +140,9 @@ export async function DELETE() {
 
     if (cart.length > 0) {
       await db.delete(cartItems).where(eq(cartItems.cartId, cart[0].id));
-      // Unlock the cart so the next add can target any branch.
       await db
         .update(carts)
-        .set({ branchId: null, updatedAt: new Date() })
+        .set({ updatedAt: new Date() })
         .where(eq(carts.id, cart[0].id));
     }
 

@@ -8,6 +8,7 @@ import {
   HomepageSectionRenderer,
   type HomepageSectionData,
 } from "@marketplace/ui";
+import { toStoreUrl } from "@/lib/store-url";
 
 interface AdminSection {
   id: string;
@@ -18,6 +19,25 @@ interface AdminSection {
   displayOrder: number;
   isActive: boolean;
   products?: { id: string; name: string; slug: string; displayOrder: number }[];
+}
+
+function rewriteImages(content: unknown): unknown {
+  if (!content || typeof content !== "object") return content;
+  const c = content as Record<string, unknown>;
+  if (typeof c.imageUrl === "string") {
+    return { ...c, imageUrl: toStoreUrl(c.imageUrl) };
+  }
+  if (Array.isArray(c.cards)) {
+    return {
+      ...c,
+      cards: c.cards.map((card) =>
+        card && typeof card === "object" && typeof (card as Record<string, unknown>).imageUrl === "string"
+          ? { ...(card as Record<string, unknown>), imageUrl: toStoreUrl((card as Record<string, unknown>).imageUrl as string) }
+          : card
+      ),
+    };
+  }
+  return content;
 }
 
 export default function HomepagePreviewPage() {
@@ -53,7 +73,7 @@ export default function HomepagePreviewPage() {
       type: section.type as HomepageSectionData["type"],
       title: section.title,
       subtitle: section.subtitle,
-      content: section.content,
+      content: rewriteImages(section.content),
       displayOrder: section.displayOrder,
       isActive: section.isActive,
     };

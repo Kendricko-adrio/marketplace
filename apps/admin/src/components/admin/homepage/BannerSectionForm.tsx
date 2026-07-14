@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { BannerSection } from "@marketplace/ui";
 import type { HomepageSectionData, BannerContent } from "@marketplace/ui";
+import { toStoreUrl } from "@/lib/store-url";
 
 interface BannerSectionFormProps {
   content: Record<string, unknown>;
@@ -84,7 +85,7 @@ export default function BannerSectionForm({
     type: "banner",
     title: title || null,
     subtitle: subtitle || null,
-    content: banner,
+    content: { ...banner, imageUrl: toStoreUrl(banner.imageUrl) },
     displayOrder: 0,
     isActive: true,
   };
@@ -98,7 +99,7 @@ export default function BannerSectionForm({
             {banner.imageUrl ? (
               <div className="relative">
                 <img
-                  src={banner.imageUrl}
+                  src={toStoreUrl(banner.imageUrl)}
                   alt="banner"
                   className="w-full h-32 object-cover rounded-md"
                 />

@@ -2,7 +2,7 @@ import { writeFile, mkdir, unlink } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 
-export const ALLOWED_FOLDERS = ["products", "homepage"];
+export const ALLOWED_FOLDERS = ["products", "homepage", "orders"];
 export const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 export const ALLOWED_TYPES = [
   "image/jpeg",

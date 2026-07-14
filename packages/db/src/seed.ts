@@ -943,7 +943,7 @@ async function seed() {
       "processing",
       "ready_for_pickup",
       "cancelled",
-      "completed",
+      "pending_payment",
     ] as const;
 
     const pickupBranchId = branchIds[0]; // Jakarta Pusat
@@ -959,7 +959,7 @@ async function seed() {
       const total = subtotal;
 
       const status = orderStatuses[i];
-      const isPaid = status !== "cancelled";
+      const isPaid = status !== "cancelled" && status !== "pending_payment";
       const hasPickupCode =
         status === "ready_for_pickup" || status === "completed";
 
@@ -992,6 +992,10 @@ async function seed() {
         midtransTransactionId: isPaid
           ? `midtrans-${orderId.slice(0, 12)}`
           : null,
+        snapRedirectUrl:
+          status === "pending_payment"
+            ? "https://app.sandbox.midtrans.com/snap/v3/redirection/dummy-pending-token"
+            : null,
         // Phase 2 shipping fields — null for pickup orders
         shippingCarrier: null,
         trackingNumber: null,

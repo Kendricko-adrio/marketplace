@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { CarouselProductSection } from "@marketplace/ui";
 import type { HomepageSectionData, HomepageProduct } from "@marketplace/ui";
+import { toStoreUrl } from "@/lib/store-url";
 
 interface CarouselProductSectionFormProps {
   selectedProductIds: string[];
@@ -92,7 +93,7 @@ export default function CarouselProductSectionForm({
         slug: p.slug,
         price: parseFloat(price),
         basePrice: parseFloat(p.basePrice),
-        image: p.images?.[0]?.url ?? null,
+        image: toStoreUrl(p.images?.[0]?.url) || null,
         rating: p.rating,
         sold: p.sold,
         isFlashSale: p.isFlashSale,

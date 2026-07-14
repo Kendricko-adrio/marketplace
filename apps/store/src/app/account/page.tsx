@@ -5,10 +5,7 @@ import Image from "next/image";
 import {
   User,
   Package,
-  MapPin,
-  Heart,
   LogOut,
-  Settings,
   Camera,
   Search,
   Filter,
@@ -26,7 +23,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { useSession } from "@/lib/auth-client";
+import { useSession, authClient } from "@/lib/auth-client";
+import type { User as AuthUser } from "@/lib/auth";
 
 interface OrderItem {
   id: string;
@@ -84,7 +82,20 @@ export default function AccountPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const user = session?.user;
+  // Profile form state
+  const [profileName, setProfileName] = useState("");
+  const [profilePhone, setProfilePhone] = useState("");
+  const [phoneEditable, setPhoneEditable] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileMessage, setProfileMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
+
+  const user = session?.user as (AuthUser & {
+    phone?: string | null;
+    onboardingCompleted?: boolean;
+  }) | undefined;
   const initials = user?.name
     ? user.name
         .split(" ")
@@ -93,6 +104,47 @@ export default function AccountPage() {
         .toUpperCase()
         .slice(0, 2)
     : "??";
+
+  useEffect(() => {
+    if (user) {
+      setProfileName(user.name ?? "");
+      setProfilePhone(user.phone ?? "");
+    }
+  }, [user?.id, user?.name, user?.phone]);
+
+  async function handleSaveProfile() {
+    setSavingProfile(true);
+    setProfileMessage(null);
+    try {
+      const res = await fetch("/api/account/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: profileName,
+          phone: profilePhone,
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPhoneEditable(false);
+        setProfileMessage({ type: "success", text: "Profil berhasil diperbarui." });
+        // Refresh session so useSession reflects the new name/phone
+        await authClient.getSession({ query: { disableCookieCache: true } });
+      } else {
+        setProfileMessage({
+          type: "error",
+          text: data.error ?? "Gagal memperbarui profil.",
+        });
+      }
+    } catch {
+      setProfileMessage({
+        type: "error",
+        text: "Terjadi kesalahan. Silakan coba lagi.",
+      });
+    } finally {
+      setSavingProfile(false);
+    }
+  }
 
   useEffect(() => {
     if (activeTab !== "orders") return;
@@ -170,27 +222,6 @@ export default function AccountPage() {
               onClick={() => setActiveTab("orders")}
             >
               <Package className="h-4 w-4" /> Pesanan Saya
-            </Button>
-            <Button
-              variant={activeTab === "address" ? "secondary" : "ghost"}
-              className="w-full justify-start gap-3"
-              onClick={() => setActiveTab("address")}
-            >
-              <MapPin className="h-4 w-4" /> Alamat
-            </Button>
-            <Button
-              variant={activeTab === "wishlist" ? "secondary" : "ghost"}
-              className="w-full justify-start gap-3"
-              onClick={() => setActiveTab("wishlist")}
-            >
-              <Heart className="h-4 w-4" /> Wishlist
-            </Button>
-            <Button
-              variant={activeTab === "settings" ? "secondary" : "ghost"}
-              className="w-full justify-start gap-3"
-              onClick={() => setActiveTab("settings")}
-            >
-              <Settings className="h-4 w-4" /> Pengaturan
             </Button>
             <div className="pt-4 mt-4 border-t">
               <Button
@@ -345,14 +376,24 @@ export default function AccountPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
+                {profileMessage && (
+                  <div
+                    className={`text-sm rounded-md px-3 py-2 ${
+                      profileMessage.type === "success"
+                        ? "bg-green-50 text-green-700 border border-green-200"
+                        : "bg-destructive/10 text-destructive border border-destructive/20"
+                    }`}
+                  >
+                    {profileMessage.text}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <div className="text-sm font-medium">Nama Lengkap</div>
-                    <Input defaultValue={user?.name ?? ""} />
-                  </div>
-                  <div className="space-y-2">
-                    <div className="text-sm font-medium">Username</div>
-                    <Input defaultValue="" />
+                    <Input
+                      value={profileName}
+                      onChange={(e) => setProfileName(e.target.value)}
+                    />
                   </div>
                 </div>
                 <div className="space-y-2">
@@ -363,32 +404,47 @@ export default function AccountPage() {
                       disabled
                       className="bg-muted"
                     />
-                    <Button variant="outline">Ubah</Button>
+                    <Button variant="outline" disabled>
+                      Ubah
+                    </Button>
                   </div>
                 </div>
                 <div className="space-y-2">
                   <div className="text-sm font-medium">Nomor Telepon</div>
                   <div className="flex gap-2">
                     <Input
-                      defaultValue=""
-                      disabled
-                      className="bg-muted"
+                      value={profilePhone}
+                      onChange={(e) => setProfilePhone(e.target.value)}
+                      disabled={!phoneEditable}
+                      className={phoneEditable ? "" : "bg-muted"}
+                      placeholder={phoneEditable ? "+628123456789" : ""}
                     />
-                    <Button variant="outline">Ubah</Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => setPhoneEditable((v) => !v)}
+                    >
+                      {phoneEditable ? "Batal" : "Ubah"}
+                    </Button>
                   </div>
+                  {phoneEditable && (
+                    <p className="text-xs text-muted-foreground">
+                      Format: +62 diikuti 8–13 digit (contoh: +628123456789).
+                    </p>
+                  )}
                 </div>
                 <div className="flex justify-end mt-4">
-                  <Button>Simpan Perubahan</Button>
+                  <Button
+                    onClick={handleSaveProfile}
+                    disabled={savingProfile}
+                  >
+                    {savingProfile ? (
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    ) : null}
+                    Simpan Perubahan
+                  </Button>
                 </div>
               </CardContent>
             </Card>
-          )}
-
-          {/* Placeholder for other tabs */}
-          {activeTab !== "orders" && activeTab !== "profile" && (
-            <div className="h-64 flex items-center justify-center border-2 border-dashed rounded-xl text-muted-foreground">
-              Konten untuk tab {activeTab} akan segera tersedia.
-            </div>
           )}
         </main>
       </div>

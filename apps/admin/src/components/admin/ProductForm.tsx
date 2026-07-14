@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { toStoreUrl } from "@/lib/store-url";
 
 export interface ProductImage {
   id?: string;
@@ -88,6 +89,7 @@ export default function ProductForm({
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadingImages, setUploadingImages] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     async function fetchCategories() {
@@ -172,33 +174,58 @@ export default function ProductForm({
     }));
   }
 
-  function handleImageUpload(
+  async function handleImageUpload(
     variantIndex: number,
     event: React.ChangeEvent<HTMLInputElement>
   ) {
     const files = event.target.files;
     if (!files || files.length === 0) return;
 
-    Array.from(files).forEach((file) => {
-      const url = URL.createObjectURL(file);
-      setFormData((prev) => {
-        const variant = prev.variants[variantIndex];
-        const newImages = [...variant.images, { url, displayOrder: variant.images.length }];
-        return {
-          ...prev,
-          variants: prev.variants.map((v, i) =>
-            i === variantIndex ? { ...v, images: newImages } : v
-          ),
-        };
+    setUploadingImages((prev) => new Set(prev).add(variantIndex));
+    try {
+      for (const file of Array.from(files)) {
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await fetch("/api/admin/upload?folder=products", {
+          method: "POST",
+          body: formData,
+        });
+        const data = await res.json();
+        if (!data.success) {
+          toast.error(data.error || "Gagal upload gambar");
+          continue;
+        }
+        setFormData((prev) => {
+          const variant = prev.variants[variantIndex];
+          const newImages = [
+            ...variant.images,
+            { url: data.url, displayOrder: variant.images.length },
+          ];
+          return {
+            ...prev,
+            variants: prev.variants.map((v, i) =>
+              i === variantIndex ? { ...v, images: newImages } : v
+            ),
+          };
+        });
+      }
+    } catch (error) {
+      console.error("Error uploading:", error);
+      toast.error("Gagal upload gambar");
+    } finally {
+      setUploadingImages((prev) => {
+        const next = new Set(prev);
+        next.delete(variantIndex);
+        return next;
       });
-    });
+    }
 
     event.target.value = "";
   }
 
-  function removeImage(variantIndex: number, imageIndex: number) {
+  async function removeImage(variantIndex: number, imageIndex: number) {
+    const removedUrl = formData.variants[variantIndex]?.images[imageIndex]?.url;
     setFormData((prev) => {
-      const variant = prev.variants[variantIndex];
       return {
         ...prev,
         variants: prev.variants.map((v, i) =>
@@ -214,6 +241,15 @@ export default function ProductForm({
         ),
       };
     });
+    if (removedUrl && removedUrl.startsWith("/uploads/")) {
+      try {
+        await fetch(`/api/admin/upload?url=${encodeURIComponent(removedUrl)}`, {
+          method: "DELETE",
+        });
+      } catch (error) {
+        console.error("Error deleting file:", error);
+      }
+    }
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -440,7 +476,7 @@ export default function ProductForm({
                     className="relative h-20 w-20 rounded-md border overflow-hidden group"
                   >
                     <img
-                      src={img.url}
+                      src={toStoreUrl(img.url)}
                       alt=""
                       className="h-full w-full object-cover"
                     />
@@ -454,14 +490,21 @@ export default function ProductForm({
                   </div>
                 ))}
                 <label className="h-20 w-20 flex flex-col items-center justify-center rounded-md border border-dashed cursor-pointer hover:bg-muted transition-colors">
-                  <Upload className="h-5 w-5 text-muted-foreground" />
-                  <span className="text-[10px] text-muted-foreground mt-1">Upload</span>
+                  {uploadingImages.has(index) ? (
+                    <Loader2 className="h-5 w-5 text-muted-foreground animate-spin" />
+                  ) : (
+                    <>
+                      <Upload className="h-5 w-5 text-muted-foreground" />
+                      <span className="text-[10px] text-muted-foreground mt-1">Upload</span>
+                    </>
+                  )}
                   <input
                     type="file"
                     accept="image/*"
                     multiple
                     className="hidden"
                     onChange={(e) => handleImageUpload(index, e)}
+                    disabled={uploadingImages.has(index)}
                   />
                 </label>
               </div>

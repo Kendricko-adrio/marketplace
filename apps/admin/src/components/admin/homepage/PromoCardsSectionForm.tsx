@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { PromoCardsSection } from "@marketplace/ui";
 import type { HomepageSectionData, PromoCardsContent, PromoCardItem } from "@marketplace/ui";
+import { toStoreUrl } from "@/lib/store-url";
 
 interface PromoCardsSectionFormProps {
   content: Record<string, unknown>;
@@ -108,7 +109,7 @@ export default function PromoCardsSectionForm({
     type: "promo_cards",
     title: title || null,
     subtitle: subtitle || null,
-    content: { cards },
+    content: { cards: cards.map((c) => ({ ...c, imageUrl: toStoreUrl(c.imageUrl) })) },
     displayOrder: 0,
     isActive: true,
   };
@@ -150,7 +151,7 @@ export default function PromoCardsSectionForm({
                     {card.imageUrl ? (
                       <div className="relative">
                         <img
-                          src={card.imageUrl}
+                          src={toStoreUrl(card.imageUrl)}
                           alt={card.title}
                           className="w-full h-24 object-cover rounded"
                         />

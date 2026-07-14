@@ -98,11 +98,16 @@ export async function POST(request: NextRequest) {
       ]
     );
 
-    // Persist the Midtrans transaction id (only available from Core API at creation time)
+    // Persist Midtrans identifiers (Core API: transaction id; Snap: redirect URL)
     if (result.mode === "core") {
       await db
         .update(orders)
         .set({ midtransTransactionId: result.transactionId })
+        .where(eq(orders.id, orderId));
+    } else if (result.mode === "snap") {
+      await db
+        .update(orders)
+        .set({ snapRedirectUrl: result.redirectUrl })
         .where(eq(orders.id, orderId));
     }
 

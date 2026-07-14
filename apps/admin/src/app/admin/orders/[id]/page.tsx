@@ -30,6 +30,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useAuth } from "@/providers/auth-provider";
+import { toStoreUrl } from "@/lib/store-url";
 
 interface OrderItem {
   id: string;
@@ -408,7 +409,7 @@ export default function AdminOrderDetailPage() {
                 <div className="h-16 w-16 rounded-md bg-secondary/50 flex-shrink-0 relative overflow-hidden">
                   {item.imageUrl && (
                     <Image
-                      src={item.imageUrl}
+                      src={toStoreUrl(item.imageUrl)}
                       alt={item.productName}
                       fill
                       className="object-cover"

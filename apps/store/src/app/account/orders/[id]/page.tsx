@@ -58,6 +58,7 @@ interface OrderDetail {
   serviceFee: string;
   total: string;
   createdAt: string;
+  snapRedirectUrl: string | null;
   branch: Branch | null;
   items: OrderItem[];
 }
@@ -480,6 +481,26 @@ export default function OrderDetailPage() {
                 <span className="text-muted-foreground">Status</span>
                 <Badge variant={payStatus.variant}>{payStatus.label}</Badge>
               </div>
+              {order.status === "pending_payment" &&
+                order.snapRedirectUrl && (
+                  <>
+                    <Separator />
+                    <div className="pt-1">
+                      <Button
+                        className="w-full"
+                        onClick={() =>
+                          (window.location.href = order.snapRedirectUrl!)
+                        }
+                      >
+                        <CreditCard className="h-4 w-4 mr-2" />
+                        Bayar Sekarang
+                      </Button>
+                      <p className="text-xs text-muted-foreground mt-2 text-center">
+                        Selesaikan pembayaran Anda sebelum link kedaluwarsa.
+                      </p>
+                    </div>
+                  </>
+                )}
             </CardContent>
           </Card>
 

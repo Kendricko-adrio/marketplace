@@ -66,6 +66,8 @@ export const orders = pgTable("orders", {
   total: numeric("total", { precision: 15, scale: 2 }).notNull(),
   // Midtrans transaction id (from Core API charge response), nullable until charge succeeds
   midtransTransactionId: text("midtrans_transaction_id"),
+  // Midtrans Snap redirect URL, saved so user can resume payment if they navigate away
+  snapRedirectUrl: text("snap_redirect_url"),
   // Phase 2 shipping fields (nullable, unused in Phase 1)
   shippingCarrier: text("shipping_carrier"),
   trackingNumber: text("tracking_number"),

@@ -7,11 +7,16 @@ import {
   branches,
 } from "@/db";
 import { eq, and, inArray } from "drizzle-orm";
-import { verifyMidtransSignature } from "@/lib/midtrans";
+import {
+  verifyMidtransSignature,
+  getMidtransTransactionStatus,
+} from "@/lib/midtrans";
 import { sendEmail } from "@/lib/email";
 import {
   pickupReadyEmailHTML,
   pickupReadyEmailText,
+  paymentFailedEmailHTML,
+  paymentFailedEmailText,
 } from "@/lib/email-templates-order";
 
 // 6-char pickup code alphabet (no ambiguous chars: O, I, 0, 1)
@@ -22,6 +27,28 @@ function generatePickupCode(): string {
     { length: 6 },
     () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]
   ).join("");
+}
+
+/**
+ * Map a Midtrans transaction_status to a human-readable failure reason.
+ * Returns null for non-failure statuses.
+ */
+function describeFailureReason(
+  transactionStatus: string,
+  statusMessage?: string
+): string | null {
+  switch (transactionStatus) {
+    case "expire":
+      return "Payment expired — user did not complete payment in time";
+    case "deny":
+      return statusMessage
+        ? `Payment denied by issuer/acquirer (${statusMessage})`
+        : "Payment denied by issuer/acquirer";
+    case "cancel":
+      return "Payment cancelled";
+    default:
+      return null;
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -79,23 +106,52 @@ export async function POST(request: NextRequest) {
 
     const order = orderRows[0];
 
-    // ===== Idempotency: skip if already paid =====
+    // ===== Idempotency: skip if already in a terminal state =====
     if (order.paymentStatus === "paid") {
       return NextResponse.json({
         success: true,
         message: "Order already processed",
       });
     }
+    if (order.status === "failed_payment") {
+      return NextResponse.json({
+        success: true,
+        message: "Order already marked as failed",
+      });
+    }
+
+    // ===== Re-verify with Midtrans (best practice) =====
+    // Fetch authoritative status directly from Midtrans to defend against
+    // spoofed callbacks, even when the signature looks valid.
+    let authoritativeStatus = String(transaction_status);
+    let authoritativeFraud = fraud_status ? String(fraud_status) : undefined;
+    let authoritativeStatusMessage: string | undefined;
+    try {
+      const statusRes = await getMidtransTransactionStatus(String(order_id));
+      if (statusRes) {
+        authoritativeStatus = statusRes.transaction_status;
+        authoritativeFraud = statusRes.fraud_status ?? authoritativeFraud;
+        authoritativeStatusMessage = statusRes.status_message;
+      }
+    } catch (verifyError) {
+      // If re-verify fails, fall back to the webhook payload (signature was
+      // already verified above). Log the issue for investigation.
+      console.error(
+        "Midtrans webhook: status re-verify failed for order",
+        order_id,
+        verifyError
+      );
+    }
 
     // ===== Handle transaction status =====
     const isSuccess =
-      transaction_status === "settlement" ||
-      (transaction_status === "capture" && fraud_status === "accept");
+      authoritativeStatus === "settlement" ||
+      (authoritativeStatus === "capture" && authoritativeFraud === "accept");
 
     const isFailure =
-      transaction_status === "deny" ||
-      transaction_status === "cancel" ||
-      transaction_status === "expire";
+      authoritativeStatus === "deny" ||
+      authoritativeStatus === "cancel" ||
+      authoritativeStatus === "expire";
 
     if (isSuccess) {
       // ===== Payment success: deduct stock, generate pickup code, send email =====
@@ -256,21 +312,27 @@ export async function POST(request: NextRequest) {
         `Midtrans webhook: order ${order_id} paid → ready_for_pickup`
       );
     } else if (isFailure) {
-      // ===== Payment failure: cancel order, restore stock =====
+      // ===== Payment failure: mark as failed_payment, restore stock if needed =====
+      const reason = describeFailureReason(
+        authoritativeStatus,
+        authoritativeStatusMessage
+      ) ?? "Payment failed";
+
       await db.transaction(async (tx) => {
         await tx
           .update(orders)
           .set({
             paymentStatus: "failed",
-            status: "cancelled",
+            status: "failed_payment",
+            paymentFailureReason: reason,
+            midtransFailureStatus: authoritativeStatus,
             updatedAt: new Date(),
           })
           .where(eq(orders.id, order.id));
 
-        // Restore stock (only if it was deducted — but since we deduct on
-        // success, and this is a failure, there's nothing to restore unless
-        // the order was previously paid and is now being reversed. For safety,
-        // we only restore if the order was previously "paid").
+        // Restore stock (only if it was previously paid — i.e. a reversal).
+        // For pending → failed_payment transitions, no stock was deducted yet,
+        // so there's nothing to restore.
         if (order.paymentStatus === "paid") {
           const items = await tx
             .select()
@@ -307,7 +369,60 @@ export async function POST(request: NextRequest) {
         }
       });
 
-      console.log(`Midtrans webhook: order ${order_id} cancelled`);
+      // ===== Send Payment Failed email (outside the transaction) =====
+      try {
+        const itemsForEmail = await db
+          .select({
+            productName: orderItems.productName,
+            variantInfo: orderItems.variantInfo,
+            price: orderItems.price,
+            quantity: orderItems.quantity,
+          })
+          .from(orderItems)
+          .where(eq(orderItems.orderId, order.id));
+
+        const html = paymentFailedEmailHTML({
+          order: {
+            id: order.id,
+            total: order.total,
+            subtotal: order.subtotal,
+            serviceFee: order.serviceFee,
+            pickupDate: order.pickupDate,
+            pickupTime: order.pickupTime,
+          },
+          reason,
+          items: itemsForEmail,
+        });
+
+        const text = paymentFailedEmailText({
+          order: {
+            id: order.id,
+            total: order.total,
+            subtotal: order.subtotal,
+            serviceFee: order.serviceFee,
+            pickupDate: order.pickupDate,
+            pickupTime: order.pickupTime,
+          },
+          reason,
+          items: itemsForEmail,
+        });
+
+        await sendEmail({
+          to: order.contactEmail,
+          subject: `Pembayaran Gagal — #${order.id.slice(0, 8).toUpperCase()}`,
+          html,
+          text,
+        });
+      } catch (emailError) {
+        console.error(
+          "Midtrans webhook: failed to send payment-failed email:",
+          emailError
+        );
+      }
+
+      console.log(
+        `Midtrans webhook: order ${order_id} failed_payment (${authoritativeStatus})`
+      );
     }
     // transaction_status === "pending" → do nothing, order stays pending_payment
 

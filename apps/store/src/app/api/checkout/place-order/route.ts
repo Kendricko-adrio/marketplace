@@ -224,7 +224,7 @@ export async function POST(request: NextRequest) {
           });
         }
 
-        // ===== Call Midtrans to create the payment (Core API or Snap) =====
+        // ===== Call Midtrans Snap to create the payment =====
         // Any thrown error auto-rollbacks the transaction in Drizzle.
         const paymentResult = await createPayment(
           orderId,
@@ -244,18 +244,11 @@ export async function POST(request: NextRequest) {
           ]
         );
 
-        // Persist Midtrans identifiers (Core API: transaction id; Snap: redirect URL)
-        if (paymentResult.mode === "core") {
-          await tx
-            .update(orders)
-            .set({ midtransTransactionId: paymentResult.transactionId })
-            .where(eq(orders.id, orderId));
-        } else if (paymentResult.mode === "snap") {
-          await tx
-            .update(orders)
-            .set({ snapRedirectUrl: paymentResult.redirectUrl })
-            .where(eq(orders.id, orderId));
-        }
+        // Persist Snap redirect URL so the customer can resume payment later
+        await tx
+          .update(orders)
+          .set({ snapRedirectUrl: paymentResult.redirectUrl })
+          .where(eq(orders.id, orderId));
 
         return paymentResult;
       });
@@ -269,18 +262,9 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        mode: midtransResult.mode,
         orderId,
-        ...(midtransResult.mode === "core"
-          ? {
-              transactionId: midtransResult.transactionId,
-              qrString: midtransResult.qrString,
-              qrImageUrl: midtransResult.qrImageUrl,
-            }
-          : {
-              redirectUrl: midtransResult.redirectUrl,
-              token: midtransResult.token,
-            }),
+        redirectUrl: midtransResult.redirectUrl,
+        token: midtransResult.token,
       });
     } catch (midtransError) {
       console.error("Midtrans payment creation failed:", midtransError);

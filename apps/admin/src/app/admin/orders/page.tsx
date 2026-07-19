@@ -60,6 +60,7 @@ const STATUS_LABELS: Record<string, string> = {
   ready_for_pickup: "Ready for Pickup",
   completed: "Completed",
   cancelled: "Cancelled",
+  failed_payment: "Payment Failed",
 };
 
 const STATUS_BADGES: Record<string, string> = {
@@ -70,6 +71,8 @@ const STATUS_BADGES: Record<string, string> = {
     "bg-violet-100 text-violet-700 border-violet-200 hover:bg-violet-100",
   completed: "bg-green-100 text-green-700 border-green-200 hover:bg-green-100",
   cancelled: "bg-red-100 text-red-700 border-red-200 hover:bg-red-100",
+  failed_payment:
+    "bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100",
 };
 
 const PAYMENT_BADGES: Record<string, string> = {
@@ -166,7 +169,13 @@ export default function AdminOrdersPage() {
 
   // 30s polling — only on relevant tabs and when tab is visible
   useEffect(() => {
-    if (activeTab !== "pending_payment" && activeTab !== "ready_for_pickup" && activeTab !== "all") return;
+    if (
+      activeTab !== "pending_payment" &&
+      activeTab !== "ready_for_pickup" &&
+      activeTab !== "failed_payment" &&
+      activeTab !== "all"
+    )
+      return;
 
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") {
@@ -254,6 +263,7 @@ export default function AdminOrdersPage() {
               <TabsTrigger value="ready_for_pickup">Ready for Pickup</TabsTrigger>
               <TabsTrigger value="completed">Completed</TabsTrigger>
               <TabsTrigger value="cancelled">Cancelled</TabsTrigger>
+              <TabsTrigger value="failed_payment">Payment Failed</TabsTrigger>
             </TabsList>
 
             {loading ? (

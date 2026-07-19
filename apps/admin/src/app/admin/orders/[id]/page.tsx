@@ -47,6 +47,8 @@ interface OrderDetail {
   status: string;
   paymentStatus: string;
   paymentMethod: string | null;
+  paymentFailureReason: string | null;
+  midtransFailureStatus: string | null;
   pickupCode: string | null;
   pickupDate: string | null;
   pickupTime: string | null;
@@ -81,6 +83,7 @@ const STATUS_LABELS: Record<string, string> = {
   ready_for_pickup: "Ready for Pickup",
   completed: "Completed",
   cancelled: "Cancelled",
+  failed_payment: "Payment Failed",
 };
 
 const STATUS_BADGES: Record<string, string> = {
@@ -91,6 +94,8 @@ const STATUS_BADGES: Record<string, string> = {
     "bg-violet-100 text-violet-700 border-violet-200 hover:bg-violet-100",
   completed: "bg-green-100 text-green-700 border-green-200 hover:bg-green-100",
   cancelled: "bg-red-100 text-red-700 border-red-200 hover:bg-red-100",
+  failed_payment:
+    "bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100",
 };
 
 const PAYMENT_BADGES: Record<string, string> = {
@@ -219,6 +224,7 @@ export default function AdminOrderDetailPage() {
     (s) => s.key === order.status
   );
   const isCancelled = order.status === "cancelled";
+  const isFailedPayment = order.status === "failed_payment";
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -265,7 +271,7 @@ export default function AdminOrderDetailPage() {
       </div>
 
       {/* Status Stepper */}
-      {!isCancelled && (
+      {!isCancelled && !isFailedPayment && (
         <Card>
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
@@ -323,6 +329,30 @@ export default function AdminOrderDetailPage() {
             <p className="font-semibold text-destructive">
               This order was cancelled
             </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {isFailedPayment && (
+        <Card>
+          <CardContent className="p-6 text-center">
+            <AlertCircle className="h-10 w-10 mx-auto text-destructive mb-2" />
+            <p className="font-semibold text-destructive">
+              Payment Failed
+            </p>
+            {order.paymentFailureReason && (
+              <p className="text-sm text-muted-foreground mt-2">
+                {order.paymentFailureReason}
+              </p>
+            )}
+            {order.midtransFailureStatus && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Midtrans status:{" "}
+                <code className="rounded bg-muted px-1.5 py-0.5 font-mono">
+                  {order.midtransFailureStatus}
+                </code>
+              </p>
+            )}
           </CardContent>
         </Card>
       )}

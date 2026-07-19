@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Only allow re-payment for pending_payment orders
+    // Only allow re-payment for pending_payment orders (failed_payment is final)
     if (order.status !== "pending_payment") {
       return NextResponse.json(
         {
@@ -98,32 +98,16 @@ export async function POST(request: NextRequest) {
       ]
     );
 
-    // Persist Midtrans identifiers (Core API: transaction id; Snap: redirect URL)
-    if (result.mode === "core") {
-      await db
-        .update(orders)
-        .set({ midtransTransactionId: result.transactionId })
-        .where(eq(orders.id, orderId));
-    } else if (result.mode === "snap") {
-      await db
-        .update(orders)
-        .set({ snapRedirectUrl: result.redirectUrl })
-        .where(eq(orders.id, orderId));
-    }
+    // Persist Snap redirect URL
+    await db
+      .update(orders)
+      .set({ snapRedirectUrl: result.redirectUrl })
+      .where(eq(orders.id, orderId));
 
     return NextResponse.json({
       success: true,
-      mode: result.mode,
-      ...(result.mode === "core"
-        ? {
-            transactionId: result.transactionId,
-            qrString: result.qrString,
-            qrImageUrl: result.qrImageUrl,
-          }
-        : {
-            redirectUrl: result.redirectUrl,
-            token: result.token,
-          }),
+      redirectUrl: result.redirectUrl,
+      token: result.token,
     });
   } catch (error) {
     console.error("Error creating Midtrans payment:", error);

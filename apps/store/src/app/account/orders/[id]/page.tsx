@@ -47,6 +47,7 @@ interface OrderDetail {
   status: string;
   paymentMethod: string | null;
   paymentStatus: string;
+  paymentFailureReason: string | null;
   pickupCode: string | null;
   pickupDate: string | null;
   pickupTime: string | null;
@@ -72,6 +73,7 @@ const statusMap: Record<
   ready_for_pickup: { label: "Ready for Pickup", variant: "default" },
   completed: { label: "Completed", variant: "default" },
   cancelled: { label: "Cancelled", variant: "destructive" },
+  failed_payment: { label: "Payment Failed", variant: "destructive" },
 };
 
 const paymentStatusMap: Record<
@@ -196,6 +198,7 @@ export default function OrderDetailPage() {
     (s) => s.key === order.status
   );
   const isCancelled = order.status === "cancelled";
+  const isFailedPayment = order.status === "failed_payment";
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-4xl">
@@ -233,7 +236,7 @@ export default function OrderDetailPage() {
       </div>
 
       {/* Status Stepper */}
-      {!isCancelled && (
+      {!isCancelled && !isFailedPayment && (
         <Card className="mb-6">
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
@@ -290,6 +293,25 @@ export default function OrderDetailPage() {
             <AlertCircle className="h-10 w-10 mx-auto text-destructive mb-2" />
             <p className="font-semibold text-destructive">
               Pesanan ini telah dibatalkan
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {isFailedPayment && (
+        <Card className="mb-6">
+          <CardContent className="p-6 text-center">
+            <AlertCircle className="h-10 w-10 mx-auto text-destructive mb-2" />
+            <p className="font-semibold text-destructive">
+              Pembayaran Gagal
+            </p>
+            {order.paymentFailureReason && (
+              <p className="text-sm text-muted-foreground mt-2">
+                {order.paymentFailureReason}
+              </p>
+            )}
+            <p className="text-sm text-muted-foreground mt-2">
+              Silakan buat pesanan baru untuk mencoba pembayaran kembali.
             </p>
           </CardContent>
         </Card>

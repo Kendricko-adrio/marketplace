@@ -60,6 +60,7 @@ const statusMap: Record<string, { label: string; variant: "default" | "secondary
   ready_for_pickup: { label: "Ready for Pickup", variant: "default" },
   completed: { label: "Completed", variant: "default" },
   cancelled: { label: "Cancelled", variant: "destructive" },
+  failed_payment: { label: "Payment Failed", variant: "destructive" },
 };
 
 function formatDate(dateStr: string) {

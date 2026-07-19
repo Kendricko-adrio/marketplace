@@ -1,31 +1,7 @@
-import { CoreApi, Snap } from "midtrans-client";
+import { Snap } from "midtrans-client";
 import crypto from "crypto";
 
-let coreApiClient: CoreApi | null = null;
 let snapClient: Snap | null = null;
-
-function getCoreApiClient(): CoreApi {
-  if (coreApiClient) return coreApiClient;
-
-  const serverKey = process.env.MIDTRANS_SERVER_KEY;
-  const clientKey = process.env.MIDTRANS_CLIENT_KEY;
-
-  if (!serverKey) {
-    throw new Error(
-      "MIDTRANS_SERVER_KEY is not configured. Set it in your .env file."
-    );
-  }
-
-  const isProduction = process.env.MIDTRANS_IS_PRODUCTION === "true";
-
-  coreApiClient = new CoreApi({
-    isProduction,
-    serverKey,
-    clientKey: clientKey || undefined,
-  });
-
-  return coreApiClient;
-}
 
 function getSnapClient(): Snap {
   if (snapClient) return snapClient;
@@ -50,9 +26,10 @@ function getSnapClient(): Snap {
   return snapClient;
 }
 
-/** Returns the configured payment mode: "core" (default) or "snap". */
-export function getPaymentMode(): "core" | "snap" {
-  return process.env.MIDTRANS_PAYMENT_MODE === "snap" ? "snap" : "core";
+function getMidtransBaseUrl(): string {
+  return process.env.MIDTRANS_IS_PRODUCTION === "true"
+    ? "https://api.midtrans.com"
+    : "https://api.sandbox.midtrans.com";
 }
 
 export interface QrisCustomerDetails {
@@ -68,66 +45,9 @@ export interface QrisItemDetail {
   quantity: number;
 }
 
-export interface CreateQrisChargeResult {
-  transactionId: string;
-  qrString: string;
-  qrImageUrl: string;
-}
-
 export interface CreateSnapPaymentResult {
   redirectUrl: string;
   token: string;
-}
-
-export type CreatePaymentResult = (
-  | { mode: "core"; transactionId: string; qrString: string; qrImageUrl: string }
-  | { mode: "snap"; redirectUrl: string; token: string }
-);
-
-/**
- * Create a QRIS transaction via Midtrans Core API (/v2/charge).
- * Returns the transaction_id, qr_string, and qr-code image URL.
- * The QR code is displayed directly in the app — no Snap redirect.
- */
-export async function createQrisCharge(
-  orderId: string,
-  grossAmount: number,
-  customerDetails: QrisCustomerDetails,
-  itemDetails?: QrisItemDetail[]
-): Promise<CreateQrisChargeResult> {
-  const core = getCoreApiClient();
-
-  const parameter = {
-    payment_type: "qris",
-    transaction_details: {
-      order_id: orderId,
-      gross_amount: grossAmount,
-    },
-    customer_details: {
-      first_name: customerDetails.first_name,
-      email: customerDetails.email,
-      phone: customerDetails.phone,
-    },
-    item_details: itemDetails,
-  };
-
-  const response = await core.charge(parameter);
-
-  const qrAction = response.actions?.find(
-    (a) => a.name === "generate-qr-code"
-  );
-
-  if (!response.transaction_id || !response.qr_string || !qrAction?.url) {
-    throw new Error(
-      `Midtrans QRIS charge returned incomplete response: ${JSON.stringify(response)}`
-    );
-  }
-
-  return {
-    transactionId: response.transaction_id,
-    qrString: response.qr_string,
-    qrImageUrl: qrAction.url,
-  };
 }
 
 /**
@@ -167,42 +87,26 @@ export async function createSnapQrisPayment(
 }
 
 /**
- * Unified payment creation. Dispatches to Core API (QRIS direct) or Snap
- * (redirect) based on the MIDTRANS_PAYMENT_MODE env var.
- * - "core" (default): QR code shown in-app, returns transactionId/qrString/qrImageUrl
- * - "snap": redirect to Midtrans Snap page, returns redirectUrl/token
+ * Unified payment creation. Always uses Midtrans Snap (redirect flow).
+ * Returns redirectUrl + token for the Snap payment page.
  */
 export async function createPayment(
   orderId: string,
   grossAmount: number,
   customerDetails: QrisCustomerDetails,
   itemDetails?: QrisItemDetail[]
-): Promise<CreatePaymentResult> {
-  const mode = getPaymentMode();
-
-  if (mode === "snap") {
-    const snapResult = await createSnapQrisPayment(
-      orderId,
-      grossAmount,
-      customerDetails,
-      itemDetails
-    );
-    return { mode: "snap", ...snapResult };
-  }
-
-  const coreResult = await createQrisCharge(
+): Promise<CreateSnapPaymentResult> {
+  return createSnapQrisPayment(
     orderId,
     grossAmount,
     customerDetails,
     itemDetails
   );
-  return { mode: "core", ...coreResult };
 }
 
 /**
  * Verify a Midtrans webhook notification's signature_key.
  * Classic Snap signature = SHA512(order_id + status_code + gross_amount + serverKey).
- * The signature format is identical for both Core API and Snap.
  */
 export function verifyMidtransSignature(
   orderId: string,
@@ -219,4 +123,64 @@ export function verifyMidtransSignature(
     .digest("hex");
 
   return expected === signatureKey;
+}
+
+/**
+ * Shape of the Midtrans /v2/{order_id}/status response.
+ * Only the fields we care about are typed here.
+ */
+export interface MidtransTransactionStatus {
+  transaction_status: string;
+  status_code: string;
+  status_message?: string;
+  fraud_status?: string;
+  payment_type?: string;
+  order_id?: string;
+  transaction_id?: string;
+  gross_amount?: string;
+  settlement_time?: string;
+  expiry_time?: string;
+}
+
+/**
+ * Re-verify a transaction's status directly with Midtrans.
+ * Calls GET /v2/{order_id}/status using Basic Auth (server-key:).
+ *
+ * Best practice per Midtrans docs: after receiving a webhook notification,
+ * always fetch the authoritative status from Midtrans before mutating your
+ * database, to defend against spoofed callbacks.
+ */
+export async function getMidtransTransactionStatus(
+  orderId: string
+): Promise<MidtransTransactionStatus | null> {
+  const serverKey = process.env.MIDTRANS_SERVER_KEY;
+  if (!serverKey) {
+    throw new Error(
+      "MIDTRANS_SERVER_KEY is not configured. Set it in your .env file."
+    );
+  }
+
+  const baseUrl = getMidtransBaseUrl();
+  const auth = Buffer.from(`${serverKey}:`).toString("base64");
+
+  const res = await fetch(`${baseUrl}/v2/${encodeURIComponent(orderId)}/status`, {
+    method: "GET",
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!res.ok) {
+    if (res.status === 404) {
+      // Transaction not found at Midtrans
+      return null;
+    }
+    const text = await res.text();
+    throw new Error(
+      `Midtrans status check failed (${res.status}): ${text}`
+    );
+  }
+
+  return (await res.json()) as MidtransTransactionStatus;
 }

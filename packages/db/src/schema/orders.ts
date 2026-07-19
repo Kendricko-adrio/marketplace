@@ -41,12 +41,19 @@ export const orders = pgTable("orders", {
   branchId: text("branch_id").references(() => branches.id),
   addressId: text("address_id").references(() => addresses.id),
   voucherId: text("voucher_id"),
-  // pending_payment | processing | ready_for_pickup | completed | cancelled
+  // pending_payment | processing | ready_for_pickup | completed | cancelled | failed_payment
+  // - cancelled: manual cancellation (by user or admin)
+  // - failed_payment: Midtrans gateway reported failure (expire/deny/cancel from callback)
   status: text("status").notNull().default("pending_payment"),
   paymentMethod: text("payment_method"), // qris | va
   paymentStatus: text("payment_status")
     .notNull()
     .default("pending"), // pending | paid | failed
+  // Human-readable reason set when a Midtrans callback marks the order as failed_payment.
+  // e.g. "Payment expired — user did not complete payment in time"
+  paymentFailureReason: text("payment_failure_reason"),
+  // Raw Midtrans transaction_status stored alongside paymentFailureReason for debugging.
+  midtransFailureStatus: text("midtrans_failure_status"),
   // Pickup-in-store fields (Phase 1)
   pickupCode: text("pickup_code"), // 6-char uppercase alphanumeric, set on payment success
   pickupDate: timestamp("pickup_date"),

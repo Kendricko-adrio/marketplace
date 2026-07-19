@@ -944,13 +944,14 @@ async function seed() {
       "ready_for_pickup",
       "cancelled",
       "pending_payment",
+      "failed_payment",
     ] as const;
 
     const pickupBranchId = branchIds[0]; // Jakarta Pusat
     const pickupDate = new Date(Date.now() + 24 * 60 * 60 * 1000); // tomorrow
     const pickupTime = "14:00";
 
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < orderStatuses.length; i++) {
       const orderId = generateId();
       const variant = variants[i % variants.length];
       const qty = Math.floor(Math.random() * 3) + 1;
@@ -959,9 +960,13 @@ async function seed() {
       const total = subtotal;
 
       const status = orderStatuses[i];
-      const isPaid = status !== "cancelled" && status !== "pending_payment";
+      const isPaid =
+        status !== "cancelled" &&
+        status !== "pending_payment" &&
+        status !== "failed_payment";
       const hasPickupCode =
         status === "ready_for_pickup" || status === "completed";
+      const isFailedPayment = status === "failed_payment";
 
       // 6-char pickup code (uppercase alphanumeric, no ambiguous chars)
       const codeChars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -978,7 +983,15 @@ async function seed() {
         branchId: pickupBranchId,
         status,
         paymentMethod: "qris",
-        paymentStatus: isPaid ? "paid" : "failed",
+        paymentStatus: isPaid
+          ? "paid"
+          : status === "pending_payment"
+          ? "pending"
+          : "failed",
+        paymentFailureReason: isFailedPayment
+          ? "Payment expired — user did not complete payment in time"
+          : null,
+        midtransFailureStatus: isFailedPayment ? "expire" : null,
         pickupCode,
         pickupDate,
         pickupTime,

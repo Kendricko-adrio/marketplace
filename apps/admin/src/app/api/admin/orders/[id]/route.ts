@@ -24,6 +24,8 @@ export const GET = withPermission(async (
           status: orders.status,
           paymentMethod: orders.paymentMethod,
           paymentStatus: orders.paymentStatus,
+          paymentFailureReason: orders.paymentFailureReason,
+          midtransFailureStatus: orders.midtransFailureStatus,
           pickupDate: orders.pickupDate,
           pickupTime: orders.pickupTime,
           contactPhone: orders.contactPhone,

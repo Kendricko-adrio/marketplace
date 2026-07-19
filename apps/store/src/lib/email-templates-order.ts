@@ -336,6 +336,141 @@ Sampai jumpa di pesanan berikutnya!
 ${BRAND_NAME} · ${BRAND_SUPPORT_EMAIL}`;
 }
 
+// ===== Email #3: Payment Failed / Expired =====
+
+interface PaymentFailedEmailProps {
+  order: OrderForEmail;
+  /** Human-readable reason, e.g. "Payment expired — user did not complete payment in time" */
+  reason: string;
+  items: OrderItemForEmail[];
+}
+
+export function paymentFailedEmailHTML({
+  order,
+  reason,
+  items,
+}: PaymentFailedEmailProps): string {
+  const year = new Date().getFullYear();
+  const shortId = order.id.slice(0, 8).toUpperCase();
+
+  const itemsRows = items
+    .map(
+      (item) => `            <tr>
+              <td style="padding:10px 0;border-bottom:1px solid #e4e4e7;font-size:14px;color:#3f3f46;">
+                ${escapeHtml(item.productName)}
+                ${item.variantInfo ? `<br/><span style="font-size:12px;color:#71717a;">${escapeHtml(item.variantInfo)}</span>` : ""}
+              </td>
+              <td style="padding:10px 12px;border-bottom:1px solid #e4e4e7;font-size:14px;color:#3f3f46;text-align:center;">${item.quantity}</td>
+              <td style="padding:10px 0;border-bottom:1px solid #e4e4e7;font-size:14px;color:#18181b;text-align:right;font-weight:500;">
+                Rp ${formatRupiah(parseFloat(item.price) * item.quantity)}
+              </td>
+            </tr>`
+    )
+    .join("\n");
+
+  return `<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Payment Failed</title>
+  </head>
+  <body style="margin:0;padding:0;background-color:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#18181b;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;padding:32px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background-color:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+            <!-- Header -->
+            <tr>
+              <td style="padding:32px 40px 8px 40px;text-align:left;">
+                <span style="font-size:20px;font-weight:700;letter-spacing:-0.01em;color:${BRAND_PRIMARY};">${escapeHtml(BRAND_NAME)}</span>
+              </td>
+            </tr>
+            <!-- Body -->
+            <tr>
+              <td style="padding:16px 40px 24px 40px;">
+                <h1 style="margin:0 0 16px 0;font-size:22px;line-height:28px;font-weight:700;color:#18181b;">Pembayaran Gagal</h1>
+                <p style="margin:0 0 16px 0;font-size:15px;line-height:24px;color:#3f3f46;">Pembayaran untuk pesanan Anda tidak berhasil diselesaikan dan pesanan telah dibatalkan.</p>
+
+                <!-- Reason -->
+                <div style="margin:0 0 28px 0;padding:20px;background-color:#fef2f2;border-radius:8px;border:1px solid #fecaca;">
+                  <p style="margin:0 0 4px 0;font-size:13px;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;">Alasan Kegagalan</p>
+                  <p style="margin:0;font-size:15px;line-height:22px;color:#991b1b;font-weight:500;">${escapeHtml(reason)}</p>
+                </div>
+
+                <!-- Order items -->
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px 0;">
+                  <thead>
+                    <tr>
+                      <th style="padding:8px 0;font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;text-align:left;border-bottom:2px solid #e4e4e7;">Produk</th>
+                      <th style="padding:8px 12px;font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;text-align:center;border-bottom:2px solid #e4e4e7;">Qty</th>
+                      <th style="padding:8px 0;font-size:12px;color:#71717a;text-transform:uppercase;letter-spacing:0.05em;text-align:right;border-bottom:2px solid #e4e4e7;">Harga</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+${itemsRows}
+                  </tbody>
+                </table>
+
+                <!-- Total -->
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px 0;">
+                  <tr>
+                    <td style="padding:12px 0 0 0;font-size:16px;font-weight:700;color:#18181b;border-top:1px solid #e4e4e7;">Total</td>
+                    <td style="padding:12px 0 0 0;font-size:16px;font-weight:700;color:${BRAND_PRIMARY};text-align:right;border-top:1px solid #e4e4e7;">Rp ${formatRupiah(parseFloat(order.total))}</td>
+                  </tr>
+                </table>
+
+                <!-- Instructions -->
+                <div style="margin:0 0 24px 0;padding:16px;background-color:#f4f4f5;border-radius:8px;">
+                  <p style="margin:0;font-size:14px;line-height:22px;color:#3f3f46;">Silakan buat pesanan baru untuk mencoba pembayaran kembali. Pesanan ini tidak dapat dilanjutkan.</p>
+                </div>
+              </td>
+            </tr>
+            <!-- Footer -->
+            <tr>
+              <td style="padding:24px 40px 32px 40px;border-top:1px solid #e4e4e7;">
+                <p style="margin:0 0 8px 0;font-size:13px;line-height:20px;color:#71717a;">ID Pesanan: ${escapeHtml(shortId)}</p>
+                <p style="margin:0;font-size:13px;line-height:20px;color:#a1a1aa;">${escapeHtml(BRAND_NAME)} &middot; ${year}<br />${escapeHtml(BRAND_SUPPORT_EMAIL)}</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
+
+export function paymentFailedEmailText({
+  order,
+  reason,
+  items,
+}: PaymentFailedEmailProps): string {
+  const shortId = order.id.slice(0, 8).toUpperCase();
+
+  const itemsText = items
+    .map(
+      (item) =>
+        `  - ${item.productName}${item.variantInfo ? ` (${item.variantInfo})` : ""} ×${item.quantity} — Rp ${formatRupiah(parseFloat(item.price) * item.quantity)}`
+    )
+    .join("\n");
+
+  return `Pembayaran Gagal — #${shortId}
+
+Pembayaran untuk pesanan Anda tidak berhasil diselesaikan dan pesanan telah dibatalkan.
+
+Alasan: ${reason}
+
+Pesanan:
+${itemsText}
+
+Total: Rp ${formatRupiah(parseFloat(order.total))}
+
+Silakan buat pesanan baru untuk mencoba pembayaran kembali. Pesanan ini tidak dapat dilanjutkan.
+
+${BRAND_NAME} · ${BRAND_SUPPORT_EMAIL}`;
+}
+
 // ===== Helpers =====
 
 function formatRupiah(amount: number): string {

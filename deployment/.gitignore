@@ -1,5 +1,6 @@
 # Secret env — JANGAN commit
 .env.staging
+.env.production
 
 # Caddy persistent state (sertifikat, config) — di-mount via named volume,
 # tapi kalau ada folder lokal yang tertinggal, ignore.

@@ -31,7 +31,12 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
+# Block semua .env* asli (secret), tapi COMMIT template *.example.
+# Tanpa exception ini, `cp deployment/.env.staging.example .env.staging`
+# akan gagal di VPS karena template tidak ter-track oleh git.
 .env*
+!.env.example
+!.env.*.example
 
 # uploaded files
 public/uploads/

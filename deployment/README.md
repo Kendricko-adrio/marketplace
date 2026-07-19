@@ -52,8 +52,15 @@ ke VPS menggunakan Docker. PostgreSQL berjalan **bare-metal di VPS**
        │ DB: storefront│
        └──────────────┘
 
-  [one-shot] migrate container → drizzle-kit migrate + seed
+  [one-shot] migrate container → drizzle-kit migrate  [+ seed untuk staging only]
 ```
+
+> **PENTING — Best practice Drizzle migration:** Container `migrate` menjalankan
+> `drizzle-kit migrate` (apply file SQL yang sudah di-commit di
+> `packages/db/drizzle/`). Untuk staging, command default juga menjalankan
+> `seed.ts` setelah migrate. Untuk production, **JANGAN** pernah run seed —
+> jalankan `migrate npx drizzle-kit migrate` saja. Lihat bab 8.3 untuk
+> workflow lengkap (generate → commit → pull → migrate).
 
 **Komponen:**
 
@@ -585,16 +592,36 @@ docker compose --env-file .env.staging logs -f
 
 ### 8.3 Jalankan database migration + seed
 
+> **WORKFLOW YANG BENAR (best practice Drizzle):**
+>
+> | Command | Kapan dipakai | Lingkungan |
+> |---------|--------------|------------|
+> | `drizzle-kit generate` | Setiap habis ubah `packages/db/src/schema/*` — generate file SQL migration baru di `packages/db/drizzle/`. **Commit file ini ke git.** | Lokal dev |
+> | `drizzle-kit migrate` | Apply migration SQL yang sudah di-commit ke DB target. **Inilah satu-satunya command yang boleh jalan di staging & production.** | Staging, Production |
+> | `drizzle-kit push` | Prototyping cepat di lokal — langsung push skema tanpa file migration. **TIDAK ada rollback, TIDAK ada history.** Hanya lokal dev. | **LOKAL SAJA** |
+> | `tsx src/seed.ts` | Isi data sample. **MENGHAPUS SEMUA DATA LAMA** dulu. Untuk staging OK kalau tidak ada data penting. | Staging (hati-hati), **PRODUCTION JANGAN** |
+>
+> **Aturan keras:**
+> - **JANGAN PERNAH** `drizzle-kit push` ke DB staging/production. Tidak ada migration file, tidak bisa rollback, tidak reproducible. Lihat: https://orm.drizzle.team/docs/migrations
+> - Migration files di `packages/db/drizzle/*.sql` **wajib di-commit ke git** — supaya CI/CD dan VPS sinkron. Cek: `git ls-files packages/db/drizzle/` harus menampilkan file `.sql`.
+> - **JANGAN edit migration file yang sudah di-generate**. Kalau skema salah, hapus file migration terakhir (kalau belum di-apply) atau buat migration baru yang memperbaiki.
+> - **Sebelum migrate production**, SELALU backup DB: `pg_dump -U marketplace_production -h localhost storefront_production > backup-$(date +%Y%m%d).sql`.
+
 **Sekali saja** saat deploy pertama (atau ulang kalau ada migration baru):
+
 ```bash
-docker compose --env-file .env.staging --profile tools run --rm migrate
+# Staging: migration + seed (staging boleh seed karena data dummy boleh hilang)
+docker compose -p staging --env-file .env.staging --profile tools run --rm migrate
+
+# Production: migration SAJA (JANGAN seed!)
+docker compose -p production --env-file .env.production --profile tools run --rm migrate npx drizzle-kit migrate
 ```
 
-Ini akan:
-1. `npx drizzle-kit migrate` — apply migration SQL ke Postgres.
+Ini (untuk staging) akan:
+1. `npx drizzle-kit migrate` — apply migration SQL yang sudah di-commit ke Postgres.
 2. `npx tsx src/seed.ts` — isi data sample (admin users, products, dll).
 
-Output yang diharapkan:
+Output yang diharapkan (staging):
 ```
 🌱 Seeding database...
 🗑️  Clearing existing data...
@@ -604,7 +631,16 @@ Output yang diharapkan:
 ```
 
 > **Catatan:** Seed akan **menghapus data lama** dulu (lihat `packages/db/src/seed.ts`).
-> Jangan run seed di production tanpa backup. Untuk staging aman.
+> Untuk staging aman (data dummy boleh hilang). **JANGAN run seed di production.**
+
+#### Troubleshooting migration
+
+| Error | Sebab | Solusi |
+|-------|-------|--------|
+| `relation already exists` | Schema sudah ada (mungkin dari `db:push` sebelumnya, atau `migrate` sudah jalan sekali) | Jalankan seed saja: `... run --rm migrate npx tsx src/seed.ts` |
+| `database is up to date` | Tidak ada migration baru | Aman. Jalankan seed saja (staging) atau tidak perlu apa-apa (production) |
+| `No migrations found` | File `packages/db/drizzle/*.sql` tidak ter-copy ke image Docker | Pastikan migration files di-commit ke git (cek: `git ls-files packages/db/drizzle/`) |
+| `password authentication failed` | `DATABASE_URL` salah / user-DB mismatch | Cek `.env.staging`: `DATABASE_URL` harus match user+DB yang dibuat di `psql` (bab 3.2) |
 
 ### 8.4 Cek status container
 
@@ -685,10 +721,26 @@ Layer cache Docker membuat rebuild cepat (hanya yang berubah).
 
 ### Run migration baru saja (tanpa seed)
 
-Kalau ada migration baru (file SQL baru di `packages/db/drizzle/`):
+Kalau ada migration baru (file SQL baru di `packages/db/drizzle/` yang sudah
+di-commit + di-pull di VPS):
+
 ```bash
-docker compose --env-file .env.staging --profile tools run --rm migrate npx drizzle-kit migrate
+# Staging
+docker compose -p staging --env-file .env.staging --profile tools run --rm migrate npx drizzle-kit migrate
+
+# Production (SELALU backup dulu — lihat bab 8.3)
+pg_dump -U marketplace_production -h localhost storefront_production > backup-$(date +%Y%m%d).sql
+docker compose -p production --env-file .env.production --profile tools run --rm migrate npx drizzle-kit migrate
 ```
+
+> **Workflow perubahan skema (di mesin dev lokal):**
+> 1. Edit `packages/db/src/schema/*.ts` (hanya di sini — apps read-only).
+> 2. `npm run db:generate` — generate file SQL baru di `packages/db/drizzle/`.
+> 3. Cek file migration baru, lalu `git add packages/db/drizzle/ && git commit`.
+> 4. `git push` + di VPS `git pull`.
+> 5. Jalankan `migrate` saja (command di atas) — **JANGAN** `db:push`.
+> 6. Update `packages/db/src/seed.ts` kalau ada tabel/kolom baru (lihat
+>    AGENTS.md bagian "Seeder stays in sync with schema").
 
 ### Run seed ulang (hati-hati — hapus semua data!)
 
@@ -830,9 +882,13 @@ harus dipahami:
      di blok global Caddyfile.
 
 ### Migration gagal: `relation already exists` atau `database is up to date`
-- `relation already exists` → schema sudah ada (mungkin dari `db:push` sebelumnya).
-  Jalankan hanya seed: `... run --rm migrate npx tsx src/seed.ts`.
-- `database is up to date` → tidak ada migration baru, aman. Jalankan seed saja.
+- `relation already exists` → schema sudah ada (mungkin dari `db:push` sebelumnya,
+  atau `migrate` sudah jalan sekali). Jalankan hanya seed (staging):
+  `... run --rm migrate npx tsx src/seed.ts`. Lihat tabel lengkap di bab 8.3.
+- `database is up to date` → tidak ada migration baru, aman. Jalankan seed saja
+  (staging) atau tidak perlu apa-apa (production).
+- `No migrations found` → migration files tidak ter-copy ke image. Pastikan
+  file `packages/db/drizzle/*.sql` sudah di-commit: `git ls-files packages/db/drizzle/`.
 
 ### `docker compose` error: `no such service: migrate`
 - Anda lupa flag `--profile tools`. Migrate hanya muncul dengan profile itu.
@@ -1180,7 +1236,10 @@ nano .env.production               # isi secret production
 
 docker compose -p production --env-file .env.production up -d --build
 
-# Migration production (HATI-HATI: jangan run seed di production!)
+# SELALU backup DB production sebelum migrate
+pg_dump -U marketplace_production -h localhost storefront_production > backup-$(date +%Y%m%d).sql
+
+# Migration production SAJA (JANGAN run seed di production!)
 docker compose -p production --env-file .env.production --profile tools run --rm migrate npx drizzle-kit migrate
 
 # Cek
@@ -1255,13 +1314,13 @@ deployment/
 ├── docker-compose.yml            # orkestrasi semua service (dipakai staging & production)
 ├── .env.staging.example          # template env staging (di-commit)
 ├── .env.staging                  # env staging asli (anda isi, JANGAN commit)
-├── .env.production.example       # template env production (di-commit)
+├── .env.production.example       # template env production (di-commit) — JANGAN seed!
 ├── .env.production               # env production asli (anda isi, JANGAN commit)
 ├── .gitignore                    # ignore .env.staging + .env.production + caddy state
 ├── README.md                     # file ini
 ├── store/Dockerfile              # image storefront
 ├── admin/Dockerfile              # image admin
-├── migrate/Dockerfile            # image one-shot migration + seed
+├── migrate/Dockerfile            # image one-shot migration + seed (seed staging only)
 └── caddy/Caddyfile               # reverse proxy + auto-HTTPS
 ```
 
@@ -1269,6 +1328,10 @@ deployment/
 
 > Panduan ini pakai konvensi `-p staging` (lihat bab 12.5 untuk strategi
 > multi-env lengkap). Ganti `staging` → `production` untuk env production.
+>
+> **INGAT:** `db:push` dan `seed` HANYA untuk lokal/staging. Production cukup
+> `drizzle-kit migrate` saja (lihat bab 8.3). Selalu backup DB production
+> sebelum migrate.
 
 ```bash
 # SSH ke VPS (sebagai operational user, bukan root)
@@ -1279,16 +1342,27 @@ ssh -p 22022 ops@IP_VPS
 # Deploy / re-deploy (staging)
 docker compose -p staging --env-file .env.staging up -d --build
 
-# Migration + seed (one-shot, staging)
+# Migration + seed (one-shot, staging — boleh seed karena data dummy)
 docker compose -p staging --env-file .env.staging --profile tools run --rm migrate
 
-# Migration saja (tanpa seed)
+# Migration saja (tanpa seed) — untuk staging kalau tidak butuh data baru
 docker compose -p staging --env-file .env.staging --profile tools run --rm migrate npx drizzle-kit migrate
 
-# Seed saja
+# Seed saja (staging — HATI-HATI: hapus semua data lama!)
 docker compose -p staging --env-file .env.staging --profile tools run --rm migrate npx tsx src/seed.ts
 
-# Lihat log
+# === PRODUCTION (ganti prefix + env file) ===
+# SELALU backup DB sebelum migrate production!
+pg_dump -U marketplace_production -h localhost storefront_production > backup-$(date +%Y%m%d).sql
+
+docker compose -p production --env-file .env.production up -d --build
+# Migration SAJA (JANGAN seed di production!)
+docker compose -p production --env-file .env.production --profile tools run --rm migrate npx drizzle-kit migrate
+docker compose -p production --env-file .env.production logs -f
+docker compose -p production --env-file .env.production ps
+docker compose -p production --env-file .env.production down
+
+# Lihat log (staging)
 docker compose -p staging --env-file .env.staging logs -f
 docker compose -p staging --env-file .env.staging logs -f caddy
 docker compose -p staging --env-file .env.staging logs -f store
@@ -1308,12 +1382,14 @@ docker compose -p staging --env-file .env.staging down -v
 # Restart satu service
 docker compose -p staging --env-file .env.staging restart caddy
 
-# === PRODUCTION (ganti prefix + env file) ===
-docker compose -p production --env-file .env.production up -d --build
-docker compose -p production --env-file .env.production --profile tools run --rm migrate npx drizzle-kit migrate
-docker compose -p production --env-file .env.production logs -f
-docker compose -p production --env-file .env.production ps
-docker compose -p production --env-file .env.production down
+# === LOKAL DEV (di mesin Anda, BUKAN VPS) ===
+# Hanya di lokal boleh pakai db:push untuk prototyping cepat:
+#   npm run db:push     # push skema langsung tanpa migration file
+# Tapi best practice: tetap pakai generate+migrate supaya ada history:
+#   npm run db:generate  # generate file migration SQL baru
+#   npm run db:migrate   # apply ke lokal DB
+# Setelah commit migration file, push ke git + pull di VPS + jalankan
+# `drizzle-kit migrate` saja di VPS.
 ```
 
 > Lihat bab 12.5 untuk strategi multi-environment lengkap (project name,

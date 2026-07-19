@@ -20,9 +20,15 @@
 # =============================================================================
 
 # Variable interpolation from .env.staging (passed via --env-file).
-# PostgreSQL bare-metal credentials + secret values.
+# PostgreSQL bare-metal connection string — DISAMAKAN LANGSUNG dari DATABASE_URL
+# di .env.staging. Jangan di-construct ulang dari PGUSER/PGPASS/PGDB karena:
+#   1. .env.staging hanya wajib set DATABASE_URL (PGUSER/PGPASS/PGDB opsional,
+#      hanya untuk reference/dokumentasi).
+#   2. Mencegah mismatch kalau user edit DATABASE_URL tapi lupa update PGUSER.
+#   3. Password dengan karakter special (mis. @, :, /) butuh URL-encoding di
+#      DATABASE_URL — construct ulang dari komponen akan pecah encoding.
 x-pg: &pg-conn
-  DATABASE_URL: "postgresql://${PGUSER}:${PGPASS}@host.docker.internal:5432/${PGDB}"
+  DATABASE_URL: "${DATABASE_URL}"
 
 services:
   # ---------------------------------------------------------------------------

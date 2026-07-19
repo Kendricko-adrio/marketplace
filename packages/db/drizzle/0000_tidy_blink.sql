@@ -214,16 +214,24 @@ CREATE TABLE "order_item" (
 CREATE TABLE "orders" (
 	"id" text PRIMARY KEY NOT NULL,
 	"user_id" text NOT NULL,
+	"branch_id" text,
 	"address_id" text,
 	"voucher_id" text,
-	"status" text DEFAULT 'proses' NOT NULL,
+	"status" text DEFAULT 'pending_payment' NOT NULL,
 	"payment_method" text,
 	"payment_status" text DEFAULT 'pending' NOT NULL,
+	"pickup_code" text,
+	"pickup_date" timestamp,
+	"pickup_time" text,
+	"contact_phone" text NOT NULL,
+	"contact_email" text NOT NULL,
 	"subtotal" numeric(15, 2) NOT NULL,
 	"shipping_cost" numeric(15, 2) DEFAULT '0' NOT NULL,
 	"discount" numeric(15, 2) DEFAULT '0' NOT NULL,
-	"service_fee" numeric(15, 2) DEFAULT '1000' NOT NULL,
+	"service_fee" numeric(15, 2) DEFAULT '0' NOT NULL,
 	"total" numeric(15, 2) NOT NULL,
+	"midtrans_transaction_id" text,
+	"snap_redirect_url" text,
 	"shipping_carrier" text,
 	"tracking_number" text,
 	"created_at" timestamp DEFAULT now() NOT NULL,
@@ -283,6 +291,18 @@ CREATE TABLE "homepage_section" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "static_page" (
+	"id" text PRIMARY KEY NOT NULL,
+	"slug" text NOT NULL,
+	"title" text NOT NULL,
+	"content" text DEFAULT '' NOT NULL,
+	"is_published" boolean DEFAULT true NOT NULL,
+	"display_order" integer DEFAULT 0 NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "static_page_slug_unique" UNIQUE("slug")
+);
+--> statement-breakpoint
 CREATE TABLE "audit_log" (
 	"id" text PRIMARY KEY NOT NULL,
 	"user_id" text,
@@ -304,6 +324,18 @@ CREATE TABLE "review" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "permission" (
+	"id" text PRIMARY KEY NOT NULL,
+	"role" text NOT NULL,
+	"module" text NOT NULL,
+	"can_view" boolean DEFAULT false NOT NULL,
+	"can_edit" boolean DEFAULT false NOT NULL,
+	"can_delete" boolean DEFAULT false NOT NULL,
+	"created_at" timestamp DEFAULT now() NOT NULL,
+	"updated_at" timestamp DEFAULT now() NOT NULL,
+	CONSTRAINT "permission_role_module_unique" UNIQUE("role","module")
+);
+--> statement-breakpoint
 ALTER TABLE "admin_account" ADD CONSTRAINT "admin_account_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "admin_session" ADD CONSTRAINT "admin_session_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "client_account" ADD CONSTRAINT "client_account_user_id_client_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."client"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -319,6 +351,7 @@ ALTER TABLE "address" ADD CONSTRAINT "address_user_id_client_id_fk" FOREIGN KEY 
 ALTER TABLE "order_item" ADD CONSTRAINT "order_item_order_id_orders_id_fk" FOREIGN KEY ("order_id") REFERENCES "public"."orders"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "order_item" ADD CONSTRAINT "order_item_variant_id_product_variant_id_fk" FOREIGN KEY ("variant_id") REFERENCES "public"."product_variant"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "orders" ADD CONSTRAINT "orders_user_id_client_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."client"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "orders" ADD CONSTRAINT "orders_branch_id_branch_id_fk" FOREIGN KEY ("branch_id") REFERENCES "public"."branch"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "orders" ADD CONSTRAINT "orders_address_id_address_id_fk" FOREIGN KEY ("address_id") REFERENCES "public"."address"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "cart_item" ADD CONSTRAINT "cart_item_cart_id_cart_id_fk" FOREIGN KEY ("cart_id") REFERENCES "public"."cart"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "cart_item" ADD CONSTRAINT "cart_item_variant_id_product_variant_id_fk" FOREIGN KEY ("variant_id") REFERENCES "public"."product_variant"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint

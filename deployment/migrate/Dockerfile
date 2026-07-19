@@ -30,4 +30,11 @@ WORKDIR /app/packages/db
 # Default command: apply migrations, then seed.
 # Override with: docker compose --profile tools run --rm migrate npx drizzle-kit migrate
 # or:            docker compose --profile tools run --rm migrate npx tsx src/seed.ts
+#
+# Recovery (staging only — kalau "relation already exists" karena DB kotor
+# dari db:push sebelumnya, atau journal out-of-sync):
+#   1. docker compose --profile tools run --rm migrate npx tsx src/reset.ts
+#   2. docker compose --profile tools run --rm migrate
+# reset.ts akan DROP semua tabel (termasuk __drizzle_migrations) lalu migrate
+# apply dari awal + seed. JANGAN run reset.ts di production.
 CMD ["sh", "-c", "npx drizzle-kit migrate && npx tsx src/seed.ts"]

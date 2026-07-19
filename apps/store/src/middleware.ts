@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { getSessionCookie } from "better-auth/cookies";
 
 // Routes that require authentication
 const protectedRoutes = ["/cart", "/checkout", "/account"];
@@ -26,9 +27,17 @@ function isOnboardingBypass(pathname: string): boolean {
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Get session token from cookies (store uses the "client" prefix)
-  const sessionToken = request.cookies.get("client.session_token")?.value;
+  // Read the session cookie using Better Auth's helper so the __Secure- cookie
+  // prefix (auto-applied when BETTER_AUTH_URL is https://) is handled
+  // transparently. Reading "client.session_token" directly fails in production
+  // HTTPS because the actual cookie name is "__Secure-client.session_token".
+  const sessionToken = getSessionCookie(request, {
+    cookiePrefix: "client",
+    cookieName: "session_token",
+  });
   const isAuthenticated = !!sessionToken;
+  // client.onboarding is set via document.cookie on the client (no __Secure-
+  // prefix) and read back here — keep the plain name.
   const onboardingDone = request.cookies.get("client.onboarding")?.value === "1";
 
   // Check if trying to access protected routes without auth

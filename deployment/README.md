@@ -641,6 +641,30 @@ Output yang diharapkan (staging):
 | `database is up to date` | Tidak ada migration baru | Aman. Jalankan seed saja (staging) atau tidak perlu apa-apa (production) |
 | `No migrations found` | File `packages/db/drizzle/*.sql` tidak ter-copy ke image Docker | Pastikan migration files di-commit ke git (cek: `git ls-files packages/db/drizzle/`) |
 | `password authentication failed` | `DATABASE_URL` salah / user-DB mismatch | Cek `.env.staging`: `DATABASE_URL` harus match user+DB yang dibuat di `psql` (bab 3.2) |
+| `relation already exists` di **semua** tabel + journal out-of-sync | DB kotor dari `db:push` sebelumnya — tabel ada tapi `__drizzle_migrations` kosong/beda | **Staging only:** reset DB lalu migrate ulang (lihat "Recovery DB staging" di bawah) |
+
+#### Recovery DB staging (reset + migrate ulang)
+
+Kalau DB staging kotor (tabel sudah ada tapi journal Drizzle out-of-sync,
+sehingga `migrate` gagal di migration pertama dengan `relation already exists`
+di SEMUA tabel), jalankan:
+
+```bash
+# 1. Drop SEMUA tabel di schema public (termasuk __drizzle_migrations)
+docker compose -p staging --env-file .env.staging --profile tools run --rm migrate npx tsx src/reset.ts
+
+# 2. Apply migration dari awal + seed
+docker compose -p staging --env-file .env.staging --profile tools run --rm migrate
+```
+
+`reset.ts` (`packages/db/src/reset.ts`) DROP semua tabel di schema `public`
+via `DROP TABLE IF EXISTS ... CASCADE`. Setelah itu, journal bersih dan
+`migrate` apply migration 0000, 0001, ... dengan benar.
+
+> **JANGAN run `reset.ts` di production.** Untuk production, kalau ada
+> masalah journal, pakai `pg_dump` backup dulu lalu fix manual via `psql`
+> (insert record ke `__drizzle_migrations` untuk migration yang sudah
+> ter-apply). Reset di production = kehilangan semua data customer.
 
 ### 8.4 Cek status container
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { getSessionCookie } from "better-auth/cookies";
 
 // Admin routes that require authentication
 const adminRoutes = ["/admin"];
@@ -20,11 +21,17 @@ function isMustResetBypass(pathname: string): boolean {
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Get session token from cookies (admin uses the "admin" prefix).
-  // This is only a lightweight existence check; the actual session validity
-  // is verified by server components / API routes using auth.api.getSession().
-  const sessionToken = request.cookies.get("admin.session_token")?.value;
+  // Read the session cookie using Better Auth's helper so the __Secure- cookie
+  // prefix (auto-applied when BETTER_AUTH_URL is https://) is handled
+  // transparently. Reading "admin.session_token" directly fails in production
+  // HTTPS because the actual cookie name is "__Secure-admin.session_token".
+  const sessionToken = getSessionCookie(request, {
+    cookiePrefix: "admin",
+    cookieName: "session_token",
+  });
   const isAuthenticated = !!sessionToken;
+  // admin.must_reset is set via document.cookie on the client (no __Secure-
+  // prefix) and read back here — keep the plain name.
   const mustReset = request.cookies.get("admin.must_reset")?.value === "1";
 
   const isAdminRoute = adminRoutes.some((route) => pathname.startsWith(route));

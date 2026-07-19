@@ -31,9 +31,14 @@ export function middleware(request: NextRequest) {
   // prefix (auto-applied when BETTER_AUTH_URL is https://) is handled
   // transparently. Reading "client.session_token" directly fails in production
   // HTTPS because the actual cookie name is "__Secure-client.session_token".
+  //
+  // IMPORTANT: only pass `cookiePrefix` — do NOT pass `cookieName`. The helper
+  // appends a dash when both are set ("client-session_token"), but Better Auth
+  // uses a dot ("client.session_token"). With only the prefix set, the else
+  // branch appends a dot and the default cookieName "session_token" is used,
+  // producing the correct name (and __Secure- prefixed variant in HTTPS).
   const sessionToken = getSessionCookie(request, {
     cookiePrefix: "client",
-    cookieName: "session_token",
   });
   const isAuthenticated = !!sessionToken;
   // client.onboarding is set via document.cookie on the client (no __Secure-

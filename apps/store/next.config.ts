@@ -6,7 +6,11 @@ config({ path: "../../.env" });
 config({ path: ".env.local", override: true });
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   transpilePackages: ["@marketplace/ui"],
+  images: {
+    unoptimized: true,
+  },
 };
 
 export default nextConfig;

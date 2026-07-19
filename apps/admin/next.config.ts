@@ -14,6 +14,7 @@ try {
 }
 
 const nextConfig: NextConfig = {
+  output: "standalone",
   transpilePackages: ["@marketplace/ui"],
   images: {
     remotePatterns: [

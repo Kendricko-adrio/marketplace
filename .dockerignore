@@ -1,0 +1,45 @@
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Dependencies (will be installed fresh inside the image)
+**/node_modules
+
+# Next.js build output (rebuilt inside image)
+**/.next
+**/.next/cache
+**/out
+
+# TypeScript build output for packages
+**/dist
+**/tsconfig.tsbuildinfo
+
+# Env files — NEVER leak secrets into image
+.env
+.env.*
+!.env.example
+!.env.staging.example
+
+# Docker build artifacts
+deployment/caddy/data
+deployment/caddy/config
+
+# Editor / OS
+.vscode
+.idea
+**/.DS_Store
+**/Thumbs.db
+
+# Logs & caches
+**/*.log
+**/npm-debug.log*
+**/.eslintcache
+**/.turbo
+
+# Misc
+coverage
+**/*.lcov
+README.md
+AGENTS.md
+.agents

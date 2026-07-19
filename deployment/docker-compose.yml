@@ -1,0 +1,165 @@
+# =============================================================================
+# Marketplace Staging — Docker Compose
+# =============================================================================
+# Services:
+#   store  — Next.js storefront  (internal :3000, behind Caddy)
+#   admin  — Next.js admin        (internal :3001, behind Caddy)
+#   caddy  — reverse proxy + auto-HTTPS (Let's Encrypt PRODUCTION)
+#   migrate — one-shot (profile: tools) — drizzle-kit migrate + seed
+#
+# Postgres berjalan BARE-METAL di VPS (di luar compose), diakses via
+# host.docker.internal yang di-map ke host gateway lewat extra_hosts.
+#
+# Usage:
+#   cp .env.staging.example .env.staging   # lalu isi secret
+#   docker compose --env-file .env.staging up -d --build
+#   docker compose --env-file .env.staging --profile tools run --rm migrate
+#
+# Rebuild after domain/NEXT_PUBLIC change:
+#   docker compose --env-file .env.staging up -d --build
+# =============================================================================
+
+# Variable interpolation from .env.staging (passed via --env-file).
+# PostgreSQL bare-metal credentials + secret values.
+x-pg: &pg-conn
+  DATABASE_URL: "postgresql://${PGUSER}:${PGPASS}@host.docker.internal:5432/${PGDB}"
+
+services:
+  # ---------------------------------------------------------------------------
+  # STOREFRONT
+  # ---------------------------------------------------------------------------
+  store:
+    build:
+      context: ..
+      dockerfile: deployment/store/Dockerfile
+      args:
+        # NEXT_PUBLIC_* are inlined at build time — must be present during build.
+        NEXT_PUBLIC_APP_URL: "https://dev-store.adfsport.cloud"
+        NEXT_PUBLIC_APP_NAME: "${NEXT_PUBLIC_APP_NAME:-Marketplace Staging}"
+        NEXT_PUBLIC_STORE_URL: "https://dev-store.adfsport.cloud"
+    container_name: marketplace-store
+    restart: unless-stopped
+    environment:
+      <<: *pg-conn
+      NODE_ENV: production
+      # Better Auth (store)
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      BETTER_AUTH_URL: "https://dev-store.adfsport.cloud"
+      # Google OAuth
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+      # SMTP (email verification, order emails)
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      # Midtrans payment (sandbox for staging)
+      MIDTRANS_SERVER_KEY: ${MIDTRANS_SERVER_KEY}
+      MIDTRANS_CLIENT_KEY: ${MIDTRANS_CLIENT_KEY}
+      MIDTRANS_IS_PRODUCTION: ${MIDTRANS_IS_PRODUCTION:-false}
+      MIDTRANS_PAYMENT_MODE: ${MIDTRANS_PAYMENT_MODE:-snap}
+      # Uploads — shared named volume mounted at /app/uploads
+      UPLOADS_DIR: /app/uploads
+      # Internal URL the admin app uses to call this store's internal endpoints.
+      # Set here for self-reference; admin gets its own STORE_INTERNAL_URL.
+      STORE_INTERNAL_URL: "http://store:3000"
+    volumes:
+      - uploads:/app/uploads
+    extra_hosts:
+      # On Linux, map host.docker.internal to the host's gateway IP so the
+      # container can reach the bare-metal Postgres on the VPS.
+      - "host.docker.internal:host-gateway"
+    # Ports are NOT published to the host — Caddy handles public ingress.
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # ADMIN DASHBOARD
+  # ---------------------------------------------------------------------------
+  admin:
+    build:
+      context: ..
+      dockerfile: deployment/admin/Dockerfile
+      args:
+        NEXT_PUBLIC_APP_URL: "https://dev-admin.adfsport.cloud"
+        NEXT_PUBLIC_APP_NAME: "${NEXT_PUBLIC_APP_NAME:-Marketplace Admin Staging}"
+        NEXT_PUBLIC_STORE_URL: "https://dev-store.adfsport.cloud"
+        NEXT_PUBLIC_ADMIN_URL: "https://dev-admin.adfsport.cloud"
+    container_name: marketplace-admin
+    restart: unless-stopped
+    environment:
+      <<: *pg-conn
+      NODE_ENV: production
+      # Better Auth (admin) — secret MUST be identical to store's so the
+      # shared-HMAC verify-pickup handshake works between admin and store.
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      # SMTP (admin sends password-reset emails)
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      # Uploads — shared named volume (admin writes, store reads)
+      UPLOADS_DIR: /app/uploads
+      # URL the admin app uses to call the store's internal endpoints
+      # (/api/internal/order-complete). Uses the compose service DNS name.
+      STORE_INTERNAL_URL: "http://store:3000"
+    volumes:
+      - uploads:/app/uploads
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "3001"
+    depends_on:
+      store:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/login"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # CADDY — reverse proxy + auto-HTTPS (Let's Encrypt PRODUCTION)
+  # ---------------------------------------------------------------------------
+  caddy:
+    image: caddy:2-alpine
+    container_name: marketplace-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3 (QUIC)
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data        # sertifikat Let's Encrypt — PERSIST, jangan dihapus
+      - caddy_config:/config
+    depends_on:
+      - store
+      - admin
+
+  # ---------------------------------------------------------------------------
+  # MIGRATE — one-shot (profile: tools). Tidak auto-start dengan `up`.
+  # Jalankan manual: docker compose --profile tools run --rm migrate
+  # ---------------------------------------------------------------------------
+  migrate:
+    profiles: ["tools"]
+    build:
+      context: ..
+      dockerfile: deployment/migrate/Dockerfile
+    container_name: marketplace-migrate
+    environment:
+      <<: *pg-conn
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Default CMD runs `drizzle-kit migrate && tsx src/seed.ts`.
+    # Override to run only one: ...run --rm migrate npx drizzle-kit migrate
+
+volumes:
+  uploads:        # shared by store + admin for /app/uploads
+  caddy_data:     # Caddy cert store — persists across restarts
+  caddy_config:   # Caddy runtime config

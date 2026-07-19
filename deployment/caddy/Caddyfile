@@ -1,0 +1,63 @@
+# Caddyfile — reverse proxy for marketplace staging
+# Domains:
+#   store: dev-store.adfsport.cloud  → store:3000
+#   admin: dev-admin.adfsport.cloud  → admin:3001
+#
+# Let's Encrypt PRODUCTION endpoint (default) — sertifikat valid dan
+# dipercaya browser, tidak ada warning.
+#
+# PERHATIAN: rate-limit production ketat (5 failed validation/jam/hostname).
+# Pastikan DNS sudah resolve + port 80 terbuka SEBELUM start Caddy pertama kali.
+# Kalau perlu experimen berulang tanpa takut rate-limit, uncomment baris
+# acme_ca staging di bawah untuk sementara.
+
+{
+	# === STAGING CA (opsional, untuk experimen bebas rate-limit) ===
+	# Uncomment baris ini untuk pakai Let's Encrypt staging (sertifikat tidak
+	# dipercaya browser, tapi bebas gagal). Comment/hapus setelah verified.
+	# acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+
+	# Opsional: email untuk notifikasi expiry/rate-limit dari Let's Encrypt.
+	# email admin@adfsport.cloud
+}
+
+# -----------------------------------------------------------------------------
+# Storefront
+# -----------------------------------------------------------------------------
+dev-store.adfsport.cloud {
+	encode gzip zstd
+
+	# Next.js standalone server (container name: store, port 3000).
+	reverse_proxy store:3000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# Cache static Next.js assets aggressively.
+	@static path /_next/static/* /favicon.ico /images/* /uploads/*
+	handle @static {
+		header Cache-Control "public, max-age=31536000, immutable"
+		reverse_proxy store:3000
+	}
+}
+
+# -----------------------------------------------------------------------------
+# Admin dashboard
+# -----------------------------------------------------------------------------
+dev-admin.adfsport.cloud {
+	encode gzip zstd
+
+	# Next.js standalone server (container name: admin, port 3001).
+	reverse_proxy admin:3001 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	@static path /_next/static/* /favicon.ico /images/*
+	handle @static {
+		header Cache-Control "public, max-age=31536000, immutable"
+		reverse_proxy admin:3001
+	}
+}

@@ -21,6 +21,7 @@ ke VPS menggunakan Docker. PostgreSQL berjalan **bare-metal di VPS**
 10. [Operasional Sehari-hari](#10-operasional-sehari-hari)
 11. [Rate-limit Let's Encrypt (Penting!)](#11-rate-limit-lets-encrypt-penting)
 12. [Troubleshooting](#12-troubleshooting)
+12.5. [Memisahkan Environment Staging & Production](#125-memisahkan-environment-staging--production)
 13. [Referensi Cepat](#13-referensi-cepat)
 
 ---
@@ -426,13 +427,21 @@ sudo cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
 sudo nano /etc/fail2ban/jail.local
 ```
 
-Cari blok `[sshd]` dan set agresif (karena pakai password, kita ban cepat):
+Cari blok `[sshd]` dan set agresif (karena pakai password, kita ban cepat).
+**PENTING:** fail2ban **tidak mendukung inline comment** (tanda `#` setelah
+nilai). Komentar harus di baris sendiri yang diawali `#` — kalau ditulis
+inline, `#` ikut jadi bagian nilai dan parsing gagal (warning
+`Wrong value for 'maxretry'`, value jadi `None`).
+
 ```
+# === SSH brute-force protection ===
+# ban setelah 3 percobaan gagal dalam 10 menit, durasi ban 1 jam.
+# Naikkan bantime ke 86400 (1 hari) kalau mau lebih agresif.
 [sshd]
 enabled  = true
-maxretry = 3        # ban setelah 3 gagal (default 5)
-bantime  = 3600     # ban 1 jam (default 10 menit) — naikkan ke 86400 = 1 hari kalau mau
-findtime = 600      # window 10 menit untuk hitung retry
+maxretry = 3
+bantime  = 3600
+findtime = 600
 ```
 
 > Kombinasi `MaxAuthTries 3` di sshd_config + `maxretry = 3` di fail2ban
@@ -860,6 +869,374 @@ harus dipahami:
 
 ---
 
+---
+
+## 12.5 Memisahkan Environment Staging & Production
+
+> Panduan ini menjelaskan beberapa strategi agar environment staging dan
+> production **terpisah** — baik container, network, maupun tag/label. Tujuan
+> akhirnya: saat jalankan `docker container ls`, hanya container staging yang
+> aktif (atau mudah difilter) saat Anda hanya ingin deploy staging dulu.
+
+### A. Mengapa perlu pemisahan?
+
+- **Kebocoran data** — staging dan production sering pakai data berbeda (DB
+  berbeda, secret berbeda, upload berbeda). Bila bercampur, test di staging
+  bisa menulis ke DB production.
+- **Isolasi resource** — restart/rebuild staging tidak boleh ganggu
+  production.
+- **Kemudahan operasional** — saat login ke VPS, `docker compose ps` /
+  `docker container ls` harus jelas menunjukkan environment mana yang aktif.
+- **Rollback aman** — kalau staging rusak, production tetap jalan.
+
+### B. Strategi 1: Compose project name berbeda (REKOMENDASI, paling simpel)
+
+Docker Compose otomatis men-generate nama container dari **project name**.
+Default-nya = nama folder, tapi bisa di-override dengan flag `-p`.
+
+**Struktur file:**
+```
+deployment/
+├── docker-compose.yml            # file utama (dipakai staging & production)
+├── .env.staging                  # env staging
+├── .env.staging.example
+├── .env.production               # env production
+└── .env.production.example
+```
+
+**Deploy staging saja:**
+```bash
+# -p staging = nama project jadi "staging"
+# Container otomatis: staging-caddy-1, staging-store-1, staging-admin-1
+docker compose -p staging --env-file .env.staging up -d --build
+
+# Cek container staging
+docker compose -p staging --env-file .env.staging ps
+docker container ls --filter "name=staging-"
+```
+
+**Deploy production (nanti, terpisah):**
+```bash
+docker compose -p production --env-file .env.production up -d --build
+
+docker compose -p production --env-file .env.production ps
+docker container ls --filter "name=production-"
+```
+
+> **Hasil:** container staging mendapat prefix `staging-`, container
+> production mendapat prefix `production-`. Saat `docker container ls` tanpa
+> filter, kedua-duanya muncul — tapi Anda bisa **filter berdasarkan prefix
+> nama** untuk lihat hanya satu environment.
+
+**Lihat hanya staging:**
+```bash
+docker container ls --filter "name=staging-"
+# atau pakai compose ps
+docker compose -p staging --env-file .env.staging ps
+```
+
+**Stop hanya staging (production tetap jalan):**
+```bash
+docker compose -p staging --env-file .env.staging down
+```
+
+> **Catatan penting tentang volume:** Nama volume juga dapat prefix project.
+> Volume `uploads` di staging → `staging_uploads`, di production →
+> `production_uploads`. **Ini otomatis mengisolasi file upload staging vs
+> production** — file staging tidak bercampur dengan file production. Same
+> untuk volume Caddy state (`caddy_data`, `caddy_config`) — sertifikat
+> staging dan production terpisah.
+
+### C. Strategi 2: Label + filter (untuk tampilan `docker container ls` bersih)
+
+Kalau mau `docker container ls` bisa difilter berdasarkan environment dengan
+**label eksplisit** (bukan hanya prefix nama):
+
+Tambah label di `docker-compose.yml`:
+```yaml
+services:
+  caddy:
+    # ... config lainnya
+    labels:
+      - "app=marketplace"
+      - "env=staging"        # ← ubah ke "production" untuk env prod
+
+  store:
+    labels:
+      - "app=marketplace"
+      - "env=staging"
+
+  admin:
+    labels:
+      - "app=marketplace"
+      - "env=staging"
+```
+
+> Kalau pakai satu file compose untuk dua env, pakai variable substitution:
+> ```yaml
+> labels:
+>   - "env=${DEPLOY_ENV:-staging}"
+> ```
+> Lalu: `DEPLOY_ENV=staging docker compose ...` atau define di masing-masing
+> `.env.staging` / `.env.production`.
+
+**Filter berdasarkan label:**
+```bash
+# Lihat hanya container staging
+docker container ls --filter "label=env=staging"
+
+# Lihat hanya production
+docker container ls --filter "label=env=production"
+
+# Alias untuk mempermudah (tambahkan ke ~/.bashrc):
+alias dstaging='docker container ls --filter "label=env=staging"'
+alias dprod='docker container ls --filter "label=env=production"'
+```
+
+**Hapus semua container staging (production aman):**
+```bash
+docker container rm $(docker container ls -q --filter "label=env=staging")
+# atau lebih aman via compose project name
+```
+
+> Strategi 1 (project name) + Strategi 2 (label) **bisa digabung** untuk
+> hasil terbaik: prefix nama untuk isolasi volume + label untuk filter cepat.
+
+### D. Strategi 3: File compose terpisah (paling eksplisit)
+
+Kalau dua env punya perbedaan signifikan (domain, port, config Caddy, secret),
+buat dua file compose:
+
+```
+deployment/
+├── docker-compose.staging.yml
+├── docker-compose.production.yml
+├── .env.staging
+└── .env.production
+```
+
+**Deploy staging:**
+```bash
+docker compose -f docker-compose.staging.yml --env-file .env.staging up -d --build
+docker compose -f docker-compose.staging.yml --env-file .env.staging ps
+```
+
+**Deploy production:**
+```bash
+docker compose -f docker-compose.production.yml --env-file .env.production up -d --build
+```
+
+> Plus: gunakan flag `-p` juga untuk eksplisit (walau default sudah pakai
+> nama file):
+> ```bash
+> docker compose -p staging -f docker-compose.staging.yml --env-file .env.staging up -d
+> docker compose -p production -f docker-compose.production.yml --env-file .env.production up -d
+> ```
+
+Keuntungan file terpisah:
+- Bisa beda domain, port mapping, volume, bahkan image tag tanpa konflik.
+- Diff antar env jelas (git diff antar dua file).
+- Tidak ada risiko salah baca `.env` karena file compose env-spesifik
+  mereferensi `.env.staging` / `.env.production`.
+
+### E. Strategi 4: Docker Context / host terpisah (isolasi penuh)
+
+Untuk isolasi **sebenarnya** (satu `docker container ls` hanya tampil satu
+env tanpa filter), pakai Docker Context = daemon/host berbeda:
+
+**Skenario A — dua VPS terpisah (staging & production beda mesin):**
+```bash
+# Di komputer lokal
+docker context create staging --docker "host=ssh://ops@STAGING_VPS_IP"
+docker context create production --docker "host=ssh://ops@PRODUCTION_VPS_IP"
+
+# Switch ke staging
+docker context use staging
+docker container ls           # ← hanya tampil container di VPS staging
+docker compose up -d --build  # deploy ke staging
+
+# Switch ke production
+docker context use production
+docker container ls           # ← hanya tampil container di VPS production
+```
+
+**Skenario B — satu VPS, dua Docker daemon (advanced, jarang dipakai):**
+Jalankan dua `dockerd` instance di port socket berbeda, lalu buat context
+per daemon. Overhead tinggi, jarang dibutuhkan — strategi 1–3 biasanya cukup.
+
+### F. Rekomendasi untuk kasus "deploy staging dulu"
+
+| Prioritas | Strategi | Alasan |
+|-----------|----------|--------|
+| **Paling simpel** | 1 (project name `-p staging`) | Tanpa edit file, langsung jalan. Volume + container otomatis terpisah via prefix. |
+| **Filter bersih** | 1 + 2 (project name + label) | `docker container ls --filter "label=env=staging"` jelas dan eksplisit. |
+| **Env sangat beda** | 3 (file compose terpisah) | Saat staging & production punya domain/port/config beda total. |
+| **Isolasi penuh** | 4 (VPS terpisah) | Saat staging & production di mesin berbeda (best practice production). |
+
+> **Untuk sekarang** (deploy staging saja dulu di satu VPS): strategi 1
+> cukup. Jalankan:
+> ```bash
+> docker compose -p staging --env-file .env.staging up -d --build
+> ```
+> Container yang muncul: `staging-caddy-1`, `staging-store-1`,
+> `staging-admin-1`. Production belum ada — aman dari `docker container ls`.
+
+### G. Hal yang perlu berbeda antar staging & production
+
+Saat kedua env berjalan, pastikan **semua** ini berbeda (tidak share):
+
+| Item | Staging | Production | Cara isolasi |
+|------|---------|------------|--------------|
+| Database | DB `storefront_staging` | DB `storefront_production` | Buat dua database di Postgres, set di `.env.*` |
+| DB user (opsional) | `marketplace_staging` | `marketplace_production` | Buat dua user di Postgres |
+| `DATABASE_URL` | beda DB name/user | beda DB name/user | `.env.staging` vs `.env.production` |
+| `BETTER_AUTH_SECRET` | secret A | secret B (beda) | Generate terpisah: `openssl rand -base64 32` |
+| Google OAuth redirect | `dev-store.adfsport.cloud` | `store.adfsport.cloud` | Daftar dua client ID di Google Console |
+| Midtrans | Sandbox key (`MIDTRANS_IS_PRODUCTION=false`) | Production key (`true`) | `.env.*` |
+| Domain (Caddy) | `dev-store`, `dev-admin` | `store`, `admin` | Dua Caddyfile / dua blok |
+| Upload volume | `staging_uploads` | `production_uploads` | Otomatis via `-p` |
+| Caddy state | `staging_caddy_data` | `production_caddy_data` | Otomatis via `-p` (sertifikat terpisah) |
+| SMTP | Bisa pakai Gmail App Password sama | Pertimbangkan provider khusus | `.env.*` |
+
+> **PENTING:** dua env di **satu VPS yang sama** membagi Postgres bare-metal.
+> Wajib buat dua database terpisah (`storefront_staging` +
+> `storefront_production`) + dua user (atau satu user dengan akses ke dua
+> DB) di Postgres. Jangan pakai satu DB yang sama — data staging akan
+> menimpa data production.
+
+### H. Setup Postgres untuk dua database
+
+Jalankan sekali di VPS:
+```bash
+sudo -u postgres psql
+```
+
+```sql
+-- Staging
+CREATE USER marketplace_staging WITH PASSWORD 'password-kuat-staging';
+CREATE DATABASE storefront_staging OWNER marketplace_staging;
+
+-- Production
+CREATE USER marketplace_production WITH PASSWORD 'password-kuat-production';
+CREATE DATABASE storefront_production OWNER marketplace_production;
+\q
+```
+
+Update `pg_hba.conf` (sudah ada baris untuk subnet Docker — berlaku untuk
+kedua DB):
+```
+host    storefront_staging     marketplace_staging     172.16.0.0/12    scram-sha-256
+host    storefront_production  marketplace_production  172.16.0.0/12    scram-sha-256
+```
+
+Restart Postgres:
+```bash
+sudo systemctl restart postgresql
+```
+
+Lalu di `.env.staging`:
+```
+PGDB=storefront_staging
+PGUSER=marketplace_staging
+PGPASS=password-kuat-staging
+DATABASE_URL=postgresql://marketplace_staging:password-kuat-staging@host.docker.internal:5432/storefront_staging
+```
+
+Di `.env.production`:
+```
+PGDB=storefront_production
+PGUSER=marketplace_production
+PGPASS=password-kuat-production
+DATABASE_URL=postgresql://marketplace_production:password-kuat-production@host.docker.internal:5432/storefront_production
+```
+
+### I. Workflow deploy staging dulu, production nanti
+
+**1. Deploy staging (sekarang):**
+```bash
+cd ~/marketplace
+cp deployment/.env.staging.example .env.staging
+nano .env.staging                  # isi secret staging
+
+docker compose -p staging --env-file .env.staging up -d --build
+
+# Migration + seed (staging)
+docker compose -p staging --env-file .env.staging --profile tools run --rm migrate
+
+# Cek
+docker container ls --filter "name=staging-"
+```
+
+**2. Verifikasi staging jalan:**
+```bash
+docker compose -p staging --env-file .env.staging ps
+# Semua Up → lanjut test di browser
+```
+
+**3. Nanti, deploy production (terpisah, setelah staging verified):**
+```bash
+cp deployment/.env.production.example .env.production
+nano .env.production               # isi secret production
+
+docker compose -p production --env-file .env.production up -d --build
+
+# Migration production (HATI-HATI: jangan run seed di production!)
+docker compose -p production --env-file .env.production --profile tools run --rm migrate npx drizzle-kit migrate
+
+# Cek
+docker container ls --filter "name=production-"
+```
+
+**4. Sehari-hari, kelola masing-masing env:**
+```bash
+# Staging
+docker compose -p staging --env-file .env.staging logs -f
+docker compose -p staging --env-file .env.staging down
+docker compose -p staging --env-file .env.staging up -d --build
+
+# Production
+docker compose -p production --env-file .env.production logs -f
+docker compose -p production --env-file .env.production down
+docker compose -p production --env-file .env.production up -d --build
+```
+
+### J. Ringkasan command cheat-sheet (multi-env)
+
+```bash
+# === STAGING ===
+docker compose -p staging --env-file .env.staging up -d --build
+docker compose -p staging --env-file .env.staging ps
+docker compose -p staging --env-file .env.staging logs -f
+docker compose -p staging --env-file .env.staging --profile tools run --rm migrate
+docker compose -p staging --env-file .env.staging down
+
+# === PRODUCTION ===
+docker compose -p production --env-file .env.production up -d --build
+docker compose -p production --env-file .env.production ps
+docker compose -p production --env-file .env.production logs -f
+docker compose -p production --env-file .env.production --profile tools run --rm migrate npx drizzle-kit migrate
+docker compose -p production --env-file .env.production down
+
+# === FILTER CONTAINER ===
+docker container ls --filter "name=staging-"
+docker container ls --filter "name=production-"
+docker container ls --filter "label=env=staging"
+docker container ls --filter "label=env=production"
+
+# === Lihat SEMUA container (staging + production, keduanya muncul) ===
+docker container ls
+# Ini wajar di satu VPS dengan dua env — pakai filter di atas untuk pisah.
+```
+
+> **Kesimpulan:** dengan `-p staging`, container staging otomatis terpisah
+> dari production (prefix nama + volume + network terpisah). Untuk benar-benar
+> hanya staging yang muncul di `docker container ls` tanpa filter, gunakan
+> **Docker Context** dengan VPS terpisah (strategi 4). Di satu daemon/VPS,
+> filter (`--filter "name=staging-"` atau `--filter "label=env=staging"`)
+> adalah cara standar untuk melihat hanya satu environment.
+
+---
+
 ## 13. Referensi Cepat
 
 ### File yang diedit untuk deployment (di repo)
@@ -875,18 +1252,23 @@ harus dipahami:
 
 ```
 deployment/
-├── docker-compose.yml       # orkestrasi semua service
-├── .env.staging.example     # template env (di-commit)
-├── .env.staging             # env asli (anda isi, JANGAN commit)
-├── .gitignore               # ignore .env.staging + caddy state
-├── README.md                # file ini
-├── store/Dockerfile         # image storefront
-├── admin/Dockerfile         # image admin
-├── migrate/Dockerfile       # image one-shot migration + seed
-└── caddy/Caddyfile          # reverse proxy + auto-HTTPS
+├── docker-compose.yml            # orkestrasi semua service (dipakai staging & production)
+├── .env.staging.example          # template env staging (di-commit)
+├── .env.staging                  # env staging asli (anda isi, JANGAN commit)
+├── .env.production.example       # template env production (di-commit)
+├── .env.production               # env production asli (anda isi, JANGAN commit)
+├── .gitignore                    # ignore .env.staging + .env.production + caddy state
+├── README.md                     # file ini
+├── store/Dockerfile              # image storefront
+├── admin/Dockerfile              # image admin
+├── migrate/Dockerfile            # image one-shot migration + seed
+└── caddy/Caddyfile               # reverse proxy + auto-HTTPS
 ```
 
 ### Command cheat-sheet
+
+> Panduan ini pakai konvensi `-p staging` (lihat bab 12.5 untuk strategi
+> multi-env lengkap). Ganti `staging` → `production` untuk env production.
 
 ```bash
 # SSH ke VPS (sebagai operational user, bukan root)
@@ -894,36 +1276,48 @@ ssh ops@IP_VPS
 # atau kalau SSH pakai port custom:
 ssh -p 22022 ops@IP_VPS
 
-# Deploy / re-deploy
-docker compose --env-file .env.staging up -d --build
+# Deploy / re-deploy (staging)
+docker compose -p staging --env-file .env.staging up -d --build
 
-# Migration + seed (one-shot)
-docker compose --env-file .env.staging --profile tools run --rm migrate
+# Migration + seed (one-shot, staging)
+docker compose -p staging --env-file .env.staging --profile tools run --rm migrate
 
 # Migration saja (tanpa seed)
-docker compose --env-file .env.staging --profile tools run --rm migrate npx drizzle-kit migrate
+docker compose -p staging --env-file .env.staging --profile tools run --rm migrate npx drizzle-kit migrate
 
 # Seed saja
-docker compose --env-file .env.staging --profile tools run --rm migrate npx tsx src/seed.ts
+docker compose -p staging --env-file .env.staging --profile tools run --rm migrate npx tsx src/seed.ts
 
 # Lihat log
-docker compose --env-file .env.staging logs -f
-docker compose --env-file .env.staging logs -f caddy
-docker compose --env-file .env.staging logs -f store
-docker compose --env-file .env.staging logs -f admin
+docker compose -p staging --env-file .env.staging logs -f
+docker compose -p staging --env-file .env.staging logs -f caddy
+docker compose -p staging --env-file .env.staging logs -f store
+docker compose -p staging --env-file .env.staging logs -f admin
 
 # Status container
-docker compose --env-file .env.staging ps
+docker compose -p staging --env-file .env.staging ps
+# atau filter global
+docker container ls --filter "name=staging-"
 
 # Stop
-docker compose --env-file .env.staging down
+docker compose -p staging --env-file .env.staging down
 
 # Stop + hapus volume (HATI-HATI)
-docker compose --env-file .env.staging down -v
+docker compose -p staging --env-file .env.staging down -v
 
 # Restart satu service
-docker compose --env-file .env.staging restart caddy
+docker compose -p staging --env-file .env.staging restart caddy
+
+# === PRODUCTION (ganti prefix + env file) ===
+docker compose -p production --env-file .env.production up -d --build
+docker compose -p production --env-file .env.production --profile tools run --rm migrate npx drizzle-kit migrate
+docker compose -p production --env-file .env.production logs -f
+docker compose -p production --env-file .env.production ps
+docker compose -p production --env-file .env.production down
 ```
+
+> Lihat bab 12.5 untuk strategi multi-environment lengkap (project name,
+> label, file compose terpisah, Docker Context).
 
 ### Port yang dipakai
 

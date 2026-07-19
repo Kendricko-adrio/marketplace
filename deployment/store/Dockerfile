@@ -60,9 +60,6 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-# Run as the built-in non-root user for safety.
-USER node
-
 # standalone server.js lives at apps/store/server.js inside the standalone dir.
 # We copy it to /app/apps/store/server.js and run from there so relative
 # paths inside server.js (e.g. ./apps/store/.next/...) resolve correctly.
@@ -78,6 +75,11 @@ RUN mkdir -p ./apps/store/.next/cache && chown node:node ./apps/store/.next/cach
 # Uploads directory — mounted as a named volume in compose.
 # Pre-create so the mount target exists with correct ownership.
 RUN mkdir -p ./uploads && chown node:node ./uploads
+
+# Run as the built-in non-root user for safety. Must be AFTER the RUN mkdir
+# steps above — WORKDIR /app is root-owned, so node cannot create top-level
+# dirs like /app/uploads. The chown above already gives them to node.
+USER node
 
 EXPOSE 3000
 

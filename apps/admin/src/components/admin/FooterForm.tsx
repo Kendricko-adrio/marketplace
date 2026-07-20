@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { Loader2, AlertCircle, Plus, Trash2, GripVertical } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Loader2, AlertCircle, Plus, Trash2, GripVertical, Eye } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,13 +10,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import {
-  Footer,
   SocialIcon,
   SOCIAL_PLATFORMS,
   SOCIAL_PLATFORM_LABELS,
   type SocialPlatform,
   type FooterConfigData,
 } from "@marketplace/ui";
+import {
+  FooterLinkPicker,
+  type LinkableDestinations,
+} from "@/components/admin/footer/FooterLinkPicker";
+import { FooterPreviewDialog } from "@/components/admin/footer/FooterPreviewDialog";
 
 // ---- Constants mirroring server-side zod limits ----
 const MAX_COLUMNS = 3;
@@ -84,6 +88,27 @@ export function FooterForm({ initialData }: FooterFormProps) {
   });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [destinations, setDestinations] = useState<LinkableDestinations | null>(
+    null
+  );
+
+  // Fetch linkable destinations once on mount. Shared across all link rows.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/admin/linkable-destinations")
+      .then((r) => r.json())
+      .then((json) => {
+        if (cancelled || !json?.success) return;
+        setDestinations(json.data as LinkableDestinations);
+      })
+      .catch((err) => {
+        console.error("Error fetching linkable destinations:", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // --- Field updaters ---
   function updateBrandName(value: string) {
@@ -238,10 +263,26 @@ export function FooterForm({ initialData }: FooterFormProps) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* ===== LEFT: EDITOR ===== */}
-        <div className="space-y-6">
-          {/* Brand section */}
+      {/* Top action bar: Preview button */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <p className="text-xs text-muted-foreground">
+          Atur konten footer, lalu klik &quot;Preview&quot; untuk melihat tampilan
+          pada lebar penuh.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setPreviewOpen(true)}
+          className="gap-2"
+        >
+          <Eye className="h-4 w-4" />
+          Preview
+        </Button>
+      </div>
+
+      {/* ===== EDITOR (full width) ===== */}
+      <div className="space-y-6">
+        {/* Brand section */}
           <div className="space-y-4">
             <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
               Brand
@@ -339,12 +380,15 @@ export function FooterForm({ initialData }: FooterFormProps) {
                             placeholder="Label link"
                             className="flex-1"
                           />
-                          <Input
+                          <FooterLinkPicker
                             value={link.href}
-                            onChange={(e) =>
-                              updateLink(colIdx, linkIdx, "href", e.target.value)
-                            }
-                            placeholder="/help atau https://..."
+                            destinations={destinations}
+                            onChange={(href, autoLabel) => {
+                              updateLink(colIdx, linkIdx, "href", href);
+                              if (autoLabel && !link.label.trim()) {
+                                updateLink(colIdx, linkIdx, "label", autoLabel);
+                              }
+                            }}
                             className="flex-1"
                           />
                           <Button
@@ -436,26 +480,6 @@ export function FooterForm({ initialData }: FooterFormProps) {
               required
             />
           </div>
-        </div>
-
-        {/* ===== RIGHT: LIVE PREVIEW ===== */}
-        <div className="lg:sticky lg:top-6 self-start space-y-3">
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
-            Preview
-          </h3>
-          <div className="rounded-lg border bg-background overflow-hidden">
-            <div className="bg-muted/40 px-4 py-2 border-b text-xs text-muted-foreground">
-              Tampilan storefront aktual
-            </div>
-            <div className="bg-background">
-              <Footer config={previewConfig} />
-            </div>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Preview ini menampilkan persis bagaimana footer akan tampil di
-            storefront. Klik &quot;Simpan&quot; untuk menerapkan perubahan.
-          </p>
-        </div>
       </div>
 
       <div className="flex gap-2 justify-end border-t pt-4">
@@ -470,6 +494,12 @@ export function FooterForm({ initialData }: FooterFormProps) {
           )}
         </Button>
       </div>
+
+      <FooterPreviewDialog
+        config={previewConfig}
+        open={previewOpen}
+        onOpenChange={setPreviewOpen}
+      />
     </form>
   );
 }

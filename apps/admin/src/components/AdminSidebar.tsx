@@ -1,7 +1,7 @@
 "use client";
 import React, { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { useRouter, usePathname } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   Package,
   ShoppingBag,
@@ -45,7 +45,6 @@ function useIsMounted(): boolean {
 
 export default function AdminSidebar() {
   const pathname = usePathname();
-  const router = useRouter();
   const { user, hasPermission, permissionsLoading } = useAuth();
   const [loggingOut, setLoggingOut] = useState(false);
   const mounted = useIsMounted();
@@ -78,12 +77,30 @@ export default function AdminSidebar() {
 
   const handleLogout = async () => {
     setLoggingOut(true);
+    // Clear the must-reset edge cookie first so the login page (which now
+    // reads the session server-side) doesn't observe a stale reset flag if
+    // the user re-authenticates as someone else within the 10-minute window.
+    document.cookie = "admin.must_reset=; path=/; max-age=0";
     try {
-      await signOut();
-      // Clear any must-reset edge cookie so it doesn't leak across sessions
-      document.cookie = "admin.must_reset=; path=/; max-age=0";
-      router.push("/login");
-      router.refresh();
+      // Navigate inside fetchOptions.onSuccess (idiomatic Better Auth pattern)
+      // rather than after `await signOut()`. The reactive `useSession()` state
+      // is invalidated asynchronously (~10ms+) after signOut resolves, so
+      // navigating before that invalidation can re-mount the login page and
+      // let it observe stale session state — causing a redirect loop with the
+      // server-side layout auth checks. A hard navigation (window.location)
+      // also bypasses the Next.js Router Cache, which in production can hold a
+      // cached "/admin -> /login" RSC redirect and make logout look broken.
+      await signOut({
+        fetchOptions: {
+          onSuccess: () => {
+            window.location.href = "/login";
+          },
+          onError: (ctx: { response: Response }) => {
+            console.error("Logout failed:", ctx.response.status);
+            setLoggingOut(false);
+          },
+        },
+      });
     } catch (err) {
       console.error("Logout error:", err);
       setLoggingOut(false);

@@ -104,6 +104,10 @@ services:
       # Better Auth (admin) — secret MUST be identical to store's so the
       # shared-HMAC verify-pickup handshake works between admin and store.
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      # Base URL for the admin app. Required so Better Auth constructs
+      # correct redirect/callback URLs and applies the __Secure- cookie
+      # prefix in production. Must match the public URL Caddy serves.
+      BETTER_AUTH_URL: "https://dev-admin.adfsport.cloud"
       # SMTP (admin sends password-reset emails)
       SMTP_USER: ${SMTP_USER}
       SMTP_PASS: ${SMTP_PASS}

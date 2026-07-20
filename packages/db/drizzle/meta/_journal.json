@@ -15,6 +15,13 @@
       "when": 1784463811725,
       "tag": "0001_sweet_raza",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1784471238379,
+      "tag": "0002_loose_red_shift",
+      "breakpoints": true
     }
   ]
 }

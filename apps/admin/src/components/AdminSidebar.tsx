@@ -13,6 +13,7 @@ import {
   LogOut,
   Loader2,
   ChevronDown,
+  PanelBottom,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -64,6 +65,7 @@ export default function AdminSidebar() {
     { href: "/admin/homepage", label: "Homepage", icon: LayoutTemplate, module: "homepage" },
     { href: "/admin/pages", label: "Halaman", icon: FileText, module: "pages" },
     { href: "/admin/users", label: "Pengguna", icon: Users, module: "users" },
+    { href: "/admin/footer", label: "Footer", icon: PanelBottom, hqOnly: true },
     { href: "/admin/roles", label: "Hak Akses", icon: Shield, hqOnly: true },
   ];
 

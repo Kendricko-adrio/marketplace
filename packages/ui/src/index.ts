@@ -32,6 +32,15 @@ export type {
 export { default as MarkdownRenderer } from "./components/markdown/MarkdownRenderer";
 export type { MarkdownRendererProps } from "./components/markdown/MarkdownRenderer";
 
+export { default as Footer } from "./components/footer/Footer";
+export type { FooterConfigData } from "./components/footer/Footer";
+export {
+  SocialIcon,
+  SOCIAL_PLATFORMS,
+  SOCIAL_PLATFORM_LABELS,
+} from "./components/footer/SocialIcons";
+export type { SocialPlatform } from "./components/footer/SocialIcons";
+
 export { default as HomepageSectionRenderer } from "./components/homepage/HomepageSectionRenderer";
 export { default as BannerSection } from "./components/homepage/BannerSection";
 export { default as CarouselProductSection } from "./components/homepage/CarouselProductSection";

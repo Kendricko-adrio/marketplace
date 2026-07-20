@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import "./globals.css";
 import LayoutWrapper from "@/components/LayoutWrapper";
+import FooterWrapper from "@/components/FooterWrapper";
 import { AuthProvider } from "@/providers/auth-provider";
 import { CartProvider } from "@/providers/cart-provider";
 
@@ -23,7 +24,9 @@ export default function RootLayout({
       <body className={inter.className}>
         <AuthProvider>
           <CartProvider>
-            <LayoutWrapper>{children}</LayoutWrapper>
+            <LayoutWrapper footerSlot={<FooterWrapper />}>
+              {children}
+            </LayoutWrapper>
           </CartProvider>
         </AuthProvider>
         <Toaster position="top-center" richColors closeButton />

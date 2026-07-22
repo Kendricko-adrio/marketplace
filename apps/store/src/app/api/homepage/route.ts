@@ -6,9 +6,177 @@ import {
   products,
   productVariants,
   productImages,
+  productToCategory,
+  categories,
   branches,
 } from "@/db";
-import { eq, and, asc, inArray } from "drizzle-orm";
+import { eq, and, asc, inArray, desc, ilike, or, gte, lte } from "drizzle-orm";
+import type { ProductFilterConfig, CarouselContent } from "@/db";
+
+type ProductRow = (typeof products)["$inferSelect"];
+
+/**
+ * Resolve carousel products in "filter" mode. Mirrors the filter logic in
+ * apps/store/src/app/api/products/route.ts but returns up to `limit` items
+ * already shaped as HomepageProduct.
+ */
+async function resolveFilterModeProducts(
+  filter: ProductFilterConfig,
+  limit: number
+): Promise<{
+  id: string;
+  name: string;
+  slug: string;
+  price: string;
+  basePrice: string;
+  rating: string | null;
+  sold: number;
+  isFlashSale: boolean;
+  flashSalePrice: string | null;
+  image: string | null;
+}[]> {
+  const conditions = [];
+  conditions.push(eq(products.status, "aktif"));
+  if (filter.search) {
+    conditions.push(
+      or(
+        ilike(products.name, `%${filter.search}%`),
+        ilike(products.description, `%${filter.search}%`)
+      ) as unknown as ReturnType<typeof eq>
+    );
+  }
+  if (filter.flashSale) conditions.push(eq(products.isFlashSale, true));
+  if (filter.minPrice) conditions.push(gte(products.basePrice, filter.minPrice));
+  if (filter.maxPrice) conditions.push(lte(products.basePrice, filter.maxPrice));
+
+  const order = filter.sortOrder ?? "newest";
+  let orderBy;
+  switch (order) {
+    case "priceAsc":
+      orderBy = asc(products.basePrice);
+      break;
+    case "priceDesc":
+      orderBy = desc(products.basePrice);
+      break;
+    case "bestseller":
+      orderBy = desc(products.sold);
+      break;
+    case "rating":
+      orderBy = desc(products.rating);
+      break;
+    case "newest":
+    default:
+      orderBy = desc(products.createdAt);
+      break;
+  }
+
+  const safeLimit = Math.min(20, Math.max(1, limit || 10));
+
+  // If category filter is set, join via productToCategory.
+  if (filter.category) {
+    const category = await db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(eq(categories.slug, filter.category))
+      .limit(1);
+
+    if (category.length === 0) return [];
+
+    const rows = await db
+      .select({
+        id: products.id,
+        name: products.name,
+        slug: products.slug,
+        basePrice: products.basePrice,
+        rating: products.rating,
+        sold: products.sold,
+        isFlashSale: products.isFlashSale,
+        flashSalePrice: products.flashSalePrice,
+        createdAt: products.createdAt,
+      })
+      .from(products)
+      .innerJoin(productToCategory, eq(products.id, productToCategory.productId))
+      .where(and(eq(productToCategory.categoryId, category[0].id), ...conditions))
+      .orderBy(orderBy)
+      .limit(safeLimit);
+
+    return hydrateProducts(rows);
+  }
+
+  const rows = await db
+    .select({
+      id: products.id,
+      name: products.name,
+      slug: products.slug,
+      basePrice: products.basePrice,
+      rating: products.rating,
+      sold: products.sold,
+      isFlashSale: products.isFlashSale,
+      flashSalePrice: products.flashSalePrice,
+      createdAt: products.createdAt,
+    })
+    .from(products)
+    .where(and(...conditions))
+    .orderBy(orderBy)
+    .limit(safeLimit);
+
+  return hydrateProducts(rows);
+}
+
+/**
+ * Attach default-variant image + price to each product row, mirroring the
+ * shape used by the manual carousel hydration below.
+ */
+async function hydrateProducts(
+  rows: Array<{
+    id: string;
+    name: string;
+    slug: string;
+    basePrice: string;
+    rating: string | null;
+    sold: number;
+    isFlashSale: boolean;
+    flashSalePrice: string | null;
+    createdAt: Date;
+  }>
+) {
+  if (rows.length === 0) return [];
+  const ids = rows.map((r) => r.id);
+  const defaultVariants = await db
+    .select()
+    .from(productVariants)
+    .where(and(inArray(productVariants.productId, ids), eq(productVariants.isDefault, true)));
+  const variantIds = defaultVariants.map((v) => v.id);
+  const images =
+    variantIds.length > 0
+      ? await db
+          .select()
+          .from(productImages)
+          .where(inArray(productImages.variantId, variantIds))
+          .orderBy(asc(productImages.displayOrder))
+      : [];
+  const imageMap = new Map<string, string>();
+  for (const img of images) {
+    if (!imageMap.has(img.variantId)) imageMap.set(img.variantId, img.url);
+  }
+  const variantMap = new Map(defaultVariants.map((v) => [v.productId, v]));
+
+  return rows.map((r) => {
+    const variant = variantMap.get(r.id);
+    return {
+      id: r.id,
+      name: r.name,
+      slug: r.slug,
+      price: variant?.price ?? r.basePrice,
+      basePrice: r.basePrice,
+      rating: r.rating,
+      sold: r.sold,
+      isFlashSale: r.isFlashSale,
+      flashSalePrice: r.flashSalePrice,
+      image: variant ? imageMap.get(variant.id) ?? null : null,
+    };
+  });
+}
 
 export async function GET() {
   try {
@@ -22,24 +190,41 @@ export async function GET() {
       return NextResponse.json({ success: true, data: [] });
     }
 
-    const carouselSectionIds = sections
-      .filter((s) => s.type === "carousel_product")
-      .map((s) => s.id);
-
     const storeBannerSectionIds = sections
       .filter((s) => s.type === "store_banner")
       .map((s) => s.id);
 
+    // Manual-mode carousels: collect junction rows.
     const productSectionsMap = new Map<
       string,
       { productId: string; displayOrder: number }[]
     >();
 
-    if (carouselSectionIds.length > 0) {
+    const manualCarouselIds: string[] = [];
+    const filterCarousels: { id: string; content: CarouselContent }[] = [];
+
+    for (const s of sections) {
+      if (s.type !== "carousel_product") continue;
+      const c = (s.content ?? {}) as Partial<CarouselContent>;
+      if (c.mode === "filter") {
+        filterCarousels.push({
+          id: s.id,
+          content: {
+            mode: "filter",
+            filter: c.filter ?? {},
+            limit: c.limit ?? 10,
+          },
+        });
+      } else {
+        manualCarouselIds.push(s.id);
+      }
+    }
+
+    if (manualCarouselIds.length > 0) {
       const junctionRows = await db
         .select()
         .from(homepageSectionProducts)
-        .where(inArray(homepageSectionProducts.sectionId, carouselSectionIds))
+        .where(inArray(homepageSectionProducts.sectionId, manualCarouselIds))
         .orderBy(asc(homepageSectionProducts.displayOrder));
 
       for (const row of junctionRows) {
@@ -57,7 +242,7 @@ export async function GET() {
       )
     );
 
-    const productMap = new Map<string, (typeof products)["$inferSelect"]>();
+    const productMap = new Map<string, ProductRow>();
     if (allProductIds.length > 0) {
       const productRows = await db
         .select()
@@ -104,6 +289,15 @@ export async function GET() {
       }
     }
 
+    // Resolve filter-mode carousels in parallel.
+    const filterResults = await Promise.all(
+      filterCarousels.map(async (c) => ({
+        sectionId: c.id,
+        items: await resolveFilterModeProducts(c.content.filter ?? {}, c.content.limit ?? 10),
+      }))
+    );
+    const filterResultsMap = new Map(filterResults.map((r) => [r.sectionId, r.items]));
+
     const branchRows = storeBannerSectionIds.length
       ? await db
           .select()
@@ -114,6 +308,25 @@ export async function GET() {
 
     const data = sections.map((section) => {
       if (section.type === "carousel_product") {
+        const c = (section.content ?? {}) as Partial<CarouselContent>;
+        if (c.mode === "filter") {
+          const items = filterResultsMap.get(section.id) ?? [];
+          return {
+            ...section,
+            products: items.map((p) => ({
+              id: p.id,
+              name: p.name,
+              slug: p.slug,
+              price: p.price,
+              basePrice: p.basePrice,
+              image: p.image,
+              rating: p.rating,
+              sold: p.sold,
+              isFlashSale: p.isFlashSale,
+              flashSalePrice: p.flashSalePrice,
+            })),
+          };
+        }
         const linked = productSectionsMap.get(section.id) ?? [];
         const sectionProducts = linked
           .map((link) => {

@@ -49,9 +49,14 @@ export { default as CarouselProductSection } from "./components/homepage/Carouse
 export { default as PromoCardsSection } from "./components/homepage/PromoCardsSection";
 export { default as AnnouncementBarSection } from "./components/homepage/AnnouncementBarSection";
 export { default as StoreBannerSection } from "./components/homepage/StoreBannerSection";
+export { buildProductFilterQuery } from "./components/homepage/PromoCardsSection";
 export type {
   HomepageSectionType,
   BannerContent,
+  BannerSlide,
+  CarouselContent,
+  CarouselSortOrder,
+  ProductFilterConfig,
   PromoCardItem,
   PromoCardsContent,
   AnnouncementBarContent,

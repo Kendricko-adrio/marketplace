@@ -17,18 +17,61 @@ export type HomepageSectionType =
   | "announcement_bar"
   | "store_banner";
 
-export interface BannerContent {
+/**
+ * Filter configuration shared by carousel "filter" mode and promo cards.
+ * Field names match the /products query string format consumed by the
+ * storefront API (see apps/store/src/app/api/products/route.ts).
+ */
+export interface ProductFilterConfig {
+  search?: string;
+  category?: string; // category slug
+  minPrice?: string;
+  maxPrice?: string;
+  flashSale?: boolean;
+  sortOrder?: "newest" | "priceAsc" | "priceDesc" | "bestseller" | "rating";
+}
+
+export type CarouselSortOrder =
+  | "newest"
+  | "priceAsc"
+  | "priceDesc"
+  | "bestseller"
+  | "rating";
+
+/**
+ * Banner hero content. Supports a carousel of 1-5 background images that
+ * auto-rotate. Title/subtitle/CTA are shared across all slides.
+ */
+export interface BannerSlide {
   imageUrl: string;
   altText?: string;
+}
+
+export interface BannerContent {
+  slides: BannerSlide[];
   ctaText?: string;
   ctaLink?: string;
+  autoRotateIntervalSec?: number; // default 5, min 2, max 30
+}
+
+/**
+ * Carousel product content. Supports two modes:
+ * - "manual": products are linked via the homepage_section_product junction
+ *   table (productIds passed through the API payload).
+ * - "filter": products are resolved dynamically at render time based on the
+ *   stored filter config and limit. Junction table is unused in this mode.
+ */
+export interface CarouselContent {
+  mode: "manual" | "filter";
+  filter?: ProductFilterConfig;
+  limit?: number; // 1-20, default 10
 }
 
 export interface PromoCardItem {
   id: string;
   imageUrl: string;
   title: string;
-  linkUrl?: string;
+  filter?: ProductFilterConfig; // undefined → non-clickable card
 }
 
 export interface PromoCardsContent {

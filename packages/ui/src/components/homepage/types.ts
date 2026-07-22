@@ -1,32 +1,16 @@
-export type HomepageSectionType =
-  | "banner"
-  | "carousel_product"
-  | "promo_cards"
-  | "announcement_bar"
-  | "store_banner";
-
-export interface BannerContent {
-  imageUrl: string;
-  altText?: string;
-  ctaText?: string;
-  ctaLink?: string;
-}
-
-export interface PromoCardItem {
-  id: string;
-  imageUrl: string;
-  title: string;
-  linkUrl?: string;
-}
-
-export interface PromoCardsContent {
-  cards: PromoCardItem[];
-}
-
-export interface AnnouncementBarContent {
-  message: string;
-  variant?: "info" | "warning" | "success";
-}
+// Re-export shared types from the schema owner (packages/db) to avoid drift.
+// The DB package is the single source of truth for content/type definitions.
+export type {
+  HomepageSectionType,
+  ProductFilterConfig,
+  CarouselSortOrder,
+  BannerSlide,
+  BannerContent,
+  CarouselContent,
+  PromoCardItem,
+  PromoCardsContent,
+  AnnouncementBarContent,
+} from "@marketplace/db/src/schema/homepage";
 
 export interface HomepageProduct {
   id: string;
@@ -56,7 +40,7 @@ export interface HomepageBranch {
 
 export interface HomepageSectionData {
   id: string;
-  type: HomepageSectionType;
+  type: import("@marketplace/db/src/schema/homepage").HomepageSectionType;
   title: string | null;
   subtitle: string | null;
   content: unknown;

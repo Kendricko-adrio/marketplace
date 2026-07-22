@@ -47,3 +47,6 @@ public/uploads/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# build output (tsc) dari packages
+dist/

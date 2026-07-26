@@ -4,10 +4,27 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { toast } from "sonner";
-import { Trash2, Plus, Minus, ArrowRight, ShoppingBag, MapPin } from "lucide-react";
+import {
+  Trash2,
+  Plus,
+  Minus,
+  ArrowRight,
+  ShoppingBag,
+  MapPin,
+  AlertCircle,
+  Loader2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useCart } from "@/providers/cart-provider";
 
 interface CartItem {
@@ -48,6 +65,12 @@ export default function CartPage() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState<string | null>(null);
   const [selectedItemIds, setSelectedItemIds] = useState<Set<string>>(new Set());
+  const [validating, setValidating] = useState(false);
+  const [inactiveDialogOpen, setInactiveDialogOpen] = useState(false);
+  const [inactiveBranchName, setInactiveBranchName] = useState<string | null>(
+    null
+  );
+  const [removedItemCount, setRemovedItemCount] = useState(0);
   const { refreshCart } = useCart();
 
   const fetchCart = async () => {
@@ -227,7 +250,11 @@ export default function CartPage() {
   };
 
   // ===== Proceed to checkout =====
-  const handleCheckout = () => {
+  // Before navigating, ask the server to confirm the selected items' branch is
+  // still active. If the branch was disabled (e.g. by an hq manager) while the
+  // items sat in the cart, the server removes all of that branch's items from
+  // the customer's cart and we show an error popup instead of proceeding.
+  const handleCheckout = async () => {
     if (selectedItems.length === 0) {
       toast.error("Pilih minimal satu barang untuk di-checkout.");
       return;
@@ -236,17 +263,81 @@ export default function CartPage() {
       toast.error("Tidak bisa checkout barang di branch yang berbeda.");
       return;
     }
-    // Store selected item IDs in sessionStorage so the checkout page can read them
+
+    setValidating(true);
     try {
-      sessionStorage.setItem(
-        "checkoutSelectedItemIds",
-        JSON.stringify(Array.from(selectedItemIds))
-      );
+      const res = await fetch("/api/cart/validate-checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          selectedItemIds: Array.from(selectedItemIds),
+        }),
+      });
+      const data = await res.json();
+
+      if (!data.success) {
+        if (data.code === "BRANCH_INACTIVE") {
+          // Branch no longer active — server already removed its items.
+          setInactiveBranchName(data.branchName ?? null);
+          setRemovedItemCount(data.removedItemCount ?? 0);
+          setInactiveDialogOpen(true);
+          // Sync local state with the cleaned cart.
+          setSelectedItemIds(new Set());
+          await fetchCart();
+          refreshCart();
+          return;
+        }
+        toast.error(data.error || "Tidak dapat melanjutkan checkout.");
+        return;
+      }
+
+      // Branch is active — store selection and proceed to checkout.
+      try {
+        sessionStorage.setItem(
+          "checkoutSelectedItemIds",
+          JSON.stringify(Array.from(selectedItemIds))
+        );
+      } catch {
+        // sessionStorage may be unavailable — fall back to query-less navigation
+      }
+      router.push("/checkout");
     } catch {
-      // sessionStorage may be unavailable — fall back to query-less navigation
+      toast.error("Gagal memvalidasi checkout. Silakan coba lagi.");
+    } finally {
+      setValidating(false);
     }
-    router.push("/checkout");
   };
+
+  // ===== Inactive-branch popup =====
+  const inactiveBranchDialog = (
+    <Dialog open={inactiveDialogOpen} onOpenChange={setInactiveDialogOpen}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive/10">
+              <AlertCircle className="h-5 w-5 text-destructive" />
+            </div>
+            <div className="flex-1">
+              <DialogTitle>Cabang tidak lagi tersedia</DialogTitle>
+              <DialogDescription className="mt-1.5">
+                Maaf, cabang{" "}
+                <span className="font-semibold text-foreground">
+                  {inactiveBranchName ?? "tersebut"}
+                </span>{" "}
+                sudah dinonaktifkan dan tidak dapat melayani pesanan.
+                {removedItemCount > 0
+                  ? ` ${removedItemCount} barang dari cabang ini telah dihapus otomatis dari keranjang Anda.`
+                  : ""}
+              </DialogDescription>
+            </div>
+          </div>
+        </DialogHeader>
+        <DialogFooter>
+          <Button onClick={() => setInactiveDialogOpen(false)}>Mengerti</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 
   if (loading) {
     return (
@@ -274,20 +365,24 @@ export default function CartPage() {
 
   if (!cart || cart.items.length === 0) {
     return (
-      <div className="container mx-auto px-4 py-16 text-center">
-        <ShoppingBag className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
-        <h1 className="text-2xl font-bold mb-2">Keranjang Kosong</h1>
-        <p className="text-muted-foreground mb-8">
-          Belum ada produk di keranjang belanja Anda.
-        </p>
-        <Link href="/products">
-          <Button>Mulai Belanja</Button>
-        </Link>
-      </div>
+      <>
+        <div className="container mx-auto px-4 py-16 text-center">
+          <ShoppingBag className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
+          <h1 className="text-2xl font-bold mb-2">Keranjang Kosong</h1>
+          <p className="text-muted-foreground mb-8">
+            Belum ada produk di keranjang belanja Anda.
+          </p>
+          <Link href="/products">
+            <Button>Mulai Belanja</Button>
+          </Link>
+        </div>
+        {inactiveBranchDialog}
+      </>
     );
   }
 
   return (
+    <>
     <div className="container mx-auto px-4 py-8">
       <h1 className="text-3xl font-bold mb-6">
         Keranjang Belanja ({cart.itemCount})
@@ -468,15 +563,29 @@ export default function CartPage() {
               <Button
                 className="w-full gap-2"
                 size="lg"
-                disabled={selectedItems.length === 0 || !selectedBranchId}
+                disabled={
+                  selectedItems.length === 0 ||
+                  !selectedBranchId ||
+                  validating
+                }
                 onClick={handleCheckout}
               >
-                Checkout <ArrowRight className="h-4 w-4" />
+                {validating ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" /> Memeriksa...
+                  </>
+                ) : (
+                  <>
+                    Checkout <ArrowRight className="h-4 w-4" />
+                  </>
+                )}
               </Button>
             </CardContent>
           </Card>
         </div>
       </div>
     </div>
+    {inactiveBranchDialog}
+    </>
   );
 }

@@ -48,3 +48,19 @@ export const reviewsRelations = relations(reviews, ({ one }) => ({
     references: [products.id],
   }),
 }));
+
+// System config — general-purpose key/value settings, edited via SQL (no admin UI
+// for now). Loaded once into an in-memory cache at app boot
+// (see apps/store/src/lib/config.ts); restart the app to pick up changes.
+//
+// Known keys (see seed.ts):
+//   reservation.ttlMinutes (number) — minutes stock is reserved while a customer
+//   is on the Midtrans Snap payment page before the order expires.
+export const systemConfig = pgTable("system_config", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  // Hint for how to parse `value`: "string" | "number" | "json"
+  type: text("type").notNull().default("string"),
+  description: text("description"),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+});

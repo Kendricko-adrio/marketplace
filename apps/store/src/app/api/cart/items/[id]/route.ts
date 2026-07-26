@@ -80,7 +80,9 @@ export async function PUT(
         )
         .limit(1);
 
-      const availableStock = stockRow[0]?.stock ?? 0;
+      // Available = stock - reservedStock (units held by pending_payment orders).
+      const availableStock =
+        (stockRow[0]?.stock ?? 0) - (stockRow[0]?.reservedStock ?? 0);
       if (quantity > availableStock) {
         return NextResponse.json(
           { success: false, error: "Insufficient stock at this branch" },

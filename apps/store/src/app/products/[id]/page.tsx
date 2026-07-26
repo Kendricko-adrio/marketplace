@@ -14,6 +14,8 @@ interface BranchStock {
   code: string;
   city: string;
   stock: number;
+  reservedStock: number;
+  available: number;
 }
 
 interface ProductVariant {
@@ -172,7 +174,7 @@ export default function ProductDetailPage() {
     (b) => b.branchId === selectedBranchId
   );
   const stockLabel = selectedBranchId
-    ? `Stok: ${selectedBranchStock?.stock ?? 0}`
+    ? `Stok: ${selectedBranchStock?.available ?? 0}`
     : availableBranches.length > 0
     ? "Pilih cabang"
     : "Stok habis di semua cabang";
@@ -323,7 +325,7 @@ export default function ProductDetailPage() {
                         </div>
                       </div>
                       <Badge variant="secondary" className="ml-auto">
-                        Stok: {b.stock}
+                        Stok: {b.available}
                       </Badge>
                     </button>
                   );
@@ -355,7 +357,7 @@ export default function ProductDetailPage() {
                 onClick={() =>
                   setQuantity(
                     selectedBranchStock
-                      ? Math.min(selectedBranchStock.stock, quantity + 1)
+                      ? Math.min(selectedBranchStock.available, quantity + 1)
                       : quantity + 1
                   )
                 }

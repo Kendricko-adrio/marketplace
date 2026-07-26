@@ -34,6 +34,7 @@ async function seed() {
     await db.delete(schema.orders);
     await db.delete(schema.reviews);
     await db.delete(schema.auditLogs);
+    await db.delete(schema.systemConfig);
     await db.delete(schema.branchStocks);
     await db.delete(schema.productImages);
     await db.delete(schema.productVariants);
@@ -1359,6 +1360,20 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
         entityId: "sample-order-id",
         changes: { status: { from: "processing", to: "completed" } },
         ipAddress: "192.168.1.100",
+      },
+    ]);
+
+    // =====================
+    // SYSTEM CONFIG
+    // =====================
+    console.log("⚙️  Creating system config...");
+    await db.insert(schema.systemConfig).values([
+      {
+        key: "reservation.ttlMinutes",
+        value: "30",
+        type: "number",
+        description:
+          "Menit TTL reservasi stok saat customer menunggu pembayaran QRIS di Midtrans Snap. Setelah TTL, order dianggap expired dan reservasi dilepas (oleh webhook expire Midtrans / cron sweep).",
       },
     ]);
 

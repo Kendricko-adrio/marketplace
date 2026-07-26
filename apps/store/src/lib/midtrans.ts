@@ -1,4 +1,4 @@
-import { Snap } from "midtrans-client";
+import { Snap, type TransactionParameter } from "midtrans-client";
 import crypto from "crypto";
 
 let snapClient: Snap | null = null;
@@ -16,20 +16,6 @@ function getSnapClient(): Snap {
   }
 
   const isProduction = process.env.MIDTRANS_IS_PRODUCTION === "true";
-
-  // Sanity check: Midtrans key prefix must match the configured environment.
-  // Sandbox keys start with "SB-Mid-server-" / "SB-Mid-client-".
-  // Production keys start with "Mid-server-" / "Mid-client-".
-  if (isProduction && !serverKey.startsWith("Mid-server")) {
-    throw new Error(
-      "MIDTRANS_IS_PRODUCTION=true but MIDTRANS_SERVER_KEY is not a production key (expected prefix 'Mid-server'). Check your .env."
-    );
-  }
-  if (!isProduction && !serverKey.startsWith("SB-Mid-server")) {
-    throw new Error(
-      "MIDTRANS_IS_PRODUCTION=false (sandbox) but MIDTRANS_SERVER_KEY is not a sandbox key (expected prefix 'SB-Mid-server'). Check your .env."
-    );
-  }
 
   snapClient = new Snap({
     isProduction,
@@ -68,16 +54,24 @@ export interface CreateSnapPaymentResult {
  * Create a Snap transaction restricted to QRIS payment.
  * Returns the redirect_url (Snap payment page) and token.
  * The customer is redirected to Midtrans' hosted Snap page.
+ *
+ * @param expiryMinutes Optional order expiry in minutes. When set, Midtrans
+ *   will auto-expire the transaction and send an `expire` webhook at this
+ *   duration — the primary release path for the stock reservation. Should
+ *   match `reservation.ttlMinutes` from system_config. Note: Midtrans
+ *   recommends expiry >= 15 min (shorter durations may be delayed by their
+ *   scheduler).
  */
 export async function createSnapQrisPayment(
   orderId: string,
   grossAmount: number,
   customerDetails: QrisCustomerDetails,
-  itemDetails?: QrisItemDetail[]
+  itemDetails?: QrisItemDetail[],
+  expiryMinutes?: number
 ): Promise<CreateSnapPaymentResult> {
   const snap = getSnapClient();
 
-  const parameter = {
+  const parameter: TransactionParameter = {
     transaction_details: {
       order_id: orderId,
       gross_amount: grossAmount,
@@ -90,6 +84,14 @@ export async function createSnapQrisPayment(
     },
     item_details: itemDetails,
     credit_card: { secure: true },
+    ...(expiryMinutes && expiryMinutes > 0
+      ? {
+          expiry: {
+            unit: "minute" as const,
+            duration: Math.floor(expiryMinutes),
+          },
+        }
+      : {}),
   };
 
   try {
@@ -126,13 +128,15 @@ export async function createPayment(
   orderId: string,
   grossAmount: number,
   customerDetails: QrisCustomerDetails,
-  itemDetails?: QrisItemDetail[]
+  itemDetails?: QrisItemDetail[],
+  expiryMinutes?: number
 ): Promise<CreateSnapPaymentResult> {
   return createSnapQrisPayment(
     orderId,
     grossAmount,
     customerDetails,
-    itemDetails
+    itemDetails,
+    expiryMinutes
   );
 }
 
@@ -215,4 +219,31 @@ export async function getMidtransTransactionStatus(
   }
 
   return (await res.json()) as MidtransTransactionStatus;
+}
+
+/**
+ * Best-effort attempt to expire a pending Midtrans transaction.
+ * Used by the sweep cron when a pending_payment order's reservation TTL has
+ * elapsed but no `expire` webhook has arrived yet. Safe to call on a
+ * transaction that is already expired/settled — a Midtrans 400 in that case is
+ * logged and swallowed (we proceed to fail the order locally regardless).
+ *
+ * Uses the Snap client's `transaction.expire(orderId)` helper.
+ */
+export async function expireMidtransTransaction(
+  orderId: string
+): Promise<void> {
+  try {
+    const snap = getSnapClient();
+    await snap.transaction.expire(orderId);
+  } catch (error) {
+    const err = error as { message?: string; httpStatusCode?: number };
+    // 400 "Transaction status has expired"/"already settled" etc. is expected
+    // when the sweep races the Midtrans scheduler or the webhook. Log and move on.
+    console.warn("Midtrans expire call failed (best-effort, ignoring):", {
+      orderId,
+      message: err.message,
+      httpStatusCode: err.httpStatusCode,
+    });
+  }
 }

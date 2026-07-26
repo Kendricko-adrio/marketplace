@@ -10,12 +10,26 @@ import {
   orders,
   orderItems,
 } from "@/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import { auth } from "@/lib/auth";
 import { headers } from "next/headers";
 import { z } from "zod";
 import { validatePickupSlot } from "@/lib/pickup-validation";
 import { createPayment } from "@/lib/midtrans";
+import { getConfigNumber } from "@/lib/config";
+
+/**
+ * Thrown inside the place-order transaction when the atomic stock-reservation
+ * UPDATE matches 0 rows (another concurrent checkout took the last units).
+ * The catch block translates it into a 400 so the customer can retry; the whole
+ * transaction rolls back, releasing any reservations made for earlier items.
+ */
+class InsufficientStockError extends Error {
+  constructor(public productName: string) {
+    super(`Insufficient stock for ${productName}`);
+    this.name = "InsufficientStockError";
+  }
+}
 
 const placeOrderSchema = z.object({
   phone: z
@@ -154,7 +168,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ===== Re-check stock for each selected item =====
+    // ===== Re-check stock for each selected item (soft check) =====
+    // Available stock = stock - reservedStock (units held by pending_payment
+    // orders). This is a soft UX pre-check; the authoritative guard is the
+    // atomic conditional UPDATE inside the transaction below.
     for (const item of selectedItems) {
       const stockRow = await db
         .select()
@@ -167,7 +184,8 @@ export async function POST(request: NextRequest) {
         )
         .limit(1);
 
-      const availableStock = stockRow[0]?.stock ?? 0;
+      const availableStock =
+        (stockRow[0]?.stock ?? 0) - (stockRow[0]?.reservedStock ?? 0);
       if (item.quantity > availableStock) {
         return NextResponse.json(
           {
@@ -187,12 +205,17 @@ export async function POST(request: NextRequest) {
     const serviceFee = 0;
     const total = subtotal;
 
-    // ===== Create the order, order items, call Midtrans, and clear cart — all atomically =====
+    // ===== Reservation TTL (minutes) from system_config (cached at boot) =====
+    const ttlMinutes = await getConfigNumber("reservation.ttlMinutes", 30);
+
+    // ===== Create the order, order items, reserve stock, call Midtrans, and clear cart — all atomically =====
     const orderId = crypto.randomUUID();
 
     try {
       const midtransResult = await db.transaction(async (tx) => {
         // ===== Create the order =====
+        // expiresAt drives the sweep cron and pairs with the Midtrans expiry
+        // so the reservation is released even if the `expire` webhook is missed.
         await tx.insert(orders).values({
           id: orderId,
           userId: session.user.id,
@@ -209,6 +232,7 @@ export async function POST(request: NextRequest) {
           discount: "0",
           serviceFee: serviceFee.toString(),
           total: total.toString(),
+          expiresAt: new Date(Date.now() + ttlMinutes * 60_000),
         });
 
         // ===== Create order items (with real product names) =====
@@ -224,8 +248,37 @@ export async function POST(request: NextRequest) {
           });
         }
 
+        // ===== Atomically reserve stock per item (authoritative guard) =====
+        // Conditional UPDATE: only increments reserved_stock if enough is still
+        // available (stock - reserved_stock >= qty). 0 rows means another
+        // concurrent checkout took the last units → throw to roll back the whole
+        // transaction (releasing reservations made for earlier items in this tx).
+        // This is race-free without FOR UPDATE: two concurrent checkouts for the
+        // last unit produce one match and one miss.
+        for (const item of selectedItems) {
+          const reserved = await tx
+            .update(branchStocks)
+            .set({
+              reservedStock: sql`${branchStocks.reservedStock} + ${item.quantity}`,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(branchStocks.branchId, branchId),
+                eq(branchStocks.productVariantId, item.variantId),
+                sql`${branchStocks.stock} - ${branchStocks.reservedStock} >= ${item.quantity}`
+              )
+            )
+            .returning({ branchId: branchStocks.branchId });
+          if (reserved.length === 0) {
+            throw new InsufficientStockError(item.productName);
+          }
+        }
+
         // ===== Call Midtrans Snap to create the payment =====
-        // Any thrown error auto-rollbacks the transaction in Drizzle.
+        // Any thrown error auto-rollbacks the transaction in Drizzle (releasing
+        // the reservations above). Expiry is set to the reservation TTL so
+        // Midtrans auto-expires the transaction and fires an `expire` webhook.
         const paymentResult = await createPayment(
           orderId,
           total,
@@ -241,7 +294,8 @@ export async function POST(request: NextRequest) {
               price: parseFloat(item.variantPrice),
               quantity: item.quantity,
             })),
-          ]
+          ],
+          ttlMinutes
         );
 
         // Persist Snap redirect URL so the customer can resume payment later
@@ -250,15 +304,17 @@ export async function POST(request: NextRequest) {
           .set({ snapRedirectUrl: paymentResult.redirectUrl })
           .where(eq(orders.id, orderId));
 
+        // ===== Remove only the checked-out items from the cart (inside the tx) =====
+        // Kept inside the transaction so a Midtrans/reservation failure rolls
+        // cart deletion back too — the customer's cart is preserved on retry.
+        for (const itemId of selectedItemIds) {
+          await tx
+            .delete(cartItems)
+            .where(and(eq(cartItems.id, itemId), eq(cartItems.cartId, cart.id)));
+        }
+
         return paymentResult;
       });
-
-      // ===== Remove only the checked-out items from the cart AFTER payment creation succeeds =====
-      for (const itemId of selectedItemIds) {
-        await db
-          .delete(cartItems)
-          .where(and(eq(cartItems.id, itemId), eq(cartItems.cartId, cart.id)));
-      }
 
       return NextResponse.json({
         success: true,
@@ -267,6 +323,13 @@ export async function POST(request: NextRequest) {
         token: midtransResult.token,
       });
     } catch (midtransError) {
+      // Insufficient stock → 400 (customer can retry / pick fewer units).
+      if (midtransError instanceof InsufficientStockError) {
+        return NextResponse.json(
+          { success: false, error: midtransError.message },
+          { status: 400 }
+        );
+      }
       const err = midtransError as {
         message?: string;
         httpStatusCode?: number;
@@ -277,7 +340,7 @@ export async function POST(request: NextRequest) {
         httpStatusCode: err.httpStatusCode,
         apiResponse: err.ApiResponse,
       });
-      // Transaction rolled back — order & cart are preserved. Customer can retry.
+      // Transaction rolled back — order, reservation & cart are preserved. Customer can retry.
       return NextResponse.json(
         {
           success: false,

@@ -22,6 +22,9 @@ export * from "./homepage";
 // Static pages schema
 export * from "./pages";
 
+// Footer CMS schema
+export * from "./footer";
+
 // System schema
 export * from "./system";
 

@@ -1,11 +1,51 @@
 import Link from "next/link";
 import Image from "next/image";
 import { ArrowRight } from "lucide-react";
-import type { HomepageSectionData, PromoCardsContent } from "./types";
+import type {
+  HomepageSectionData,
+  PromoCardsContent,
+  PromoCardItem,
+  ProductFilterConfig,
+} from "./types";
 
 interface PromoCardsSectionProps {
   section: HomepageSectionData;
   preview?: boolean;
+}
+
+/**
+ * Build a /products query string from a ProductFilterConfig.
+ * Field names match the storefront /products page format.
+ */
+export function buildProductFilterQuery(filter: ProductFilterConfig): string {
+  const params = new URLSearchParams();
+  if (filter.search) params.set("search", filter.search);
+  if (filter.category) params.set("category", filter.category);
+  if (filter.minPrice) params.set("minPrice", filter.minPrice);
+  if (filter.maxPrice) params.set("maxPrice", filter.maxPrice);
+  if (filter.flashSale) params.set("flashSale", "true");
+  if (filter.sortOrder) {
+    const order = filter.sortOrder;
+    if (order === "priceAsc") {
+      params.set("sortOrder", "asc");
+      params.set("sortBy", "price");
+    } else if (order === "priceDesc") {
+      params.set("sortOrder", "desc");
+      params.set("sortBy", "price");
+    } else if (order === "bestseller") {
+      params.set("sortOrder", "desc");
+      params.set("sortBy", "sold");
+    } else if (order === "rating") {
+      params.set("sortOrder", "desc");
+      params.set("sortBy", "rating");
+    } else {
+      // newest
+      params.set("sortOrder", "desc");
+      params.set("sortBy", "createdAt");
+    }
+  }
+  const qs = params.toString();
+  return qs ? `/products?${qs}` : "/products";
 }
 
 export default function PromoCardsSection({
@@ -27,6 +67,16 @@ export default function PromoCardsSection({
       )}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {cards.map((card) => {
+          // Backward-compat: legacy linkUrl (string) is ignored under the new
+          // filter-based schema; cards without a filter object render as plain divs.
+          const legacy = card as unknown as { linkUrl?: string };
+          const hasFilter =
+            !!card.filter &&
+            typeof card.filter === "object" &&
+            Object.keys(card.filter).length > 0;
+          const href = hasFilter ? buildProductFilterQuery(card.filter as ProductFilterConfig) : null;
+          const useLink = !preview && !!href && !legacy.linkUrl;
+
           const inner = (
             <div className="group rounded-xl border bg-card text-card-foreground shadow-sm overflow-hidden hover:shadow-lg transition-shadow duration-200">
               <div className="relative aspect-[16/9] bg-muted overflow-hidden">
@@ -49,11 +99,11 @@ export default function PromoCardsSection({
             </div>
           );
 
-          if (preview || !card.linkUrl) {
+          if (!useLink) {
             return <div key={card.id}>{inner}</div>;
           }
           return (
-            <Link key={card.id} href={card.linkUrl}>
+            <Link key={card.id} href={href as string}>
               {inner}
             </Link>
           );

@@ -267,12 +267,23 @@ export async function POST(request: NextRequest) {
         token: midtransResult.token,
       });
     } catch (midtransError) {
-      console.error("Midtrans payment creation failed:", midtransError);
+      const err = midtransError as {
+        message?: string;
+        httpStatusCode?: number;
+        ApiResponse?: unknown;
+      };
+      console.error("Midtrans payment creation failed:", {
+        message: err.message,
+        httpStatusCode: err.httpStatusCode,
+        apiResponse: err.ApiResponse,
+      });
       // Transaction rolled back — order & cart are preserved. Customer can retry.
       return NextResponse.json(
         {
           success: false,
-          error: "Failed to initiate payment. Your cart is preserved — please try again.",
+          error:
+            err.message ||
+            "Failed to initiate payment. Your cart is preserved — please try again.",
         },
         { status: 502 }
       );

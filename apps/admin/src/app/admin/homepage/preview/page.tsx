@@ -7,10 +7,12 @@ import { Badge } from "@/components/ui/badge";
 import {
   HomepageSectionRenderer,
   type HomepageSectionData,
+  type HomepageProduct,
+  type HomepageBranch,
 } from "@marketplace/ui";
 import { toStoreUrl } from "@/lib/store-url";
 
-interface AdminSection {
+interface PreviewSection {
   id: string;
   type: string;
   title: string | null;
@@ -18,22 +20,44 @@ interface AdminSection {
   content: unknown;
   displayOrder: number;
   isActive: boolean;
-  products?: { id: string; name: string; slug: string; displayOrder: number }[];
+  products?: HomepageProduct[];
+  branches?: HomepageBranch[];
 }
 
-function rewriteImages(content: unknown): unknown {
+function rewriteBannerImages(content: unknown): unknown {
   if (!content || typeof content !== "object") return content;
   const c = content as Record<string, unknown>;
+  // New schema: slides array
+  if (Array.isArray(c.slides)) {
+    return {
+      ...c,
+      slides: c.slides.map(
+        (s) =>
+          s && typeof s === "object" && typeof (s as Record<string, unknown>).imageUrl === "string"
+            ? {
+                ...(s as Record<string, unknown>),
+                imageUrl: toStoreUrl((s as Record<string, unknown>).imageUrl as string),
+              }
+            : s
+      ),
+    };
+  }
+  // Legacy schema: single imageUrl
   if (typeof c.imageUrl === "string") {
     return { ...c, imageUrl: toStoreUrl(c.imageUrl) };
   }
+  // Promo cards: rewrite each card imageUrl
   if (Array.isArray(c.cards)) {
     return {
       ...c,
-      cards: c.cards.map((card) =>
-        card && typeof card === "object" && typeof (card as Record<string, unknown>).imageUrl === "string"
-          ? { ...(card as Record<string, unknown>), imageUrl: toStoreUrl((card as Record<string, unknown>).imageUrl as string) }
-          : card
+      cards: c.cards.map(
+        (card) =>
+          card && typeof card === "object" && typeof (card as Record<string, unknown>).imageUrl === "string"
+            ? {
+                ...(card as Record<string, unknown>),
+                imageUrl: toStoreUrl((card as Record<string, unknown>).imageUrl as string),
+              }
+            : card
       ),
     };
   }
@@ -41,14 +65,18 @@ function rewriteImages(content: unknown): unknown {
 }
 
 export default function HomepagePreviewPage() {
-  const [sections, setSections] = useState<AdminSection[]>([]);
+  const [sections, setSections] = useState<PreviewSection[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
-    const fetchSections = async () => {
+    const fetchAll = async () => {
       try {
-        const res = await fetch("/api/admin/homepage");
+        // Single fetch: the preview-all endpoint returns ALL sections
+        // (active + inactive) with carousel products and store_banner
+        // branches fully hydrated. This avoids the storefront API which
+        // only returns active sections.
+        const res = await fetch("/api/admin/homepage/preview-all", { cache: "no-store" });
         const data = await res.json();
         if (data.success) setSections(data.data);
       } catch (error) {
@@ -57,32 +85,39 @@ export default function HomepagePreviewPage() {
         setLoading(false);
       }
     };
-    fetchSections();
+    fetchAll();
   }, []);
 
-  const visibleSections = showAll
-    ? sections
-    : sections.filter((s) => s.isActive);
+  const visibleSections = showAll ? sections : sections.filter((s) => s.isActive);
 
   const announcement = visibleSections.find((s) => s.type === "announcement_bar");
   const rest = visibleSections.filter((s) => s.type !== "announcement_bar");
 
-  const renderSection = (section: AdminSection) => {
+  const renderSection = (section: PreviewSection) => {
+    // Rewrite carousel product images to the store origin. The API returns
+    // image paths as "/uploads/..." which the admin app (port 3001) does not
+    // serve — without rewriting they would 404 in the admin preview.
+    const products = section.products?.map((p) => ({
+      ...p,
+      image: p.image ? toStoreUrl(p.image) : null,
+    }));
     const sectionData: HomepageSectionData = {
       id: section.id,
       type: section.type as HomepageSectionData["type"],
       title: section.title,
       subtitle: section.subtitle,
-      content: rewriteImages(section.content),
+      content: rewriteBannerImages(section.content),
       displayOrder: section.displayOrder,
       isActive: section.isActive,
+      products,
+      branches: section.branches,
     };
     return <HomepageSectionRenderer key={section.id} section={sectionData} preview />;
   };
 
   return (
     <div className="min-h-screen bg-background">
-      <div className="border-b bg-card sticky top-0 z-50">
+      <div className="border-b bg-card sticky top-0 z-20">
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="sm" asChild>
@@ -129,9 +164,7 @@ export default function HomepagePreviewPage() {
           {announcement && (
             <div className="relative">
               {renderSection(announcement)}
-              {!announcement.isActive && (
-                <InactiveBadge />
-              )}
+              {!announcement.isActive && <InactiveBadge />}
             </div>
           )}
           {rest.map((section) => (
@@ -148,7 +181,7 @@ export default function HomepagePreviewPage() {
 
 function InactiveBadge() {
   return (
-    <div className="absolute top-2 right-2 z-50">
+    <div className="absolute top-2 right-2 z-20">
       <Badge variant="destructive">Nonaktif</Badge>
     </div>
   );

@@ -1,9 +1,17 @@
 "use client";
 import { usePathname } from "next/navigation";
 import Header from "@/components/Header";
-import Footer from "@/components/Footer";
 
-export default function LayoutWrapper({ children }: { children: React.ReactNode }) {
+// `footerSlot` is a React node passed from the server layout (typically
+// <FooterWrapper />), so the footer can be a Server Component that fetches
+// data while LayoutWrapper stays a client component (it needs usePathname).
+export default function LayoutWrapper({
+  children,
+  footerSlot,
+}: {
+  children: React.ReactNode;
+  footerSlot?: React.ReactNode;
+}) {
   const pathname = usePathname();
   const isAdmin = pathname?.startsWith("#admin");
 
@@ -11,7 +19,7 @@ export default function LayoutWrapper({ children }: { children: React.ReactNode 
     <div className="flex min-h-screen flex-col">
       {!isAdmin && <Header />}
       <main className="flex-1">{children}</main>
-      {!isAdmin && <Footer />}
+      {!isAdmin && footerSlot}
     </div>
   );
 }

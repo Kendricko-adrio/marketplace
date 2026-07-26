@@ -25,6 +25,7 @@ async function seed() {
     console.log("🗑️  Clearing existing data...");
     await db.delete(schema.permissions);
     await db.delete(schema.staticPages);
+    await db.delete(schema.footerConfig);
     await db.delete(schema.homepageSectionProducts);
     await db.delete(schema.homepageSections);
     await db.delete(schema.cartItems);
@@ -847,10 +848,12 @@ async function seed() {
         title: "Promo Spesial Akhir Tahun",
         subtitle: "Diskon hingga 70% untuk semua produk pilihan",
         content: {
-          imageUrl: "",
-          altText: "Promo Akhir Tahun",
+          slides: [
+            { imageUrl: "", altText: "Promo Akhir Tahun" },
+          ],
           ctaText: "Belanja Sekarang",
           ctaLink: "/products",
+          autoRotateIntervalSec: 5,
         },
         displayOrder: 2,
         isActive: true,
@@ -860,7 +863,7 @@ async function seed() {
         type: "carousel_product",
         title: "Produk Pilihan",
         subtitle: "Produk rekomendasi terbaik untuk Anda",
-        content: {},
+        content: { mode: "manual" },
         displayOrder: 3,
         isActive: true,
       },
@@ -875,19 +878,19 @@ async function seed() {
               id: generateId(),
               imageUrl: "",
               title: "New Arrivals",
-              linkUrl: "/products",
+              filter: { sortOrder: "newest" },
             },
             {
               id: generateId(),
               imageUrl: "",
               title: "Best Seller",
-              linkUrl: "/products",
+              filter: { sortOrder: "bestseller" },
             },
             {
               id: generateId(),
               imageUrl: "",
               title: "Diskon Spesial",
-              linkUrl: "/products",
+              filter: { flashSale: true },
             },
           ],
         },
@@ -1272,6 +1275,58 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
         displayOrder: 4,
       },
     ]);
+
+    // =====================
+    // FOOTER CONFIG (CMS)
+    // =====================
+    console.log("🦶 Creating footer config...");
+    await db.insert(schema.footerConfig).values({
+      id: generateId(),
+      data: {
+        brandName: "StoreFront",
+        tagline:
+          "Belanja aman, nyaman, dan terpercaya. Temukan produk terbaik dengan harga terbaik hanya di sini.",
+        columns: [
+          {
+            title: "Layanan",
+            links: [
+              { label: "Bantuan", href: "/help" },
+              { label: "Status Pesanan", href: "/status" },
+              { label: "Katalog", href: "/catalog" },
+              { label: "Cabang Kami", href: "/branches" },
+            ],
+          },
+          {
+            title: "Tentang",
+            links: [
+              { label: "Tentang Kami", href: "/pages/about" },
+              { label: "Hubungi Kami", href: "/pages/contact" },
+              { label: "Privasi", href: "/pages/privacy" },
+              { label: "Syarat & Ketentuan", href: "/pages/terms" },
+            ],
+          },
+        ],
+        copyrightText: "© 2026 StoreFront. All rights reserved.",
+        socialMedia: [
+          {
+            platform: "instagram",
+            url: "https://instagram.com/storefront",
+            enabled: true,
+          },
+          {
+            platform: "facebook",
+            url: "https://facebook.com/storefront",
+            enabled: true,
+          },
+          {
+            platform: "tiktok",
+            url: "https://tiktok.com/@storefront",
+            enabled: true,
+          },
+        ],
+      },
+      updatedBy: hqId,
+    });
 
     // =====================
     // AUDIT LOGS

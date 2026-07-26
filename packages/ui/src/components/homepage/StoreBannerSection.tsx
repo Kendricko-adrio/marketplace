@@ -3,10 +3,12 @@ import type { HomepageSectionData, HomepageBranch } from "./types";
 
 interface StoreBannerSectionProps {
   section: HomepageSectionData;
+  preview?: boolean;
 }
 
 export default function StoreBannerSection({
   section,
+  preview: _preview,
 }: StoreBannerSectionProps) {
   const branches = section.branches ?? [];
 

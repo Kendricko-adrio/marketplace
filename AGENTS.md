@@ -188,6 +188,38 @@ Defined per-app in `apps/<app>/tsconfig.json` (no root alias).
   forgot-password,reset-password,auth/verify}`.
 - Admin routes follow: `/admin/{dashboard,products,orders,users,marketing,analytics}`.
 
+## Skills Usage
+
+Agent **wajib** selalu memanfaatkan skills yang tersedia untuk setiap tugas
+yang sesuai. Sebelum mengerjakan request, cek daftar `available_skills` dan
+gunakan skill yang paling relevan via tool `skill`.
+
+### Wajib Selalu Dipakai (sesuai konteks)
+
+| Kondisi / Permintaan User                    | Skill yang HARUS digunakan         |
+|----------------------------------------------|------------------------------------|
+| Debug error, bug, test failure, perilaku tak terduga | `systematic-debugging`     |
+| Setup/konfigurasi/troubleshooting Better Auth | `better-auth-best-practices`       |
+| Membangun/edit halaman, komponen, atau UI Next.js | `nextjs` + `next-best-practices` |
+| Membuat UI/web design (komponen, halaman, poster) | `frontend-design`            |
+| Pertanyaan tentang library/framework/SDK/API/CLI | `context7-mcp` (via Context7 MCP) |
+| Operasi model Azure Foundry (deploy/finetune/eval) | `microsoft-foundry` / sub-skills |
+
+### Aturan
+
+- **Jangan menyelesaikan tugas tanpa cek skills terlebih dahulu.** Jika ada
+  skill yang cocok, WAJIB load skill tersebut via tool `skill` sebelum bertindak.
+- **Debugging**: setiap kali user melaporkan error, bug, crash, test gagal,
+  atau perilaku tak terduga — WAJIB load skill `systematic-debugging` lebih
+  dulu dan ikuti workflow-nya. Jangan langsung menebak fix.
+- **Library/framework**: sebelum menulis kode yang memakai library eksternal
+  (React, Next.js, Drizzle, Better Auth, Tailwind, dll), fetch dokumentasi
+  terbaru via Context7 MCP — jangan andalkan ingatan.
+- Jika beberapa skill relevan sekaligus (mis. debug UI Next.js), load semua
+  skill yang berlaku secara berurutan.
+- Setelah skill dimuat, ikuti instruksi/pola dari skill tersebut; jangan
+  menyimpang tanpa alasan yang jelas.
+
 ## ⚠️ RULES
 
 - **Schema edits ONLY in `packages/db/src/schema/`** — apps are read-only consumers.

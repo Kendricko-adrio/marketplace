@@ -1,6 +1,6 @@
 "use client";
 import { useState, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,7 +17,6 @@ import { Separator } from "@/components/ui/separator";
 import { signIn, authClient } from "@/lib/auth-client";
 
 function LoginForm() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/";
 
@@ -39,33 +38,46 @@ function LoginForm() {
     document.cookie = "client.onboarding=; path=/; max-age=0";
 
     try {
-      const result = await signIn.email({
-        email,
-        password,
-      });
-
-      if (result.error) {
-        const msg = result.error.message || "Email atau password salah";
-        // Better Auth returns this when requireEmailVerification is on.
-        if (
-          msg.toLowerCase().includes("verify") ||
-          msg.toLowerCase().includes("verifikasi") ||
-          msg.toLowerCase().includes("email is not verified")
-        ) {
-          setNeedsVerification(true);
-          setError(msg);
-        } else {
-          setError(msg);
+      // Navigate inside fetchOptions.onSuccess (idiomatic Better Auth pattern)
+      // with a hard navigation so the Next.js Router Cache cannot replay a
+      // stale cached redirect. This mirrors the admin login fix and keeps the
+      // two apps consistent.
+      await signIn.email(
+        { email, password },
+        {
+          onSuccess: () => {
+            // Let middleware route to /onboarding if needed, otherwise
+            // callbackUrl. Hard navigation bypasses the Router Cache.
+            window.location.href = callbackUrl;
+          },
+          onError: (ctx: { response: Response }) => {
+            ctx.response
+              .json()
+              .then((body: { message?: string } | null) => {
+                const msg =
+                  (body && body.message) || "Email atau password salah";
+                // Better Auth returns this when requireEmailVerification is on.
+                if (
+                  msg.toLowerCase().includes("verify") ||
+                  msg.toLowerCase().includes("verifikasi") ||
+                  msg.toLowerCase().includes("email is not verified")
+                ) {
+                  setNeedsVerification(true);
+                  setError(msg);
+                } else {
+                  setError(msg);
+                }
+              })
+              .catch(() => {
+                setError("Email atau password salah");
+              })
+              .finally(() => setLoading(false));
+          },
         }
-      } else {
-        // Let middleware route to /onboarding if needed, otherwise callbackUrl.
-        router.push(callbackUrl);
-        router.refresh();
-      }
+      );
     } catch (err) {
       console.error("Login error:", err);
       setError("Terjadi kesalahan. Silakan coba lagi.");
-    } finally {
       setLoading(false);
     }
   };

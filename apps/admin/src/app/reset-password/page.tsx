@@ -224,9 +224,20 @@ function ResetPasswordContent() {
                 <button
                   type="button"
                   onClick={async () => {
-                    await signOut();
+                    // Clear the must-reset edge cookie first so it doesn't
+                    // leak into the next login session.
                     document.cookie = "admin.must_reset=; path=/; max-age=0";
-                    router.push("/login");
+                    // Navigate inside onSuccess (idiomatic Better Auth) with a
+                    // hard navigation so the Router Cache can't replay a
+                    // stale /admin redirect and the reactive useSession state
+                    // race is avoided.
+                    await signOut({
+                      fetchOptions: {
+                        onSuccess: () => {
+                          window.location.href = "/login";
+                        },
+                      },
+                    });
                   }}
                   className="block w-full text-center text-xs text-muted-foreground hover:text-foreground"
                 >

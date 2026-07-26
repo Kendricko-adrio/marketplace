@@ -20,11 +20,11 @@ export default function HomepageSectionRenderer({
     case "banner":
       return <BannerSection section={section} preview={preview} />;
     case "carousel_product":
-      return <CarouselProductSection section={section} />;
+      return <CarouselProductSection section={section} preview={preview} />;
     case "promo_cards":
       return <PromoCardsSection section={section} preview={preview} />;
     case "store_banner":
-      return <StoreBannerSection section={section} />;
+      return <StoreBannerSection section={section} preview={preview} />;
     default:
       return null;
   }

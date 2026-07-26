@@ -4,9 +4,8 @@ import {
   homepageSections,
   homepageSectionProducts,
   products,
-  branches,
 } from "@/db";
-import { eq, asc, inArray, desc } from "drizzle-orm";
+import { asc, inArray, desc } from "drizzle-orm";
 import { z } from "zod";
 import { withPermission } from "@/lib/auth-guard";
 
@@ -79,12 +78,73 @@ export const GET = withPermission(async () => {
   }
 }, "homepage", "view");
 
-const promoCardSchema = z.object({
+// --- Zod schemas for content validation ---
+
+const productFilterSchema = z.object({
+  search: z.string().optional(),
+  category: z.string().optional(), // category slug
+  minPrice: z.string().optional(),
+  maxPrice: z.string().optional(),
+  flashSale: z.boolean().optional(),
+  sortOrder: z
+    .enum(["newest", "priceAsc", "priceDesc", "bestseller", "rating"])
+    .optional(),
+});
+
+const bannerSlideSchema = z.object({
+  imageUrl: z.string(),
+  altText: z.string().optional(),
+});
+
+const bannerContentSchema = z.object({
+  slides: z.array(bannerSlideSchema).max(5).default([]),
+  ctaText: z.string().optional(),
+  ctaLink: z.string().optional(),
+  autoRotateIntervalSec: z.number().int().min(2).max(30).optional(),
+});
+
+const carouselContentSchema = z.object({
+  mode: z.enum(["manual", "filter"]),
+  filter: productFilterSchema.optional(),
+  limit: z.number().int().min(1).max(20).optional(),
+});
+
+const promoCardItemSchema = z.object({
   id: z.string(),
   imageUrl: z.string(),
   title: z.string(),
-  linkUrl: z.string().optional(),
+  filter: productFilterSchema.optional(),
 });
+
+const promoCardsContentSchema = z.object({
+  cards: z.array(promoCardItemSchema).max(6).default([]),
+});
+
+const announcementBarContentSchema = z.object({
+  message: z.string(),
+  variant: z.enum(["info", "warning", "success"]).optional(),
+});
+
+/**
+ * Per-type content validator. Returns the validated content or throws a
+ * ZodError-derived object the caller can pass back to the client.
+ */
+function validateContent(type: string, content: unknown): unknown {
+  if (content === null || content === undefined) return {};
+  switch (type) {
+    case "banner":
+      return bannerContentSchema.parse(content);
+    case "carousel_product":
+      return carouselContentSchema.parse(content);
+    case "promo_cards":
+      return promoCardsContentSchema.parse(content);
+    case "announcement_bar":
+      return announcementBarContentSchema.parse(content);
+    case "store_banner":
+    default:
+      return content;
+  }
+}
 
 const createSectionSchema = z.object({
   type: z.enum([
@@ -120,6 +180,21 @@ export const POST = withPermission(async (_ctx, request: NextRequest) => {
     const data = parsed.data;
     const sectionId = crypto.randomUUID();
 
+    // Validate content shape per-type. On failure, return a 400 with details.
+    let validatedContent: unknown = data.content;
+    try {
+      validatedContent = validateContent(data.type, data.content);
+    } catch (e) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Invalid content shape for section type",
+          details: e instanceof z.ZodError ? e : String(e),
+        },
+        { status: 400 }
+      );
+    }
+
     const maxOrderResult = await db
       .select()
       .from(homepageSections)
@@ -133,18 +208,22 @@ export const POST = withPermission(async (_ctx, request: NextRequest) => {
       type: data.type,
       title: data.title ?? null,
       subtitle: data.subtitle ?? null,
-      content: data.content,
+      content: validatedContent,
       displayOrder: nextOrder,
       isActive: data.isActive,
     });
 
-    if (data.type === "carousel_product" && data.productIds) {
-      for (let i = 0; i < data.productIds.length; i++) {
-        await db.insert(homepageSectionProducts).values({
-          sectionId,
-          productId: data.productIds[i],
-          displayOrder: i + 1,
-        });
+    if (data.type === "carousel_product" && data.productIds && data.productIds.length > 0) {
+      // Only store junction rows when the carousel is in manual mode.
+      const carouselContent = (validatedContent as { mode?: string }) ?? {};
+      if (carouselContent.mode !== "filter") {
+        for (let i = 0; i < data.productIds.length; i++) {
+          await db.insert(homepageSectionProducts).values({
+            sectionId,
+            productId: data.productIds[i],
+            displayOrder: i + 1,
+          });
+        }
       }
     }
 

@@ -17,6 +17,20 @@ function getSnapClient(): Snap {
 
   const isProduction = process.env.MIDTRANS_IS_PRODUCTION === "true";
 
+  // Sanity check: Midtrans key prefix must match the configured environment.
+  // Sandbox keys start with "SB-Mid-server-" / "SB-Mid-client-".
+  // Production keys start with "Mid-server-" / "Mid-client-".
+  if (isProduction && !serverKey.startsWith("Mid-server")) {
+    throw new Error(
+      "MIDTRANS_IS_PRODUCTION=true but MIDTRANS_SERVER_KEY is not a production key (expected prefix 'Mid-server'). Check your .env."
+    );
+  }
+  if (!isProduction && !serverKey.startsWith("SB-Mid-server")) {
+    throw new Error(
+      "MIDTRANS_IS_PRODUCTION=false (sandbox) but MIDTRANS_SERVER_KEY is not a sandbox key (expected prefix 'SB-Mid-server'). Check your .env."
+    );
+  }
+
   snapClient = new Snap({
     isProduction,
     serverKey,
@@ -78,12 +92,30 @@ export async function createSnapQrisPayment(
     credit_card: { secure: true },
   };
 
-  const transaction = await snap.createTransaction(parameter);
+  try {
+    const transaction = await snap.createTransaction(parameter);
 
-  return {
-    redirectUrl: transaction.redirect_url,
-    token: transaction.token,
-  };
+    return {
+      redirectUrl: transaction.redirect_url,
+      token: transaction.token,
+    };
+  } catch (error) {
+    // Midtrans client throws MidtransError with:
+    // .message, .httpStatusCode, .ApiResponse, .rawHttpClientData
+    const err = error as {
+      message?: string;
+      httpStatusCode?: number;
+      ApiResponse?: unknown;
+    };
+    console.error("Midtrans Snap createTransaction failed:", {
+      orderId,
+      grossAmount,
+      message: err.message,
+      httpStatusCode: err.httpStatusCode,
+      apiResponse: err.ApiResponse,
+    });
+    throw error;
+  }
 }
 
 /**

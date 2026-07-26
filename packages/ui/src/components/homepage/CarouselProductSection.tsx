@@ -3,10 +3,12 @@ import type { HomepageSectionData, HomepageProduct } from "./types";
 
 interface CarouselProductSectionProps {
   section: HomepageSectionData;
+  preview?: boolean;
 }
 
 export default function CarouselProductSection({
   section,
+  preview,
 }: CarouselProductSectionProps) {
   const products = section.products ?? [];
 
@@ -26,7 +28,7 @@ export default function CarouselProductSection({
             key={p.id}
             className="snap-start shrink-0 w-[200px] sm:w-[240px] md:w-[260px]"
           >
-            <CarouselProductCard product={p} />
+            <CarouselProductCard product={p} preview={preview} />
           </div>
         ))}
       </div>
@@ -34,10 +36,17 @@ export default function CarouselProductSection({
   );
 }
 
-function CarouselProductCard({ product }: { product: HomepageProduct }) {
-  const price = product.isFlashSale && product.flashSalePrice
-    ? parseFloat(product.flashSalePrice)
-    : parseFloat(String(product.price ?? product.basePrice ?? "0"));
+function CarouselProductCard({
+  product,
+  preview,
+}: {
+  product: HomepageProduct;
+  preview?: boolean;
+}) {
+  const price =
+    product.isFlashSale && product.flashSalePrice
+      ? parseFloat(product.flashSalePrice)
+      : parseFloat(String(product.price ?? product.basePrice ?? "0"));
   const originalPrice =
     product.isFlashSale && product.flashSalePrice
       ? parseFloat(String(product.basePrice ?? "0"))
@@ -51,6 +60,7 @@ function CarouselProductCard({ product }: { product: HomepageProduct }) {
       originalPrice={originalPrice}
       image={product.image ?? ""}
       isFlashSale={product.isFlashSale}
+      preview={preview}
     />
   );
 }

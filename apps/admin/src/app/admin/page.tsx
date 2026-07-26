@@ -3,6 +3,13 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { getFirstViewableModule, getPermissionsForRole } from "@/lib/permissions";
 
+// Force dynamic rendering so the RSC payload (which may contain a redirect to
+// /login when unauthenticated) is never cached by the Next.js client-side
+// Router Cache. Without this, a cached "/admin -> /login" redirect can be
+// replayed right after a successful login, making the login appear to fail
+// until the user clicks the button a second time.
+export const dynamic = "force-dynamic";
+
 // Redirect to the first module the user is allowed to view.
 // If no module is viewable, render a no-access page.
 export default async function AdminDashboard() {

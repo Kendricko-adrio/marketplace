@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node *)",
+      "Bash(env)",
+      "Bash(git check-ignore *)",
+      "Bash(curl -s --max-time 15 https://downloads.claude.ai/claude-code-releases/latest)",
+      "Bash(echo \"EXIT: $?\")"
+    ]
+  }
+}

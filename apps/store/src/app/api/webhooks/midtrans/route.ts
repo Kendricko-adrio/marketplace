@@ -1,57 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import {
-  orders,
-  orderItems,
-  branchStocks,
-  branches,
-} from "@/db";
-import { eq, and, inArray } from "drizzle-orm";
+import { orders } from "@/db";
+import { eq } from "drizzle-orm";
 import {
   verifyMidtransSignature,
   getMidtransTransactionStatus,
 } from "@/lib/midtrans";
-import { sendEmail } from "@/lib/email";
 import {
-  pickupReadyEmailHTML,
-  pickupReadyEmailText,
-  paymentFailedEmailHTML,
-  paymentFailedEmailText,
-} from "@/lib/email-templates-order";
-
-// 6-char pickup code alphabet (no ambiguous chars: O, I, 0, 1)
-const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
-function generatePickupCode(): string {
-  return Array.from(
-    { length: 6 },
-    () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]
-  ).join("");
-}
-
-/**
- * Map a Midtrans transaction_status to a human-readable failure reason.
- * Returns null for non-failure statuses.
- */
-function describeFailureReason(
-  transactionStatus: string,
-  statusMessage?: string
-): string | null {
-  switch (transactionStatus) {
-    case "expire":
-      return "Payment expired — user did not complete payment in time";
-    case "deny":
-      return statusMessage
-        ? `Payment denied by issuer/acquirer (${statusMessage})`
-        : "Payment denied by issuer/acquirer";
-    case "cancel":
-      return "Payment cancelled";
-    default:
-      return null;
-  }
-}
+  claimAndFinalizePaidOrder,
+  claimAndFailOrder,
+  describeFailureReason,
+} from "@/lib/order-finalize";
+import { requestLogger, serializeError } from "@/lib/logger";
 
 export async function POST(request: NextRequest) {
+  const log = requestLogger(request, { module: "midtrans-webhook" });
   try {
     const body = await request.json();
 
@@ -64,7 +27,10 @@ export async function POST(request: NextRequest) {
       fraud_status,
     } = body;
 
+    log.info("webhook received", { order_id, transaction_status, status_code });
+
     if (!order_id || !transaction_status) {
+      log.warn("invalid notification — missing fields");
       return NextResponse.json(
         { success: false, error: "Invalid notification" },
         { status: 400 }
@@ -81,13 +47,15 @@ export async function POST(request: NextRequest) {
         String(signature_key)
       );
       if (!isValid) {
-        console.error("Midtrans webhook: invalid signature for order", order_id);
+        log.error("invalid signature", { order_id });
         return NextResponse.json(
           { success: false, error: "Invalid signature" },
           { status: 401 }
         );
       }
     }
+
+    const orderLog = log.child({ orderId: String(order_id) });
 
     // ===== Load the order =====
     const orderRows = await db
@@ -97,7 +65,7 @@ export async function POST(request: NextRequest) {
       .limit(1);
 
     if (orderRows.length === 0) {
-      console.error("Midtrans webhook: order not found", order_id);
+      orderLog.error("order not found");
       return NextResponse.json(
         { success: false, error: "Order not found" },
         { status: 404 }
@@ -107,13 +75,17 @@ export async function POST(request: NextRequest) {
     const order = orderRows[0];
 
     // ===== Idempotency: skip if already in a terminal state =====
+    // (The claim-guard inside the finalizers also enforces this, but checking
+    // here avoids a redundant Midtrans status re-verify round-trip.)
     if (order.paymentStatus === "paid") {
+      orderLog.info("already processed — skipping");
       return NextResponse.json({
         success: true,
         message: "Order already processed",
       });
     }
     if (order.status === "failed_payment") {
+      orderLog.info("already failed — skipping");
       return NextResponse.json({
         success: true,
         message: "Order already marked as failed",
@@ -136,11 +108,9 @@ export async function POST(request: NextRequest) {
     } catch (verifyError) {
       // If re-verify fails, fall back to the webhook payload (signature was
       // already verified above). Log the issue for investigation.
-      console.error(
-        "Midtrans webhook: status re-verify failed for order",
-        order_id,
-        verifyError
-      );
+      orderLog.error("status re-verify failed", {
+        error: serializeError(verifyError),
+      });
     }
 
     // ===== Handle transaction status =====
@@ -154,282 +124,32 @@ export async function POST(request: NextRequest) {
       authoritativeStatus === "expire";
 
     if (isSuccess) {
-      // ===== Payment success: deduct stock, generate pickup code, send email =====
-      await db.transaction(async (tx) => {
-        // 1. Mark as paid + processing
-        await tx
-          .update(orders)
-          .set({
-            paymentStatus: "paid",
-            status: "processing",
-            updatedAt: new Date(),
-          })
-          .where(eq(orders.id, order.id));
-
-        // 2. Deduct branch stock for each order item
-        const items = await tx
-          .select()
-          .from(orderItems)
-          .where(eq(orderItems.orderId, order.id));
-
-        for (const item of items) {
-          const stockRow = await tx
-            .select()
-            .from(branchStocks)
-            .where(
-              and(
-                eq(branchStocks.branchId, order.branchId!),
-                eq(branchStocks.productVariantId, item.variantId)
-              )
-            )
-            .limit(1);
-
-          if (stockRow.length > 0) {
-            const newStock = Math.max(0, stockRow[0].stock - item.quantity);
-            await tx
-              .update(branchStocks)
-              .set({ stock: newStock, updatedAt: new Date() })
-              .where(
-                and(
-                  eq(branchStocks.branchId, order.branchId!),
-                  eq(branchStocks.productVariantId, item.variantId)
-                )
-              );
-          }
-        }
-
-        // 3. Generate unique pickup code
-        let pickupCode = generatePickupCode();
-        // Collision check against active orders
-        let attempts = 0;
-        while (attempts < 10) {
-          const existing = await tx
-            .select({ id: orders.id })
-            .from(orders)
-            .where(
-              and(
-                eq(orders.pickupCode, pickupCode),
-                inArray(orders.status, ["ready_for_pickup", "completed"])
-              )
-            )
-            .limit(1);
-          if (existing.length === 0) break;
-          pickupCode = generatePickupCode();
-          attempts++;
-        }
-
-        // 4. Set status to ready_for_pickup with pickup code
-        await tx
-          .update(orders)
-          .set({
-            status: "ready_for_pickup",
-            pickupCode,
-            updatedAt: new Date(),
-          })
-          .where(eq(orders.id, order.id));
-      });
-
-      // ===== Send Email #1 (outside the transaction) =====
-      try {
-        const [branchData, itemsForEmail] = await Promise.all([
-          db
-            .select()
-            .from(branches)
-            .where(eq(branches.id, order.branchId!))
-            .limit(1),
-          db
-            .select({
-              productName: orderItems.productName,
-              variantInfo: orderItems.variantInfo,
-              price: orderItems.price,
-              quantity: orderItems.quantity,
-            })
-            .from(orderItems)
-            .where(eq(orderItems.orderId, order.id)),
-        ]);
-
-        const updatedOrder = await db
-          .select()
-          .from(orders)
-          .where(eq(orders.id, order.id))
-          .limit(1);
-
-        if (branchData.length > 0 && updatedOrder[0].pickupCode) {
-          const html = pickupReadyEmailHTML({
-            order: {
-              id: order.id,
-              total: order.total,
-              subtotal: order.subtotal,
-              serviceFee: order.serviceFee,
-              pickupDate: order.pickupDate,
-              pickupTime: order.pickupTime,
-            },
-            pickupCode: updatedOrder[0].pickupCode,
-            branch: {
-              name: branchData[0].name,
-              address: branchData[0].address,
-              city: branchData[0].city,
-              operatingHours: branchData[0].operatingHours,
-            },
-            items: itemsForEmail,
-          });
-
-          const text = pickupReadyEmailText({
-            order: {
-              id: order.id,
-              total: order.total,
-              subtotal: order.subtotal,
-              serviceFee: order.serviceFee,
-              pickupDate: order.pickupDate,
-              pickupTime: order.pickupTime,
-            },
-            pickupCode: updatedOrder[0].pickupCode,
-            branch: {
-              name: branchData[0].name,
-              address: branchData[0].address,
-              city: branchData[0].city,
-              operatingHours: branchData[0].operatingHours,
-            },
-            items: itemsForEmail,
-          });
-
-          await sendEmail({
-            to: order.contactEmail,
-            subject: `Your Order is Ready for Pickup — #${order.id.slice(0, 8).toUpperCase()}`,
-            html,
-            text,
-          });
-        }
-      } catch (emailError) {
-        // Log but don't fail the webhook — Midtrans needs a 200 response
-        console.error(
-          "Midtrans webhook: failed to send pickup-ready email:",
-          emailError
-        );
-      }
-
-      console.log(
-        `Midtrans webhook: order ${order_id} paid → ready_for_pickup`
-      );
-    } else if (isFailure) {
-      // ===== Payment failure: mark as failed_payment, restore stock if needed =====
-      const reason = describeFailureReason(
+      // Payment success: convert reservation → real deduction, generate pickup
+      // code, move to ready_for_pickup, send email. Claim-guard makes this
+      // idempotent against the sweep cron racing this webhook.
+      orderLog.info("settlement → finalize dispatched", {
         authoritativeStatus,
-        authoritativeStatusMessage
-      ) ?? "Payment failed";
-
-      await db.transaction(async (tx) => {
-        await tx
-          .update(orders)
-          .set({
-            paymentStatus: "failed",
-            status: "failed_payment",
-            paymentFailureReason: reason,
-            midtransFailureStatus: authoritativeStatus,
-            updatedAt: new Date(),
-          })
-          .where(eq(orders.id, order.id));
-
-        // Restore stock (only if it was previously paid — i.e. a reversal).
-        // For pending → failed_payment transitions, no stock was deducted yet,
-        // so there's nothing to restore.
-        if (order.paymentStatus === "paid") {
-          const items = await tx
-            .select()
-            .from(orderItems)
-            .where(eq(orderItems.orderId, order.id));
-
-          for (const item of items) {
-            const stockRow = await tx
-              .select()
-              .from(branchStocks)
-              .where(
-                and(
-                  eq(branchStocks.branchId, order.branchId!),
-                  eq(branchStocks.productVariantId, item.variantId)
-                )
-              )
-              .limit(1);
-
-            if (stockRow.length > 0) {
-              await tx
-                .update(branchStocks)
-                .set({
-                  stock: stockRow[0].stock + item.quantity,
-                  updatedAt: new Date(),
-                })
-                .where(
-                  and(
-                    eq(branchStocks.branchId, order.branchId!),
-                    eq(branchStocks.productVariantId, item.variantId)
-                  )
-                );
-            }
-          }
-        }
       });
-
-      // ===== Send Payment Failed email (outside the transaction) =====
-      try {
-        const itemsForEmail = await db
-          .select({
-            productName: orderItems.productName,
-            variantInfo: orderItems.variantInfo,
-            price: orderItems.price,
-            quantity: orderItems.quantity,
-          })
-          .from(orderItems)
-          .where(eq(orderItems.orderId, order.id));
-
-        const html = paymentFailedEmailHTML({
-          order: {
-            id: order.id,
-            total: order.total,
-            subtotal: order.subtotal,
-            serviceFee: order.serviceFee,
-            pickupDate: order.pickupDate,
-            pickupTime: order.pickupTime,
-          },
-          reason,
-          items: itemsForEmail,
-        });
-
-        const text = paymentFailedEmailText({
-          order: {
-            id: order.id,
-            total: order.total,
-            subtotal: order.subtotal,
-            serviceFee: order.serviceFee,
-            pickupDate: order.pickupDate,
-            pickupTime: order.pickupTime,
-          },
-          reason,
-          items: itemsForEmail,
-        });
-
-        await sendEmail({
-          to: order.contactEmail,
-          subject: `Pembayaran Gagal — #${order.id.slice(0, 8).toUpperCase()}`,
-          html,
-          text,
-        });
-      } catch (emailError) {
-        console.error(
-          "Midtrans webhook: failed to send payment-failed email:",
-          emailError
-        );
-      }
-
-      console.log(
-        `Midtrans webhook: order ${order_id} failed_payment (${authoritativeStatus})`
-      );
+      await claimAndFinalizePaidOrder(order.id, order, orderLog);
+    } else if (isFailure) {
+      const reason =
+        describeFailureReason(authoritativeStatus, authoritativeStatusMessage) ??
+        "Payment failed";
+      orderLog.info("failure → fail dispatched", {
+        authoritativeStatus,
+        reason,
+      });
+      await claimAndFailOrder(order.id, reason, authoritativeStatus, orderLog);
     }
     // transaction_status === "pending" → do nothing, order stays pending_payment
+    if (!isSuccess && !isFailure) {
+      orderLog.info("non-terminal status — no action", { authoritativeStatus });
+    }
 
     // Always return 200 to Midtrans (prevents retries)
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Midtrans webhook error:", error);
+    log.error("webhook handler failed", { error: serializeError(error) });
     // Still return 200 to prevent Midtrans from retrying excessively
     return NextResponse.json({ success: true });
   }

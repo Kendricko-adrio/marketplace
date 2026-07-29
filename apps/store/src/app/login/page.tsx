@@ -19,6 +19,7 @@ import { signIn, authClient } from "@/lib/auth-client";
 function LoginForm() {
   const searchParams = useSearchParams();
   const callbackUrl = searchParams.get("callbackUrl") || "/";
+  const resetSuccess = searchParams.get("reset") === "success";
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -140,6 +141,11 @@ function LoginForm() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {resetSuccess && (
+            <div className="bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 text-sm p-3 rounded-md">
+              Password berhasil diubah. Silakan masuk dengan password baru Anda.
+            </div>
+          )}
           {error && (
             <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-md">
               {error}

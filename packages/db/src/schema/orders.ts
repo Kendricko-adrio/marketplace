@@ -5,6 +5,7 @@ import {
   boolean,
   numeric,
   integer,
+  index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { clients, users } from "./auth";
@@ -78,9 +79,18 @@ export const orders = pgTable("orders", {
   // Phase 2 shipping fields (nullable, unused in Phase 1)
   shippingCarrier: text("shipping_carrier"),
   trackingNumber: text("tracking_number"),
+  // When a pending_payment order is considered expired and its stock reservation
+  // should be released. Set at place-order = createdAt + reservation.ttlMinutes
+  // (see system_config). The sweep cron and the Midtrans `expire` webhook key off
+  // this. Nullable for legacy rows (backfilled by migration).
+  expiresAt: timestamp("expires_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+}, (t) => ({
+  // Supports the sweep cron's batch lookup of stale pending_payment orders
+  // (WHERE status = 'pending_payment' AND expires_at < now()).
+  statusExpiresIdx: index("idx_orders_status_expires").on(t.status, t.expiresAt),
+}));
 
 // Order Items table
 export const orderItems = pgTable("order_item", {

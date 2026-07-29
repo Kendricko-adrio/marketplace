@@ -3,8 +3,15 @@ import { db } from "@/db";
 import { clients, orders, orderItems, branches } from "@/db";
 import { eq, and, desc, sql, ilike, or, gte, lte } from "drizzle-orm";
 import { withPermission, getBranchScope } from "@/lib/auth-guard";
+import { requestLogger, serializeError } from "@/lib/logger";
 
 export const GET = withPermission(async (_ctx, request: NextRequest) => {
+  const log = requestLogger(request, {
+    module: "admin-orders",
+    action: "list",
+    userId: _ctx.user.id,
+    role: _ctx.user.role,
+  });
   try {
     const { searchParams } = new URL(request.url);
     const status = searchParams.get("status");
@@ -15,6 +22,8 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
     const page = parseInt(searchParams.get("page") || "1");
     const limit = parseInt(searchParams.get("limit") || "20");
     const offset = (page - 1) * limit;
+
+    log.info("orders list requested", { status, branchIdParam, page, limit });
 
     // ===== RBAC: determine branch scope =====
     const scope = getBranchScope(_ctx.user);
@@ -115,6 +124,7 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
     const countResult = await countQuery;
     const total = Number(countResult[0]?.count || 0);
 
+    log.info("orders list served", { total, page });
     return NextResponse.json({
       success: true,
       data: ordersWithDetails,
@@ -126,7 +136,7 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
       },
     });
   } catch (error) {
-    console.error("Error fetching admin orders:", error);
+    log.error("fetch admin orders failed", { error: serializeError(error) });
     return NextResponse.json(
       { success: false, error: "Failed to fetch orders" },
       { status: 500 }

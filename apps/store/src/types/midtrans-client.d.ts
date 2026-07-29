@@ -26,12 +26,20 @@ declare module "midtrans-client" {
     category?: string;
   }
 
+  // Order expiry sent to Snap so Midtrans auto-expires the transaction and
+  // fires an `expire` webhook (primary release path for stock reservations).
+  export interface ExpiryParameter {
+    unit: "minute" | "hour" | "day";
+    duration: number;
+  }
+
   export interface TransactionParameter {
     transaction_details: TransactionDetails;
     payment_methods?: string[];
     customer_details?: CustomerDetails;
     item_details?: ItemDetail[];
     credit_card?: { secure?: boolean };
+    expiry?: ExpiryParameter;
   }
 
   export interface CreateTransactionResult {
@@ -39,7 +47,13 @@ declare module "midtrans-client" {
     redirect_url: string;
   }
 
+  // Minimal shape of the Snap transaction helper used by the sweep cron.
+  export interface SnapTransaction {
+    expire(orderId: string): Promise<unknown>;
+  }
+
   export class Snap {
+    transaction: SnapTransaction;
     constructor(config: SnapConfig);
     createTransaction(
       parameter: TransactionParameter

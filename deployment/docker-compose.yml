@@ -63,6 +63,9 @@ services:
       MIDTRANS_CLIENT_KEY: ${MIDTRANS_CLIENT_KEY}
       MIDTRANS_IS_PRODUCTION: ${MIDTRANS_IS_PRODUCTION:-false}
       MIDTRANS_PAYMENT_MODE: ${MIDTRANS_PAYMENT_MODE:-snap}
+      # Cron secret for the stock-reservation sweep endpoint
+      # (POST /api/cron/sweep-reservations, header X-Cron-Secret).
+      CRON_SECRET: ${CRON_SECRET}
       # Uploads — shared named volume mounted at /app/uploads
       UPLOADS_DIR: /app/uploads
       # Internal URL the admin app uses to call this store's internal endpoints.

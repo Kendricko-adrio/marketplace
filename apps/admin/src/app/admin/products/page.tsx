@@ -49,6 +49,8 @@ interface Product {
   variants: { id: string; price: string; isDefault: boolean }[];
   variantCount: number;
   totalStock: number;
+  totalReserved: number;
+  totalAvailable: number;
   categories: string[];
   images?: { url: string }[];
 }
@@ -167,7 +169,7 @@ export default function AdminProductsPage() {
                       <TableHead>Kategori</TableHead>
                       <TableHead className="text-right">Harga</TableHead>
                       <TableHead className="text-center">Varian</TableHead>
-                      <TableHead className="text-right">Total Stok</TableHead>
+                      <TableHead className="text-right">Stok</TableHead>
                       <TableHead className="text-center">Status</TableHead>
                       <TableHead className="w-[80px] text-right">
                         Aksi
@@ -208,7 +210,14 @@ export default function AdminProductsPage() {
                             {product.variantCount}
                           </TableCell>
                           <TableCell className="text-right">
-                            {product.totalStock}
+                            <div className="font-medium">
+                              {product.totalAvailable}
+                            </div>
+                            {product.totalReserved > 0 && (
+                              <div className="text-xs text-muted-foreground">
+                                {product.totalReserved} reserved
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell className="text-center">
                             <Badge

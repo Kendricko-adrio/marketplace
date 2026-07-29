@@ -54,6 +54,11 @@ export const branchStocks = pgTable(
       .notNull()
       .references(() => productVariants.id, { onDelete: "cascade" }),
     stock: integer("stock").notNull().default(0),
+    // Quantity held by pending_payment orders (reserved at place-order, before
+    // the customer pays on Midtrans Snap). "Available stock" = stock - reservedStock.
+    // Decremented to 0 when the reservation converts to a real deduction on payment
+    // success, or is released on payment failure/expiry.
+    reservedStock: integer("reserved_stock").notNull().default(0),
     updatedAt: timestamp("updated_at").notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.branchId, t.productVariantId] })]

@@ -2,66 +2,11 @@
 
 ## Tech Stack
 
-- Next.js 16.1.1 + React 19.2.3 + TypeScript (strict)
-- Tailwind CSS 3 + shadcn/ui (Radix primitives)
-- Drizzle ORM 0.45 + PostgreSQL (`pg` driver, node-postgres `Pool`)
-- Better Auth 1.4 (Drizzle adapter) — **two separate instances** (see Auth)
-- `bcryptjs` for password hashing
-- **npm workspaces** monorepo (apps/store, apps/admin, packages/db)
+See `package.json` (root + each workspace) for the canonical dependency list. Points not obvious from the manifest: Better Auth runs as **two separate instances** (see Auth); `bcryptjs` for password hashing; npm workspaces monorepo (`apps/store`, `apps/admin`, `packages/db`).
 
 ## Project Structure
 
-```
-marketplace/
-├── apps/
-│   ├── store/                       ← Customer storefront (port 3000)
-│   │   └── src/
-│   │       ├── app/                 ← App router: products, cart, checkout,
-│   │       │                        │   account, onboarding, login, register,
-│   │       │                        │   auth/verify, forgot/reset-password,
-│   │       │                        │   api/auth/[...all]
-│   │       ├── components/          ← Store-specific components (ui/ = shadcn)
-│   │       ├── db/index.ts         ← Local `db` instance + schema re-export
-│   │       ├── lib/auth.ts         ← Store Better Auth instance ("client" prefix)
-│   │       ├── lib/email.ts        ← Nodemailer verification email sender
-│   │       ├── providers/          ← Client-side React providers
-│   │       └── middleware.ts       ← Auth + onboarding gate
-│   │
-│   └── admin/                       ← Admin dashboard (port 3001)
-│       └── src/
-│           ├── app/                ← App router: admin/{dashboard,products,
-│           │                       │   orders,users,marketing,analytics},
-│           │                       │   login, api/auth/[...all]
-│           ├── components/         ← Admin-specific components (ui/ = shadcn)
-│           ├── db/index.ts         ← Local `db` instance + schema re-export
-│           ├── lib/auth.ts         ← Admin Better Auth instance ("admin" prefix)
-│           ├── providers/
-│           └── middleware.ts       ← Admin route protection
-│
-├── packages/
-│   └── db/                         ← 🏛️ SHARED SCHEMA OWNER
-│       ├── src/
-│       │   ├── schema/             ← All table definitions
-│       │   │   ├── index.ts       ← Barrel re-export of all schema modules
-│       │   │   ├── auth.ts        ← clients + users (admin) + sessions/accounts
-│       │   │   ├── products.ts
-│       │   │   ├── orders.ts
-│       │   │   ├── cart.ts
-│       │   │   ├── marketing.ts
-│       │   │   └── system.ts
-│       │   ├── index.ts            ← DB connection (Pool + drizzle)
-│       │   ├── seed.ts             ← Seed script
-│       │   └── reset.ts            ← DB reset script
-│       ├── drizzle.config.ts       ← Schema owner config (loads ../../.env)
-│       ├── drizzle/                ← Generated migrations
-│       └── package.json            ← name: "@marketplace/db"
-│
-├── docker-compose.yml              ← PostgreSQL 16-alpine (DB: storefront)
-├── package.json                    ← Workspaces config + root scripts
-├── .env                            ← Shared env (DATABASE_URL, BETTER_AUTH_SECRET,
-│                                    │   GOOGLE_CLIENT_ID/SECRET, SMTP_*)
-└── .env.example
-```
+Run `ls`/`find` for the live tree. In short: `apps/store` (storefront, port 3000), `apps/admin` (admin, port 3001), and `packages/db` (🏛️ shared schema owner). Each app has its own `src/db/index.ts` (local `db` instance + schema re-export), `lib/auth.ts`, `providers/`, and `middleware.ts`.
 
 ## Dev Setup (order matters)
 
@@ -144,40 +89,11 @@ different user tables, cookie prefixes, and feature sets.
 
 ## Workspace Scripts (run from ROOT)
 
-| Command            | What it does                                   |
-|--------------------|------------------------------------------------|
-| `npm run dev`      | Alias for `dev:store`                          |
-| `npm run dev:store`| Start storefront (port 3000)                   |
-| `npm run dev:admin`| Start admin (port 3001)                        |
-| `npm run dev:all`  | Start both via `concurrently`                 |
-| `npm run build`    | `build:store` + `build:admin`                 |
-| `npm run build:store` | Build storefront                            |
-| `npm run build:admin`| Build admin                                  |
-| `npm run db:generate` | Generate migration (packages/db)           |
-| `npm run db:push`  | Push schema to DB (packages/db)               |
-| `npm run db:migrate`| Run migrations (packages/db)                 |
-| `npm run db:studio`| Drizzle Studio (packages/db)                 |
-| `npm run db:seed`  | Seed sample data (packages/db)               |
-| `npm run db:check` | `drizzle-kit check` (packages/db)            |
-| `npm run db:reset` | Reset DB via `packages/db/src/reset.ts`      |
-| `npm run lint`     | Lint store + admin                            |
-| `npm run lint:store`| Lint storefront                              |
-| `npm run lint:admin`| Lint admin                                   |
+See the `scripts` block in the root `package.json` for the full list (`dev:store`, `dev:admin`, `dev:all`, `build:store`, `build:admin`, `db:generate`, `db:push`, `db:migrate`, `db:studio`, `db:seed`, `db:check`, `db:reset`, `lint`, `lint:store`, `lint:admin`). Run all `db:*` scripts from the root via `npm run db:*`.
 
 ## Path Aliases
 
-Defined per-app in `apps/<app>/tsconfig.json` (no root alias).
-
-| Alias               | Store resolves to                  | Admin resolves to                  |
-|---------------------|------------------------------------|------------------------------------|
-| `@/*`               | `./src/*`                          | `./src/*`                          |
-| `@marketplace/db`   | `../../packages/db/src/index.ts`   | `../../packages/db/src/index.ts`   |
-| `@marketplace/db/*` | `../../packages/db/src/*`          | `../../packages/db/src/*`          |
-| `@db/*`             | _(not defined in store)_           | `./src/db/*`                       |
-
-- The `db` instance is imported as `@/db` (i.e. `./src/db/index.ts`) in both apps.
-- `apps/<app>/src/db/index.ts` imports schema source directly via
-  `@marketplace/db/src/schema` (not the built `dist/`).
+Defined per-app in `apps/<app>/tsconfig.json` (no root alias). `@/*` → `./src/*` in both apps; `@marketplace/db` and `@marketplace/db/*` → `../../packages/db/src/*`; `@db/*` is store-undefined, admin → `./src/db/*`. The `db` instance is imported as `@/db` (`./src/db/index.ts`) in both apps, and `apps/<app>/src/db/index.ts` imports schema source directly via `@marketplace/db/src/schema` (not the built `dist/`).
 
 ## Conventions
 
@@ -236,3 +152,6 @@ gunakan skill yang paling relevan via tool `skill`.
   `packages/db/src/seed.ts` so `npm run db:reset && npm run db:seed` produces a
   fully populated, testable DB without manual data entry. Add a `DELETE` for any
   new table (top of `seed()`, respecting FK order) and realistic sample rows.
+- **ALWAYS USE CONTEXT7 FOR ENRICH YOUR KNOWLEDGE ON THE LIBRARY OR FRAMEWORK THAT HIS PROJECT USE** - 
+  you have a cut off time knowledge so to make sure that you have an updated documentation,
+  use context7 for asking the documentation that you need.

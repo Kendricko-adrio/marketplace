@@ -3,14 +3,22 @@ import { db } from "@/db";
 import { orders, orderItems, branches, clients, productVariants, productImages } from "@/db";
 import { eq, asc } from "drizzle-orm";
 import { withPermission, getBranchScope } from "@/lib/auth-guard";
+import { requestLogger, serializeError } from "@/lib/logger";
 
 export const GET = withPermission(async (
   _ctx,
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) => {
+  let log = requestLogger(request, {
+    module: "admin-orders",
+    action: "detail",
+    userId: _ctx.user.id,
+    role: _ctx.user.role,
+  });
   try {
     const { id } = await params;
+    log = log.child({ orderId: id });
     const scope = getBranchScope(_ctx.user);
 
     const order = await db
@@ -55,6 +63,7 @@ export const GET = withPermission(async (
       .limit(1);
 
     if (order.length === 0) {
+      log.warn("order not found");
       return NextResponse.json(
         { success: false, error: "Order not found" },
         { status: 404 }
@@ -63,6 +72,10 @@ export const GET = withPermission(async (
 
     // RBAC: branch admin can only view their own branch's orders
     if (scope.mode === "own" && order[0].order.branchId !== scope.branchId) {
+      log.warn("forbidden — order belongs to a different branch", {
+        orderBranchId: order[0].order.branchId,
+        adminBranchId: scope.branchId,
+      });
       return NextResponse.json(
         { success: false, error: "Forbidden — order belongs to a different branch" },
         { status: 403 }
@@ -102,6 +115,7 @@ export const GET = withPermission(async (
       })
     );
 
+    log.info("order detail served");
     return NextResponse.json({
       success: true,
       data: {
@@ -112,7 +126,7 @@ export const GET = withPermission(async (
       },
     });
   } catch (error) {
-    console.error("Error fetching order:", error);
+    log.error("fetch order detail failed", { error: serializeError(error) });
     return NextResponse.json(
       { success: false, error: "Failed to fetch order" },
       { status: 500 }

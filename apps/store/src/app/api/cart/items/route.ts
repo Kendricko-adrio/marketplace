@@ -98,7 +98,9 @@ export async function POST(request: NextRequest) {
       )
       .limit(1);
 
-    const availableStock = stockRow[0]?.stock ?? 0;
+    // Available = stock - reservedStock (units held by pending_payment orders).
+    const availableStock =
+      (stockRow[0]?.stock ?? 0) - (stockRow[0]?.reservedStock ?? 0);
 
     const cart = await getOrCreateCart(session.user.id);
 

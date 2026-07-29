@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import { toast } from "sonner";
-import { ShoppingCart, Heart, Share2, Minus, Plus, MapPin } from "lucide-react";
+import { ShoppingCart, Minus, Plus, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useCart } from "@/providers/cart-provider";
@@ -14,6 +14,8 @@ interface BranchStock {
   code: string;
   city: string;
   stock: number;
+  reservedStock: number;
+  available: number;
 }
 
 interface ProductVariant {
@@ -172,7 +174,7 @@ export default function ProductDetailPage() {
     (b) => b.branchId === selectedBranchId
   );
   const stockLabel = selectedBranchId
-    ? `Stok: ${selectedBranchStock?.stock ?? 0}`
+    ? `Stok: ${selectedBranchStock?.available ?? 0}`
     : availableBranches.length > 0
     ? "Pilih cabang"
     : "Stok habis di semua cabang";
@@ -323,7 +325,7 @@ export default function ProductDetailPage() {
                         </div>
                       </div>
                       <Badge variant="secondary" className="ml-auto">
-                        Stok: {b.stock}
+                        Stok: {b.available}
                       </Badge>
                     </button>
                   );
@@ -355,7 +357,7 @@ export default function ProductDetailPage() {
                 onClick={() =>
                   setQuantity(
                     selectedBranchStock
-                      ? Math.min(selectedBranchStock.stock, quantity + 1)
+                      ? Math.min(selectedBranchStock.available, quantity + 1)
                       : quantity + 1
                   )
                 }
@@ -375,14 +377,6 @@ export default function ProductDetailPage() {
               {addingToCart ? "Menambahkan..." : "Masukkan Keranjang"}
             </Button>
 
-            <div className="flex gap-2">
-              <Button variant="outline" size="icon" className="h-11 w-11">
-                <Heart className="w-5 h-5" />
-              </Button>
-              <Button variant="outline" size="icon" className="h-11 w-11">
-                <Share2 className="w-5 h-5" />
-              </Button>
-            </div>
           </div>
 
           <div className="bg-green-50 text-green-700 p-4 rounded-lg flex gap-3 items-center border border-green-100">

@@ -51,12 +51,21 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
 
         const variantIds = variants.map((v) => v.id);
         let totalStock = 0;
+        let totalReserved = 0;
+        let totalAvailable = 0;
         if (variantIds.length > 0) {
+          // totalStock = all units on hand; totalReserved = units held by
+          // pending_payment orders; totalAvailable = units actually buyable.
           const stockRows = await db
-            .select({ total: sum(branchStocks.stock) })
+            .select({
+              total: sum(branchStocks.stock),
+              reserved: sum(branchStocks.reservedStock),
+            })
             .from(branchStocks)
             .where(inArray(branchStocks.productVariantId, variantIds));
           totalStock = Number(stockRows[0]?.total || 0);
+          totalReserved = Number(stockRows[0]?.reserved || 0);
+          totalAvailable = Math.max(0, totalStock - totalReserved);
         }
 
         // Fetch images for each variant
@@ -79,6 +88,8 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
           })),
           variantCount: variants.length,
           totalStock,
+          totalReserved,
+          totalAvailable,
           categories: productCategories.map((c) => c.name),
           images,
         };

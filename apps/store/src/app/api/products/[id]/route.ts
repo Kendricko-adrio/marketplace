@@ -10,7 +10,7 @@ import {
   branchStocks,
   branches,
 } from "@/db";
-import { eq, and, asc, avg, count, inArray, gt } from "drizzle-orm";
+import { eq, and, asc, avg, count, sql } from "drizzle-orm";
 
 export async function GET(
   request: NextRequest,
@@ -71,7 +71,9 @@ export async function GET(
           .where(eq(productImages.variantId, variant.id))
           .orderBy(asc(productImages.displayOrder));
 
-        // Get branches with stock > 0 for this variant
+        // Get branches with available stock for this variant.
+        // Available = stock - reservedStock (units held by pending_payment
+        // orders). Branches with zero/negative available are hidden.
         const branchStockRows = await db
           .select({
             branchId: branches.id,
@@ -79,6 +81,7 @@ export async function GET(
             code: branches.code,
             city: branches.city,
             stock: branchStocks.stock,
+            reservedStock: branchStocks.reservedStock,
           })
           .from(branchStocks)
           .innerJoin(branches, eq(branchStocks.branchId, branches.id))
@@ -86,15 +89,20 @@ export async function GET(
             and(
               eq(branchStocks.productVariantId, variant.id),
               eq(branches.status, "aktif"),
-              gt(branchStocks.stock, 0)
+              sql`${branchStocks.stock} - ${branchStocks.reservedStock} > 0`
             )
           )
           .orderBy(asc(branches.name));
 
+        const branchStock = branchStockRows.map((b) => ({
+          ...b,
+          available: b.stock - b.reservedStock,
+        }));
+
         return {
           ...variant,
           images: images.map((img) => img.url),
-          branchStock: branchStockRows,
+          branchStock,
         };
       })
     );

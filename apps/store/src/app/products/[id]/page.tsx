@@ -3,7 +3,7 @@ import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import { toast } from "sonner";
-import { ShoppingCart, Heart, Share2, Minus, Plus, MapPin } from "lucide-react";
+import { ShoppingCart, Minus, Plus, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useCart } from "@/providers/cart-provider";
@@ -377,14 +377,6 @@ export default function ProductDetailPage() {
               {addingToCart ? "Menambahkan..." : "Masukkan Keranjang"}
             </Button>
 
-            <div className="flex gap-2">
-              <Button variant="outline" size="icon" className="h-11 w-11">
-                <Heart className="w-5 h-5" />
-              </Button>
-              <Button variant="outline" size="icon" className="h-11 w-11">
-                <Share2 className="w-5 h-5" />
-              </Button>
-            </div>
           </div>
 
           <div className="bg-green-50 text-green-700 p-4 rounded-lg flex gap-3 items-center border border-green-100">

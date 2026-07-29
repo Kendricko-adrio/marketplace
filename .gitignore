@@ -50,3 +50,5 @@ next-env.d.ts
 
 # build output (tsc) dari packages
 dist/
+
+.playwright-mcp

@@ -1,11 +1,13 @@
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { createAuthMiddleware } from "better-auth/api";
+import { eq } from "drizzle-orm";
 import { db } from "@/db";
 import * as schema from "@/db";
+import { clientAccounts } from "@/db";
 import bcrypt from "bcryptjs";
 import { APIError } from "better-auth/api";
-import { sendVerificationEmail } from "@/lib/email";
+import { sendVerificationEmail, sendResetPasswordEmail } from "@/lib/email";
 
 // Password must be 8+ chars and contain at least one lowercase letter, one
 // uppercase letter, and one digit (alphanumeric complexity rule).
@@ -35,9 +37,27 @@ export const auth = betterAuth({
       },
     },
     async sendResetPassword(data) {
-      console.log("Reset password URL:", data.url);
-      // TODO: Implement reset password email (out of scope for this pass)
+      // Guard: only users who signed up with email/password (a credential
+      // account) may reset their password. Google-only users are silently
+      // skipped — no email is sent and no information is leaked. Better Auth
+      // has already created a reset token in the DB; it simply goes unused.
+      // This guard is required because Better Auth's resetPassword endpoint
+      // would otherwise auto-create a credential account for a Google user
+      // on reset. data.user does not carry account info, so we query the DB.
+      const accounts = await db
+        .select()
+        .from(clientAccounts)
+        .where(eq(clientAccounts.userId, data.user.id));
+      const hasCredential = accounts.some((a) => a.providerId === "credential");
+      if (!hasCredential) return;
+      await sendResetPasswordEmail({
+        to: data.user.email,
+        name: data.user.name,
+        resetUrl: data.url,
+      });
     },
+    resetPasswordTokenExpiresIn: 60 * 60, // 1 hour
+    revokeSessionsOnPasswordReset: true,
   },
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
@@ -46,6 +66,19 @@ export const auth = betterAuth({
       if (ctx.path === "/sign-up/email" && ctx.method === "POST") {
         const password = (ctx.body as { password?: string } | null)?.password ?? "";
         if (password && !PASSWORD_COMPLEXITY_REGEX.test(password)) {
+          throw new APIError("BAD_REQUEST", {
+            message:
+              "Password harus mengandung huruf besar, huruf kecil, dan angka.",
+          });
+        }
+      }
+      // Same complexity rule at the reset-password endpoint. Better Auth's
+      // resetPassword only enforces min/max length, so we validate the new
+      // password here to keep it consistent with sign-up.
+      if (ctx.path === "/reset-password" && ctx.method === "POST") {
+        const newPassword =
+          (ctx.body as { newPassword?: string } | null)?.newPassword ?? "";
+        if (newPassword && !PASSWORD_COMPLEXITY_REGEX.test(newPassword)) {
           throw new APIError("BAD_REQUEST", {
             message:
               "Password harus mengandung huruf besar, huruf kecil, dan angka.",

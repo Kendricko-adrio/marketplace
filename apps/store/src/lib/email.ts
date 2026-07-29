@@ -2,6 +2,8 @@ import nodemailer from "nodemailer";
 import {
   verificationEmailHTML,
   verificationEmailText,
+  resetPasswordEmailHTML,
+  resetPasswordEmailText,
 } from "@/lib/email-templates";
 import { BRAND_NAME, BRAND_SUPPORT_EMAIL } from "@/lib/email-config";
 
@@ -16,6 +18,12 @@ interface SendVerificationEmailInput {
   to: string;
   name: string;
   verificationUrl: string;
+}
+
+interface SendResetPasswordEmailInput {
+  to: string;
+  name: string;
+  resetUrl: string;
 }
 
 let transporter: nodemailer.Transporter | null = null;
@@ -71,6 +79,26 @@ export async function sendVerificationEmail(
   await sendEmail({
     to: input.to,
     subject: `Verify your email address — ${BRAND_NAME}`,
+    html,
+    text,
+  });
+}
+
+export async function sendResetPasswordEmail(
+  input: SendResetPasswordEmailInput
+): Promise<void> {
+  const html = resetPasswordEmailHTML({
+    url: input.resetUrl,
+    name: input.name,
+  });
+  const text = resetPasswordEmailText({
+    url: input.resetUrl,
+    name: input.name,
+  });
+
+  await sendEmail({
+    to: input.to,
+    subject: `Reset your password — ${BRAND_NAME}`,
     html,
     text,
   });

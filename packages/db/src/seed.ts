@@ -1291,9 +1291,9 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
           {
             title: "Layanan",
             links: [
-              { label: "Bantuan", href: "/help" },
-              { label: "Status Pesanan", href: "/status" },
-              { label: "Katalog", href: "/catalog" },
+              { label: "Bantuan", href: "/pages/contact" },
+              { label: "Status Pesanan", href: "/account" },
+              { label: "Katalog", href: "/products" },
               { label: "Cabang Kami", href: "/branches" },
             ],
           },

@@ -8,6 +8,7 @@ import {
   paymentFailedEmailHTML,
   paymentFailedEmailText,
 } from "@/lib/email-templates-order";
+import { createLogger, serializeError, type Logger } from "@/lib/logger";
 
 // 6-char pickup code alphabet (no ambiguous chars: O, I, 0, 1)
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -80,10 +81,12 @@ type OrderView = {
  */
 export async function claimAndFinalizePaidOrder(
   orderId: string,
-  order: OrderView
+  order: OrderView,
+  logger?: Logger
 ): Promise<FinalizeResult> {
+  const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
   if (!order.branchId) {
-    console.error("claimAndFinalizePaidOrder: order has no branchId", orderId);
+    log.error("cannot finalize — order has no branchId");
     return { claimed: false };
   }
 
@@ -218,13 +221,10 @@ export async function claimAndFinalizePaidOrder(
       });
     }
   } catch (emailError) {
-    console.error(
-      "claimAndFinalizePaidOrder: pickup-ready email failed:",
-      emailError
-    );
+    log.error("pickup-ready email failed", { error: serializeError(emailError) });
   }
 
-  console.log(`order-finalize: order ${orderId} paid → ready_for_pickup`);
+  log.info("order paid → ready_for_pickup", { pickupCode });
   return { claimed: true, pickupCode };
 }
 
@@ -245,8 +245,10 @@ export async function claimAndFinalizePaidOrder(
 export async function claimAndFailOrder(
   orderId: string,
   reason: string,
-  midtransStatus: string
+  midtransStatus: string,
+  logger?: Logger
 ): Promise<FinalizeResult> {
+  const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
   // Re-load the order (the caller's in-memory copy may be stale by the time a
   // sweep batch reaches it).
   const orderRows = await db
@@ -337,14 +339,9 @@ export async function claimAndFailOrder(
       text,
     });
   } catch (emailError) {
-    console.error(
-      "claimAndFailOrder: payment-failed email failed:",
-      emailError
-    );
+    log.error("payment-failed email failed", { error: serializeError(emailError) });
   }
 
-  console.log(
-    `order-finalize: order ${orderId} failed_payment (${midtransStatus})`
-  );
+  log.info("order failed_payment", { midtransStatus, reason });
   return { claimed: true };
 }

@@ -5,6 +5,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import crypto from "crypto";
 import { withPermission, getBranchScope } from "@/lib/auth-guard";
+import { requestLogger, serializeError } from "@/lib/logger";
 
 const verifyPickupSchema = z.object({
   pickupCodeInput: z.string().min(1).max(10),
@@ -15,12 +16,20 @@ export const POST = withPermission(async (
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) => {
+  const log = requestLogger(request, {
+    module: "admin-orders",
+    action: "verify-pickup",
+    userId: user.id,
+    role: user.role,
+  });
   try {
     const { id } = await params;
+    const orderLog = log.child({ orderId: id });
     const body = await request.json();
     const parsed = verifyPickupSchema.safeParse(body);
 
     if (!parsed.success) {
+      orderLog.warn("invalid pickup code input", { issues: parsed.error.issues });
       return NextResponse.json(
         { success: false, error: "Invalid input" },
         { status: 400 }
@@ -32,6 +41,7 @@ export const POST = withPermission(async (
 
     // Only branch admins can verify pickup codes (HQ is read-only per spec)
     if (scope.mode !== "own") {
+      orderLog.warn("non-branch admin attempted pickup verify");
       return NextResponse.json(
         { success: false, error: "Only branch admins can verify pickup codes" },
         { status: 403 }
@@ -46,6 +56,7 @@ export const POST = withPermission(async (
       .limit(1);
 
     if (orderRows.length === 0) {
+      orderLog.warn("order not found");
       return NextResponse.json(
         { success: false, error: "Order not found" },
         { status: 404 }
@@ -56,6 +67,10 @@ export const POST = withPermission(async (
 
     // RBAC: must be this branch's order
     if (order.branchId !== scope.branchId) {
+      orderLog.warn("forbidden — order belongs to a different branch", {
+        orderBranchId: order.branchId,
+        adminBranchId: scope.branchId,
+      });
       return NextResponse.json(
         { success: false, error: "Forbidden — order belongs to a different branch" },
         { status: 403 }
@@ -64,6 +79,7 @@ export const POST = withPermission(async (
 
     // Order must be ready_for_pickup
     if (order.status !== "ready_for_pickup") {
+      orderLog.warn("order not ready_for_pickup", { status: order.status });
       return NextResponse.json(
         {
           success: false,
@@ -82,11 +98,14 @@ export const POST = withPermission(async (
       crypto.timingSafeEqual(Buffer.from(input), Buffer.from(expected));
 
     if (!isMatch) {
+      orderLog.warn("pickup code mismatch");
       return NextResponse.json(
         { success: false, error: "Invalid pickup code. Please verify with the customer." },
         { status: 409 }
       );
     }
+
+    orderLog.info("pickup code verified — calling store order-complete");
 
     // ===== Code matches → call the store's internal order-complete endpoint =====
     const storeUrl =
@@ -94,9 +113,7 @@ export const POST = withPermission(async (
       "http://localhost:3000";
 
     if (!process.env.STORE_INTERNAL_URL) {
-      console.warn(
-        "STORE_INTERNAL_URL is not set; falling back to http://localhost:3000"
-      );
+      orderLog.warn("STORE_INTERNAL_URL not set; falling back to localhost:3000");
     }
 
     const secret = crypto
@@ -115,7 +132,10 @@ export const POST = withPermission(async (
 
     if (!completeRes.ok) {
       const errData = await completeRes.json().catch(() => ({}));
-      console.error("order-complete call failed:", errData);
+      orderLog.error("store order-complete call failed", {
+        httpStatus: completeRes.status,
+        errData,
+      });
       return NextResponse.json(
         {
           success: false,
@@ -136,12 +156,13 @@ export const POST = withPermission(async (
       ipAddress: null,
     });
 
+    orderLog.info("order completed via pickup verification", { userId: user.id });
     return NextResponse.json({
       success: true,
       message: "Order completed successfully",
     });
   } catch (error) {
-    console.error("Error verifying pickup code:", error);
+    log.error("verify pickup code failed", { error: serializeError(error) });
     return NextResponse.json(
       { success: false, error: "Failed to verify pickup code" },
       { status: 500 }

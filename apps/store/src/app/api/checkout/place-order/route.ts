@@ -17,6 +17,7 @@ import { z } from "zod";
 import { validatePickupSlot } from "@/lib/pickup-validation";
 import { createPayment } from "@/lib/midtrans";
 import { getConfigNumber } from "@/lib/config";
+import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
 
 /**
  * Thrown inside the place-order transaction when the atomic stock-reservation
@@ -44,15 +45,21 @@ const placeOrderSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
+  let log = requestLogger(request, { module: "place-order" });
+  log.info("place order requested");
   try {
     const session = await auth.api.getSession({
       headers: await headers(),
     });
 
     if (!session) {
-      return NextResponse.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
+      log.warn("unauthorized — no session");
+      return withRequestId(
+        NextResponse.json(
+          { success: false, error: "Unauthorized" },
+          { status: 401 }
+        ),
+        log
       );
     }
 
@@ -60,18 +67,28 @@ export async function POST(request: NextRequest) {
     const parsed = placeOrderSchema.safeParse(body);
 
     if (!parsed.success) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Invalid request body",
-          details: parsed.error.issues,
-        },
-        { status: 400 }
+      log.warn("invalid request body", { issues: parsed.error.issues });
+      return withRequestId(
+        NextResponse.json(
+          {
+            success: false,
+            error: "Invalid request body",
+            details: parsed.error.issues,
+          },
+          { status: 400 }
+        ),
+        log
       );
     }
 
     const { phone, email, pickupDate, pickupTime, selectedItemIds } =
       parsed.data;
+    log = log.child({
+      userId: session.user.id,
+      itemCount: selectedItemIds.length,
+      pickupDate,
+      pickupTime,
+    });
 
     // ===== Load the user's cart =====
     const cartRows = await db
@@ -130,17 +147,24 @@ export async function POST(request: NextRequest) {
       );
     }
     if (branchIds.size > 1) {
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            "Tidak bisa checkout barang di branch yang berbeda. Pilih barang dari satu cabang saja.",
-        },
-        { status: 400 }
+      log.warn("multi-branch checkout rejected", {
+        branchIds: Array.from(branchIds),
+      });
+      return withRequestId(
+        NextResponse.json(
+          {
+            success: false,
+            error:
+              "Tidak bisa checkout barang di branch yang berbeda. Pilih barang dari satu cabang saja.",
+          },
+          { status: 400 }
+        ),
+        log
       );
     }
 
     const branchId = Array.from(branchIds)[0];
+    log = log.child({ branchId });
 
     // ===== Load the branch and validate operating hours =====
     const branch = await db
@@ -210,6 +234,8 @@ export async function POST(request: NextRequest) {
 
     // ===== Create the order, order items, reserve stock, call Midtrans, and clear cart — all atomically =====
     const orderId = crypto.randomUUID();
+    log = log.child({ orderId });
+    log.info("creating order", { total, ttlMinutes });
 
     try {
       const midtransResult = await db.transaction(async (tx) => {
@@ -316,18 +342,30 @@ export async function POST(request: NextRequest) {
         return paymentResult;
       });
 
-      return NextResponse.json({
-        success: true,
-        orderId,
-        redirectUrl: midtransResult.redirectUrl,
-        token: midtransResult.token,
+      log.info("order placed successfully", {
+        redirectUrl: !!midtransResult.redirectUrl,
       });
+      return withRequestId(
+        NextResponse.json({
+          success: true,
+          orderId,
+          redirectUrl: midtransResult.redirectUrl,
+          token: midtransResult.token,
+        }),
+        log
+      );
     } catch (midtransError) {
       // Insufficient stock → 400 (customer can retry / pick fewer units).
       if (midtransError instanceof InsufficientStockError) {
-        return NextResponse.json(
-          { success: false, error: midtransError.message },
-          { status: 400 }
+        log.warn("insufficient stock — order rolled back", {
+          productName: midtransError.productName,
+        });
+        return withRequestId(
+          NextResponse.json(
+            { success: false, error: midtransError.message },
+            { status: 400 }
+          ),
+          log
         );
       }
       const err = midtransError as {
@@ -335,27 +373,33 @@ export async function POST(request: NextRequest) {
         httpStatusCode?: number;
         ApiResponse?: unknown;
       };
-      console.error("Midtrans payment creation failed:", {
+      log.error("Midtrans payment creation failed — order rolled back", {
         message: err.message,
         httpStatusCode: err.httpStatusCode,
         apiResponse: err.ApiResponse,
       });
       // Transaction rolled back — order, reservation & cart are preserved. Customer can retry.
-      return NextResponse.json(
-        {
-          success: false,
-          error:
-            err.message ||
-            "Failed to initiate payment. Your cart is preserved — please try again.",
-        },
-        { status: 502 }
+      return withRequestId(
+        NextResponse.json(
+          {
+            success: false,
+            error:
+              err.message ||
+              "Failed to initiate payment. Your cart is preserved — please try again.",
+          },
+          { status: 502 }
+        ),
+        log
       );
     }
   } catch (error) {
-    console.error("Error placing order:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to place order" },
-      { status: 500 }
+    log.error("place order failed", { error: serializeError(error) });
+    return withRequestId(
+      NextResponse.json(
+        { success: false, error: "Failed to place order" },
+        { status: 500 }
+      ),
+      log
     );
   }
 }

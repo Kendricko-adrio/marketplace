@@ -71,6 +71,13 @@ export default function CartPage() {
     null
   );
   const [removedItemCount, setRemovedItemCount] = useState(0);
+  const [stockDialogOpen, setStockDialogOpen] = useState(false);
+  const [stockOutOfStock, setStockOutOfStock] = useState<{ name: string }[]>(
+    []
+  );
+  const [stockAdjusted, setStockAdjusted] = useState<
+    { name: string; available: number }[]
+  >([]);
   const { refreshCart } = useCart();
 
   const fetchCart = async () => {
@@ -287,6 +294,18 @@ export default function CartPage() {
           refreshCart();
           return;
         }
+        if (data.code === "INSUFFICIENT_STOCK") {
+          // Some items are out of stock (removed) or partially available
+          // (quantity lowered). Server already applied the changes — sync
+          // local state and show a popup listing the affected products.
+          setStockOutOfStock(data.outOfStock ?? []);
+          setStockAdjusted(data.adjusted ?? []);
+          setStockDialogOpen(true);
+          setSelectedItemIds(new Set());
+          await fetchCart();
+          refreshCart();
+          return;
+        }
         toast.error(data.error || "Tidak dapat melanjutkan checkout.");
         return;
       }
@@ -339,6 +358,65 @@ export default function CartPage() {
     </Dialog>
   );
 
+  // ===== Insufficient-stock popup =====
+  // Shown when the server found selected items that are out of stock
+  // (removed from cart) or only partially available (quantity lowered).
+  // Both sections can appear at once.
+  const insufficientStockDialog = (
+    <Dialog open={stockDialogOpen} onOpenChange={setStockDialogOpen}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-destructive/10">
+              <AlertCircle className="h-5 w-5 text-destructive" />
+            </div>
+            <div className="flex-1">
+              <DialogTitle>Stok barang tidak mencukupi</DialogTitle>
+              <div className="mt-1.5 space-y-3 text-sm text-muted-foreground">
+                {stockOutOfStock.length > 0 && (
+                  <div>
+                    <p>
+                      Maaf, barang berikut sudah habis stoknya dan telah dihapus
+                      dari keranjang Anda:
+                    </p>
+                    <ul className="mt-1.5 list-disc pl-5 text-foreground">
+                      {stockOutOfStock.map((item, idx) => (
+                        <li key={idx} className="font-medium">
+                          {item.name}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {stockAdjusted.length > 0 && (
+                  <div>
+                    <p>
+                      Jumlah pesanan barang berikut telah kami sesuaikan dengan
+                      stok yang tersedia:
+                    </p>
+                    <ul className="mt-1.5 list-disc pl-5 text-foreground">
+                      {stockAdjusted.map((item, idx) => (
+                        <li key={idx} className="font-medium">
+                          {item.name}{" "}
+                          <span className="text-muted-foreground font-normal">
+                            (sisa {item.available})
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </DialogHeader>
+        <DialogFooter>
+          <Button onClick={() => setStockDialogOpen(false)}>Mengerti</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+
   if (loading) {
     return (
       <div className="container mx-auto px-4 py-8">
@@ -377,6 +455,7 @@ export default function CartPage() {
           </Link>
         </div>
         {inactiveBranchDialog}
+        {insufficientStockDialog}
       </>
     );
   }
@@ -586,6 +665,7 @@ export default function CartPage() {
       </div>
     </div>
     {inactiveBranchDialog}
+    {insufficientStockDialog}
     </>
   );
 }

@@ -1,7 +1,6 @@
-import { pgTable, text, timestamp, integer, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
-import { clients, users } from "./auth";
-import { products } from "./products";
+import { users } from "./auth";
 
 // Audit Log table - tracks admin activities (references admin users table)
 export const auditLogs = pgTable("audit_log", {
@@ -15,37 +14,11 @@ export const auditLogs = pgTable("audit_log", {
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 
-// Reviews table (belongs to store clients)
-export const reviews = pgTable("review", {
-  id: text("id").primaryKey(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => clients.id, { onDelete: "cascade" }),
-  productId: text("product_id")
-    .notNull()
-    .references(() => products.id, { onDelete: "cascade" }),
-  rating: integer("rating").notNull(), // 1-5
-  comment: text("comment"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
-
 // Relations
 export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
   user: one(users, {
     fields: [auditLogs.userId],
     references: [users.id],
-  }),
-}));
-
-export const reviewsRelations = relations(reviews, ({ one }) => ({
-  user: one(clients, {
-    fields: [reviews.userId],
-    references: [clients.id],
-  }),
-  product: one(products, {
-    fields: [reviews.productId],
-    references: [products.id],
   }),
 }));
 

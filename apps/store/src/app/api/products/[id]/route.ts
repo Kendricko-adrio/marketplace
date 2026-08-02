@@ -6,11 +6,10 @@ import {
   productToCategory,
   categories,
   productImages,
-  reviews,
   branchStocks,
   branches,
 } from "@/db";
-import { eq, and, asc, avg, count, sql } from "drizzle-orm";
+import { eq, and, asc, sql } from "drizzle-orm";
 
 export async function GET(
   request: NextRequest,
@@ -115,23 +114,6 @@ export async function GET(
       ...new Set(variants.filter((v) => v.size).map((v) => v.size)),
     ];
 
-    // Get reviews summary
-    const reviewsSummary = await db
-      .select({
-        avgRating: avg(reviews.rating),
-        totalReviews: count(reviews.id),
-      })
-      .from(reviews)
-      .where(eq(reviews.productId, productData.id));
-
-    // Get recent reviews
-    const recentReviews = await db
-      .select()
-      .from(reviews)
-      .where(eq(reviews.productId, productData.id))
-      .orderBy(asc(reviews.createdAt))
-      .limit(5);
-
     return NextResponse.json({
       success: true,
       data: {
@@ -140,11 +122,6 @@ export async function GET(
         variants: variantsWithImagesAndStock,
         colors,
         sizes,
-        reviews: {
-          average: reviewsSummary[0]?.avgRating || 0,
-          total: Number(reviewsSummary[0]?.totalReviews || 0),
-          recent: recentReviews,
-        },
       },
     });
   } catch (error) {

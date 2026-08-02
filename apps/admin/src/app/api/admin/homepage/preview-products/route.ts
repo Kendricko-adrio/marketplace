@@ -19,9 +19,11 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
     for (const key of [
       "search",
       "category",
+      "brand",
+      "gender",
       "minPrice",
       "maxPrice",
-      "flashSale",
+      "hasDiscount",
       "sortOrder",
       "sortBy",
       "page",

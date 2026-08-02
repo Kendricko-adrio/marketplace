@@ -48,6 +48,7 @@ interface CartItem {
     id: string;
     name: string;
     slug: string;
+    basePrice: string;
   };
   image: string | null;
 }
@@ -545,6 +546,15 @@ export default function CartPage() {
                             <div className="text-primary font-bold mt-1">
                               Rp {parseFloat(item.variant.price).toLocaleString("id-ID")}
                             </div>
+                            {parseFloat(item.product.basePrice) >
+                              parseFloat(item.variant.price) && (
+                              <div className="text-xs text-muted-foreground line-through">
+                                Rp{" "}
+                                {parseFloat(item.product.basePrice).toLocaleString(
+                                  "id-ID"
+                                )}
+                              </div>
+                            )}
                           </div>
                           <div className="flex items-center justify-between mt-2">
                             <div className="flex items-center border rounded-md">

@@ -16,20 +16,22 @@
     "db:studio": "drizzle-kit studio",
     "db:seed": "npx tsx src/seed.ts",
     "db:check": "drizzle-kit check",
-    "db:reset": "npx tsx src/reset.ts"
+    "db:reset": "npx tsx src/reset.ts",
+    "db:import-soh": "npx tsx src/import-soh.ts"
   },
   "dependencies": {
+    "csv-parse": "^5.6.0",
     "drizzle-orm": "^0.45.1",
     "pg": "^8.16.3"
   },
   "devDependencies": {
     "@types/node": "^20",
     "@types/pg": "^8.16.0",
+    "bcryptjs": "^3.0.3",
     "dotenv": "^17.2.3",
     "drizzle-kit": "^0.31.8",
     "tsx": "^4.19.0",
-    "typescript": "^5",
-    "bcryptjs": "^3.0.3"
+    "typescript": "^5"
   },
   "peerDependencies": {
     "drizzle-orm": "^0.45.1"

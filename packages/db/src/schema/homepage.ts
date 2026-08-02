@@ -25,18 +25,15 @@ export type HomepageSectionType =
 export interface ProductFilterConfig {
   search?: string;
   category?: string; // category slug
+  brand?: string; // brand slug
+  gender?: string; // gender slug
   minPrice?: string;
   maxPrice?: string;
-  flashSale?: boolean;
-  sortOrder?: "newest" | "priceAsc" | "priceDesc" | "bestseller" | "rating";
+  hasDiscount?: boolean;
+  sortOrder?: "newest" | "priceAsc" | "priceDesc";
 }
 
-export type CarouselSortOrder =
-  | "newest"
-  | "priceAsc"
-  | "priceDesc"
-  | "bestseller"
-  | "rating";
+export type CarouselSortOrder = "newest" | "priceAsc" | "priceDesc";
 
 /**
  * Banner hero content. Supports a carousel of 1-5 background images that

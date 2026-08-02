@@ -104,6 +104,25 @@ Defined per-app in `apps/<app>/tsconfig.json` (no root alias). `@/*` → `./src/
   forgot-password,reset-password,auth/verify}`.
 - Admin routes follow: `/admin/{dashboard,products,orders,users,marketing,analytics}`.
 
+## Documentation
+
+Project documentation lives in `docs/` (repo root). It is **mandatory, not
+optional** — treat doc updates as part of the work, not a follow-up.
+
+- **API additions**: whenever a new HTTP endpoint is added — any new `route.ts`
+  under `apps/store/src/app/api/**` or `apps/admin/src/app/api/**`, including
+  webhooks, cron, and internal routes — update `docs/api-reference.md` with the
+  endpoint's method, path, auth, body, response, and purpose, following the
+  existing entry format. Do not leave `docs/api-reference.md` stale; if an
+  existing endpoint's behavior changes, update its entry too.
+- **Feature additions**: every new user-facing or operational feature (e.g. SOH
+  third-party sync, stock reservation, a new admin module, a checkout-flow
+  change, a new payment path) must have documentation under `docs/` describing
+  the design, invariants, env/secrets, and operational steps. If the feature
+  spans multiple files, create a dedicated `docs/<feature>.md`.
+- When a doc references deployment/operational steps that are already covered by
+  `deployment/README.md`, keep that file in sync as well.
+
 ## Skills Usage
 
 Agent **wajib** selalu memanfaatkan skills yang tersedia untuk setiap tugas
@@ -155,3 +174,7 @@ gunakan skill yang paling relevan via tool `skill`.
 - **ALWAYS USE CONTEXT7 FOR ENRICH YOUR KNOWLEDGE ON THE LIBRARY OR FRAMEWORK THAT HIS PROJECT USE** - 
   you have a cut off time knowledge so to make sure that you have an updated documentation,
   use context7 for asking the documentation that you need.
+- **Dokumentasi WAJIB, bukan opsional** — setiap penambahan API baru harus
+  dicatat di `docs/api-reference.md`, dan setiap fitur baru harus punya doc
+  sendiri di `docs/` (lihat bagian **Documentation** di atas). Jangan anggap
+  tugas selesai sebelum doc ter-update.

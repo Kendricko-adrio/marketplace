@@ -8,9 +8,11 @@ import {
   productImages,
   productToCategory,
   categories,
+  brands,
+  genders,
   branches,
 } from "@/db";
-import { eq, and, asc, inArray, desc, ilike, or, gte, lte } from "drizzle-orm";
+import { eq, and, asc, inArray, desc, ilike, or, gte, lte, sql } from "drizzle-orm";
 import { withPermission } from "@/lib/auth-guard";
 import type { ProductFilterConfig, CarouselContent } from "@/db";
 
@@ -93,17 +95,24 @@ export const GET = withPermission(async () => {
         .where(inArray(products.id, allProductIds));
       for (const p of productRows) productMap.set(p.id, p);
 
-      const defaultVariants = await db
+      // Fetch all variants to compute the cheapest variant net price per
+      // product. Image still comes from the default variant.
+      const allVariants = await db
         .select()
         .from(productVariants)
-        .where(
-          and(
-            inArray(productVariants.productId, allProductIds),
-            eq(productVariants.isDefault, true)
-          )
-        );
+        .where(inArray(productVariants.productId, allProductIds));
 
-      const variantIds = defaultVariants.map((v) => v.id);
+      const minPriceMap = new Map<string, string>();
+      const defaultVariantMap = new Map<string, (typeof allVariants)[number]>();
+      for (const v of allVariants) {
+        const cur = minPriceMap.get(v.productId);
+        if (cur === undefined || parseFloat(v.price) < parseFloat(cur)) {
+          minPriceMap.set(v.productId, v.price);
+        }
+        if (v.isDefault) defaultVariantMap.set(v.productId, v);
+      }
+
+      const variantIds = [...defaultVariantMap.values()].map((v) => v.id);
       const images =
         variantIds.length > 0
           ? await db
@@ -112,7 +121,6 @@ export const GET = withPermission(async () => {
               .where(inArray(productImages.variantId, variantIds))
               .orderBy(asc(productImages.displayOrder))
           : [];
-
       const imageMap = new Map<string, string>();
       for (const img of images) {
         if (!imageMap.has(img.variantId)) {
@@ -120,13 +128,13 @@ export const GET = withPermission(async () => {
         }
       }
 
-      const variantMap = new Map(defaultVariants.map((v) => [v.productId, v]));
       for (const p of productRows) {
-        const variant = variantMap.get(p.id);
+        const variant = defaultVariantMap.get(p.id);
         (p as unknown as { _image?: string | null })._image = variant
           ? imageMap.get(variant.id) ?? null
           : null;
-        (p as unknown as { _price?: string })._price = variant?.price ?? p.basePrice;
+        (p as unknown as { _price?: string })._price =
+          minPriceMap.get(p.id) ?? p.basePrice;
       }
     }
 
@@ -167,10 +175,6 @@ export const GET = withPermission(async () => {
               price: p.price,
               basePrice: p.basePrice,
               image: p.image,
-              rating: p.rating,
-              sold: p.sold,
-              isFlashSale: p.isFlashSale,
-              flashSalePrice: p.flashSalePrice,
             })),
           };
         }
@@ -188,10 +192,6 @@ export const GET = withPermission(async () => {
               price: price,
               basePrice: p.basePrice,
               image: img,
-              rating: p.rating,
-              sold: p.sold,
-              isFlashSale: p.isFlashSale,
-              flashSalePrice: p.flashSalePrice,
             };
           })
           .filter((x): x is NonNullable<typeof x> => x !== null);
@@ -223,10 +223,6 @@ type FilteredProduct = {
   slug: string;
   price: string;
   basePrice: string;
-  rating: string | null;
-  sold: number;
-  isFlashSale: boolean;
-  flashSalePrice: string | null;
   image: string | null;
 };
 
@@ -234,6 +230,16 @@ async function resolveFilterModeProducts(
   filter: ProductFilterConfig,
   limit: number
 ): Promise<FilteredProduct[]> {
+  // Cheapest variant net price per product (join, no N+1).
+  const minPriceSq = db
+    .select({
+      productId: productVariants.productId,
+      minPrice: sql<string>`min(${productVariants.price})`.as("minPrice"),
+    })
+    .from(productVariants)
+    .groupBy(productVariants.productId)
+    .as("vp");
+
   const conditions = [];
   conditions.push(eq(products.status, "aktif"));
   if (filter.search) {
@@ -244,24 +250,60 @@ async function resolveFilterModeProducts(
       ) as unknown as ReturnType<typeof eq>
     );
   }
-  if (filter.flashSale) conditions.push(eq(products.isFlashSale, true));
-  if (filter.minPrice) conditions.push(gte(products.basePrice, filter.minPrice));
-  if (filter.maxPrice) conditions.push(lte(products.basePrice, filter.maxPrice));
+  if (filter.hasDiscount) {
+    // Discount = RRP (base_price) above the cheapest variant net price.
+    conditions.push(sql`${products.basePrice} > ${minPriceSq.minPrice}`);
+  }
+  if (filter.minPrice) conditions.push(gte(minPriceSq.minPrice, filter.minPrice));
+  if (filter.maxPrice) conditions.push(lte(minPriceSq.minPrice, filter.maxPrice));
+
+  // Brand filter (slug → brandId). Unknown slug → no results.
+  if (filter.brand) {
+    const brand = await db
+      .select({ id: brands.id })
+      .from(brands)
+      .where(eq(brands.slug, filter.brand))
+      .limit(1);
+    conditions.push(brand.length ? eq(products.brandId, brand[0].id) : sql`false`);
+  }
+
+  // Gender filter (slug → genderId).
+  if (filter.gender) {
+    const gender = await db
+      .select({ id: genders.id })
+      .from(genders)
+      .where(eq(genders.slug, filter.gender))
+      .limit(1);
+    conditions.push(gender.length ? eq(products.genderId, gender[0].id) : sql`false`);
+  }
+
+  // Category filter (slug → id) via a subquery on the junction table.
+  if (filter.category) {
+    const category = await db
+      .select({ id: categories.id })
+      .from(categories)
+      .where(eq(categories.slug, filter.category))
+      .limit(1);
+    if (category.length === 0) return [];
+    conditions.push(
+      inArray(
+        products.id,
+        db
+          .select({ productId: productToCategory.productId })
+          .from(productToCategory)
+          .where(eq(productToCategory.categoryId, category[0].id))
+      )
+    );
+  }
 
   const order = filter.sortOrder ?? "newest";
   let orderBy;
   switch (order) {
     case "priceAsc":
-      orderBy = asc(products.basePrice);
+      orderBy = asc(minPriceSq.minPrice);
       break;
     case "priceDesc":
-      orderBy = desc(products.basePrice);
-      break;
-    case "bestseller":
-      orderBy = desc(products.sold);
-      break;
-    case "rating":
-      orderBy = desc(products.rating);
+      orderBy = desc(minPriceSq.minPrice);
       break;
     case "newest":
     default:
@@ -271,49 +313,19 @@ async function resolveFilterModeProducts(
 
   const safeLimit = Math.min(20, Math.max(1, limit || 10));
 
-  if (filter.category) {
-    const category = await db
-      .select({ id: categories.id })
-      .from(categories)
-      .where(eq(categories.slug, filter.category))
-      .limit(1);
-
-    if (category.length === 0) return [];
-
-    const rows = await db
-      .select({
-        id: products.id,
-        name: products.name,
-        slug: products.slug,
-        basePrice: products.basePrice,
-        rating: products.rating,
-        sold: products.sold,
-        isFlashSale: products.isFlashSale,
-        flashSalePrice: products.flashSalePrice,
-        createdAt: products.createdAt,
-      })
-      .from(products)
-      .innerJoin(productToCategory, eq(products.id, productToCategory.productId))
-      .where(and(eq(productToCategory.categoryId, category[0].id), ...conditions))
-      .orderBy(orderBy)
-      .limit(safeLimit);
-
-    return hydrateProducts(rows);
-  }
+  const selectCols = {
+    id: products.id,
+    name: products.name,
+    slug: products.slug,
+    basePrice: products.basePrice,
+    createdAt: products.createdAt,
+    price: minPriceSq.minPrice,
+  };
 
   const rows = await db
-    .select({
-      id: products.id,
-      name: products.name,
-      slug: products.slug,
-      basePrice: products.basePrice,
-      rating: products.rating,
-      sold: products.sold,
-      isFlashSale: products.isFlashSale,
-      flashSalePrice: products.flashSalePrice,
-      createdAt: products.createdAt,
-    })
+    .select(selectCols)
     .from(products)
+    .innerJoin(minPriceSq, eq(products.id, minPriceSq.productId))
     .where(and(...conditions))
     .orderBy(orderBy)
     .limit(safeLimit);
@@ -327,10 +339,7 @@ async function hydrateProducts(
     name: string;
     slug: string;
     basePrice: string;
-    rating: string | null;
-    sold: number;
-    isFlashSale: boolean;
-    flashSalePrice: string | null;
+    price: string | null;
     createdAt: Date;
   }>
 ) {
@@ -361,12 +370,8 @@ async function hydrateProducts(
       id: r.id,
       name: r.name,
       slug: r.slug,
-      price: variant?.price ?? r.basePrice,
+      price: r.price ?? r.basePrice,
       basePrice: r.basePrice,
-      rating: r.rating,
-      sold: r.sold,
-      isFlashSale: r.isFlashSale,
-      flashSalePrice: r.flashSalePrice,
       image: variant ? imageMap.get(variant.id) ?? null : null,
     };
   });

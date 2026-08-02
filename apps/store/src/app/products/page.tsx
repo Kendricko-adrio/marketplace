@@ -10,11 +10,7 @@ interface Product {
   slug: string;
   price: string;
   basePrice: string;
-  rating: string | null;
-  sold: number;
   image: string | null;
-  isFlashSale?: boolean;
-  flashSalePrice?: string | null;
 }
 
 interface ProductsResponse {
@@ -35,8 +31,11 @@ async function getProducts(searchParams: {
 
   if (searchParams.search) params.set("search", searchParams.search);
   if (searchParams.category) params.set("category", searchParams.category);
+  if (searchParams.brand) params.set("brand", searchParams.brand);
+  if (searchParams.gender) params.set("gender", searchParams.gender);
   if (searchParams.minPrice) params.set("minPrice", searchParams.minPrice);
   if (searchParams.maxPrice) params.set("maxPrice", searchParams.maxPrice);
+  if (searchParams.hasDiscount) params.set("hasDiscount", searchParams.hasDiscount);
   if (searchParams.sortBy) params.set("sortBy", searchParams.sortBy);
   if (searchParams.sortOrder) params.set("sortOrder", searchParams.sortOrder);
   params.set("page", searchParams.page || "1");
@@ -218,12 +217,12 @@ export default async function ProductsPage({
                 title={product.name}
                 price={parseFloat(product.price || product.basePrice)}
                 originalPrice={
-                  product.isFlashSale && product.flashSalePrice
+                  parseFloat(product.basePrice) >
+                  parseFloat(product.price || product.basePrice)
                     ? parseFloat(product.basePrice)
                     : undefined
                 }
                 image={product.image || ""}
-                isFlashSale={product.isFlashSale}
               />
             ))}
           </div>

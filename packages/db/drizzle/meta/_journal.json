@@ -29,6 +29,34 @@
       "when": 1785050582915,
       "tag": "0003_cloudy_puppet_master",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785341433048,
+      "tag": "0004_adorable_valkyrie",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785344667853,
+      "tag": "0005_strange_eternals",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785427001072,
+      "tag": "0006_low_snowbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1785427021285,
+      "tag": "0007_cuddly_hellion",
+      "breakpoints": true
     }
   ]
 }

@@ -36,8 +36,6 @@ interface Product {
   description: string | null;
   basePrice: string;
   status: string;
-  isFlashSale: boolean;
-  flashSalePrice: string | null;
   variants: ProductVariant[];
   colors: string[];
   sizes: string[];
@@ -159,10 +157,7 @@ export default function ProductDetailPage() {
     );
   }
 
-  const currentPrice =
-    product.isFlashSale && product.flashSalePrice
-      ? parseFloat(product.flashSalePrice)
-      : parseFloat(selectedVariant?.price || product.basePrice);
+  const currentPrice = parseFloat(selectedVariant?.price || product.basePrice);
 
   const originalPrice = parseFloat(product.basePrice);
   const discount = Math.round(

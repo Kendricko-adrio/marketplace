@@ -43,14 +43,9 @@ function CarouselProductCard({
   product: HomepageProduct;
   preview?: boolean;
 }) {
-  const price =
-    product.isFlashSale && product.flashSalePrice
-      ? parseFloat(product.flashSalePrice)
-      : parseFloat(String(product.price ?? product.basePrice ?? "0"));
-  const originalPrice =
-    product.isFlashSale && product.flashSalePrice
-      ? parseFloat(String(product.basePrice ?? "0"))
-      : undefined;
+  const price = parseFloat(String(product.price ?? product.basePrice ?? "0"));
+  const basePrice = parseFloat(String(product.basePrice ?? "0"));
+  const originalPrice = basePrice > price ? basePrice : undefined;
 
   return (
     <ProductCard
@@ -59,7 +54,6 @@ function CarouselProductCard({
       price={price}
       originalPrice={originalPrice}
       image={product.image ?? ""}
-      isFlashSale={product.isFlashSale}
       preview={preview}
     />
   );

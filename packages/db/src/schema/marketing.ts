@@ -1,4 +1,4 @@
-import {
+﻿import {
   pgTable,
   text,
   timestamp,
@@ -20,8 +20,8 @@ export const vouchers = pgTable("voucher", {
   quota: integer("quota").notNull().default(100),
   used: integer("used").notNull().default(0),
   isActive: boolean("is_active").notNull().default(true),
-  validFrom: timestamp("valid_from").notNull().defaultNow(),
-  validUntil: timestamp("valid_until").notNull(),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  validFrom: timestamp("valid_from", { withTimezone: true }).notNull().defaultNow(),
+  validUntil: timestamp("valid_until", { withTimezone: true }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

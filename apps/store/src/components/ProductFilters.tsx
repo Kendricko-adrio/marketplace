@@ -6,39 +6,67 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 
-interface Category {
+interface Option {
   id: string;
   name: string;
   slug: string;
 }
 
+// Native select styled to match the surrounding shadcn Input.
+const selectClass =
+  "flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
+
 export default function ProductFilters() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [selectedCategory, setSelectedCategory] = useState<string>(
-    searchParams.get("category") || ""
-  );
-  const [minPrice, setMinPrice] = useState(searchParams.get("minPrice") || "");
-  const [maxPrice, setMaxPrice] = useState(searchParams.get("maxPrice") || "");
+  const [categories, setCategories] = useState<Option[]>([]);
+  const [brands, setBrands] = useState<Option[]>([]);
+  const [genders, setGenders] = useState<Option[]>([]);
+
   const [searchQuery, setSearchQuery] = useState(
     searchParams.get("search") || ""
   );
+  const [selectedCategory, setSelectedCategory] = useState<string>(
+    searchParams.get("category") || ""
+  );
+  const [selectedBrand, setSelectedBrand] = useState<string>(
+    searchParams.get("brand") || ""
+  );
+  const [selectedGender, setSelectedGender] = useState<string>(
+    searchParams.get("gender") || ""
+  );
+  const [minPrice, setMinPrice] = useState(searchParams.get("minPrice") || "");
+  const [maxPrice, setMaxPrice] = useState(searchParams.get("maxPrice") || "");
+  const [sortBy, setSortBy] = useState(searchParams.get("sortBy") || "createdAt");
+  const [sortOrder, setSortOrder] = useState(
+    searchParams.get("sortOrder") || "desc"
+  );
+  const [hasDiscount, setHasDiscount] = useState(
+    searchParams.get("hasDiscount") === "true"
+  );
 
   useEffect(() => {
-    async function fetchCategories() {
+    async function fetchOptions() {
       try {
-        const res = await fetch("/api/categories");
-        const data = await res.json();
-        if (data.success) {
-          setCategories(data.data);
-        }
+        const [catsRes, brandsRes, gendersRes] = await Promise.all([
+          fetch("/api/categories"),
+          fetch("/api/brands"),
+          fetch("/api/genders"),
+        ]);
+        const [cats, brs, gdr] = await Promise.all([
+          catsRes.json(),
+          brandsRes.json(),
+          gendersRes.json(),
+        ]);
+        if (cats.success) setCategories(cats.data);
+        if (brs.success) setBrands(brs.data);
+        if (gdr.success) setGenders(gdr.data);
       } catch (error) {
-        console.error("Error fetching categories:", error);
+        console.error("Error fetching filter options:", error);
       }
     }
-    fetchCategories();
+    fetchOptions();
   }, []);
 
   const applyFilters = () => {
@@ -46,8 +74,13 @@ export default function ProductFilters() {
 
     if (searchQuery) params.set("search", searchQuery);
     if (selectedCategory) params.set("category", selectedCategory);
+    if (selectedBrand) params.set("brand", selectedBrand);
+    if (selectedGender) params.set("gender", selectedGender);
     if (minPrice) params.set("minPrice", minPrice);
     if (maxPrice) params.set("maxPrice", maxPrice);
+    if (hasDiscount) params.set("hasDiscount", "true");
+    if (sortBy) params.set("sortBy", sortBy);
+    if (sortOrder) params.set("sortOrder", sortOrder);
     params.set("page", "1"); // Reset to first page on filter change
 
     router.push(`/products?${params.toString()}`);
@@ -55,10 +88,23 @@ export default function ProductFilters() {
 
   const clearFilters = () => {
     setSelectedCategory("");
+    setSelectedBrand("");
+    setSelectedGender("");
     setMinPrice("");
     setMaxPrice("");
     setSearchQuery("");
+    setSortBy("createdAt");
+    setSortOrder("desc");
+    setHasDiscount(false);
     router.push("/products");
+  };
+
+  // Sort is a single dropdown mapped to the API's sortBy + sortOrder pair.
+  const sortValue = `${sortBy}|${sortOrder}`;
+  const onSortChange = (v: string) => {
+    const [by, order] = v.split("|");
+    setSortBy(by);
+    setSortOrder(order);
   };
 
   return (
@@ -114,6 +160,40 @@ export default function ProductFilters() {
         </div>
       </div>
 
+      {/* Brand */}
+      <div className="mb-8">
+        <h3 className="font-semibold mb-4 text-foreground">Brand</h3>
+        <select
+          className={selectClass}
+          value={selectedBrand}
+          onChange={(e) => setSelectedBrand(e.target.value)}
+        >
+          <option value="">Semua brand</option>
+          {brands.map((b) => (
+            <option key={b.id} value={b.slug}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Gender */}
+      <div className="mb-8">
+        <h3 className="font-semibold mb-4 text-foreground">Gender</h3>
+        <select
+          className={selectClass}
+          value={selectedGender}
+          onChange={(e) => setSelectedGender(e.target.value)}
+        >
+          <option value="">Semua gender</option>
+          {genders.map((g) => (
+            <option key={g.id} value={g.slug}>
+              {g.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {/* Price Range */}
       <div className="mb-8">
         <h3 className="font-semibold mb-4 text-foreground">Harga</h3>
@@ -133,6 +213,37 @@ export default function ProductFilters() {
             onChange={(e) => setMaxPrice(e.target.value)}
             className="h-9 px-2 text-sm"
           />
+        </div>
+      </div>
+
+      {/* Sort */}
+      <div className="mb-8">
+        <h3 className="font-semibold mb-4 text-foreground">Urutan</h3>
+        <select
+          className={selectClass}
+          value={sortValue}
+          onChange={(e) => onSortChange(e.target.value)}
+        >
+          <option value="createdAt|desc">Terbaru</option>
+          <option value="price|asc">Harga Termurah</option>
+          <option value="price|desc">Harga Termahal</option>
+        </select>
+      </div>
+
+      {/* Discount toggle */}
+      <div className="mb-8">
+        <div className="flex items-center space-x-2">
+          <Checkbox
+            id="hasDiscount"
+            checked={hasDiscount}
+            onCheckedChange={(v) => setHasDiscount(v === true)}
+          />
+          <Label
+            htmlFor="hasDiscount"
+            className="text-sm font-normal cursor-pointer text-muted-foreground"
+          >
+            Hanya produk diskon
+          </Label>
         </div>
       </div>
 

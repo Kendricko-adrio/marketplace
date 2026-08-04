@@ -1,4 +1,4 @@
-import {
+﻿import {
   pgTable,
   text,
   timestamp,
@@ -6,6 +6,7 @@ import {
   numeric,
   integer,
   primaryKey,
+  index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
@@ -18,8 +19,30 @@ export const categories = pgTable("category", {
   image: text("image"),
   icon: text("icon"),
   isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Brands table â€” product brand dimension, sync-managed (auto-created by the
+// SOH import / webhook). No admin CRUD; rows are upserted by slug from the
+// CSV "Brand" column (modal value per ART). See packages/db/src/soh-sync.ts.
+export const brands = pgTable("brand", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+// Genders table â€” product gender dimension, sync-managed (auto-created by the
+// SOH import / webhook) from the CSV "sex" column (Men/Women/Unisex/...).
+// Distinct from the `gender` column on the `clients` table (onboarding).
+export const genders = pgTable("gender", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  slug: text("slug").notNull().unique(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // Products table
@@ -30,13 +53,16 @@ export const products = pgTable("product", {
   description: text("description"),
   basePrice: numeric("base_price", { precision: 15, scale: 2 }).notNull(),
   status: text("status").notNull().default("aktif"), // aktif | habis | arsip
-  rating: numeric("rating", { precision: 2, scale: 1 }).default("0"),
-  sold: integer("sold").notNull().default(0),
-  isFlashSale: boolean("is_flash_sale").notNull().default(false),
-  flashSalePrice: numeric("flash_sale_price", { precision: 15, scale: 2 }),
-  flashSaleEndsAt: timestamp("flash_sale_ends_at"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  // SOH sync fields â€” populated by the SOH import script / webhook
+  // (see packages/db/src/soh-sync.ts). Nullable so admin-created products
+  // (no supplier master data) still insert fine.
+  articleNumber: text("article_number").unique(), // natural key (ART); nullable unique (multi-NULL OK)
+  brandId: text("brand_id").references(() => brands.id), // FK -> brands; sync-managed, nullable
+  genderId: text("gender_id").references(() => genders.id), // FK -> genders; sync-managed, nullable
+  season: text("season"),
+  collection: text("collection"), // CSV "STATUS" â€” sub-category/collection label, NOT the status enum
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // Product to Category junction table (many-to-many)
@@ -54,19 +80,28 @@ export const productToCategory = pgTable(
 );
 
 // Product Variants table (color, size combinations)
-export const productVariants = pgTable("product_variant", {
-  id: text("id").primaryKey(),
-  productId: text("product_id")
-    .notNull()
-    .references(() => products.id, { onDelete: "cascade" }),
-  sku: text("sku").notNull().unique(),
-  color: text("color"),
-  size: text("size"),
-  price: numeric("price", { precision: 15, scale: 2 }).notNull(),
-  isDefault: boolean("is_default").notNull().default(false),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
-});
+export const productVariants = pgTable(
+  "product_variant",
+  {
+    id: text("id").primaryKey(),
+    productId: text("product_id")
+      .notNull()
+      .references(() => products.id, { onDelete: "cascade" }),
+    sku: text("sku").notNull().unique(),
+    color: text("color"),
+    size: text("size"),
+    price: numeric("price", { precision: 15, scale: 2 }).notNull(),
+    isDefault: boolean("is_default").notNull().default(false),
+    // SOH sync fields â€” supplier barcode + raw discount from CSV.
+    // barcode is the supplier EAN (may be non-unique / non-numeric), distinct
+    // from our system `sku` (which is generated as `${ART}-${Size}`).
+    barcode: text("barcode"),
+    discount: text("discount"), // raw disc% from CSV (mixed int/decimal formats, stored as-is)
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("product_variant_barcode_idx").on(t.barcode)]
+);
 
 // Product Images table
 export const productImages = pgTable("product_image", {
@@ -76,7 +111,7 @@ export const productImages = pgTable("product_image", {
     .references(() => productVariants.id, { onDelete: "cascade" }),
   url: text("url").notNull(),
   displayOrder: integer("display_order").notNull().default(0),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // Relations
@@ -84,9 +119,19 @@ export const categoriesRelations = relations(categories, ({ many }) => ({
   productToCategory: many(productToCategory),
 }));
 
-export const productsRelations = relations(products, ({ many }) => ({
+export const brandsRelations = relations(brands, ({ many }) => ({
+  products: many(products),
+}));
+
+export const gendersRelations = relations(genders, ({ many }) => ({
+  products: many(products),
+}));
+
+export const productsRelations = relations(products, ({ many, one }) => ({
   variants: many(productVariants),
   productToCategory: many(productToCategory),
+  brand: one(brands, { fields: [products.brandId], references: [brands.id] }),
+  gender: one(genders, { fields: [products.genderId], references: [genders.id] }),
 }));
 
 export const productToCategoryRelations = relations(

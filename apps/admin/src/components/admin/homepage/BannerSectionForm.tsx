@@ -336,7 +336,7 @@ export default function BannerSectionForm({
                   update({ ctaLink: buildProductFilterQuery(v) });
                 }}
                 showSort={false}
-                showFlashSale={false}
+                showHasDiscount={false}
                 idPrefix="cta-filter"
               />
             </div>

@@ -83,11 +83,13 @@ export const GET = withPermission(async () => {
 const productFilterSchema = z.object({
   search: z.string().optional(),
   category: z.string().optional(), // category slug
+  brand: z.string().optional(), // brand slug
+  gender: z.string().optional(), // gender slug
   minPrice: z.string().optional(),
   maxPrice: z.string().optional(),
-  flashSale: z.boolean().optional(),
+  hasDiscount: z.boolean().optional(),
   sortOrder: z
-    .enum(["newest", "priceAsc", "priceDesc", "bestseller", "rating"])
+    .enum(["newest", "priceAsc", "priceDesc"])
     .optional(),
 });
 

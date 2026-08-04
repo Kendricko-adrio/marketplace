@@ -90,5 +90,12 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|public).*)",],
+  // Exclude API routes, Next.js internals, favicon, the /public prefix,
+  // and all static file requests (anything containing a `.` extension).
+  // Without the last exclusion, root-level images such as /adf-logo.png
+  // would be caught by the onboarding gate and redirected to /onboarding
+  // for logged-in-but-not-onboarded users, causing a broken image.
+  matcher: [
+    "/((?!api|_next/static|_next/image|favicon.ico|public|.*\\.).*)",
+  ],
 };

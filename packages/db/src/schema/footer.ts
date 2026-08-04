@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+﻿import { pgTable, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { users } from "./auth";
 
@@ -69,7 +69,7 @@ export const DEFAULT_FOOTER_CONFIG: FooterConfigData = {
       ],
     },
   ],
-  copyrightText: "© 2026 StoreFront. All rights reserved.",
+  copyrightText: "Â© 2026 StoreFront. All rights reserved.",
   socialMedia: [],
 };
 
@@ -79,7 +79,7 @@ export const DEFAULT_FOOTER_CONFIG: FooterConfigData = {
 export const footerConfig = pgTable("footer_config", {
   id: text("id").primaryKey(),
   data: jsonb("data").notNull().default({}),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   updatedBy: text("updated_by").references(() => users.id, {
     onDelete: "set null",
   }),

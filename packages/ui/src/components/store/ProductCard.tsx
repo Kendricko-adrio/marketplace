@@ -10,7 +10,6 @@ interface ProductCardProps {
   price: number;
   originalPrice?: number;
   image: string;
-  isFlashSale?: boolean;
   preview?: boolean;
 }
 
@@ -20,7 +19,6 @@ export default function ProductCard({
   price,
   originalPrice,
   image,
-  isFlashSale,
   preview,
 }: ProductCardProps) {
   const discount = originalPrice

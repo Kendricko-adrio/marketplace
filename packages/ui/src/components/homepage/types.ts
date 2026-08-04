@@ -19,10 +19,6 @@ export interface HomepageProduct {
   price: number;
   basePrice: number;
   image: string | null;
-  rating: string | null;
-  sold: number;
-  isFlashSale: boolean;
-  flashSalePrice: string | null;
 }
 
 export interface HomepageBranch {

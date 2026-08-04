@@ -1,4 +1,4 @@
-import {
+﻿import {
   pgTable,
   text,
   timestamp,
@@ -26,8 +26,8 @@ export const addresses = pgTable("address", {
   district: text("district").notNull(),
   postalCode: text("postal_code").notNull(),
   isDefault: boolean("is_default").notNull().default(false),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // Orders table (belongs to store clients).
@@ -51,13 +51,13 @@ export const orders = pgTable("orders", {
     .notNull()
     .default("pending"), // pending | paid | failed
   // Human-readable reason set when a Midtrans callback marks the order as failed_payment.
-  // e.g. "Payment expired — user did not complete payment in time"
+  // e.g. "Payment expired â€” user did not complete payment in time"
   paymentFailureReason: text("payment_failure_reason"),
   // Raw Midtrans transaction_status stored alongside paymentFailureReason for debugging.
   midtransFailureStatus: text("midtrans_failure_status"),
   // Pickup-in-store fields (Phase 1)
   pickupCode: text("pickup_code"), // 6-char uppercase alphanumeric, set on payment success
-  pickupDate: timestamp("pickup_date"),
+  pickupDate: timestamp("pickup_date", { withTimezone: true }),
   pickupTime: text("pickup_time"), // "HH:mm"
   contactPhone: text("contact_phone").notNull(),
   contactEmail: text("contact_email").notNull(),
@@ -83,9 +83,9 @@ export const orders = pgTable("orders", {
   // should be released. Set at place-order = createdAt + reservation.ttlMinutes
   // (see system_config). The sweep cron and the Midtrans `expire` webhook key off
   // this. Nullable for legacy rows (backfilled by migration).
-  expiresAt: timestamp("expires_at"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => ({
   // Supports the sweep cron's batch lookup of stale pending_payment orders
   // (WHERE status = 'pending_payment' AND expires_at < now()).
@@ -105,7 +105,7 @@ export const orderItems = pgTable("order_item", {
   variantInfo: text("variant_info"), // e.g., "Hitam / XL"
   price: numeric("price", { precision: 15, scale: 2 }).notNull(),
   quantity: integer("quantity").notNull(),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // Relations

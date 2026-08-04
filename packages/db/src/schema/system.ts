@@ -1,7 +1,6 @@
-import { pgTable, text, timestamp, integer, jsonb } from "drizzle-orm/pg-core";
+﻿import { pgTable, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
-import { clients, users } from "./auth";
-import { products } from "./products";
+import { users } from "./auth";
 
 // Audit Log table - tracks admin activities (references admin users table)
 export const auditLogs = pgTable("audit_log", {
@@ -12,22 +11,7 @@ export const auditLogs = pgTable("audit_log", {
   entityId: text("entity_id"),
   changes: jsonb("changes"), // JSON diff of changes
   ipAddress: text("ip_address"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-});
-
-// Reviews table (belongs to store clients)
-export const reviews = pgTable("review", {
-  id: text("id").primaryKey(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => clients.id, { onDelete: "cascade" }),
-  productId: text("product_id")
-    .notNull()
-    .references(() => products.id, { onDelete: "cascade" }),
-  rating: integer("rating").notNull(), // 1-5
-  comment: text("comment"),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // Relations
@@ -38,23 +22,12 @@ export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
   }),
 }));
 
-export const reviewsRelations = relations(reviews, ({ one }) => ({
-  user: one(clients, {
-    fields: [reviews.userId],
-    references: [clients.id],
-  }),
-  product: one(products, {
-    fields: [reviews.productId],
-    references: [products.id],
-  }),
-}));
-
-// System config — general-purpose key/value settings, edited via SQL (no admin UI
+// System config â€” general-purpose key/value settings, edited via SQL (no admin UI
 // for now). Loaded once into an in-memory cache at app boot
 // (see apps/store/src/lib/config.ts); restart the app to pick up changes.
 //
 // Known keys (see seed.ts):
-//   reservation.ttlMinutes (number) — minutes stock is reserved while a customer
+//   reservation.ttlMinutes (number) â€” minutes stock is reserved while a customer
 //   is on the Midtrans Snap payment page before the order expires.
 export const systemConfig = pgTable("system_config", {
   key: text("key").primaryKey(),
@@ -62,5 +35,5 @@ export const systemConfig = pgTable("system_config", {
   // Hint for how to parse `value`: "string" | "number" | "json"
   type: text("type").notNull().default("string"),
   description: text("description"),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });

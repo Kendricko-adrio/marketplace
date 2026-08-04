@@ -71,6 +71,7 @@ export async function GET() {
           id: products.id,
           name: products.name,
           slug: products.slug,
+          basePrice: products.basePrice,
         },
       })
       .from(cartItems)

@@ -74,7 +74,7 @@ interface BranchWithHours {
 
 export default function CheckoutPage() {
   const router = useRouter();
-  const { data: session } = useSession();
+  const { data: session, isPending: sessionPending } = useSession();
   const { refreshCart } = useCart();
 
   // ===== State =====
@@ -191,12 +191,25 @@ export default function CheckoutPage() {
     return true;
   };
 
-  // Pre-fill contact from session
-  // Better Auth's client-side useSession type doesn't include custom
-  // additional fields (phone), so we cast to access it.
+  // Pre-fill contact from session.
+  // Better Auth's client-side `useSession` type doesn't include custom
+  // additional fields (phone) by default, so we cast to access it.
   const sessionUser = session?.user as
     | { name?: string; email?: string; phone?: string }
     | undefined;
+
+  // Show the "fill from profile" button once the session is loaded and at
+  // least one of phone/email is available from the profile. Previously the
+  // button required both fields to be present, which hid it during the
+  // initial session fetch after login and also for users with only an email
+  // on file (e.g. Google sign-in before onboarding adds a phone number).
+  const canFillFromProfile = useMemo(
+    () =>
+      !sessionPending &&
+      !!sessionUser &&
+      (!!sessionUser.phone || !!sessionUser.email),
+    [sessionPending, sessionUser]
+  );
 
   useEffect(() => {
     if (sessionUser) {
@@ -480,14 +493,14 @@ export default function CheckoutPage() {
                   <p className="mt-4 text-sm text-destructive">{contactError}</p>
                 )}
 
-                {sessionUser?.phone && sessionUser?.email && (
+                {canFillFromProfile && (
                   <Button
                     variant="outline"
                     size="sm"
                     className="mt-4"
                     onClick={() => {
-                      setPhone(sessionUser.phone || "");
-                      setEmail(sessionUser.email || "");
+                      if (sessionUser?.phone) setPhone(sessionUser.phone);
+                      if (sessionUser?.email) setEmail(sessionUser.email);
                     }}
                   >
                     Isi dari Profil

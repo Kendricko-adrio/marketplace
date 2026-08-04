@@ -36,8 +36,6 @@ interface Product {
   description: string | null;
   basePrice: string;
   status: string;
-  isFlashSale: boolean;
-  flashSalePrice: string | null;
   variants: ProductVariant[];
   colors: string[];
   sizes: string[];
@@ -59,6 +57,7 @@ export default function ProductDetailPage() {
   );
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
   const [addingToCart, setAddingToCart] = useState(false);
+  const [selectedImageIndex, setSelectedImageIndex] = useState(0);
 
   useEffect(() => {
     async function fetchProduct() {
@@ -101,6 +100,7 @@ export default function ProductDetailPage() {
     if (matchingVariant) {
       setSelectedVariant(matchingVariant);
       setSelectedBranchId(null);
+      setSelectedImageIndex(0);
     }
   }, [selectedColor, selectedSize, product]);
 
@@ -159,10 +159,7 @@ export default function ProductDetailPage() {
     );
   }
 
-  const currentPrice =
-    product.isFlashSale && product.flashSalePrice
-      ? parseFloat(product.flashSalePrice)
-      : parseFloat(selectedVariant?.price || product.basePrice);
+  const currentPrice = parseFloat(selectedVariant?.price || product.basePrice);
 
   const originalPrice = parseFloat(product.basePrice);
   const discount = Math.round(
@@ -185,9 +182,9 @@ export default function ProductDetailPage() {
         {/* Image Gallery */}
         <div>
           <div className="aspect-square bg-secondary/50 rounded-xl mb-4 relative">
-            {selectedVariant?.images[0] && (
+            {selectedVariant?.images[selectedImageIndex] && (
               <Image
-                src={selectedVariant.images[0]}
+                src={selectedVariant.images[selectedImageIndex]}
                 alt={product.name}
                 fill
                 className="object-cover rounded-xl"
@@ -196,10 +193,12 @@ export default function ProductDetailPage() {
           </div>
           <div className="grid grid-cols-4 gap-4">
             {(selectedVariant?.images || []).slice(0, 4).map((img, i) => (
-              <div
+              <button
                 key={i}
+                type="button"
+                onClick={() => setSelectedImageIndex(i)}
                 className={`aspect-square bg-secondary/30 rounded-lg cursor-pointer border-2 ${
-                  i === 0
+                  i === selectedImageIndex
                     ? "border-primary"
                     : "border-transparent hover:border-primary/50"
                 } transition-colors relative overflow-hidden`}
@@ -207,7 +206,7 @@ export default function ProductDetailPage() {
                 {img && (
                   <Image src={img} alt="" fill className="object-cover" />
                 )}
-              </div>
+              </button>
             ))}
           </div>
         </div>

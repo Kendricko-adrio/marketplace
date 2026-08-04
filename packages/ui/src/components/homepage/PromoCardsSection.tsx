@@ -7,45 +7,11 @@ import type {
   PromoCardItem,
   ProductFilterConfig,
 } from "./types";
+import { buildProductFilterQuery } from "./filter-query";
 
 interface PromoCardsSectionProps {
   section: HomepageSectionData;
   preview?: boolean;
-}
-
-/**
- * Build a /products query string from a ProductFilterConfig.
- * Field names match the storefront /products page format.
- */
-export function buildProductFilterQuery(filter: ProductFilterConfig): string {
-  const params = new URLSearchParams();
-  if (filter.search) params.set("search", filter.search);
-  if (filter.category) params.set("category", filter.category);
-  if (filter.minPrice) params.set("minPrice", filter.minPrice);
-  if (filter.maxPrice) params.set("maxPrice", filter.maxPrice);
-  if (filter.flashSale) params.set("flashSale", "true");
-  if (filter.sortOrder) {
-    const order = filter.sortOrder;
-    if (order === "priceAsc") {
-      params.set("sortOrder", "asc");
-      params.set("sortBy", "price");
-    } else if (order === "priceDesc") {
-      params.set("sortOrder", "desc");
-      params.set("sortBy", "price");
-    } else if (order === "bestseller") {
-      params.set("sortOrder", "desc");
-      params.set("sortBy", "sold");
-    } else if (order === "rating") {
-      params.set("sortOrder", "desc");
-      params.set("sortBy", "rating");
-    } else {
-      // newest
-      params.set("sortOrder", "desc");
-      params.set("sortBy", "createdAt");
-    }
-  }
-  const qs = params.toString();
-  return qs ? `/products?${qs}` : "/products";
 }
 
 export default function PromoCardsSection({

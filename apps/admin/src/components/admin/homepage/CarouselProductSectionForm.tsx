@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CarouselProductSection } from "@marketplace/ui";
+import { CarouselProductSection, buildStoreFilterQuery } from "@marketplace/ui";
 import type {
   HomepageSectionData,
   HomepageProduct,
@@ -39,10 +39,6 @@ interface AdminProduct {
   slug: string;
   basePrice: string;
   status: string;
-  rating: string | null;
-  sold: number;
-  isFlashSale: boolean;
-  flashSalePrice: string | null;
   variantCount: number;
   variants?: { id: string; price: string; isDefault: boolean }[];
   images?: { url: string }[];
@@ -60,10 +56,6 @@ interface StoreProduct {
   slug: string;
   price: string;
   basePrice: string;
-  rating: string | null;
-  sold: number;
-  isFlashSale: boolean;
-  flashSalePrice: string | null;
   image: string | null;
 }
 interface StoreProductsResponse {
@@ -78,37 +70,6 @@ function normalizeContent(raw: Record<string, unknown>): CarouselContent {
   }
   // Legacy: no mode field. Treat as manual (junction table holds the selection).
   return { mode: "manual" };
-}
-
-function buildStoreQuery(filter: ProductFilterConfig, limit: number): string {
-  const params = new URLSearchParams();
-  if (filter.search) params.set("search", filter.search);
-  if (filter.category) params.set("category", filter.category);
-  if (filter.minPrice) params.set("minPrice", filter.minPrice);
-  if (filter.maxPrice) params.set("maxPrice", filter.maxPrice);
-  if (filter.flashSale) params.set("flashSale", "true");
-  if (filter.sortOrder) {
-    const order = filter.sortOrder;
-    if (order === "priceAsc") {
-      params.set("sortOrder", "asc");
-      params.set("sortBy", "price");
-    } else if (order === "priceDesc") {
-      params.set("sortOrder", "desc");
-      params.set("sortBy", "price");
-    } else if (order === "bestseller") {
-      params.set("sortOrder", "desc");
-      params.set("sortBy", "sold");
-    } else if (order === "rating") {
-      params.set("sortOrder", "desc");
-      params.set("sortBy", "rating");
-    } else {
-      params.set("sortOrder", "desc");
-      params.set("sortBy", "createdAt");
-    }
-  }
-  params.set("limit", String(limit));
-  params.set("page", "1");
-  return params.toString();
 }
 
 export default function CarouselProductSectionForm({
@@ -167,7 +128,7 @@ export default function CarouselProductSectionForm({
     const fetchPreview = async () => {
       setLoadingPreview(true);
       try {
-        const qs = buildStoreQuery(filter, limit);
+        const qs = buildStoreFilterQuery(filter, limit);
         // Use the admin-side proxy route to avoid cross-origin CORS issues
         // (admin runs on port 3001, store on port 3000). The proxy forwards
         // server-side, which is not subject to browser CORS.
@@ -184,10 +145,6 @@ export default function CarouselProductSectionForm({
               price: parseFloat(p.price),
               basePrice: parseFloat(p.basePrice),
               image: p.image ? toStoreUrl(p.image) : null,
-              rating: p.rating,
-              sold: p.sold,
-              isFlashSale: p.isFlashSale,
-              flashSalePrice: p.flashSalePrice,
             }))
           );
         }
@@ -262,10 +219,6 @@ export default function CarouselProductSectionForm({
         price: parseFloat(price),
         basePrice: parseFloat(p.basePrice),
         image: toStoreUrl(p.images?.[0]?.url) || null,
-        rating: p.rating,
-        sold: p.sold,
-        isFlashSale: p.isFlashSale,
-        flashSalePrice: p.flashSalePrice,
       };
     })
     .filter((x): x is HomepageProduct => x !== null);

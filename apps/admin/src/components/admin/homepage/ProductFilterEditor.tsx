@@ -25,8 +25,12 @@ interface ProductFilterEditorProps {
   showSort?: boolean;
   /** Show the search field (default true). */
   showSearch?: boolean;
-  /** Show the flash sale toggle (default true). */
-  showFlashSale?: boolean;
+  /** Show the "has discount" toggle (default true). */
+  showHasDiscount?: boolean;
+  /** Show the brand dropdown (default true). */
+  showBrand?: boolean;
+  /** Show the gender dropdown (default true). */
+  showGender?: boolean;
   idPrefix?: string;
 }
 
@@ -35,25 +39,43 @@ export default function ProductFilterEditor({
   onChange,
   showSort = true,
   showSearch = true,
-  showFlashSale = true,
+  showHasDiscount = true,
+  showBrand = true,
+  showGender = true,
   idPrefix = "filter",
 }: ProductFilterEditorProps) {
   const [categories, setCategories] = useState<AdminCategory[]>([]);
+  const [brands, setBrands] = useState<AdminCategory[]>([]);
+  const [genders, setGenders] = useState<AdminCategory[]>([]);
   const [loadingCats, setLoadingCats] = useState(true);
+  const [loadingBrands, setLoadingBrands] = useState(true);
+  const [loadingGenders, setLoadingGenders] = useState(true);
 
   useEffect(() => {
-    const fetchCats = async () => {
+    const fetchOptions = async () => {
       try {
-        const res = await fetch("/api/admin/categories");
-        const data = await res.json();
-        if (data.success) setCategories(data.data);
+        const [catsRes, brandsRes, gendersRes] = await Promise.all([
+          fetch("/api/admin/categories"),
+          fetch("/api/admin/brands"),
+          fetch("/api/admin/genders"),
+        ]);
+        const [cats, brs, gdr] = await Promise.all([
+          catsRes.json(),
+          brandsRes.json(),
+          gendersRes.json(),
+        ]);
+        if (cats.success) setCategories(cats.data);
+        if (brs.success) setBrands(brs.data);
+        if (gdr.success) setGenders(gdr.data);
       } catch (e) {
-        console.error("Error fetching categories:", e);
+        console.error("Error fetching filter options:", e);
       } finally {
         setLoadingCats(false);
+        setLoadingBrands(false);
+        setLoadingGenders(false);
       }
     };
-    fetchCats();
+    fetchOptions();
   }, []);
 
   const update = <K extends keyof ProductFilterConfig>(key: K, v: ProductFilterConfig[K]) => {
@@ -120,13 +142,70 @@ export default function ProductFilterEditor({
                 <SelectItem value="newest">Terbaru</SelectItem>
                 <SelectItem value="priceAsc">Harga Termurah</SelectItem>
                 <SelectItem value="priceDesc">Harga Termahal</SelectItem>
-                <SelectItem value="bestseller">Terlaris</SelectItem>
-                <SelectItem value="rating">Rating Tertinggi</SelectItem>
               </SelectContent>
             </Select>
           </div>
         )}
       </div>
+
+      {(showBrand || showGender) && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {showBrand && (
+            <div className="space-y-1">
+              <Label className="text-xs">Brand</Label>
+              <Select
+                value={value.brand ?? "__all__"}
+                onValueChange={(v) => update("brand", v === "__all__" ? undefined : v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Semua brand" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">Semua brand</SelectItem>
+                  {loadingBrands ? (
+                    <SelectItem value="__loading__" disabled>
+                      Memuat...
+                    </SelectItem>
+                  ) : (
+                    brands.map((b) => (
+                      <SelectItem key={b.id} value={b.slug}>
+                        {b.name}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {showGender && (
+            <div className="space-y-1">
+              <Label className="text-xs">Gender</Label>
+              <Select
+                value={value.gender ?? "__all__"}
+                onValueChange={(v) => update("gender", v === "__all__" ? undefined : v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Semua gender" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all__">Semua gender</SelectItem>
+                  {loadingGenders ? (
+                    <SelectItem value="__loading__" disabled>
+                      Memuat...
+                    </SelectItem>
+                  ) : (
+                    genders.map((g) => (
+                      <SelectItem key={g.id} value={g.slug}>
+                        {g.name}
+                      </SelectItem>
+                    ))
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div className="space-y-1">
@@ -159,13 +238,13 @@ export default function ProductFilterEditor({
         </div>
       </div>
 
-      {showFlashSale && (
+      {showHasDiscount && (
         <label className="flex items-center gap-2 cursor-pointer">
           <Checkbox
-            checked={!!value.flashSale}
-            onCheckedChange={(v) => update("flashSale", v === true ? true : undefined)}
+            checked={!!value.hasDiscount}
+            onCheckedChange={(v) => update("hasDiscount", v === true ? true : undefined)}
           />
-          <span className="text-sm">Hanya produk Flash Sale</span>
+          <span className="text-sm">Hanya produk dengan diskon</span>
         </label>
       )}
     </div>

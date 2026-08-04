@@ -13,10 +13,10 @@ import {
 } from "@/components/ui/dialog";
 import {
   HomepageSectionRenderer,
+  buildStoreFilterQuery,
   type HomepageSectionData,
   type HomepageProduct,
   type CarouselContent,
-  type ProductFilterConfig,
 } from "@marketplace/ui";
 import BannerSectionForm from "./BannerSectionForm";
 import CarouselProductSectionForm from "./CarouselProductSectionForm";
@@ -46,10 +46,6 @@ interface AdminProduct {
   name: string;
   slug: string;
   basePrice: string;
-  rating: string | null;
-  sold: number;
-  isFlashSale: boolean;
-  flashSalePrice: string | null;
   variants?: { id: string; price: string; isDefault: boolean }[];
   images?: { url: string }[];
 }
@@ -60,46 +56,11 @@ interface StoreProduct {
   slug: string;
   price: string;
   basePrice: string;
-  rating: string | null;
-  sold: number;
-  isFlashSale: boolean;
-  flashSalePrice: string | null;
   image: string | null;
 }
 interface StoreProductsResponse {
   success: boolean;
   data: StoreProduct[];
-}
-
-function buildStoreQuery(filter: ProductFilterConfig, limit: number): string {
-  const params = new URLSearchParams();
-  if (filter.search) params.set("search", filter.search);
-  if (filter.category) params.set("category", filter.category);
-  if (filter.minPrice) params.set("minPrice", filter.minPrice);
-  if (filter.maxPrice) params.set("maxPrice", filter.maxPrice);
-  if (filter.flashSale) params.set("flashSale", "true");
-  if (filter.sortOrder) {
-    const order = filter.sortOrder;
-    if (order === "priceAsc") {
-      params.set("sortOrder", "asc");
-      params.set("sortBy", "price");
-    } else if (order === "priceDesc") {
-      params.set("sortOrder", "desc");
-      params.set("sortBy", "price");
-    } else if (order === "bestseller") {
-      params.set("sortOrder", "desc");
-      params.set("sortBy", "sold");
-    } else if (order === "rating") {
-      params.set("sortOrder", "desc");
-      params.set("sortBy", "rating");
-    } else {
-      params.set("sortOrder", "desc");
-      params.set("sortBy", "createdAt");
-    }
-  }
-  params.set("limit", String(limit));
-  params.set("page", "1");
-  return params.toString();
 }
 
 export default function HomepageSectionForm({
@@ -231,7 +192,7 @@ export default function HomepageSectionForm({
           // store /api/products endpoint with the saved filter + limit.
           const filter = carouselContent.filter ?? {};
           const limit = carouselContent.limit ?? 10;
-          const qs = buildStoreQuery(filter, limit);
+          const qs = buildStoreFilterQuery(filter, limit);
           const res = await fetch(`/api/admin/homepage/preview-products?${qs}`, {
             cache: "no-store",
           });
@@ -245,10 +206,6 @@ export default function HomepageSectionForm({
                 price: parseFloat(p.price),
                 basePrice: parseFloat(p.basePrice),
                 image: p.image ? toStoreUrl(p.image) : null,
-                rating: p.rating,
-                sold: p.sold,
-                isFlashSale: p.isFlashSale,
-                flashSalePrice: p.flashSalePrice,
               }))
             );
           }
@@ -277,10 +234,6 @@ export default function HomepageSectionForm({
                 price: parseFloat(price),
                 basePrice: parseFloat(p.basePrice),
                 image: toStoreUrl(p.images?.[0]?.url) || null,
-                rating: p.rating,
-                sold: p.sold,
-                isFlashSale: p.isFlashSale,
-                flashSalePrice: p.flashSalePrice,
               });
             }
             setPreviewProducts(products);

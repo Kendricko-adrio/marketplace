@@ -20,6 +20,7 @@ ke VPS menggunakan Docker. PostgreSQL berjalan **bare-metal di VPS**
 9. [Verifikasi Deployment](#9-verifikasi-deployment)
 10. [Operasional Sehari-hari](#10-operasional-sehari-hari)
 10.5. [Sweep Reservasi Stok (cron)](#105-sweep-reservasi-stok-cron)
+10.6. [Sync SOH dari Third-Party (import dan webhook)](#106-sync-soh-dari-third-party-import-dan-webhook)
 11. [Rate-limit Let's Encrypt (Penting!)](#11-rate-limit-lets-encrypt-penting)
 12. [Troubleshooting](#12-troubleshooting)
 12.5. [Memisahkan Environment Staging & Production](#125-memisahkan-environment-staging--production)
@@ -888,6 +889,139 @@ curl -fsS -X POST -H "X-Cron-Secret: $CRON_SECRET" https://dev-store.adfsport.cl
 - **Kalau cron tidak terpasang**: order yang expired tanpa webhook `expire`
   dari Midtrans akan tetap `pending_payment` + reservasi bocor sampai ada
   yang trigger sweep manual. Cron adalah safety-net wajib untuk produksi.
+
+---
+
+## 10.6 Sync SOH dari Third-Party (import dan webhook)
+
+Master data produk & stok (Stock-On-Hand / SOH) dimiliki oleh sistem
+third-party yang punya webhook. Ada dua jalur sinkronisasi:
+
+1. **Import pertama (one-shot)** — script `db:import-soh` membaca file CSV SOH
+   lalu upsert ke `product` / `product_variant` / `branch_stock` (+ `branch`
+   + `category` baru). Idempoten — aman dijalankan ulang.
+2. **Update berkala (webhook)** — endpoint `POST /api/webhooks/soh` menerima
+   push JSON dari third-party (`{ "records": [ ...field CSV... ] }`) dan upsert
+   per record. Upsert-only (tidak pernah hapus data).
+
+Logika aggregate + upsert dipakai bersama oleh script & webhook di module
+`packages/db/src/soh-sync.ts`.
+
+### A. Aturan mapping penting
+
+- **Product** = group by `ART` → kolom `product.article_number` (unique; natural
+  key untuk upsert idempoten). `RRP` → `base_price`; `Brand`/`sex`/`Season` →
+  `brand`/`gender`/`season`; CSV `STATUS` → `collection` (label, **BUKAN**
+  `product.status`).
+- **Variant** = group by `(ART, Size)`; `sku` di-generate `` `${ART}-${Size}` ``
+  (unique). `Barcode` supplier → kolom `barcode` (non-unique, di-index).
+  `disc%` → `discount` (raw text, format campuran disimpan apa adanya).
+  `Nett` → `price` (modus per variant).
+- **Branch** = group by `NamaGudang`; `code` = `Toko`. **Branch baru yang tidak
+  ada di DB dibuat `status="nonaktif"`** sampai admin enable via halaman Cabang.
+  Branch existing: status dipertahankan (tidak di-reset saat re-import).
+- **`branch_stock.stock`** = sum `Total` per (branch, variant). **`reserved_stock`
+  TIDAK pernah disentuh import** (di-manage runtime checkout — lihat bab 10.5).
+  Stok branch `nonaktif` tetap di-import tapi hidden dari customer (storefront
+  filter `status='aktif'`).
+
+### B. Set `SOH_WEBHOOK_SECRET`
+
+Generate secret:
+```bash
+openssl rand -hex 32
+```
+
+Masukkan ke `.env.staging` / `.env.production`:
+```
+SOH_WEBHOOK_SECRET=<hasil-openssl-di-atas>
+```
+
+Restart store supaya env baru terbaca:
+```bash
+docker compose -p staging --env-file .env.staging up -d --build store
+```
+
+> `SOH_WEBHOOK_SECRET` harus di-wire ke service `store` di `docker-compose.yml`
+> (mirip `CRON_SECRET`): tambahkan `SOH_WEBHOOK_SECRET: ${SOH_WEBHOOK_SECRET}`
+> di env service `store` kalau belum ada.
+
+### C. Import pertama (one-shot)
+
+Jalankan di mesin yang bisa konek ke DB (lokal, atau lewat container `migrate`
+pakai `npx tsx`):
+
+```bash
+# Lokal — CSV default ada di root repo
+npm run db:import-soh
+# atau path custom:
+npm run db:import-soh -- "path/to/SOH.csv"
+```
+
+Output yang diharapkan (file `Dummy data SOH ALL Outlet.csv`):
+```
+Parsed 71149 rows (71149 valid, 0 skipped — missing ART/NamaGudang).
+  aggregated: 20 branches, 5 categories, 10208 products, 37421 variants, 71149 stock rows
+  ...
+✅ Import complete: { "branches":20, "categories":5, "products":10208, "variants":37421, "stockRows":71149, "totalQty":197983 }
+```
+
+> Cek dry-run dulu (tidak menulis DB) untuk verifikasi uniqueness + counts:
+> ```bash
+> npx tsx packages/db/src/soh-scan.ts "Dummy data SOH ALL Outlet.csv"
+> ```
+
+### D. Webhook — terima update dari third-party
+
+Endpoint: `POST /api/webhooks/soh`, auth header `X-SOH-Webhook-Secret`.
+
+Contoh request (1 record):
+```bash
+curl -X POST https://dev-store.adfsport.cloud/api/webhooks/soh \
+  -H "X-SOH-Webhook-Secret: $SOH_WEBHOOK_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"records":[{"barcode":"4065429990123","namaGudang":"ADIDAS OUTLET SERPONG","toko":"Adidas BSD","brand":"ADIDAS","prdsgroup":"Footwear","sex":"Unisex","art":"HP2001","namaArtikel":"BOA JACKET","size":"M","rrp":"5,250,000","disc":"46500","nett":"600000","status":"RUNNING APP WOMEN","season":"20222","total":"3"}]}'
+```
+
+Response 200:
+```json
+{ "success": true, "branches": 1, "categories": 1, "products": 1, "variants": 1, "stockRows": 1, "totalQty": 3 }
+```
+
+- Secret kosong di server → **503**. Secret salah / tidak ada → **401**. Body
+  invalid → **400**.
+- Field JSON pakai nama `SohRecord` (lihat `packages/db/src/soh-sync.ts`):
+  `barcode`, `namaGudang`, `toko`, `brand`, `prdsgroup`, `sex`, `art`,
+  `namaArtikel`, `size`, `rrp`, **`disc`** (bukan `disc%` CSV), `nett`, `status`,
+  `season`, `total`. Setiap field di-coerce ke string; missing/null → `""`. Kalau
+  third-party kirim nama field beda (mis. `disc%` atau `NamaGudang`), sesuaikan
+  zod schema di route handler — format pasti payload third-party masih asumsi
+  terbuka.
+- Tiap call dicatat di `audit_log` (`action: "SOH_SYNC_WEBHOOK"`).
+- Payload besar (>ribuan record) tetap sync. Kalau sering timeout, minta
+  third-party kirim delta (bukan full snapshot) atau pakai script (bab C) untuk
+  snapshot penuh.
+
+### E. Verifikasi pasca-import (psql)
+
+```sql
+-- branch baru semua nonaktif
+SELECT code, name, status FROM branch WHERE id LIKE 'soh:branch:%';
+-- product contoh
+SELECT name, article_number, brand, gender, season, collection, base_price
+  FROM product WHERE article_number = 'HP2001';
+-- variant + barcode + discount
+SELECT sku, size, price, barcode, discount, is_default
+  FROM product_variant WHERE sku LIKE 'HP2001-%';
+-- reserved_stock tetap 0 untuk row import
+SELECT COUNT(*) FROM branch_stock WHERE reserved_stock <> 0;
+-- total stok
+SELECT SUM(stock) FROM branch_stock;
+```
+
+> **Idempotensi:** jalankan `db:import-soh` 2x → counts sama, tidak ada
+> duplikat, status branch tetap `nonaktif` (tidak ter-reset). Ini juga yang
+> membuat webhook aman di-replay.
 
 ---
 

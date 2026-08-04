@@ -75,6 +75,17 @@ function formatRupiah(value: string) {
   return `Rp ${parseFloat(value).toLocaleString("id-ID")}`;
 }
 
+function validatePhone(phone: string): string | null {
+  if (!phone) return "Nomor telepon wajib diisi.";
+  if (!phone.startsWith("+62")) {
+    return "Nomor telepon harus diawali dengan +62.";
+  }
+  if (!/^\+62\d{8,13}$/.test(phone)) {
+    return "Format nomor telepon tidak valid. Gunakan +62 diikuti 8–13 digit.";
+  }
+  return null;
+}
+
 export default function AccountPage() {
   const router = useRouter();
   const { data: session } = useSession();
@@ -92,6 +103,8 @@ export default function AccountPage() {
     type: "success" | "error";
     text: string;
   } | null>(null);
+
+  const phoneError = phoneEditable ? validatePhone(profilePhone) : null;
 
   const user = session?.user as (AuthUser & {
     phone?: string | null;
@@ -116,14 +129,26 @@ export default function AccountPage() {
   async function handleSaveProfile() {
     setSavingProfile(true);
     setProfileMessage(null);
+
+    if (phoneEditable && phoneError) {
+      setProfileMessage({ type: "error", text: phoneError });
+      setSavingProfile(false);
+      return;
+    }
+
     try {
+      const body: { name?: string; phone?: string } = {};
+      if (profileName !== (user?.name ?? "")) {
+        body.name = profileName;
+      }
+      if (phoneEditable && profilePhone !== (user?.phone ?? "")) {
+        body.phone = profilePhone;
+      }
+
       const res = await fetch("/api/account/profile", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: profileName,
-          phone: profilePhone,
-        }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (data.success) {
@@ -417,12 +442,25 @@ export default function AccountPage() {
                       value={profilePhone}
                       onChange={(e) => setProfilePhone(e.target.value)}
                       disabled={!phoneEditable}
-                      className={phoneEditable ? "" : "bg-muted"}
+                      className={
+                        phoneEditable
+                          ? phoneError
+                            ? "border-destructive focus-visible:ring-destructive"
+                            : ""
+                          : "bg-muted"
+                      }
                       placeholder={phoneEditable ? "+628123456789" : ""}
+                      aria-invalid={phoneEditable ? !!phoneError : undefined}
+                      type="tel"
                     />
                     <Button
                       variant="outline"
-                      onClick={() => setPhoneEditable((v) => !v)}
+                      onClick={() => {
+                        if (phoneEditable) {
+                          setProfilePhone(user?.phone ?? "");
+                        }
+                        setPhoneEditable((v) => !v);
+                      }}
                     >
                       {phoneEditable ? "Batal" : "Ubah"}
                     </Button>
@@ -432,11 +470,14 @@ export default function AccountPage() {
                       Format: +62 diikuti 8–13 digit (contoh: +628123456789).
                     </p>
                   )}
+                  {phoneEditable && phoneError && (
+                    <p className="text-xs text-destructive">{phoneError}</p>
+                  )}
                 </div>
                 <div className="flex justify-end mt-4">
                   <Button
                     onClick={handleSaveProfile}
-                    disabled={savingProfile}
+                    disabled={savingProfile || !!phoneError}
                   >
                     {savingProfile ? (
                       <Loader2 className="h-4 w-4 animate-spin mr-2" />

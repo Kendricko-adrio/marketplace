@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { eq } from "drizzle-orm";
 import { Pool } from "pg";
 import * as schema from "./schema";
+import { keyId, slugify } from "./soh-sync";
 import bcrypt from "bcryptjs";
 
 // Helper to generate random ID
@@ -32,7 +33,6 @@ async function seed() {
     await db.delete(schema.carts);
     await db.delete(schema.orderItems);
     await db.delete(schema.orders);
-    await db.delete(schema.reviews);
     await db.delete(schema.auditLogs);
     await db.delete(schema.systemConfig);
     await db.delete(schema.branchStocks);
@@ -40,6 +40,8 @@ async function seed() {
     await db.delete(schema.productVariants);
     await db.delete(schema.productToCategory);
     await db.delete(schema.products);
+    await db.delete(schema.brands);
+    await db.delete(schema.genders);
     await db.delete(schema.categories);
     await db.delete(schema.branches);
     await db.delete(schema.vouchers);
@@ -312,15 +314,15 @@ async function seed() {
         id: generateId(),
         name: "AirRunner Pro Running Shoes",
         slug: "airrunner-pro-running-shoes",
+        articleNumber: "SEED-AR-001",
+        brand: "AirRunner",
+        gender: "Unisex",
+        season: "SS26",
+        collection: "Running",
         description:
           "Sepatu lari profesional dengan teknologi cushioned sole untuk kenyamanan maksimal. Ringan, breathable, dan cocok untuk marathon maupun jogging harian.",
-        basePrice: "1200000",
+        basePrice: "1500000",
         status: "aktif",
-        rating: "4.8",
-        sold: 1200,
-        isFlashSale: true,
-        flashSalePrice: "899000",
-        flashSaleEndsAt: new Date(Date.now() + 2 * 60 * 60 * 1000), // 2 hours
         categoryIds: [categoryIds.runningShoes],
         variants: [
           {
@@ -350,15 +352,15 @@ async function seed() {
         id: generateId(),
         name: "StreetStyle High Top Sneakers",
         slug: "streetstyle-high-top-sneakers",
+        articleNumber: "SEED-SS-002",
+        brand: "StreetStyle",
+        gender: "Unisex",
+        season: "SS26",
+        collection: "Lifestyle",
         description:
           "Sneakers high top dengan desain urban yang stylish. Sol karet anti slip dan upper dari canvas premium. Cocok untuk streetwear dan casual outing.",
-        basePrice: "850000",
+        basePrice: "1100000",
         status: "aktif",
-        rating: "4.6",
-        sold: 850,
-        isFlashSale: true,
-        flashSalePrice: "650000",
-        flashSaleEndsAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
         categoryIds: [categoryIds.sneakers],
         variants: [
           {
@@ -388,15 +390,15 @@ async function seed() {
         id: generateId(),
         name: "Classic Leather Oxford Formal",
         slug: "classic-leather-oxford-formal",
+        articleNumber: "SEED-OX-003",
+        brand: "OxfordCo",
+        gender: "Men",
+        season: "FW25",
+        collection: "Formal",
         description:
           "Sepatu formal Oxford berbahan kulit asli dengan jahitan Goodyear welt. Elegan, tahan lama, dan nyaman untuk penggunaan sehari-hari di kantor.",
-        basePrice: "1500000",
+        basePrice: "1900000",
         status: "aktif",
-        rating: "4.7",
-        sold: 600,
-        isFlashSale: true,
-        flashSalePrice: "1200000",
-        flashSaleEndsAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
         categoryIds: [categoryIds.formalShoes],
         variants: [
           {
@@ -419,15 +421,15 @@ async function seed() {
         id: generateId(),
         name: "Comfy Canvas Slip-On Casual",
         slug: "comfy-canvas-slip-on-casual",
+        articleNumber: "SEED-CS-004",
+        brand: "Comfy",
+        gender: "Unisex",
+        season: "SS26",
+        collection: "Casual",
         description:
           "Sepatu slip-on bahan canvas yang ringan dan nyaman. Desain minimalis tanpa tali, cocok untuk jalan-jalan santai dan aktivitas harian.",
-        basePrice: "450000",
+        basePrice: "590000",
         status: "aktif",
-        rating: "4.5",
-        sold: 2100,
-        isFlashSale: true,
-        flashSalePrice: "350000",
-        flashSaleEndsAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
         categoryIds: [categoryIds.casualShoes],
         variants: [
           {
@@ -450,13 +452,15 @@ async function seed() {
         id: generateId(),
         name: "Mountain Hiker Outdoor Boots",
         slug: "mountain-hiker-outdoor-boots",
+        articleNumber: "SEED-MH-005",
+        brand: "HikerPro",
+        gender: "Unisex",
+        season: "FW25",
+        collection: "Outdoor",
         description:
           "Boots outdoor dengan sol karet anti slip dan upper dari kulit suede. Tahan air dan cocok untuk hiking di berbagai medan.",
         basePrice: "1350000",
         status: "aktif",
-        rating: "4.4",
-        sold: 750,
-        isFlashSale: false,
         categoryIds: [categoryIds.boots],
         variants: [
           {
@@ -486,13 +490,15 @@ async function seed() {
         id: generateId(),
         name: "Summer Slide Comfort Sandals",
         slug: "summer-slide-comfort-sandals",
+        articleNumber: "SEED-SD-006",
+        brand: "Summer",
+        gender: "Unisex",
+        season: "SS26",
+        collection: "Sandals",
         description:
           "Sandal slide dengan footbed empuk dan strap yang nyaman. Desain simpel dan ringan, sempurna untuk pantai dan cuaca panas.",
         basePrice: "250000",
         status: "aktif",
-        rating: "4.3",
-        sold: 1500,
-        isFlashSale: false,
         categoryIds: [categoryIds.sandals],
         variants: [
           {
@@ -515,13 +521,15 @@ async function seed() {
         id: generateId(),
         name: "Court Master Basketball Sneakers",
         slug: "court-master-basketball-sneakers",
+        articleNumber: "SEED-CB-007",
+        brand: "CourtMaster",
+        gender: "Men",
+        season: "SS26",
+        collection: "Basketball",
         description:
           "Sepatu basket dengan ankle support tinggi dan sol yang responsif. Upper dari synthetic leather yang tahan lama dan mudah dibersihkan.",
         basePrice: "1100000",
         status: "aktif",
-        rating: "4.6",
-        sold: 950,
-        isFlashSale: false,
         categoryIds: [categoryIds.sneakers],
         variants: [
           {
@@ -544,13 +552,15 @@ async function seed() {
         id: generateId(),
         name: "Easy Walk Slip-On Casual",
         slug: "easy-walk-slip-on-casual",
+        articleNumber: "SEED-EW-008",
+        brand: "EasyWalk",
+        gender: "Unisex",
+        season: "SS26",
+        collection: "Casual",
         description:
           "Sepatu slip-on casual dengan insole memory foam untuk kenyamanan sepanjang hari. Upper dari knit breathable yang fleksibel.",
         basePrice: "550000",
         status: "aktif",
-        rating: "4.5",
-        sold: 1800,
-        isFlashSale: false,
         categoryIds: [categoryIds.casualShoes],
         variants: [
           {
@@ -573,13 +583,15 @@ async function seed() {
         id: generateId(),
         name: "Trail Blazer All-Terrain Running",
         slug: "trail-blazer-all-terrain-running",
+        articleNumber: "SEED-TB-009",
+        brand: "TrailBlaze",
+        gender: "Unisex",
+        season: "FW25",
+        collection: "Trail",
         description:
           "Sepatu trail running dengan outsole bergerigi untuk cengkeraman maksimal di medan berlumpur dan berbatu. Tahan air dan breathable.",
         basePrice: "950000",
         status: "aktif",
-        rating: "4.7",
-        sold: 650,
-        isFlashSale: false,
         categoryIds: [categoryIds.runningShoes],
         variants: [
           {
@@ -602,13 +614,15 @@ async function seed() {
         id: generateId(),
         name: "Urban Chelsea Leather Boots",
         slug: "urban-chelsea-leather-boots",
+        articleNumber: "SEED-UC-010",
+        brand: "UrbanCo",
+        gender: "Men",
+        season: "FW25",
+        collection: "Boots",
         description:
           "Chelsea boots berbahan kulit premium dengan elastic side panel. Desain timeless yang cocok untuk formal maupun smart casual.",
         basePrice: "1600000",
         status: "aktif",
-        rating: "4.8",
-        sold: 420,
-        isFlashSale: false,
         categoryIds: [categoryIds.boots, categoryIds.formalShoes],
         variants: [
           {
@@ -629,6 +643,34 @@ async function seed() {
       },
     ];
 
+    // Brand & gender dimensions — sync-managed tables, seeded here so demo
+    // products can be linked via brandId/genderId. Ids are deterministic
+    // (keyId of slug) to match how soh-sync.ts creates them.
+    const brandBySlug = new Map<string, { id: string; name: string }>();
+    const genderBySlug = new Map<string, { id: string; name: string }>();
+    for (const p of productsData) {
+      if (p.brand) {
+        const slug = slugify(p.brand);
+        if (!brandBySlug.has(slug))
+          brandBySlug.set(slug, { id: keyId("soh:brand:", slug), name: p.brand });
+      }
+      if (p.gender) {
+        const slug = slugify(p.gender);
+        if (!genderBySlug.has(slug))
+          genderBySlug.set(slug, { id: keyId("soh:gender:", slug), name: p.gender });
+      }
+    }
+    if (brandBySlug.size) {
+      await db.insert(schema.brands).values(
+        [...brandBySlug.values()].map((b) => ({ id: b.id, name: b.name, slug: slugify(b.name) }))
+      );
+    }
+    if (genderBySlug.size) {
+      await db.insert(schema.genders).values(
+        [...genderBySlug.values()].map((g) => ({ id: g.id, name: g.name, slug: slugify(g.name) }))
+      );
+    }
+
     for (const product of productsData) {
       const productIndex = productsData.indexOf(product);
 
@@ -640,11 +682,13 @@ async function seed() {
         description: product.description,
         basePrice: product.basePrice,
         status: product.status,
-        rating: product.rating,
-        sold: product.sold,
-        isFlashSale: product.isFlashSale,
-        flashSalePrice: product.flashSalePrice || null,
-        flashSaleEndsAt: product.flashSaleEndsAt || null,
+        // SOH sync fields (nullable; populated by db:import-soh / the SOH
+        // webhook for supplier products — seeded here with demo values).
+        articleNumber: product.articleNumber,
+        brandId: product.brand ? brandBySlug.get(slugify(product.brand))!.id : null,
+        genderId: product.gender ? genderBySlug.get(slugify(product.gender))!.id : null,
+        season: product.season,
+        collection: product.collection,
       });
 
       allProductIds.push(product.id);
@@ -669,6 +713,11 @@ async function seed() {
           size: variant.size,
           price: variant.price,
           isDefault: variant.isDefault,
+          // SOH sync fields — supplier barcode + raw discount. Null for seed
+          // (admin-created demo products have no supplier master data); populated
+          // by db:import-soh / the SOH webhook.
+          barcode: null,
+          discount: null,
         });
 
         // Track variant id for branch stock seeding
@@ -884,14 +933,14 @@ async function seed() {
             {
               id: generateId(),
               imageUrl: "",
-              title: "Best Seller",
-              filter: { sortOrder: "bestseller" },
+              title: "Harga Termurah",
+              filter: { sortOrder: "priceAsc" },
             },
             {
               id: generateId(),
               imageUrl: "",
               title: "Diskon Spesial",
-              filter: { flashSale: true },
+              filter: { hasDiscount: true },
             },
           ],
         },

@@ -1,4 +1,4 @@
-import {
+﻿import {
   pgTable,
   text,
   timestamp,
@@ -25,18 +25,15 @@ export type HomepageSectionType =
 export interface ProductFilterConfig {
   search?: string;
   category?: string; // category slug
+  brand?: string; // brand slug
+  gender?: string; // gender slug
   minPrice?: string;
   maxPrice?: string;
-  flashSale?: boolean;
-  sortOrder?: "newest" | "priceAsc" | "priceDesc" | "bestseller" | "rating";
+  hasDiscount?: boolean;
+  sortOrder?: "newest" | "priceAsc" | "priceDesc";
 }
 
-export type CarouselSortOrder =
-  | "newest"
-  | "priceAsc"
-  | "priceDesc"
-  | "bestseller"
-  | "rating";
+export type CarouselSortOrder = "newest" | "priceAsc" | "priceDesc";
 
 /**
  * Banner hero content. Supports a carousel of 1-5 background images that
@@ -71,7 +68,7 @@ export interface PromoCardItem {
   id: string;
   imageUrl: string;
   title: string;
-  filter?: ProductFilterConfig; // undefined → non-clickable card
+  filter?: ProductFilterConfig; // undefined â†’ non-clickable card
 }
 
 export interface PromoCardsContent {
@@ -91,8 +88,8 @@ export const homepageSections = pgTable("homepage_section", {
   content: jsonb("content").notNull().default({}),
   displayOrder: integer("display_order").notNull().default(0),
   isActive: boolean("is_active").notNull().default(true),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const homepageSectionProducts = pgTable(

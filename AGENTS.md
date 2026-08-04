@@ -42,6 +42,13 @@ import { clients, products } from "@/db";   // re-exported from @marketplace/db
 3. `npm run db:push` — apply to DB
 4. No rebuild/sync needed — apps read schema source via path alias
 
+> **Note on `db:push` vs `db:migrate`:** this project's dev DB is managed with
+> `db:push` (schema-sync), not `db:migrate`. The `__drizzle_migrations` journal
+> is NOT kept in sync with the push-applied DB, so `db:migrate` will try to
+> replay old `CREATE TABLE` statements and fail with `relation already exists`.
+> Use `db:push` to apply schema changes; treat the generated migration files in
+> `packages/db/drizzle/` as the source-of-truth SQL record for review/audit.
+
 ## Auth (Better Auth) — Two Separate Instances
 
 The store and admin run **independent** Better Auth instances with
@@ -178,3 +185,15 @@ gunakan skill yang paling relevan via tool `skill`.
   dicatat di `docs/api-reference.md`, dan setiap fitur baru harus punya doc
   sendiri di `docs/` (lihat bagian **Documentation** di atas). Jangan anggap
   tugas selesai sebelum doc ter-update.
+- **Setiap kolom datetime/timestamp WAJIB punya timezone** — di
+  `packages/db/src/schema/`, selalu pakai `timestamp("col", { withTimezone: true })`
+  (→ Postgres `timestamptz`). Jangan pakai `timestamp("col")` polos (→
+  `timestamp without time zone`), karena nilai tersimpan sebagai wall-clock tanpa
+  label zona dan bergantung pada session `timezone` Postgres — berisiko inkonsistensi
+  antara data yang di-insert dari app (`new Date()` → UTC) vs `defaultNow()`/`now()`
+  (→ jam lokal session). Dengan `withTimezone: true`, Postgres selalu menyimpan UTC
+  secara absolut dan mengonversi ke zona client saat dibaca. Pengecualian: tipe
+  `date` (calendar date murni tanpa waktu, mis. `birthDate`) tidak butuh timezone.
+  Saat insert dari app, kirim `Date` objek (bukan string lokal) agar `pg` driver
+  serialisasi via `toISOString()` (UTC). Pastikan juga session `timezone` Postgres
+  di-set ke `UTC` (default di env dev; verifikasi via `SHOW timezone;`).

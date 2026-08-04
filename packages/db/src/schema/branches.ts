@@ -1,4 +1,4 @@
-import {
+﻿import {
   pgTable,
   text,
   timestamp,
@@ -39,8 +39,8 @@ export const branches = pgTable("branch", {
     .default({}),
   googleMapsUrl: text("google_maps_url"),
   status: text("status").notNull().default("aktif"), // aktif | nonaktif
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // Per-variant stock at each branch (source of truth for stock)
@@ -59,7 +59,7 @@ export const branchStocks = pgTable(
     // Decremented to 0 when the reservation converts to a real deduction on payment
     // success, or is released on payment failure/expiry.
     reservedStock: integer("reserved_stock").notNull().default(0),
-    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.branchId, t.productVariantId] })]
 );

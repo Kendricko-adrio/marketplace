@@ -1,4 +1,4 @@
-import { pgTable, text, boolean, timestamp, unique } from "drizzle-orm/pg-core";
+﻿import { pgTable, text, boolean, timestamp, unique } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 // =========================================================
@@ -39,8 +39,8 @@ export const permissions = pgTable(
 		canView: boolean("can_view").notNull().default(false),
 		canEdit: boolean("can_edit").notNull().default(false),
 		canDelete: boolean("can_delete").notNull().default(false),
-		createdAt: timestamp("created_at").notNull().defaultNow(),
-		updatedAt: timestamp("updated_at").notNull().defaultNow(),
+		createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+		updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 	},
 	(t) => [unique("permission_role_module_unique").on(t.role, t.module)]
 );

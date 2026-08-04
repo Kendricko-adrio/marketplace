@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, integer } from "drizzle-orm/pg-core";
+﻿import { pgTable, text, timestamp, integer } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { clients } from "./auth";
 import { productVariants } from "./products";
@@ -14,10 +14,10 @@ export const carts = pgTable("cart", {
     .notNull()
     .unique()
     .references(() => clients.id, { onDelete: "cascade" }),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
-// Cart Items table — each line is tagged with the branch it was added from.
+// Cart Items table â€” each line is tagged with the branch it was added from.
 export const cartItems = pgTable("cart_item", {
   id: text("id").primaryKey(),
   cartId: text("cart_id")
@@ -30,8 +30,8 @@ export const cartItems = pgTable("cart_item", {
     onDelete: "cascade",
   }),
   quantity: integer("quantity").notNull().default(1),
-  createdAt: timestamp("created_at").notNull().defaultNow(),
-  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
 // Relations

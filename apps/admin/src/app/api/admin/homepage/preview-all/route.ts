@@ -88,6 +88,7 @@ export const GET = withPermission(async () => {
       string,
       (typeof products)["$inferSelect"] & { _image?: string | null; _price?: string }
     >();
+    const genderNameMap = new Map<string, string>();
     if (allProductIds.length > 0) {
       const productRows = await db
         .select()
@@ -136,6 +137,21 @@ export const GET = withPermission(async () => {
         (p as unknown as { _price?: string })._price =
           minPriceMap.get(p.id) ?? p.basePrice;
       }
+
+      // Resolve gender names for manual-mode products (productRow only has
+      // genderId; the card needs the display name). genderId is nullable.
+      const genderIds = [
+        ...new Set(
+          productRows.map((p) => p.genderId).filter((g): g is string => !!g)
+        ),
+      ];
+      if (genderIds.length > 0) {
+        const genderRows = await db
+          .select({ id: genders.id, name: genders.name })
+          .from(genders)
+          .where(inArray(genders.id, genderIds));
+        for (const g of genderRows) genderNameMap.set(g.id, g.name);
+      }
     }
 
     // --- Carousel: filter mode (dynamic query per section) ---
@@ -175,6 +191,8 @@ export const GET = withPermission(async () => {
               price: p.price,
               basePrice: p.basePrice,
               image: p.image,
+              collection: p.collection,
+              gender: p.gender,
             })),
           };
         }
@@ -192,6 +210,8 @@ export const GET = withPermission(async () => {
               price: price,
               basePrice: p.basePrice,
               image: img,
+              collection: p.collection,
+              gender: p.genderId ? genderNameMap.get(p.genderId) ?? null : null,
             };
           })
           .filter((x): x is NonNullable<typeof x> => x !== null);
@@ -224,6 +244,8 @@ type FilteredProduct = {
   price: string;
   basePrice: string;
   image: string | null;
+  collection: string | null;
+  gender: string | null;
 };
 
 async function resolveFilterModeProducts(
@@ -320,12 +342,15 @@ async function resolveFilterModeProducts(
     basePrice: products.basePrice,
     createdAt: products.createdAt,
     price: minPriceSq.minPrice,
+    collection: products.collection,
+    gender: genders.name,
   };
 
   const rows = await db
     .select(selectCols)
     .from(products)
     .innerJoin(minPriceSq, eq(products.id, minPriceSq.productId))
+    .leftJoin(genders, eq(products.genderId, genders.id))
     .where(and(...conditions))
     .orderBy(orderBy)
     .limit(safeLimit);
@@ -341,6 +366,8 @@ async function hydrateProducts(
     basePrice: string;
     price: string | null;
     createdAt: Date;
+    collection: string | null;
+    gender: string | null;
   }>
 ) {
   if (rows.length === 0) return [];
@@ -373,6 +400,8 @@ async function hydrateProducts(
       price: r.price ?? r.basePrice,
       basePrice: r.basePrice,
       image: variant ? imageMap.get(variant.id) ?? null : null,
+      collection: r.collection,
+      gender: r.gender,
     };
   });
 }

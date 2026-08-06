@@ -10,7 +10,7 @@ import { CartProvider } from "@/providers/cart-provider";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "E-Commerce Store",
+  title: "ADF Sports",
   description: "Premium shopping experience",
 };
 

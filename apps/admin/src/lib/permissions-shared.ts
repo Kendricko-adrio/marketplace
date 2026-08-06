@@ -9,6 +9,7 @@ export const HQ_PERMISSIONS: PermissionMap = {
 	homepage: { canView: true, canEdit: true, canDelete: true },
 	pages: { canView: true, canEdit: true, canDelete: true },
 	users: { canView: true, canEdit: true, canDelete: true },
+	notifications: { canView: true, canEdit: true, canDelete: true },
 };
 
 export const MODULE_LABELS: Record<ModuleName, string> = {
@@ -18,6 +19,7 @@ export const MODULE_LABELS: Record<ModuleName, string> = {
 	homepage: "Homepage",
 	pages: "Halaman",
 	users: "Pengguna",
+	notifications: "Notifikasi",
 };
 
 export function moduleLabel(moduleName: ModuleName): string {

@@ -20,6 +20,8 @@ type ProductResult = {
   status: string;
   createdAt: Date;
   price: string | null;
+  collection: string | null;
+  gender: string | null;
 };
 
 export async function GET(request: NextRequest) {
@@ -145,6 +147,8 @@ export async function GET(request: NextRequest) {
       status: products.status,
       createdAt: products.createdAt,
       price: minPriceSq.minPrice,
+      collection: products.collection,
+      gender: genders.name,
     };
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;
@@ -153,6 +157,7 @@ export async function GET(request: NextRequest) {
       .select(selectCols)
       .from(products)
       .innerJoin(minPriceSq, eq(products.id, minPriceSq.productId))
+      .leftJoin(genders, eq(products.genderId, genders.id))
       .where(where)
       .orderBy(orderBy)
       .limit(limit)

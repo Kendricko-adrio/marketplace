@@ -7,6 +7,7 @@ import {
   categories,
   productImages,
   branchStocks,
+  genders,
 } from "@/db";
 import { eq, desc, sql, inArray, sum, asc } from "drizzle-orm";
 import { z } from "zod";
@@ -25,6 +26,23 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
       .orderBy(desc(products.createdAt))
       .limit(limit)
       .offset(offset);
+
+    // Resolve gender names for this page (product row only carries genderId).
+    // genderId is nullable; map id -> name so consumers (e.g. the carousel
+    // manual-mode preview) can render the gender label without a second hit.
+    const genderIds = [
+      ...new Set(
+        allProducts.map((p) => p.genderId).filter((g): g is string => !!g)
+      ),
+    ];
+    const genderNameMap = new Map<string, string>();
+    if (genderIds.length > 0) {
+      const genderRows = await db
+        .select({ id: genders.id, name: genders.name })
+        .from(genders)
+        .where(inArray(genders.id, genderIds));
+      for (const g of genderRows) genderNameMap.set(g.id, g.name);
+    }
 
     // Get total count
     const countResult = await db
@@ -81,6 +99,9 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
 
         return {
           ...product,
+          gender: product.genderId
+            ? genderNameMap.get(product.genderId) ?? null
+            : null,
           variants: variants.map((v) => ({
             id: v.id,
             price: v.price,

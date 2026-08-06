@@ -142,6 +142,13 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | PUT | `/api/admin/permissions` | admin-session (hq) | Upsert a permission (admin role) |
 | GET | `/api/admin/permissions/me` | admin-session | Current user's role + permissions |
 | GET/POST | `/api/auth/*` | Better Auth (catch-all) | Admin auth endpoints |
+| GET | `/api/admin/notifications/poll` | admin-session | Long-poll real-time notifications (branch/HQ scoped) |
+| GET | `/api/admin/notifications` | admin-session (notifications:view) | List notifications (paginated, isRead filter) |
+| PATCH | `/api/admin/notifications/{id}` | admin-session (notifications:edit) | Mark one notification as read |
+| POST | `/api/admin/notifications/mark-all-read` | admin-session (notifications:edit) | Mark all in-scope notifications as read |
+| DELETE | `/api/admin/notifications/{id}` | admin-session (notifications:delete) | Delete one notification |
+| DELETE | `/api/admin/notifications/clear-all-read` | admin-session (notifications:delete) | Delete all read in-scope notifications |
+| GET/POST | `/api/auth/*` | Better Auth (catch-all) | Admin auth endpoints |
 | GET | `/uploads/{path...}` | none | Serve an uploaded file |
 
 ---
@@ -195,7 +202,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Purpose**: Paginated, filterable product list for storefront browsing.
 - **Params**: `search` (string, optional), `category` (slug, optional), `brand` (slug, optional), `gender` (slug, optional), `minPrice` (string, optional), `maxPrice` (string, optional), `status` (string, default `"aktif"`), `hasDiscount` (`"true"` to filter products whose `basePrice > min(variant.price)`), `sortBy` (`"price"`|`"createdAt"`, default `"createdAt"`), `sortOrder` (`"asc"`|`"desc"`, default `"desc"`), `page` (int, default `1`), `limit` (int, default `12`)
 - **Body**: none
-- **Response**: 200 `{ success: true, data: [{ id, name, slug, description, basePrice, status, createdAt, price, image }], pagination: { page, limit, total, totalPages } }`; 500 `{ success: false, error }`
+- **Response**: 200 `{ success: true, data: [{ id, name, slug, description, basePrice, status, createdAt, price, image, collection: string|null, gender: string|null }], pagination: { page, limit, total, totalPages } }`; 500 `{ success: false, error }`
 - **Notes**: `price` is the **cheapest variant net price** per product (`min(productVariants.price)` via a grouped subquery join) — the price the customer pays and the value shown on product cards; `basePrice` is the RRP (strikethrough/original). `image` is the first image (`displayOrder` asc) of the **default** variant (separate from price). `minPrice`/`maxPrice` and `sortBy=price` operate on the cheapest-variant net price; `hasDiscount` filters to `basePrice > min(variant.price)`. `category` (slug), `brand` (slug), and `gender` (slug) are each resolved to an id and applied as conditions to **both** the list and the count query, so `pagination.total` is correct under any filter combination (category uses a junction-table subquery; brand/gender are direct `brandId`/`genderId` equality). An unknown slug yields zero results.
 
 #### `GET` `/api/products/{id}`
@@ -203,8 +210,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Purpose**: Full product detail with variants, per-variant branch availability, and categories.
 - **Params**: `{id}` — accepts either the product `id` or its `slug` (looked up by id first, then by slug)
 - **Body**: none
-- **Response**: 200 `{ success: true, data: { ...product, categories: [{ id, name, slug }], variants: [{ ...variant, images: string[], branchStock: [{ branchId, name, code, city, stock, reservedStock, available }] }], colors: string[], sizes: string[] } }`; 404 if not found by id or slug; 500 `{ success: false, error }`
-- **Notes**: Variants ordered by `isDefault` asc. `branchStock` is restricted to `branches.status = "aktif"` and only rows where `stock - reservedStock > 0`; `available = stock - reservedStock` is computed in JS. `colors`/`sizes` are unique non-null variant values. Read-only. Each variant `price` is the net price the customer pays; `product.basePrice` is the RRP.
+- **Response**: 200 `{ success: true, data: { ...product, brand: string|null, gender: string|null, collection: string|null, categories: [{ id, name, slug }], variants: [{ ...variant, images: string[], branchStock: [{ branchId, name, code, city, stock, reservedStock, available }] }], colors: string[], sizes: string[] } }`; 404 if not found by id or slug; 500 `{ success: false, error }`
+- **Notes**: Variants ordered by `isDefault` asc. `branchStock` is restricted to `branches.status = "aktif"` and only rows where `stock - reservedStock > 0`; `available = stock - reservedStock` is computed in JS. `colors`/`sizes` are unique non-null variant values. Read-only. Each variant `price` is the net price the customer pays; `product.basePrice` is the RRP. `brand`/`gender` are the resolved names from the sync-managed `brand`/`gender` dimension tables (looked up from `product.brandId`/`product.genderId`, nullable); `collection` is the plain-text collection label column on the product row.
 
 #### `GET` `/api/homepage`
 - **Auth**: none
@@ -212,7 +219,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: —
 - **Body**: none
 - **Response**: 200 `{ success: true, data: sections[] }` where each section varies by `type`: `carousel_product` sections gain a `products` array; `store_banner` sections gain a `branches` array (active branches, `name` asc); other types pass through unchanged. Empty array if no sections. 500 `{ success: false, error }`
-- **Notes**: Only `isActive = true` sections, ordered by `displayOrder` asc. `carousel_product` content has a `mode`: `"filter"` resolves products dynamically (mirrors `/api/products` filters: `search`, `category` slug, `brand` slug, `gender` slug, `hasDiscount`, `minPrice`, `maxPrice`, `sortOrder` of `newest|priceAsc|priceDesc`; `limit` clamped 1–20, default 10) and runs in parallel; otherwise manual mode reads `homepageSectionProducts` junction rows ordered by `displayOrder`. Carousel product `price` is the cheapest variant net price, `basePrice` is the RRP. `store_banner` sections attach all `status = "aktif"` branches. Read-only.
+- **Notes**: Only `isActive = true` sections, ordered by `displayOrder` asc. `carousel_product` content has a `mode`: `"filter"` resolves products dynamically (mirrors `/api/products` filters: `search`, `category` slug, `brand` slug, `gender` slug, `hasDiscount`, `minPrice`, `maxPrice`, `sortOrder` of `newest|priceAsc|priceDesc`; `limit` clamped 1–20, default 10) and runs in parallel; otherwise manual mode reads `homepageSectionProducts` junction rows ordered by `displayOrder`. Carousel product `price` is the cheapest variant net price, `basePrice` is the RRP. Each carousel product also carries `collection` (text label from the product row, nullable) and `gender` (resolved name from the sync-managed `gender` dimension table via `genderId`, nullable) so product cards can render both. `store_banner` sections attach all `status = "aktif"` branches. Read-only.
 
 #### `POST` `/api/vouchers/validate`
 - **Auth**: none
@@ -394,7 +401,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: query `page` (default 1), `limit` (default 20)
 - **Body**: none
 - **Response**: 200 `{ success, data: [...], pagination: { page, limit, total, totalPages } }`; 500 error
-- **Notes**: N+1 per product (variants, categories, branchStocks sums, productImages ordered by displayOrder). Per-product fields: `variants: [{id, price, isDefault}]`, `variantCount`, `totalStock`, `totalReserved`, `totalAvailable = max(0, totalStock - totalReserved)`, `categories: [name]`, `images: [{url}]`.
+- **Notes**: N+1 per product (variants, categories, branchStocks sums, productImages ordered by displayOrder). Per-product fields: `variants: [{id, price, isDefault}]`, `variantCount`, `totalStock`, `totalReserved`, `totalAvailable = max(0, totalStock - totalReserved)`, `categories: [name]`, `images: [{url}]`. Also spreads the full product row (incl. `collection` text label) and adds `gender` (resolved name from the `gender` dimension table via `genderId`, nullable — batch-looked-up per page) so carousel manual-mode preview cards can render the gender label.
 
 #### `POST` `/api/admin/products`
 - **Auth**: admin-session (permission: products/edit)
@@ -561,7 +568,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 #### `GET` `/api/admin/orders`
 - **Auth**: admin-session (permission: orders `view`; both `admin` and `hq` pass the guard)
 - **Purpose**: List orders with customer/branch summary and per-order item count, scoped by RBAC branch visibility.
-- **Params**: `status` (exact match), `branchId` (HQ-only filter), `from` / `to` (date range on `createdAt`; `to` inclusive by +1 day), `search` (ilike on `orders.id` or `clients.name`), `page` (default 1), `limit` (default 20)
+- **Params**: `status` (exact match), `branchId` (HQ-only filter), `from` / `to` (date range on `createdAt`; `to` inclusive by +1 day), `pickupFrom` / `pickupTo` (date range on `pickupDate`; `to` inclusive by +1 day; orders with NULL `pickupDate` are excluded when either is set), `search` (ilike on `orders.id`, `clients.name`, or `orders.contactPhone`), `page` (default 1), `limit` (default 20)
 - **Body**: none
 - **Response**: 200 `{ success: true, data: [{ ...orders, customer: {id,name,email}, branch: {id,name,city}, itemCount }], pagination: { page, limit, total, totalPages } }`; 500 `{ success: false, error: "Failed to fetch orders" }`
 - **Notes**: Branch scope via `getBranchScope` — `scope.mode === "own"` forces `orders.branchId = scope.branchId` (branch admins); HQ only filters by `branchId` when supplied. N+1 item-count query per order.
@@ -702,7 +709,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: —
 - **Body**: none
 - **Response**: 200 `{ success: true, data: Section[] }` (empty array if no sections); 500 on error
-- **Notes**: Unlike the storefront endpoint, includes inactive sections. For `carousel_product` in `manual` mode, hydrates products with the cheapest-variant net price and the default-variant image, returning `products: { id, name, slug, price, basePrice, image }[]` (`price` = net, `basePrice` = RRP). For `filter` mode, runs `resolveFilterModeProducts` mirroring storefront logic (status `aktif`, optional `search`/`category`/`brand`/`gender`/price range/`hasDiscount`/`sortOrder` of `newest|priceAsc|priceDesc`, limit clamped 1-20). `store_banner` sections include `branches` (status `aktif`, ordered by `name`).
+- **Notes**: Unlike the storefront endpoint, includes inactive sections. For `carousel_product` in `manual` mode, hydrates products with the cheapest-variant net price and the default-variant image, returning `products: { id, name, slug, price, basePrice, image, collection, gender }[]` (`price` = net, `basePrice` = RRP; `collection` from the product row, `gender` resolved from `genderId` via a per-page gender-name lookup — both nullable). For `filter` mode, runs `resolveFilterModeProducts` mirroring storefront logic (status `aktif`, optional `search`/`category`/`brand`/`gender`/price range/`hasDiscount`/`sortOrder` of `newest|priceAsc|priceDesc`, limit clamped 1-20); filter-mode products also carry `collection`/`gender` (via a left join on `genders`). `store_banner` sections include `branches` (status `aktif`, ordered by `name`).
 
 #### `GET` `/api/admin/homepage/preview-products`
 - **Auth**: admin-session (permission: `homepage:view`)
@@ -791,6 +798,56 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Body**: none
 - **Response**: 200 file bytes with `Content-Type` by extension (`.jpg/.jpeg` → `image/jpeg`, `.png` → `image/png`, `.webp` → `image/webp`, `.gif` → `image/gif`, else `application/octet-stream`) and `Cache-Control: public, max-age=31536000, immutable`; 403 `"Forbidden"` if path contains `..`; 404 `"Not Found"` if file missing
 - **Notes**: Path traversal guard rejects `..`. Resolves via `path.join(getUploadsDir(), relativePath)`. No session check — public static file route.
+
+#### `GET` `/api/admin/notifications/poll`
+- **Auth**: admin-session
+- **Purpose**: Long-polling endpoint used by the admin notification bell and notifications page to receive new order-paid events in near real-time.
+- **Params**: `since` (ISO8601 timestamp, optional) — client-supplied watermark; the server returns any notifications with `createdAt > since`.
+- **Body**: none
+- **Response**:
+  - First call (no `since`): 200 `{ success: true, data: [], unreadCount: N, serverNow: "<db-now-iso>" }`
+  - With `since` and new rows exist: 200 `{ success: true, data: NotificationListItem[], unreadCount: N, serverNow: "<latest-createdAt-or-db-now>" }`
+  - With `since` and no new rows within ~25s: 200 `{ success: true, data: [], unreadCount: N, serverNow: "<db-now-iso>" }`
+  - 401 if no session; 500 on error
+- **Notes**: `dynamic = "force-dynamic"`. Scope is enforced server-side: branch admins only receive notifications for `branchId = user.branchId`; HQ receives notifications for all branches. The client reconnects immediately after every response, using `serverNow` as the next `since` value. The in-memory pending-poll broadcaster (`apps/admin/src/lib/notification-broadcaster.ts`) wakes matching listeners when a new notification row is inserted.
+
+#### `GET` `/api/admin/notifications`
+- **Auth**: admin-session (`notifications:view`)
+- **Purpose**: Paginated list of notifications for the full `/admin/notifications` page.
+- **Params**: `isRead` (`"all"` | `"read"` | `"unread"`, default `"all"`), `page` (int, default `1`), `limit` (int, default `20`, max `100`)
+- **Body**: none
+- **Response**: 200 `{ success: true, data: NotificationListItem[], pagination: { page, limit, total, totalPages } }`; 401/403/500 on error
+- **Notes**: Branch-scoped for branch admins; HQ sees all. Each row includes joined `branch` and `order` details (customer name, order status, total).
+
+#### `PATCH` `/api/admin/notifications/{id}`
+- **Auth**: admin-session (`notifications:edit`)
+- **Purpose**: Mark a single notification as read.
+- **Params**: `{id}` — notification id
+- **Body**: none
+- **Response**: 200 `{ success: true }`; 404 if notification not found or not in scope; 401/403/500 on error
+- **Notes**: Updates `isRead = true`, `readAt = now()`, `updatedAt = now()`.
+
+#### `POST` `/api/admin/notifications/mark-all-read`
+- **Auth**: admin-session (`notifications:edit`)
+- **Purpose**: Mark every unread notification in the user's scope as read.
+- **Body**: none
+- **Response**: 200 `{ success: true, updated: N }`; 401/403/500 on error
+- **Notes**: The bell dropdown and the `/admin/notifications` page both call this on open (per product decision).
+
+#### `DELETE` `/api/admin/notifications/{id}`
+- **Auth**: admin-session (`notifications:delete`)
+- **Purpose**: Delete a single notification.
+- **Params**: `{id}` — notification id
+- **Body**: none
+- **Response**: 200 `{ success: true }`; 404 if not found or not in scope; 401/403/500 on error
+- **Notes**: Hard delete; no audit trail is kept for notification deletions.
+
+#### `DELETE` `/api/admin/notifications/clear-all-read`
+- **Auth**: admin-session (`notifications:delete`)
+- **Purpose**: Bulk delete all already-read notifications in the user's scope.
+- **Body**: none
+- **Response**: 200 `{ success: true, deleted: N }`; 401/403/500 on error
+- **Notes**: Used by the "Hapus Dibaca" button on `/admin/notifications`.
 
 ---
 

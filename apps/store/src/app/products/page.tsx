@@ -1,32 +1,17 @@
 import { Suspense } from "react";
-import ProductCard from "@/components/ProductCard";
+import InfiniteProductGrid, {
+  type Product,
+  type Pagination,
+} from "@/components/InfiniteProductGrid";
 import ProductFilters from "@/components/ProductFilters";
-import { Button } from "@/components/ui/button";
-import Link from "next/link";
-
-interface Product {
-  id: string;
-  name: string;
-  slug: string;
-  price: string;
-  basePrice: string;
-  image: string | null;
-}
-
-interface ProductsResponse {
-  success: boolean;
-  data: Product[];
-  pagination: {
-    page: number;
-    limit: number;
-    total: number;
-    totalPages: number;
-  };
-}
 
 async function getProducts(searchParams: {
   [key: string]: string | undefined;
-}): Promise<ProductsResponse> {
+}): Promise<{
+  success: boolean;
+  data: Product[];
+  pagination: Pagination;
+}> {
   const params = new URLSearchParams();
 
   if (searchParams.search) params.set("search", searchParams.search);
@@ -39,7 +24,7 @@ async function getProducts(searchParams: {
   if (searchParams.sortBy) params.set("sortBy", searchParams.sortBy);
   if (searchParams.sortOrder) params.set("sortOrder", searchParams.sortOrder);
   params.set("page", searchParams.page || "1");
-  params.set("limit", "12");
+  params.set("limit", "20");
 
   try {
     const res = await fetch(
@@ -55,113 +40,9 @@ async function getProducts(searchParams: {
     return {
       success: false,
       data: [],
-      pagination: { page: 1, limit: 12, total: 0, totalPages: 0 },
+      pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
     };
   }
-}
-
-// Pagination component
-function Pagination({
-  currentPage,
-  totalPages,
-  searchParams,
-}: {
-  currentPage: number;
-  totalPages: number;
-  searchParams: { [key: string]: string | undefined };
-}) {
-  if (totalPages <= 1) return null;
-
-  const createPageUrl = (page: number) => {
-    const params = new URLSearchParams();
-    Object.entries(searchParams).forEach(([key, value]) => {
-      if (value && key !== "page") params.set(key, value);
-    });
-    params.set("page", page.toString());
-    return `/products?${params.toString()}`;
-  };
-
-  const pages = [];
-  const maxVisiblePages = 5;
-  let startPage = Math.max(1, currentPage - Math.floor(maxVisiblePages / 2));
-  const endPage = Math.min(totalPages, startPage + maxVisiblePages - 1);
-
-  if (endPage - startPage + 1 < maxVisiblePages) {
-    startPage = Math.max(1, endPage - maxVisiblePages + 1);
-  }
-
-  for (let i = startPage; i <= endPage; i++) {
-    pages.push(i);
-  }
-
-  return (
-    <div className="mt-12 flex justify-center gap-2">
-      {currentPage > 1 && (
-        <Link href={createPageUrl(currentPage - 1)}>
-          <Button variant="outline" className="w-10 h-10 p-0">
-            &lt;
-          </Button>
-        </Link>
-      )}
-
-      {startPage > 1 && (
-        <>
-          <Link href={createPageUrl(1)}>
-            <Button variant="outline" className="w-10 h-10 p-0">
-              1
-            </Button>
-          </Link>
-          {startPage > 2 && (
-            <Button
-              variant="ghost"
-              className="w-10 h-10 p-0 cursor-default"
-              disabled
-            >
-              ...
-            </Button>
-          )}
-        </>
-      )}
-
-      {pages.map((page) => (
-        <Link key={page} href={createPageUrl(page)}>
-          <Button
-            variant={page === currentPage ? "default" : "outline"}
-            className="w-10 h-10 p-0"
-          >
-            {page}
-          </Button>
-        </Link>
-      ))}
-
-      {endPage < totalPages && (
-        <>
-          {endPage < totalPages - 1 && (
-            <Button
-              variant="ghost"
-              className="w-10 h-10 p-0 cursor-default"
-              disabled
-            >
-              ...
-            </Button>
-          )}
-          <Link href={createPageUrl(totalPages)}>
-            <Button variant="outline" className="w-10 h-10 p-0">
-              {totalPages}
-            </Button>
-          </Link>
-        </>
-      )}
-
-      {currentPage < totalPages && (
-        <Link href={createPageUrl(currentPage + 1)}>
-          <Button variant="outline" className="w-10 h-10 p-0">
-            &gt;
-          </Button>
-        </Link>
-      )}
-    </div>
-  );
 }
 
 export default async function ProductsPage({
@@ -197,40 +78,12 @@ export default async function ProductsPage({
           </div>
         </div>
 
-        {products.length === 0 ? (
-          <div className="text-center py-16">
-            <p className="text-muted-foreground text-lg">
-              Tidak ada produk yang ditemukan.
-            </p>
-            <Link href="/products">
-              <Button variant="outline" className="mt-4">
-                Lihat Semua Produk
-              </Button>
-            </Link>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {products.map((product) => (
-              <ProductCard
-                key={product.id}
-                id={product.id}
-                title={product.name}
-                price={parseFloat(product.price || product.basePrice)}
-                originalPrice={
-                  parseFloat(product.basePrice) >
-                  parseFloat(product.price || product.basePrice)
-                    ? parseFloat(product.basePrice)
-                    : undefined
-                }
-                image={product.image || ""}
-              />
-            ))}
-          </div>
-        )}
-
-        <Pagination
-          currentPage={pagination.page}
-          totalPages={pagination.totalPages}
+        {/* key resets the grid state whenever filters/sort change so the
+            accumulated list and pagination start fresh from the new SSR page. */}
+        <InfiniteProductGrid
+          key={JSON.stringify(params)}
+          initialProducts={products}
+          initialPagination={pagination}
           searchParams={params}
         />
       </div>

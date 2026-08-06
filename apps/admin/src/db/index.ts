@@ -11,4 +11,8 @@ const pool = new Pool({
 
 export const db = drizzle(pool, { schema });
 
+// Exposed for the real-time notification listener, which needs a dedicated
+// client connection for Postgres LISTEN/NOTIFY.
+export { pool };
+
 export * from "@marketplace/db/src/schema";

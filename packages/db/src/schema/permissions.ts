@@ -16,6 +16,7 @@ export const moduleNames = [
 	"homepage",
 	"pages",
 	"users",
+	"notifications",
 ] as const;
 
 export type ModuleName = (typeof moduleNames)[number];

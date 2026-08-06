@@ -8,6 +8,8 @@ import {
   productImages,
   branchStocks,
   branches,
+  brands,
+  genders,
 } from "@/db";
 import { eq, and, asc, sql } from "drizzle-orm";
 
@@ -54,6 +56,24 @@ export async function GET(
       .from(productToCategory)
       .innerJoin(categories, eq(productToCategory.categoryId, categories.id))
       .where(eq(productToCategory.productId, productData.id));
+
+    // Resolve brand and gender names (sync-managed dimensions).
+    // brandId / genderId are nullable FKs; left joins keep products without them.
+    const [brandRow] = productData.brandId
+      ? await db
+          .select({ name: brands.name })
+          .from(brands)
+          .where(eq(brands.id, productData.brandId))
+          .limit(1)
+      : [];
+
+    const [genderRow] = productData.genderId
+      ? await db
+          .select({ name: genders.name })
+          .from(genders)
+          .where(eq(genders.id, productData.genderId))
+          .limit(1)
+      : [];
 
     // Get variants with images
     const variants = await db
@@ -118,6 +138,11 @@ export async function GET(
       success: true,
       data: {
         ...productData,
+        brand: brandRow?.name ?? null,
+        gender: genderRow?.name ?? null,
+        // collection is a plain text column on the product row, already spread
+        // above via ...productData — surfaced here for client convenience.
+        collection: productData.collection ?? null,
         categories: productCategories,
         variants: variantsWithImagesAndStock,
         colors,

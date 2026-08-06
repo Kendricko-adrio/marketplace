@@ -11,6 +11,8 @@ interface ProductCardProps {
   originalPrice?: number;
   image: string;
   preview?: boolean;
+  gender?: string;
+  collection?: string;
 }
 
 export default function ProductCard({
@@ -20,6 +22,8 @@ export default function ProductCard({
   originalPrice,
   image,
   preview,
+  gender,
+  collection,
 }: ProductCardProps) {
   const discount = originalPrice
     ? Math.round(((originalPrice - price) / originalPrice) * 100)
@@ -79,6 +83,21 @@ export default function ProductCard({
           >
             {title}
           </Link>
+        )}
+
+        {(gender || collection) && (
+          <div className="mb-3 flex flex-wrap gap-2">
+            {gender && (
+              <span className="inline-flex items-center rounded-md bg-blue-500/15 text-blue-700 px-2 py-1 text-xs font-medium">
+                {gender}
+              </span>
+            )}
+            {collection && (
+              <span className="inline-flex items-center rounded-md bg-amber-500/15 text-amber-700 px-2 py-1 text-xs font-medium">
+                {collection}
+              </span>
+            )}
+          </div>
         )}
 
         <div className="mt-auto">

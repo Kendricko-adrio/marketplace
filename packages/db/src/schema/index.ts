@@ -30,3 +30,6 @@ export * from "./system";
 
 // RBAC permissions schema
 export * from "./permissions";
+
+// Notifications schema
+export * from "./notifications";

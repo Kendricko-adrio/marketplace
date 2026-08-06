@@ -19,6 +19,8 @@ export interface HomepageProduct {
   price: number;
   basePrice: number;
   image: string | null;
+  gender?: string | null;
+  collection?: string | null;
 }
 
 export interface HomepageBranch {

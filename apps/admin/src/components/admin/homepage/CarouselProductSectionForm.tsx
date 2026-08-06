@@ -40,6 +40,8 @@ interface AdminProduct {
   basePrice: string;
   status: string;
   variantCount: number;
+  collection?: string | null;
+  gender?: string | null;
   variants?: { id: string; price: string; isDefault: boolean }[];
   images?: { url: string }[];
 }
@@ -57,6 +59,8 @@ interface StoreProduct {
   price: string;
   basePrice: string;
   image: string | null;
+  collection?: string | null;
+  gender?: string | null;
 }
 interface StoreProductsResponse {
   success: boolean;
@@ -145,6 +149,8 @@ export default function CarouselProductSectionForm({
               price: parseFloat(p.price),
               basePrice: parseFloat(p.basePrice),
               image: p.image ? toStoreUrl(p.image) : null,
+              collection: p.collection ?? null,
+              gender: p.gender ?? null,
             }))
           );
         }
@@ -205,7 +211,7 @@ export default function CarouselProductSectionForm({
   };
 
   const selectedPreviewProducts: HomepageProduct[] = selectedProductIds
-    .map((id) => {
+    .map((id): HomepageProduct | null => {
       // We only have full product info for currently-loaded page; cross-page selections
       // are preserved as id-only entries without a card preview.
       const p = allProducts.find((ap) => ap.id === id);
@@ -219,6 +225,8 @@ export default function CarouselProductSectionForm({
         price: parseFloat(price),
         basePrice: parseFloat(p.basePrice),
         image: toStoreUrl(p.images?.[0]?.url) || null,
+        collection: p.collection ?? null,
+        gender: p.gender ?? null,
       };
     })
     .filter((x): x is HomepageProduct => x !== null);

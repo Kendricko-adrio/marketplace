@@ -12,6 +12,190 @@ function generateId(): string {
   return crypto.randomUUID();
 }
 
+// Generates 40 additional products so the storefront /products page has
+// enough data (50 total) to exercise its infinite-scroll UI. Produces the
+// same shape as the hand-authored `productsData` entries below; the existing
+// insertion loop (products → categories → variants → images) handles the rest.
+// All keys are made unique via the loop index — `product.slug`,
+// `product.article_number`, and `product_variant.sku` all have UNIQUE
+// constraints, so uniqueness here is required, not cosmetic.
+function buildGeneratedProducts(categoryIds: {
+  sneakers: string;
+  runningShoes: string;
+  formalShoes: string;
+  casualShoes: string;
+  sandals: string;
+  boots: string;
+}) {
+  const brandPool = [
+    "AirRunner",
+    "StreetStyle",
+    "OxfordCo",
+    "Comfy",
+    "HikerPro",
+    "Summer",
+    "CourtMaster",
+    "EasyWalk",
+    "TrailBlaze",
+    "UrbanCo",
+    "NovaStep",
+    "TrekFit",
+  ];
+  const genderPool = ["Unisex", "Men", "Women"];
+  const seasonPool = ["SS26", "FW25"];
+  const colorPool = [
+    "Hitam",
+    "Putih",
+    "Navy",
+    "Abu-abu",
+    "Coklat",
+    "Hijau Army",
+    "Merah",
+    "Biru",
+  ];
+  const sizePool = ["40", "41", "42", "43", "44"];
+  const adjectives = [
+    "Swift",
+    "Urban",
+    "Classic",
+    "Pro",
+    "Elite",
+    "Air",
+    "Flex",
+    "Bold",
+    "Prime",
+    "Rapid",
+    "Trail",
+    "Court",
+    "Lite",
+    "Peak",
+    "Retro",
+    "Neo",
+    "Pure",
+    "Wild",
+    "Edge",
+    "Force",
+  ];
+  const nouns = [
+    "Runner",
+    "Walker",
+    "Sneaker",
+    "Oxford",
+    "Boot",
+    "Sandal",
+    "Trainer",
+    "Hiker",
+    "Slider",
+    "Court",
+    "Stride",
+    "Trek",
+    "Step",
+    "Dash",
+    "Glide",
+    "Motion",
+    "Pace",
+  ];
+  // Collection → category mapping (one category per generated product).
+  const collectionToCategory: Record<string, keyof typeof categoryIds> = {
+    Running: "runningShoes",
+    Lifestyle: "sneakers",
+    Formal: "formalShoes",
+    Casual: "casualShoes",
+    Outdoor: "boots",
+    Sandals: "sandals",
+    Basketball: "sneakers",
+    Trail: "runningShoes",
+    Boots: "boots",
+  };
+  const collectionKeys = Object.keys(collectionToCategory);
+
+  const products: Array<{
+    id: string;
+    name: string;
+    slug: string;
+    articleNumber: string;
+    brand: string;
+    gender: string;
+    season: string;
+    collection: string;
+    description: string;
+    basePrice: string;
+    status: string;
+    categoryIds: string[];
+    variants: Array<{
+      color: string;
+      size: string;
+      price: string;
+      sku: string;
+      isDefault: boolean;
+    }>;
+  }> = [];
+
+  for (let i = 0; i < 40; i++) {
+    const brand = brandPool[i % brandPool.length];
+    const gender = genderPool[i % genderPool.length];
+    const season = seasonPool[i % seasonPool.length];
+    const collection = collectionKeys[i % collectionKeys.length];
+    const categoryId = categoryIds[collectionToCategory[collection]];
+
+    const name = `${adjectives[i % adjectives.length]} ${
+      nouns[(i * 3) % nouns.length]
+    } ${i + 1}`;
+    const slug = slugify(name);
+    const articleNumber = `SEED-GEN-${String(i + 11).padStart(3, "0")}`;
+
+    // Cheapest variant net price — varies across products so the price-range
+    // and price-sort filters have spread. ~half get a basePrice above the
+    // net price (so `hasDiscount` has both sides).
+    const minPrice = 400000 + (i % 10) * 75000;
+    const basePrice =
+      i % 2 === 0 ? minPrice : minPrice + 150000 + (i % 3) * 50000;
+
+    const abbrev = brand.replace(/[^A-Za-z]/g, "").slice(0, 3).toUpperCase();
+    const color1 = colorPool[i % colorPool.length];
+    const color2 = colorPool[(i + 3) % colorPool.length];
+    const size1 = sizePool[i % sizePool.length];
+    const size2 = sizePool[(i + 2) % sizePool.length];
+    const colorAbbr = (c: string) =>
+      c.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 3);
+
+    const variants = [
+      {
+        color: color1,
+        size: size1,
+        price: String(minPrice),
+        sku: `${abbrev}-${colorAbbr(color1)}-${size1}-${i + 11}`,
+        isDefault: true,
+      },
+      {
+        color: color2,
+        size: size2,
+        price: String(minPrice + (i % 4) * 25000),
+        sku: `${abbrev}-${colorAbbr(color2)}-${size2}-${i + 11}`,
+        isDefault: false,
+      },
+    ];
+
+    products.push({
+      id: generateId(),
+      name,
+      slug,
+      articleNumber,
+      brand,
+      gender,
+      season,
+      collection,
+      description: `Model ${name} dari ${brand} — bagian dari koleksi ${collection} musim ${season}. Nyaman untuk pemakaian sehari-hari dengan kualitas yang konsisten.`,
+      basePrice: String(basePrice),
+      status: "aktif",
+      categoryIds: [categoryId],
+      variants,
+    });
+  }
+
+  return products;
+}
+
 async function seed() {
   const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
@@ -24,6 +208,7 @@ async function seed() {
   try {
     // Clear existing data
     console.log("🗑️  Clearing existing data...");
+    await db.delete(schema.notifications);
     await db.delete(schema.permissions);
     await db.delete(schema.staticPages);
     await db.delete(schema.footerConfig);
@@ -160,6 +345,14 @@ async function seed() {
         canView: false,
         canEdit: false,
         canDelete: false,
+      },
+      {
+        id: generateId(),
+        role: "admin",
+        module: "notifications",
+        canView: true,
+        canEdit: true,
+        canDelete: true,
       },
     ]);
 
@@ -643,6 +836,12 @@ async function seed() {
       },
     ];
 
+    // Append 40 generated products (50 total) so the storefront has enough
+    // data to exercise the /products infinite-scroll UI. Generated before the
+    // brand/gender dimension loop so any new brands/genders they reference
+    // are created below.
+    productsData.push(...buildGeneratedProducts(categoryIds));
+
     // Brand & gender dimensions — sync-managed tables, seeded here so demo
     // products can be linked via brandId/genderId. Ids are deterministic
     // (keyId of slug) to match how soh-sync.ts creates them.
@@ -1076,6 +1275,29 @@ async function seed() {
         variantInfo: `${variant.color || ""} ${variant.size || ""}`.trim(),
         price: variant.price,
         quantity: qty,
+      });
+    }
+
+    // =====================
+    // SAMPLE NOTIFICATIONS
+    // =====================
+    console.log("🔔 Creating sample notifications...");
+    const paidOrderRows = await db
+      .select({ id: schema.orders.id, branchId: schema.orders.branchId, total: schema.orders.total })
+      .from(schema.orders)
+      .where(eq(schema.orders.paymentStatus, "paid"))
+      .limit(2);
+
+    for (const paidOrder of paidOrderRows) {
+      if (!paidOrder.branchId) continue;
+      await db.insert(schema.notifications).values({
+        id: generateId(),
+        type: "order_paid",
+        orderId: paidOrder.id,
+        branchId: paidOrder.branchId,
+        title: "Order Paid",
+        message: `Order #${paidOrder.id.slice(0, 8).toUpperCase()} has been paid and is ready for pickup.`,
+        isRead: false,
       });
     }
 

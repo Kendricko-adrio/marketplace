@@ -18,6 +18,8 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
     const branchIdParam = searchParams.get("branchId");
     const from = searchParams.get("from");
     const to = searchParams.get("to");
+    const pickupFrom = searchParams.get("pickupFrom");
+    const pickupTo = searchParams.get("pickupTo");
     const search = searchParams.get("search");
     const page = parseInt(searchParams.get("page") || "1");
     const limit = parseInt(searchParams.get("limit") || "20");
@@ -53,12 +55,23 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
       conditions.push(lte(orders.createdAt, toDate));
     }
 
+    if (pickupFrom) {
+      conditions.push(gte(orders.pickupDate, new Date(pickupFrom)));
+    }
+    if (pickupTo) {
+      // Add 1 day to include the full "to" date
+      const pickupToDate = new Date(pickupTo);
+      pickupToDate.setDate(pickupToDate.getDate() + 1);
+      conditions.push(lte(orders.pickupDate, pickupToDate));
+    }
+
     if (search) {
-      // Search by order ID or customer name
+      // Search by order ID, customer name, or contact phone
       conditions.push(
         or(
           ilike(orders.id, `%${search}%`),
-          ilike(clients.name, `%${search}%`)
+          ilike(clients.name, `%${search}%`),
+          ilike(orders.contactPhone, `%${search}%`)
         )
       );
     }

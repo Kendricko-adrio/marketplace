@@ -55,6 +55,8 @@ function CarouselProductCard({
       originalPrice={originalPrice}
       image={product.image ?? ""}
       preview={preview}
+      gender={product.gender ?? undefined}
+      collection={product.collection ?? undefined}
     />
   );
 }

@@ -36,6 +36,9 @@ interface Product {
   description: string | null;
   basePrice: string;
   status: string;
+  brand: string | null;
+  gender: string | null;
+  collection: string | null;
   variants: ProductVariant[];
   colors: string[];
   sizes: string[];
@@ -378,29 +381,29 @@ export default function ProductDetailPage() {
 
           </div>
 
-          <div className="bg-green-50 text-green-700 p-4 rounded-lg flex gap-3 items-center border border-green-100">
-            <div className="bg-green-100 p-2 rounded-full">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="20"
-                height="20"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-            </div>
-            <div>
-              <div className="font-bold text-sm">Garansi 100% Original</div>
-              <div className="text-xs text-green-600">
-                Garansi uang kembali jika produk palsu.
-              </div>
-            </div>
-          </div>
+          {/* Brand / Collection / Gender metadata */}
+          {(product.brand || product.collection || product.gender) && (
+            <dl className="grid grid-cols-3 gap-4 border-t border-border pt-6 text-sm">
+              {product.brand && (
+                <div>
+                  <dt className="text-muted-foreground">Brand</dt>
+                  <dd className="font-medium">{product.brand}</dd>
+                </div>
+              )}
+              {product.collection && (
+                <div>
+                  <dt className="text-muted-foreground">Koleksi</dt>
+                  <dd className="font-medium">{product.collection}</dd>
+                </div>
+              )}
+              {product.gender && (
+                <div>
+                  <dt className="text-muted-foreground">Gender</dt>
+                  <dd className="font-medium">{product.gender}</dd>
+                </div>
+              )}
+            </dl>
+          )}
         </div>
       </div>
 

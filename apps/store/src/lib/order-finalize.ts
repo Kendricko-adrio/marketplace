@@ -1,5 +1,5 @@
 import { db } from "@/db";
-import { orders, orderItems, branchStocks, branches } from "@/db";
+import { orders, orderItems, branchStocks, branches, notifications } from "@/db";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { sendEmail } from "@/lib/email";
 import {
@@ -167,7 +167,29 @@ export async function claimAndFinalizePaidOrder(
 
   if (!pickupCode) return { claimed: false };
 
-  // 5. Send pickup-ready email (best-effort, outside the tx).
+  // 5. Create admin notification so branch/HQ staff see the new paid order.
+  let notificationId: string | null = null;
+  try {
+    notificationId = crypto.randomUUID();
+    await db.insert(notifications).values({
+      id: notificationId,
+      type: "order_paid",
+      orderId: order.id,
+      branchId: order.branchId!,
+      title: "Order Paid — Ready for Pickup",
+      message: `Order #${order.id.slice(0, 8).toUpperCase()} has been paid (Rp ${parseFloat(
+        order.total
+      ).toLocaleString("id-ID")}) and is ready for pickup.`,
+    });
+    // Wake admin long-poll listeners across processes via Postgres NOTIFY.
+    await db.execute(
+      sql`SELECT pg_notify('new_notification', ${JSON.stringify({ id: notificationId })})`
+    );
+  } catch (notifyError) {
+    log.error("admin notification insert failed", { error: serializeError(notifyError) });
+  }
+
+  // 6. Send pickup-ready email (best-effort, outside the tx).
   try {
     const [branchData, itemsForEmail] = await Promise.all([
       db

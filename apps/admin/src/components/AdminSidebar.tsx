@@ -14,6 +14,7 @@ import {
   Loader2,
   ChevronDown,
   PanelBottom,
+  Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -53,13 +54,21 @@ export default function AdminSidebar() {
     href: string;
     label: string;
     icon: React.ComponentType<{ size?: number }>;
-    module?: "products" | "orders" | "branches" | "homepage" | "pages" | "users";
+    module?:
+      | "products"
+      | "orders"
+      | "notifications"
+      | "branches"
+      | "homepage"
+      | "pages"
+      | "users";
     hqOnly?: boolean;
   };
 
   const links: SidebarLink[] = [
     { href: "/admin/products", label: "Produk", icon: Package, module: "products" },
     { href: "/admin/orders", label: "Pesanan", icon: ShoppingBag, module: "orders" },
+    { href: "/admin/notifications", label: "Notifikasi", icon: Bell, module: "notifications" },
     { href: "/admin/branches", label: "Cabang", icon: Store, module: "branches" },
     { href: "/admin/homepage", label: "Homepage", icon: LayoutTemplate, module: "homepage" },
     { href: "/admin/pages", label: "Halaman", icon: FileText, module: "pages" },

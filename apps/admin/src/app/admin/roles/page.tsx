@@ -28,6 +28,7 @@ export default async function RolesPage() {
     homepage: { canView: false, canEdit: false, canDelete: false },
     pages: { canView: false, canEdit: false, canDelete: false },
     users: { canView: false, canEdit: false, canDelete: false },
+    notifications: { canView: false, canEdit: false, canDelete: false },
   };
 
   for (const row of rows) {

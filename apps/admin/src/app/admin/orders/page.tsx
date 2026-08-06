@@ -1,7 +1,7 @@
 "use client";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Eye, Search, MoreHorizontal, Loader2, MapPin } from "lucide-react";
+import { Eye, Search, MoreHorizontal, Loader2, MapPin, Phone, X } from "lucide-react";
 import { useAuth } from "@/providers/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -43,6 +43,8 @@ interface Order {
   status: string;
   paymentStatus: string;
   createdAt: string;
+  pickupDate: string | null;
+  contactPhone: string;
   customer: { name: string; email: string };
   branch: { id: string; name: string; city: string } | null;
   itemCount: number;
@@ -82,6 +84,30 @@ const PAYMENT_BADGES: Record<string, string> = {
   failed: "bg-red-100 text-red-700 border-red-200 hover:bg-red-100",
 };
 
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
+// Build a windowed page list around the current page (max 5 consecutive),
+// with first/last + ellipsis when the range is far from the edges.
+function getPageRange(current: number, total: number): (number | "...")[] {
+  if (total <= 1) return total === 1 ? [1] : [];
+  const max = 5;
+  let start = Math.max(1, current - 2);
+  const end = Math.min(total, start + max - 1);
+  start = Math.max(1, end - max + 1);
+
+  const pages: (number | "...")[] = [];
+  if (start > 1) {
+    pages.push(1);
+    if (start > 2) pages.push("...");
+  }
+  for (let i = start; i <= end; i++) pages.push(i);
+  if (end < total) {
+    if (end < total - 1) pages.push("...");
+    pages.push(total);
+  }
+  return pages;
+}
+
 export default function AdminOrdersPage() {
   const router = useRouter();
   const { hasPermission } = useAuth();
@@ -89,13 +115,19 @@ export default function AdminOrdersPage() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState("all");
+  const [searchInput, setSearchInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [branchFilter, setBranchFilter] = useState("all");
   const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(25);
   const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+  const [orderFrom, setOrderFrom] = useState("");
+  const [orderTo, setOrderTo] = useState("");
+  const [pickupFrom, setPickupFrom] = useState("");
+  const [pickupTo, setPickupTo] = useState("");
   const [userRole, setUserRole] = useState<string>("admin");
   const [userBranchId, setUserBranchId] = useState<string | null>(null);
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fetch current user's role/branch
   useEffect(() => {
@@ -131,6 +163,17 @@ export default function AdminOrdersPage() {
     fetchBranches();
   }, [isHQ]);
 
+  // Debounce the search input into the query used for fetching (500ms).
+  // Separating input from the fetched query avoids an immediate fetch on
+  // every keystroke (the previous impl. double-fired via the useCallback dep).
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setSearchQuery(searchInput);
+      setPage(1);
+    }, 500);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
   const fetchOrders = useCallback(async () => {
     setLoading(true);
     try {
@@ -138,34 +181,42 @@ export default function AdminOrdersPage() {
       if (activeTab !== "all") params.set("status", activeTab);
       if (isHQ && branchFilter !== "all") params.set("branchId", branchFilter);
       if (searchQuery) params.set("search", searchQuery);
+      if (orderFrom) params.set("from", orderFrom);
+      if (orderTo) params.set("to", orderTo);
+      if (pickupFrom) params.set("pickupFrom", pickupFrom);
+      if (pickupTo) params.set("pickupTo", pickupTo);
       params.set("page", String(page));
-      params.set("limit", "20");
+      params.set("limit", String(limit));
 
       const res = await fetch(`/api/admin/orders?${params.toString()}`);
       const data = await res.json();
       if (data.success) {
         setOrders(data.data);
         setTotalPages(data.pagination?.totalPages || 1);
+        setTotalItems(data.pagination?.total || 0);
       }
     } catch (error) {
       console.error("Error fetching orders:", error);
     } finally {
       setLoading(false);
     }
-  }, [activeTab, branchFilter, searchQuery, page, isHQ]);
+  }, [
+    activeTab,
+    branchFilter,
+    searchQuery,
+    page,
+    limit,
+    isHQ,
+    orderFrom,
+    orderTo,
+    pickupFrom,
+    pickupTo,
+  ]);
 
   // Fetch on filter/tab/page change
   useEffect(() => {
     fetchOrders();
   }, [fetchOrders]);
-
-  // Debounced search
-  const handleSearchChange = (value: string) => {
-    setSearchQuery(value);
-    setPage(1);
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => fetchOrders(), 1000);
-  };
 
   // 30s polling — only on relevant tabs and when tab is visible
   useEffect(() => {
@@ -194,6 +245,21 @@ export default function AdminOrdersPage() {
     });
   };
 
+  const hasDateFilter =
+    !!orderFrom || !!orderTo || !!pickupFrom || !!pickupTo;
+
+  const clearDateFilters = () => {
+    setOrderFrom("");
+    setOrderTo("");
+    setPickupFrom("");
+    setPickupTo("");
+    setPage(1);
+  };
+
+  const pageRange = getPageRange(page, totalPages);
+  const fromItem = totalItems === 0 ? 0 : (page - 1) * limit + 1;
+  const toItem = Math.min(page * limit, totalItems);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -214,37 +280,107 @@ export default function AdminOrdersPage() {
         </CardHeader>
         <CardContent>
           {/* Filters */}
-          <div className="flex flex-col md:flex-row gap-4 mb-6 justify-between">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search order ID, customer name..."
-                className="pl-8"
-                value={searchQuery}
-                onChange={(e) => handleSearchChange(e.target.value)}
-              />
+          <div className="flex flex-col gap-4 mb-6">
+            <div className="flex flex-col md:flex-row gap-4 justify-between">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Search order ID, customer name, phone..."
+                  className="pl-8"
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                />
+              </div>
+              {isHQ && (
+                <Select
+                  value={branchFilter}
+                  onValueChange={(v) => {
+                    setBranchFilter(v);
+                    setPage(1);
+                  }}
+                >
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue placeholder="All branches" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Branches</SelectItem>
+                    {branches.map((b) => (
+                      <SelectItem key={b.id} value={b.id}>
+                        {b.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
-            {isHQ && (
-              <Select
-                value={branchFilter}
-                onValueChange={(v) => {
-                  setBranchFilter(v);
-                  setPage(1);
-                }}
-              >
-                <SelectTrigger className="w-[200px]">
-                  <SelectValue placeholder="All branches" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Branches</SelectItem>
-                  {branches.map((b) => (
-                    <SelectItem key={b.id} value={b.id}>
-                      {b.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
+
+            {/* Date filters */}
+            <div className="flex flex-col lg:flex-row gap-4 lg:items-end">
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted-foreground">
+                  Order Date
+                </span>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="date"
+                    className="w-[160px]"
+                    value={orderFrom}
+                    onChange={(e) => {
+                      setOrderFrom(e.target.value);
+                      setPage(1);
+                    }}
+                  />
+                  <span className="text-xs text-muted-foreground">to</span>
+                  <Input
+                    type="date"
+                    className="w-[160px]"
+                    value={orderTo}
+                    onChange={(e) => {
+                      setOrderTo(e.target.value);
+                      setPage(1);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-muted-foreground">
+                  Pickup Date
+                </span>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="date"
+                    className="w-[160px]"
+                    value={pickupFrom}
+                    onChange={(e) => {
+                      setPickupFrom(e.target.value);
+                      setPage(1);
+                    }}
+                  />
+                  <span className="text-xs text-muted-foreground">to</span>
+                  <Input
+                    type="date"
+                    className="w-[160px]"
+                    value={pickupTo}
+                    onChange={(e) => {
+                      setPickupTo(e.target.value);
+                      setPage(1);
+                    }}
+                  />
+                </div>
+              </div>
+
+              {hasDateFilter && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="gap-1 text-muted-foreground"
+                  onClick={clearDateFilters}
+                >
+                  <X className="h-3.5 w-3.5" /> Clear dates
+                </Button>
+              )}
+            </div>
           </div>
 
           {/* Status tabs */}
@@ -277,8 +413,10 @@ export default function AdminOrdersPage() {
                     <TableRow>
                       <TableHead className="w-[120px]">Order ID</TableHead>
                       <TableHead>Customer</TableHead>
+                      <TableHead>Contact Phone</TableHead>
                       <TableHead>Branch</TableHead>
-                      <TableHead>Date</TableHead>
+                      <TableHead>Order Date</TableHead>
+                      <TableHead>Pickup Date</TableHead>
                       <TableHead className="text-center">Items</TableHead>
                       <TableHead className="text-right">Total</TableHead>
                       <TableHead>Status</TableHead>
@@ -289,7 +427,7 @@ export default function AdminOrdersPage() {
                   <TableBody>
                     {orders.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={9} className="h-24 text-center">
+                        <TableCell colSpan={11} className="h-24 text-center">
                           No orders found.
                         </TableCell>
                       </TableRow>
@@ -308,6 +446,12 @@ export default function AdminOrdersPage() {
                             </div>
                           </TableCell>
                           <TableCell>
+                            <div className="flex items-center gap-1.5 text-sm">
+                              <Phone className="h-3.5 w-3.5 text-muted-foreground" />
+                              {order.contactPhone}
+                            </div>
+                          </TableCell>
+                          <TableCell>
                             {order.branch ? (
                               <div className="text-sm">
                                 {order.branch.name}
@@ -321,6 +465,13 @@ export default function AdminOrdersPage() {
                           </TableCell>
                           <TableCell className="text-sm">
                             {formatDate(order.createdAt)}
+                          </TableCell>
+                          <TableCell className="text-sm">
+                            {order.pickupDate ? (
+                              formatDate(order.pickupDate)
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
                           </TableCell>
                           <TableCell className="text-center">
                             {order.itemCount}
@@ -385,12 +536,46 @@ export default function AdminOrdersPage() {
           </Tabs>
 
           {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between mt-4">
-              <span className="text-sm text-muted-foreground">
-                Page {page} of {totalPages}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-4">
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <span>
+                {totalItems > 0
+                  ? `Showing ${fromItem}–${toItem} of ${totalItems}`
+                  : "No results"}
               </span>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
+                <span>Rows per page</span>
+                <Select
+                  value={String(limit)}
+                  onValueChange={(v) => {
+                    setLimit(Number(v));
+                    setPage(1);
+                  }}
+                >
+                  <SelectTrigger className="h-8 w-[72px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAGE_SIZE_OPTIONS.map((n) => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {totalPages > 1 && (
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(1)}
+                  disabled={page <= 1}
+                >
+                  First
+                </Button>
                 <Button
                   variant="outline"
                   size="sm"
@@ -399,6 +584,26 @@ export default function AdminOrdersPage() {
                 >
                   Previous
                 </Button>
+                {pageRange.map((p, idx) =>
+                  p === "..." ? (
+                    <span
+                      key={`ellipsis-${idx}`}
+                      className="px-2 text-muted-foreground"
+                    >
+                      …
+                    </span>
+                  ) : (
+                    <Button
+                      key={p}
+                      variant={p === page ? "default" : "outline"}
+                      size="sm"
+                      className="h-8 w-8 p-0"
+                      onClick={() => setPage(p)}
+                    >
+                      {p}
+                    </Button>
+                  )
+                )}
                 <Button
                   variant="outline"
                   size="sm"
@@ -407,9 +612,17 @@ export default function AdminOrdersPage() {
                 >
                   Next
                 </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage(totalPages)}
+                  disabled={page >= totalPages}
+                >
+                  Last
+                </Button>
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </CardContent>
       </Card>
     </div>

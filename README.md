@@ -1,64 +1,60 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Marketplace Monorepo
 
-## Getting Started
+Monorepo for the Okcir marketplace: a storefront, an admin dashboard, and
+shared packages, managed with npm workspaces.
 
-### Prerequisites
+## Tech Stack
 
-- [Node.js](https://nodejs.org/)
-- [Docker](https://www.docker.com/)
+| Layer | Choice |
+|---|---|
+| Framework | Next.js 16 (App Router) — one app per workspace |
+| Database | PostgreSQL 16 via Docker Compose, Drizzle ORM |
+| Auth | Better Auth — **two separate instances** (store + admin) |
+| Workspaces | npm workspaces (`apps/*`, `packages/*`) |
 
-### Development Setup
+## Project Structure
 
-1. **Start the PostgreSQL database**
+| Path | Role |
+|---|---|
+| `apps/store` | Storefront, http://localhost:3000 |
+| `apps/admin` | Admin dashboard, http://localhost:3001 |
+| `packages/db` | 🏛️ Shared schema owner (`@marketplace/db`) |
+| `packages/ui` | Shared UI components |
 
-   ```bash
-   docker compose up -d
-   ```
+## Dev Setup (order matters)
 
-2. **Set up environment variables**
+1. `docker compose up -d` — starts PostgreSQL 16 on port 5432 (DB name: `storefront`)
+2. `cp .env.example .env` — configure `DATABASE_URL`, `BETTER_AUTH_SECRET`, Google OAuth + SMTP vars
+3. `npm install` — installs workspace deps (hoists to root)
+4. `npm run db:push` — pushes schema to DB (runs in packages/db)
+5. `npm run db:seed` — seeds sample data (runs in packages/db)
+6. `npm run dev:store` — storefront on http://localhost:3000
+7. `npm run dev:admin` — admin on http://localhost:3001
 
-   Create a `.env` file in the root of the project:
+## Scripts (run from ROOT)
 
-   ```env
-   DATABASE_URL="postgresql://postgres:postgres@localhost:5432/storefront"
-   ```
+| Script | Purpose |
+|---|---|
+| `dev:store` / `dev:admin` | Run one app in dev mode |
+| `dev:all` | Run both apps concurrently |
+| `build:store` / `build:admin` / `build` | Production builds |
+| `db:generate` | Generate Drizzle migration in `packages/db/drizzle/` |
+| `db:push` | Apply schema to DB (see note below) |
+| `db:seed` | Seed sample data |
+| `db:reset` | Reset + reseed the DB |
+| `db:import-jubelio` | Full pull from Jubelio master data (see `docs/features/jubelio-sync.md`) |
+| `lint` / `lint:store` / `lint:admin` | ESLint |
 
-3. **Push the Drizzle schema to the database**
+> **Note on `db:push` vs `db:migrate`:** the dev DB is managed with `db:push`
+> (schema-sync), **not** `db:migrate`. The `__drizzle_migrations` journal is not
+> kept in sync with the push-applied DB, so `db:migrate` will try to replay old
+> `CREATE TABLE` statements and fail with `relation already exists`. Use
+> `db:push` to apply schema changes; treat the generated migration files in
+> `packages/db/drizzle/` as the source-of-truth SQL record for review/audit.
 
-   ```bash
-   npm run db:push
-   ```
+## Documentation
 
-4. **Run the development server**
-
-   ```bash
-   npm run dev
-   ```
-
-   Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-### Database Scripts
-
-- `npm run db:generate` - Generate Drizzle migrations
-- `npm run db:push` - Push schema changes to the database
-- `npm run db:studio` - Open Drizzle Studio to inspect the database
-- `npm run db:seed` - Seed the database with sample data
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `AGENTS.md` — project rules, conventions, and dev setup details (read first)
+- `docs/` — API reference (`docs/api-reference.md`) + feature docs
+  (notifications, Jubelio sync, pricing, product filters, …)
+- `docs/deployment-docs/` — deployment / operational steps (index: `docs/deployment-docs/README.md`)

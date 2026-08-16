@@ -32,8 +32,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 # Block semua .env* asli (secret), tapi COMMIT template *.example.
-# Tanpa exception ini, `cp deployment/.env.staging.example .env.staging`
-# akan gagal di VPS karena template tidak ter-track oleh git.
+# Tanpa exception ini, `cp deployment/staging/.env.example .env` di VPS
+# akan gagal karena template tidak ter-track oleh git.
 .env*
 !.env.example
 !.env.*.example

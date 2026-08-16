@@ -15,7 +15,7 @@ import {
  * Sweep cron — safety-net release for stock reservations whose order expired
  * without a Midtrans `expire` webhook arriving.
  *
- * Triggered by the host crontab (see deployment/README.md):
+ * Triggered by the host crontab (see docs/deployment-docs/cron-sweep.md):
  *   curl -X POST -H "X-Cron-Secret: $CRON_SECRET" \
  *     https://<store-host>/api/cron/sweep-reservations
  *

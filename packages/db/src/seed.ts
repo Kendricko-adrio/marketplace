@@ -4,7 +4,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { eq } from "drizzle-orm";
 import { Pool } from "pg";
 import * as schema from "./schema";
-import { keyId, slugify } from "./soh-sync";
+import { keyId, slugify } from "./ids";
 import bcrypt from "bcryptjs";
 
 // Helper to generate random ID
@@ -844,7 +844,7 @@ async function seed() {
 
     // Brand & gender dimensions — sync-managed tables, seeded here so demo
     // products can be linked via brandId/genderId. Ids are deterministic
-    // (keyId of slug) to match how soh-sync.ts creates them.
+    // (keyId of slug) to match how the sync creates them.
     const brandBySlug = new Map<string, { id: string; name: string }>();
     const genderBySlug = new Map<string, { id: string; name: string }>();
     for (const p of productsData) {
@@ -894,7 +894,7 @@ async function seed() {
         description: product.description,
         basePrice: product.basePrice,
         status: product.status,
-        // SOH sync fields (nullable; populated by db:import-soh / the SOH
+        // Sync-managed fields (nullable; populated by the Jubelio import /
         // webhook for supplier products — seeded here with demo values).
         articleNumber: product.articleNumber,
         brandId: product.brand ? brandBySlug.get(slugify(product.brand))!.id : null,
@@ -927,9 +927,9 @@ async function seed() {
           size: variant.size,
           price: variant.price,
           isDefault: variant.isDefault,
-          // SOH sync fields — supplier barcode + raw discount. Null for seed
+          // Sync-managed fields — supplier barcode + raw discount. Null for seed
           // (admin-created demo products have no supplier master data); populated
-          // by db:import-soh / the SOH webhook.
+          // by the Jubelio import / webhook.
           barcode: null,
           discount: null,
         });

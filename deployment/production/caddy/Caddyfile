@@ -1,0 +1,56 @@
+# Caddyfile — reverse proxy for marketplace production
+# Domains:
+#   store: store.adfsport.cloud  → store:3000
+#   admin: admin.adfsport.cloud  → admin:3001
+#
+# Let's Encrypt PRODUCTION endpoint (default) — sertifikat valid dan
+# dipercaya browser, tidak ada warning.
+#
+# PERHATIAN: rate-limit production ketat (5 failed validation/jam/hostname).
+# Pastikan DNS sudah resolve + port 80 terbuka SEBELUM start Caddy pertama kali.
+
+{
+	# Opsional: email untuk notifikasi expiry/rate-limit dari Let's Encrypt.
+	# email admin@adfsport.cloud
+}
+
+# -----------------------------------------------------------------------------
+# Storefront
+# -----------------------------------------------------------------------------
+store.adfsport.cloud {
+	encode gzip zstd
+
+	# Next.js standalone server (service name: store, port 3000).
+	reverse_proxy store:3000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	# Cache static Next.js assets aggressively.
+	@static path /_next/static/* /favicon.ico /images/* /uploads/*
+	handle @static {
+		header Cache-Control "public, max-age=31536000, immutable"
+		reverse_proxy store:3000
+	}
+}
+
+# -----------------------------------------------------------------------------
+# Admin dashboard
+# -----------------------------------------------------------------------------
+admin.adfsport.cloud {
+	encode gzip zstd
+
+	# Next.js standalone server (service name: admin, port 3001).
+	reverse_proxy admin:3001 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+
+	@static path /_next/static/* /favicon.ico /images/*
+	handle @static {
+		header Cache-Control "public, max-age=31536000, immutable"
+		reverse_proxy admin:3001
+	}
+}

@@ -15,11 +15,11 @@ import {
  *
  * Setup: in Jubelio UI, Pengaturan → Developer → Webhook, set this URL as the
  * callback for `update-product`, `update-price`, `update-qty` and fill in the
- * Webhook Secret Key (must equal JUBELIO_WEBHOOK_SECRET). See docs/jubelio-sync.md.
+ * Webhook Secret Key (must equal JUBELIO_WEBHOOK_SECRET). See docs/features/jubelio-sync.md.
  *
  * Auth: Jubelio signs `SHA256(rawBodyString + secret)`; we recompute from the
  * raw request body and compare. 503 if the secret is not configured, 401 on
- * mismatch (mirrors the X-SOH-Webhook-Secret pattern).
+ * mismatch (same pattern as the sweep cron's X-Cron-Secret).
  *
  * Payloads (per docs/jubelio-api/dist.yaml):
  *   update-product / update-price: { action, item_group_id, item_group_name }

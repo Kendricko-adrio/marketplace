@@ -41,8 +41,8 @@ export const categories = pgTable("category", {
 });
 
 // Brands table â€” product brand dimension, sync-managed (auto-created by the
-// SOH import / webhook). No admin CRUD; rows are upserted by slug from the
-// CSV "Brand" column (modal value per ART). See packages/db/src/soh-sync.ts.
+// Jubelio import / webhook). No admin CRUD; rows are upserted by slug from the
+// supplier master data. See packages/db/src/jubelio-sync.ts.
 export const brands = pgTable("brand", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -52,7 +52,7 @@ export const brands = pgTable("brand", {
 });
 
 // Genders table â€” product gender dimension, sync-managed (auto-created by the
-// SOH import / webhook) from the CSV "sex" column (Men/Women/Unisex/...).
+// Jubelio import / webhook) from the supplier "sex" value (Men/Women/Unisex/...).
 // Distinct from the `gender` column on the `clients` table (onboarding).
 export const genders = pgTable("gender", {
   id: text("id").primaryKey(),
@@ -70,8 +70,8 @@ export const products = pgTable("product", {
   description: text("description"),
   basePrice: numeric("base_price", { precision: 15, scale: 2 }).notNull(),
   status: text("status").notNull().default("aktif"), // aktif | habis | arsip
-  // SOH sync fields â€” populated by the SOH import script / webhook
-  // (see packages/db/src/soh-sync.ts). Nullable so admin-created products
+  // Sync-managed fields â€” populated by the Jubelio import / webhook
+  // (see packages/db/src/jubelio-sync.ts). Nullable so admin-created products
   // (no supplier master data) still insert fine.
   articleNumber: text("article_number").unique(), // natural key (ART); nullable unique (multi-NULL OK)
   brandId: text("brand_id").references(() => brands.id), // FK -> brands; sync-managed, nullable
@@ -123,7 +123,7 @@ export const productVariants = pgTable(
     size: text("size"),
     price: numeric("price", { precision: 15, scale: 2 }).notNull(),
     isDefault: boolean("is_default").notNull().default(false),
-    // SOH sync fields â€” supplier barcode + raw discount from CSV.
+    // Sync-managed fields â€” supplier barcode + raw discount.
     // barcode is the supplier EAN (may be non-unique / non-numeric), distinct
     // from our system `sku` (which is generated as `${ART}-${Size}`).
     barcode: text("barcode"),

@@ -2,7 +2,7 @@
 
 > Reference for **every HTTP API endpoint** in the project, derived from the
 > `route.ts` handlers under `apps/store/src/app` and `apps/admin/src/app`.
-> Last updated: 2026-07-29.
+> Last updated: 2026-08-16.
 >
 > This document describes behavior as implemented in source. If code and this
 > doc disagree, the **code is authoritative** — re-run the extraction or read
@@ -47,7 +47,6 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | Secret / env | Used by | Header / mechanism |
 |---|---|---|
 | `CRON_SECRET` | `POST /api/cron/sweep-reservations` | `X-Cron-Secret` |
-| `SOH_WEBHOOK_SECRET` | `POST /api/webhooks/soh` | `X-SOH-Webhook-Secret` |
 | `JUBELIO_WEBHOOK_SECRET` | `POST /api/webhooks/jubelio` | `webhook-signature` (`SHA256(body+secret)`) |
 | `MIDTRANS_SERVER_KEY` | `POST /api/webhooks/midtrans`, payment creation | `signature_key` verification |
 | `BETTER_AUTH_SECRET` | `POST /api/internal/order-complete` | HMAC body secret (shared store↔admin) |
@@ -67,6 +66,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | GET | `/api/branches` | none | List active branches (store locator) |
 | GET | `/api/branches/{id}` | none | Fetch a single branch |
 | GET | `/api/categories` | none | List active categories |
+| GET | `/api/brands` | none | List all product brands (dimension) for storefront filter dropdowns |
+| GET | `/api/genders` | none | List all product genders (dimension) for storefront filter dropdowns |
 | GET | `/api/products` | none | Paginated/filterable product list |
 | GET | `/api/products/{id}` | none | Product detail + variants + per-branch stock |
 | GET | `/api/homepage` | none | Assemble active homepage sections (hydrated) |
@@ -85,7 +86,6 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | PATCH | `/api/account/profile` | client-session | Update client name/phone |
 | POST | `/api/payments/midtrans/create` | client-session | Re-payment for a pending_payment order |
 | POST | `/api/webhooks/midtrans` | signature-verification | Midtrans payment notification → finalize/fail order |
-| POST | `/api/webhooks/soh` | secret-header `X-SOH-Webhook-Secret` | **SOH master-data sync (third-party push)** |
 | POST | `/api/webhooks/jubelio` | signature `SHA256(body+JUBELIO_WEBHOOK_SECRET)` | **Jubelio master-data sync (product/price/stock push)** |
 | POST | `/api/internal/order-complete` | internal (HMAC) | Admin→store: mark order completed + email |
 | POST | `/api/cron/sweep-reservations` | secret-header `X-Cron-Secret` | Release stale reservation safety-net |
@@ -104,6 +104,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | ~~PUT~~ | ~~`/api/admin/products/{id}`~~ | — | **Removed** — Jubelio is the source of truth; use the Sync button |
 | ~~DELETE~~ | ~~`/api/admin/products/{id}`~~ | — | **Removed** — Jubelio is the source of truth |
 | GET | `/api/admin/categories` | admin-session (products:view) | List active categories |
+| GET | `/api/admin/brands` | admin-session (products:view) | List all product brands (dimension) for the homepage ProductFilterEditor dropdown |
+| GET | `/api/admin/genders` | admin-session (products:view) | List all product genders (dimension) for the homepage ProductFilterEditor dropdown |
 | GET | `/api/admin/branches` | admin-session (branches:view) | List branches (paginated) |
 | POST | `/api/admin/branches` | admin-session (branches:edit) | Create branch |
 | GET | `/api/admin/branches/{id}` | admin-session (branches:view) | Fetch a branch |
@@ -144,7 +146,6 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | GET | `/api/admin/permissions` | admin-session (hq) | List permissions |
 | PUT | `/api/admin/permissions` | admin-session (hq) | Upsert a permission (admin role) |
 | GET | `/api/admin/permissions/me` | admin-session | Current user's role + permissions |
-| GET/POST | `/api/auth/*` | Better Auth (catch-all) | Admin auth endpoints |
 | GET | `/api/admin/notifications/poll` | admin-session | Long-poll real-time notifications (branch/HQ scoped) |
 | GET | `/api/admin/notifications` | admin-session (notifications:view) | List notifications (paginated, isRead filter) |
 | PATCH | `/api/admin/notifications/{id}` | admin-session (notifications:edit) | Mark one notification as read |
@@ -190,7 +191,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: —
 - **Body**: none
 - **Response**: 200 `{ success: true, data: [{ id, name, slug }] }`; 500 `{ success: false, error }`
-- **Notes**: Sync-managed dimension (populated by the SOH import / webhook — see `docs/soh-sync/`). Ordered by `name` asc. No `isActive` flag — all rows returned.
+- **Notes**: Sync-managed dimension (populated by the Jubelio import / webhook — see `docs/features/jubelio-sync.md`). Ordered by `name` asc. No `isActive` flag — all rows returned.
 
 #### `GET` `/api/genders`
 - **Auth**: none
@@ -198,7 +199,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: —
 - **Body**: none
 - **Response**: 200 `{ success: true, data: [{ id, name, slug }] }`; 500 `{ success: false, error }`
-- **Notes**: Sync-managed dimension (CSV `sex` → `genders`), populated by the SOH import / webhook. Ordered by `name` asc. Distinct from the `clients.gender` onboarding field.
+- **Notes**: Sync-managed dimension (supplier `sex` → `genders`), populated by the Jubelio import / webhook. Ordered by `name` asc. Distinct from the `clients.gender` onboarding field.
 
 #### `GET` `/api/products`
 - **Auth**: none
@@ -348,17 +349,9 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Response**: 400 `{ success: false, error: "Invalid notification" }` (missing `order_id`/`transaction_status`); 401 `{ success: false, error: "Invalid signature" }`; 404 `{ success: false, error: "Order not found" }`; 200 `{ success: true }` (also returned on idempotent skip and on handler error to prevent Midtrans retries)
 - **Notes**: Signature skipped only when `signature_key` absent. Idempotency: skips orders already `paid` or `failed_payment`. Re-verifies authoritative status from Midtrans to defend against spoofed callbacks. `settlement` / `capture`+`fraud_status: accept` → `claimAndFinalizePaidOrder` (reservation → real deduction, pickup code, ready_for_pickup, email). `deny`/`cancel`/`expire` → `claimAndFailOrder` (releases reservation). `pending` → no action. Claim-guard makes it safe vs. the sweep cron. Env dependency: `MIDTRANS_SERVER_KEY`.
 
-#### `POST` `/api/webhooks/soh`
-- **Auth**: secret-header (`X-SOH-Webhook-Secret` vs `process.env.SOH_WEBHOOK_SECRET`) — **503** if env unset, **401** on mismatch
-- **Purpose**: Receive recurring SOH (Stock-On-Hand) product/stock master-data deltas from the third-party supplier and upsert them. *(The endpoint added for the third-party master-data sync — see `deployment/README.md` §10.6.)*
-- **Params**: —
-- **Body**: `{ records: Array<{ barcode: string, namaGudang: string, toko: string, brand: string, prdsgroup: string, sex: string, art: string, namaArtikel: string, size: string, rrp: string, disc: string, nett: string, status: string, season: string, total: string }> }` (every field coerced to string; null/undefined → `""`)
-- **Response**: 503 `{ success: false, error: "Webhook not configured" }` (env unset); 401 `{ success: false, error: "Unauthorized" }` (mismatch); 400 `{ success: false, error: "Invalid JSON body" | "Invalid payload", issues? }`; 500 `{ success: false, error: "Sync failed" }`; 200 `{ success: true, ...summary }`
-- **Notes**: Upsert-only (additive/overwrite per record) — never deletes products/stock. **`branch_stock.reservedStock` is never touched.** New branches are created disabled (`"nonaktif"`). Rows missing `art` or `namaGudang` (the two natural keys) are dropped before upsert. Writes an `auditLogs` row (`action: "SOH_SYNC_WEBHOOK"`, `entityType: "branch_stock"`, `changes: { summary, recordCount }`). Env dependency: `SOH_WEBHOOK_SECRET`. Field names are the `SohRecord` field names (lowercase; note `disc`, **not** the CSV column `disc%`) — see `packages/db/src/soh-sync.ts`. Shared logic with the one-shot `db:import-soh` script. **Feature design & operational docs**: [`./soh-sync/`](./soh-sync/) — [README](./soh-sync/README.md) · [CSV import tool](./soh-sync/csv-import.md) · [webhook](./soh-sync/webhook.md).
-
 #### `POST` `/api/webhooks/jubelio`
 - **Auth**: signature — `SHA256(rawBodyString + JUBELIO_WEBHOOK_SECRET)` (hex), sent in the `webhook-signature` (or `x-jubelio-signature`) header; recomputed from the raw request body — **503** if env unset, **401** on mismatch
-- **Purpose**: Receive Jubelio push events when a product/price/stock changes and re-sync the affected entity from Jubelio (source of truth). Setup: Jubelio UI → Pengaturan → Developer → Webhook, register this URL for `update-product` / `update-price` / `update-qty` + set the Webhook Secret Key. See `docs/jubelio-sync.md` + `deployment/README.md` §10.6.
+- **Purpose**: Receive Jubelio push events when a product/price/stock changes and re-sync the affected entity from Jubelio (source of truth). Setup: Jubelio UI → Pengaturan → Developer → Webhook, register this URL for `update-product` / `update-price` / `update-qty` + set the Webhook Secret Key. See `docs/features/jubelio-sync.md` + `docs/deployment-docs/jubelio-sync.md`.
 - **Params**: —
 - **Body**: `update-product`/`update-price`: `{ action, item_group_id, item_group_name }`; `update-qty`: `{ action, item_group_id, item_group_name, item_ids: number[], location_id }`
 - **Response**: 503 `{ success: false, error: "Webhook not configured" }` (env unset); 401 `{ success: false, error: "Unauthorized" }` (bad signature); 400 `{ success: false, error: "Invalid JSON body" | "Missing item_group_id" | "Missing item_ids" }`; 500 `{ success: false, error: "Sync failed" }` (Jubelio retries up to 3×); 200 `{ success: true, ...summary }`
@@ -643,7 +636,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 #### `GET` `/api/admin/footer`
 - **Auth**: admin-session (role: `hq`)
-- **Purpose**: Fetch the singleton footer-config row's `data` field (or `null` if none exists; client falls back to `DEFAULT_FOOTER_CONFIG`).
+- **Purpose**: Fetch the singleton footer-config row's `data` field (or `null` if none exists; the admin form falls back to empty fields, and the storefront renders an empty footer until a row is seeded — see `docs/features/footer.md`).
 - **Params**: —
 - **Body**: none
 - **Response**: 200 `{ success: true, data: null }` (no row) or `{ success: true, data: { id, data, updatedAt } }`; 500 `"Failed to fetch footer config"`
@@ -857,8 +850,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 ## Appendix — Cross-cutting behaviors
 
-- **Stock reservation model**: `branch_stock.stock` (SOH) + `branch_stock.reservedStock` (runtime). Cart operations check `stock - reservedStock` but do **not** reserve. Reservation happens atomically inside `place-order`'s transaction; release happens via the Midtrans webhook (payment fail/expire) or the `sweep-reservations` cron for stale `pending_payment` orders. The SOH webhook/import **never** touches `reservedStock`. See `deployment/README.md` §10.5–10.6.
+- **Stock reservation model**: `branch_stock.stock` (SOH) + `branch_stock.reservedStock` (runtime). Cart operations check `stock - reservedStock` but do **not** reserve. Reservation happens atomically inside `place-order`'s transaction; release happens via the Midtrans webhook (payment fail/expire) or the `sweep-reservations` cron for stale `pending_payment` orders. The Jubelio webhook/import **never** touches `reservedStock`. See `docs/deployment-docs/cron-sweep.md` and `docs/deployment-docs/jubelio-sync.md`.
 - **RBAC (admin)**: admin list/detail endpoints are branch-scoped via `getBranchScope` — branch admins see only their own branch; HQ sees all. Edit/delete operations additionally check the permission map (`<module>:<view|edit|delete>`); a few endpoints require `role: "hq"`.
-- **Audit log**: significant mutations write `audit_log` rows (e.g. `VERIFY_PICKUP_CODE`, `SOH_SYNC_WEBHOOK`). Several upsert/delete endpoints (products, pages, footer, users) do **not** write audit entries — noted per endpoint.
-- **Idempotency**: payment webhooks (Midtrans + sweep) use a claim-guard so duplicate/replayed notifications are safe. The SOH webhook is upsert-only on natural keys, so replays are safe.
+- **Audit log**: significant mutations write `audit_log` rows (e.g. `VERIFY_PICKUP_CODE`, `JUBELIO_SYNC_WEBHOOK`). Several upsert/delete endpoints (products, pages, footer, users) do **not** write audit entries — noted per endpoint.
+- **Idempotency**: payment webhooks (Midtrans + sweep) use a claim-guard so duplicate/replayed notifications are safe. The Jubelio webhook is upsert-only on natural keys, so replays are safe.
 - **Transactions**: most admin CRUD endpoints do **not** wrap multi-row writes in a DB transaction (noted where relevant); `place-order` and the stock-claim flows do.

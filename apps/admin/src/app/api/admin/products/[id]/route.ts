@@ -14,7 +14,7 @@ import { withPermission } from "@/lib/auth-guard";
  * Admin product detail (read-only). Jubelio is the source of truth for
  * products, so create/update/delete are removed from the admin API — a product
  * is refreshed from Jubelio via POST /api/admin/products/[id]/sync instead.
- * See packages/db/src/jubelio-sync.ts + docs/jubelio-sync.md.
+ * See packages/db/src/jubelio-sync.ts + docs/features/jubelio-sync.md.
  */
 export const GET = withPermission(async (
   _ctx,

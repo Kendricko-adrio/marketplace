@@ -17,11 +17,9 @@
     "db:seed": "npx tsx src/seed.ts",
     "db:check": "drizzle-kit check",
     "db:reset": "npx tsx src/reset.ts",
-    "db:import-soh": "npx tsx src/import-soh.ts",
     "db:import-jubelio": "npx tsx src/import-jubelio.ts"
   },
   "dependencies": {
-    "csv-parse": "^5.6.0",
     "drizzle-orm": "^0.45.1",
     "pg": "^8.16.3"
   },

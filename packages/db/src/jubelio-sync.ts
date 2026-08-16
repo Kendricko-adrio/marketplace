@@ -15,9 +15,9 @@
  * Data model (verified live): product = `item_group`, variant = `item/sku`,
  * branch = `location` (physical outlet — NOT `/locations/` which returns only
  * the webstore; use `/locations/list`), stock per (item_id, location_id).
- * Shopee = channel_id 64. See docs/jubelio-sync.md + memory [[jubelio-sync-api]].
+ * Shopee = channel_id 64. See docs/features/jubelio-sync.md + memory [[jubelio-sync-api]].
  *
- * Invariants (mirror soh-sync.ts; do NOT violate):
+ * Invariants (mirror the former SOH sync; do NOT violate):
  *   - branch_stock.reservedStock is NEVER written here (runtime-managed by
  *     checkout — see [[stock-reservation-design]]). Only `stock` is written.
  *   - New branches upsert as status="nonaktif"; existing branches keep status.

@@ -19,11 +19,12 @@
 .env
 .env.*
 !.env.example
-!.env.staging.example
 
 # Docker build artifacts
-deployment/caddy/data
-deployment/caddy/config
+deployment/staging/caddy/data
+deployment/staging/caddy/config
+deployment/production/caddy/data
+deployment/production/caddy/config
 
 # Editor / OS
 .vscode

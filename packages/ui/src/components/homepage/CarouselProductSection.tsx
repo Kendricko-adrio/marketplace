@@ -49,7 +49,7 @@ function CarouselProductCard({
 
   return (
     <ProductCard
-      id={product.id}
+      slug={product.slug}
       title={product.name}
       price={price}
       originalPrice={originalPrice}

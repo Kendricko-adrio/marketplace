@@ -5,10 +5,23 @@
   boolean,
   numeric,
   integer,
+  jsonb,
   primaryKey,
   index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+
+/**
+ * Product-level gallery image entry. Populated from Jubelio
+ * `/inventory/catalog/{item_group_id}` `images[]` by the Jubelio sync
+ * (see packages/db/src/jubelio-sync.ts). URLs are hotlinked from the Jubelio
+ * CDN — never downloaded to local storage.
+ */
+export type ProductImage = {
+  url: string;
+  thumbnail: string;
+  displayOrder: number;
+};
 
 // Categories table
 export const categories = pgTable("category", {
@@ -19,6 +32,10 @@ export const categories = pgTable("category", {
   image: text("image"),
   icon: text("icon"),
   isActive: boolean("is_active").notNull().default(true),
+  // Jubelio sync link — natural key for this category in Jubelio
+  // (from /inventory/categories/item-categories/). Nullable + unique so
+  // admin/legacy categories still insert. See packages/db/src/jubelio-sync.ts.
+  jubelioCategoryId: integer("jubelio_category_id").unique(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -60,6 +77,17 @@ export const products = pgTable("product", {
   brandId: text("brand_id").references(() => brands.id), // FK -> brands; sync-managed, nullable
   genderId: text("gender_id").references(() => genders.id), // FK -> genders; sync-managed, nullable
   season: text("season"),
+  // Jubelio sync link — natural key (item_group_id) for this product in Jubelio.
+  // Nullable + unique so admin/legacy/CSV products still insert. Populated by
+  // the Jubelio import script / webhook (see packages/db/src/jubelio-sync.ts).
+  jubelioItemGroupId: integer("jubelio_item_group_id").unique(),
+  // Product-level image (card thumbnail) — Jubelio group `thumbnail`, hotlinked
+  // from the Jubelio CDN. Used by product cards / cart / order line items.
+  thumbnail: text("thumbnail"),
+  // Product-level gallery images — Jubelio `/inventory/catalog/{id}` `images[]`,
+  // hotlinked. Used by the product detail page gallery. Null for legacy/admin
+  // products. Stored as JSONB (never queried per-row, only displayed as a set).
+  images: jsonb("images").$type<ProductImage[]>(),
   collection: text("collection"), // CSV "STATUS" â€” sub-category/collection label, NOT the status enum
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -88,6 +116,9 @@ export const productVariants = pgTable(
       .notNull()
       .references(() => products.id, { onDelete: "cascade" }),
     sku: text("sku").notNull().unique(),
+    // Jubelio sync link — natural key (item_id) for this variant in Jubelio.
+    // Nullable + unique so admin/legacy variants still insert.
+    jubelioItemId: integer("jubelio_item_id").unique(),
     color: text("color"),
     size: text("size"),
     price: numeric("price", { precision: 15, scale: 2 }).notNull(),
@@ -103,7 +134,12 @@ export const productVariants = pgTable(
   (t) => [index("product_variant_barcode_idx").on(t.barcode)]
 );
 
-// Product Images table
+// Product Images table (legacy, variant-level). Jubelio-synced products use the
+// product-level `thumbnail` + `images` JSONB columns on `products` instead (set
+// by packages/db/src/jubelio-sync.ts). This variant-level table is kept for
+// backward compatibility with pre-Jubelio admin-uploaded images and the seeder;
+// admin product CRUD (which wrote here) is removed now that Jubelio is the
+// source of truth. New code should read `products.thumbnail` / `products.images`.
 export const productImages = pgTable("product_image", {
   id: text("id").primaryKey(),
   variantId: text("variant_id")

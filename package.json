@@ -22,6 +22,7 @@
     "db:check": "cd packages/db && npm run db:check",
     "db:reset": "cd packages/db && npm run db:reset",
     "db:import-soh": "cd packages/db && npm run db:import-soh",
+    "db:import-jubelio": "cd packages/db && npm run db:import-jubelio",
     "lint": "cd apps/store && npm run lint && cd ../admin && npm run lint",
     "lint:store": "cd apps/store && npm run lint",
     "lint:admin": "cd apps/admin && npm run lint"

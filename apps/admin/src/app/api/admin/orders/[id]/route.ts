@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { orders, orderItems, branches, clients, productVariants, productImages } from "@/db";
-import { eq, asc } from "drizzle-orm";
+import { orders, orderItems, branches, clients, productVariants, products } from "@/db";
+import { eq } from "drizzle-orm";
 import { withPermission, getBranchScope } from "@/lib/auth-guard";
 import { requestLogger, serializeError } from "@/lib/logger";
 
@@ -82,7 +82,7 @@ export const GET = withPermission(async (
       );
     }
 
-    // Get order items with variant + image
+    // Get order items with variant + product thumbnail (Jubelio CDN image)
     const items = await db
       .select({
         id: orderItems.id,
@@ -94,26 +94,17 @@ export const GET = withPermission(async (
         quantity: orderItems.quantity,
         createdAt: orderItems.createdAt,
         productId: productVariants.productId,
+        thumbnail: products.thumbnail,
       })
       .from(orderItems)
       .innerJoin(productVariants, eq(orderItems.variantId, productVariants.id))
+      .innerJoin(products, eq(productVariants.productId, products.id))
       .where(eq(orderItems.orderId, id));
 
-    const itemsWithImages = await Promise.all(
-      items.map(async (item) => {
-        const images = await db
-          .select({ url: productImages.url })
-          .from(productImages)
-          .where(eq(productImages.variantId, item.variantId))
-          .orderBy(asc(productImages.displayOrder))
-          .limit(1);
-
-        return {
-          ...item,
-          imageUrl: images[0]?.url ?? null,
-        };
-      })
-    );
+    const itemsWithImages = items.map((item) => ({
+      ...item,
+      imageUrl: item.thumbnail ?? null,
+    }));
 
     log.info("order detail served");
     return NextResponse.json({

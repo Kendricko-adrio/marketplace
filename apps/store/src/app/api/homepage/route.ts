@@ -127,6 +127,7 @@ async function resolveFilterModeProducts(
     price: minPriceSq.minPrice,
     collection: products.collection,
     gender: genders.name,
+    thumbnail: products.thumbnail,
   };
 
   const rows = await db
@@ -156,6 +157,7 @@ async function hydrateProducts(
     createdAt: Date;
     collection: string | null;
     gender: string | null;
+    thumbnail: string | null;
   }>
 ) {
   if (rows.length === 0) return [];
@@ -187,7 +189,8 @@ async function hydrateProducts(
       slug: r.slug,
       price: r.price ?? r.basePrice,
       basePrice: r.basePrice,
-      image: variant ? imageMap.get(variant.id) ?? null : null,
+      // Prefer product-level thumbnail (Jubelio CDN); fall back to variant image.
+      image: r.thumbnail ?? (variant ? imageMap.get(variant.id) ?? null : null),
       collection: r.collection,
       gender: r.gender,
     };
@@ -302,9 +305,10 @@ export async function GET() {
 
       for (const p of productRows) {
         const variant = defaultVariantMap.get(p.id);
-        (p as unknown as { _image?: string | null })._image = variant
-          ? imageMap.get(variant.id) ?? null
-          : null;
+        // Prefer the product-level thumbnail (Jubelio CDN); fall back to the
+        // default variant's first variant-level image for legacy products.
+        (p as unknown as { _image?: string | null })._image =
+          p.thumbnail ?? (variant ? imageMap.get(variant.id) ?? null : null);
         (p as unknown as { _price?: string })._price =
           minPriceMap.get(p.id) ?? p.basePrice;
       }

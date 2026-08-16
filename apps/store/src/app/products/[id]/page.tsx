@@ -421,7 +421,14 @@ export default function ProductDetailPage() {
 
         <div className="max-w-3xl leading-relaxed text-muted-foreground">
           {product.description ? (
-            <p className="mb-4 whitespace-pre-line">{product.description}</p>
+            // Jubelio sends the description as HTML (<p>, <br>, ...). It's
+            // trusted content from the Jubelio master data, so we render it
+            // directly. Arbitrary-variant spacing keeps paragraphs readable
+            // without depending on the typography plugin.
+            <div
+              className="[&_p]:mb-4 [&_p:last-child]:mb-0 [&_br]:block [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:list-decimal [&_ol]:pl-6 [&_li]:mb-1"
+              dangerouslySetInnerHTML={{ __html: product.description }}
+            />
           ) : (
             <p className="mb-4 text-muted-foreground italic">
               Tidak ada deskripsi.

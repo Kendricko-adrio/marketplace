@@ -31,6 +31,7 @@ interface OrderItem {
   createdAt: string;
   productId: string;
   imageUrl: string | null;
+  slug: string | null;
 }
 
 interface Branch {
@@ -407,7 +408,7 @@ export default function OrderDetailPage() {
                       variant="outline"
                       size="sm"
                       className="mt-2"
-                      onClick={() => router.push(`/products/${item.productId}`)}
+                      onClick={() => router.push(`/products/${item.slug ?? item.productId}`)}
                     >
                       <ShoppingBag className="h-3.5 w-3.5 mr-1.5" />
                       Beli Lagi

@@ -1,16 +1,7 @@
 "use client";
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import {
-  Edit,
-  Trash2,
-  Plus,
-  MoreHorizontal,
-  Search,
-  Loader2,
-} from "lucide-react";
-import { toast } from "sonner";
+import { Search, Loader2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -23,22 +14,12 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
   CardDescription,
 } from "@/components/ui/card";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { useAuth } from "@/providers/auth-provider";
 
 interface Product {
   id: string;
@@ -56,24 +37,39 @@ interface Product {
 }
 
 export default function AdminProductsPage() {
-  const router = useRouter();
-  const { hasPermission } = useAuth();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [deleteTarget, setDeleteTarget] = useState<Product | null>(null);
-  const [deleting, setDeleting] = useState(false);
+
+  // Debounce the search input so we only hit the DB after the user stops typing.
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      setDebouncedSearch(searchTerm.trim());
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [searchTerm]);
+
+  // Reset to the first page whenever the (debounced) search term changes.
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch]);
 
   useEffect(() => {
     fetchProducts();
-  }, [page]);
+  }, [page, debouncedSearch]);
 
   async function fetchProducts() {
     setLoading(true);
     try {
-      const res = await fetch(`/api/admin/products?page=${page}&limit=10`);
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: "10",
+      });
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      const res = await fetch(`/api/admin/products?${params.toString()}`);
       const data = await res.json();
       if (data.success) {
         setProducts(data.data);
@@ -95,44 +91,16 @@ export default function AdminProductsPage() {
     return variants[status] || "secondary";
   };
 
-  const filteredProducts = products.filter((product) => {
-    if (!searchTerm) return true;
-    return product.name.toLowerCase().includes(searchTerm.toLowerCase());
-  });
-
-  async function handleDelete() {
-    if (!deleteTarget) return;
-    setDeleting(true);
-    try {
-      const res = await fetch(`/api/admin/products/${deleteTarget.id}`, {
-        method: "DELETE",
-      });
-      const data = await res.json();
-      if (data.success) {
-        toast.success("Produk berhasil dihapus");
-        setDeleteTarget(null);
-        fetchProducts();
-      } else {
-        toast.error(data.error || "Gagal menghapus produk");
-      }
-    } catch {
-      toast.error("Gagal menghapus produk");
-    } finally {
-      setDeleting(false);
-    }
-  }
+  const filteredProducts = products;
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <h2 className="text-2xl font-bold tracking-tight">Produk</h2>
-        {hasPermission("products", "edit") && (
-          <Link href="/admin/products/new">
-            <Button className="gap-2">
-              <Plus className="h-4 w-4" /> Tambah Produk
-            </Button>
-          </Link>
-        )}
+        <p className="text-sm text-muted-foreground">
+          Katalog disinkronkan dari Jubelio (source of truth). Buka detail untuk
+          menyinkronkan ulang sebuah produk.
+        </p>
       </div>
 
       <Card>
@@ -171,9 +139,7 @@ export default function AdminProductsPage() {
                       <TableHead className="text-center">Varian</TableHead>
                       <TableHead className="text-right">Stok</TableHead>
                       <TableHead className="text-center">Status</TableHead>
-                      <TableHead className="w-[80px] text-right">
-                        Aksi
-                      </TableHead>
+                      <TableHead className="w-[80px] text-right">Aksi</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -188,7 +154,7 @@ export default function AdminProductsPage() {
                         <TableRow key={product.id}>
                           <TableCell className="font-medium">
                             <Link
-                              href={`/products/${product.id}`}
+                              href={`/products/${product.slug}`}
                               className="hover:text-primary"
                               target="_blank"
                             >
@@ -228,39 +194,11 @@ export default function AdminProductsPage() {
                             </Badge>
                           </TableCell>
                           <TableCell className="text-right">
-                            <DropdownMenu>
-                              <DropdownMenuTrigger asChild>
-                                <Button variant="ghost" className="h-8 w-8 p-0">
-                                  <MoreHorizontal className="h-4 w-4" />
-                                </Button>
-                              </DropdownMenuTrigger>
-                              <DropdownMenuContent align="end">
-                                <DropdownMenuLabel>Aksi</DropdownMenuLabel>
-                                {hasPermission("products", "edit") && (
-                                  <DropdownMenuItem
-                                    className="cursor-pointer gap-2"
-                                    onSelect={() =>
-                                      router.push(
-                                        `/admin/products/${product.id}/edit`
-                                      )
-                                    }
-                                  >
-                                    <Edit className="h-4 w-4" /> Edit
-                                  </DropdownMenuItem>
-                                )}
-                                {hasPermission("products", "delete") && hasPermission("products", "edit") && (
-                                  <DropdownMenuSeparator />
-                                )}
-                                {hasPermission("products", "delete") && (
-                                  <DropdownMenuItem
-                                    className="cursor-pointer gap-2 text-destructive focus:text-destructive focus:bg-destructive/10"
-                                    onSelect={() => setDeleteTarget(product)}
-                                  >
-                                    <Trash2 className="h-4 w-4" /> Hapus
-                                  </DropdownMenuItem>
-                                )}
-                              </DropdownMenuContent>
-                            </DropdownMenu>
+                            <Link href={`/admin/products/${product.id}`}>
+                              <Button variant="ghost" className="h-8 gap-2">
+                                <Eye className="h-4 w-4" /> Detail
+                              </Button>
+                            </Link>
                           </TableCell>
                         </TableRow>
                       ))
@@ -294,22 +232,6 @@ export default function AdminProductsPage() {
           )}
         </CardContent>
       </Card>
-
-      <ConfirmDialog
-        open={!!deleteTarget}
-        onOpenChange={(open) => {
-          if (!open) setDeleteTarget(null);
-        }}
-        title="Hapus Produk"
-        description={
-          deleteTarget
-            ? `Yakin ingin menghapus produk "${deleteTarget.name}"? Tindakan ini tidak dapat dibatalkan.`
-            : null
-        }
-        confirmLabel="Hapus"
-        loading={deleting}
-        onConfirm={handleDelete}
-      />
     </div>
   );
 }

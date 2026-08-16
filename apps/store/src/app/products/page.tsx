@@ -15,7 +15,6 @@ async function getProducts(searchParams: {
   const params = new URLSearchParams();
 
   if (searchParams.search) params.set("search", searchParams.search);
-  if (searchParams.category) params.set("category", searchParams.category);
   if (searchParams.brand) params.set("brand", searchParams.brand);
   if (searchParams.gender) params.set("gender", searchParams.gender);
   if (searchParams.minPrice) params.set("minPrice", searchParams.minPrice);
@@ -67,8 +66,6 @@ export default async function ProductsPage({
           <h1 className="text-2xl font-bold">
             {params.search
               ? `Hasil pencarian: "${params.search}"`
-              : params.category
-              ? `Kategori: ${params.category}`
               : "Semua Produk"}
           </h1>
           <div className="flex items-center gap-4 w-full sm:w-auto">

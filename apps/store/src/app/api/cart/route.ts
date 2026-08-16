@@ -72,6 +72,7 @@ export async function GET() {
           name: products.name,
           slug: products.slug,
           basePrice: products.basePrice,
+          thumbnail: products.thumbnail,
         },
       })
       .from(cartItems)
@@ -80,19 +81,24 @@ export async function GET() {
       .leftJoin(branches, eq(cartItems.branchId, branches.id))
       .where(eq(cartItems.cartId, cart.id));
 
-    // Get images for each item
+    // Get an image for each item: prefer the product-level thumbnail (Jubelio
+    // CDN), fall back to the variant's first image for legacy products.
     const itemsWithImages = await Promise.all(
       items.map(async (item) => {
-        const images = await db
-          .select()
-          .from(productImages)
-          .where(eq(productImages.variantId, item.variantId))
-          .orderBy(asc(productImages.displayOrder))
-          .limit(1);
+        let image = item.product.thumbnail ?? null;
+        if (!image) {
+          const images = await db
+            .select()
+            .from(productImages)
+            .where(eq(productImages.variantId, item.variantId))
+            .orderBy(asc(productImages.displayOrder))
+            .limit(1);
+          image = images[0]?.url || null;
+        }
 
         return {
           ...item,
-          image: images[0]?.url || null,
+          image,
         };
       })
     );

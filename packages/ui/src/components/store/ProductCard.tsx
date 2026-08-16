@@ -5,7 +5,9 @@ import { Card, CardContent } from "../ui/card";
 import { Badge } from "../ui/badge";
 
 interface ProductCardProps {
-  id: string;
+  /** Product slug — used for the detail-page link (never the raw id, which is
+   *  an internal PK and must not be exposed in customer-facing URLs). */
+  slug: string;
   title: string;
   price: number;
   originalPrice?: number;
@@ -16,7 +18,7 @@ interface ProductCardProps {
 }
 
 export default function ProductCard({
-  id,
+  slug,
   title,
   price,
   originalPrice,
@@ -62,12 +64,12 @@ export default function ProductCard({
     <Card className="overflow-hidden h-full flex flex-col hover:shadow-lg transition-shadow duration-200">
       <div
         className="relative block aspect-square bg-muted overflow-hidden"
-        {...(preview ? {} : { "data-href": `/products/${id}` })}
+        {...(preview ? {} : { "data-href": `/products/${slug}` })}
       >
         {preview ? (
           imageBlock
         ) : (
-          <Link href={`/products/${id}`} className="contents">
+          <Link href={`/products/${slug}`} className="contents">
             {imageBlock}
           </Link>
         )}
@@ -78,7 +80,7 @@ export default function ProductCard({
           titleBlock
         ) : (
           <Link
-            href={`/products/${id}`}
+            href={`/products/${slug}`}
             className="font-medium text-sm text-card-foreground line-clamp-2 mb-2 hover:text-primary transition-colors h-10"
           >
             {title}

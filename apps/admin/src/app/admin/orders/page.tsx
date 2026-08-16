@@ -86,6 +86,13 @@ const PAYMENT_BADGES: Record<string, string> = {
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
+// Local YYYY-MM-DD for <input type="date"> defaults (today).
+function todayLocalISO(): string {
+  const d = new Date();
+  const tzOffset = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - tzOffset).toISOString().slice(0, 10);
+}
+
 // Build a windowed page list around the current page (max 5 consecutive),
 // with first/last + ellipsis when the range is far from the edges.
 function getPageRange(current: number, total: number): (number | "...")[] {
@@ -122,8 +129,8 @@ export default function AdminOrdersPage() {
   const [limit, setLimit] = useState(25);
   const [totalPages, setTotalPages] = useState(1);
   const [totalItems, setTotalItems] = useState(0);
-  const [orderFrom, setOrderFrom] = useState("");
-  const [orderTo, setOrderTo] = useState("");
+  const [orderFrom, setOrderFrom] = useState(todayLocalISO);
+  const [orderTo, setOrderTo] = useState(todayLocalISO);
   const [pickupFrom, setPickupFrom] = useState("");
   const [pickupTo, setPickupTo] = useState("");
   const [userRole, setUserRole] = useState<string>("admin");

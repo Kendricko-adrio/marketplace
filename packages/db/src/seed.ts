@@ -873,6 +873,19 @@ async function seed() {
     for (const product of productsData) {
       const productIndex = productsData.indexOf(product);
 
+      // Product-level image (card thumbnail) + gallery (JSONB). Mirrors the
+      // Jubelio sync's product.thumbnail / product.images fields so seeded
+      // products display through the same query path as Jubelio products.
+      // Uses the local sample image set; thumbnail == url for these (no
+      // separate Jubelio thumbnail variant). See packages/db/src/jubelio-sync.ts.
+      const galleryStart = (productIndex * 2) % productImages.length;
+      const galleryCount = 3;
+      const gallery: { url: string; thumbnail: string; displayOrder: number }[] = [];
+      for (let i = 0; i < galleryCount; i++) {
+        const p = productImages[(galleryStart + i) % productImages.length];
+        gallery.push({ url: p, thumbnail: p, displayOrder: i });
+      }
+
       // Insert product
       await db.insert(schema.products).values({
         id: product.id,
@@ -888,6 +901,8 @@ async function seed() {
         genderId: product.gender ? genderBySlug.get(slugify(product.gender))!.id : null,
         season: product.season,
         collection: product.collection,
+        thumbnail: gallery[0]?.url ?? null,
+        images: gallery,
       });
 
       allProductIds.push(product.id);

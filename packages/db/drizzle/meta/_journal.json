@@ -71,6 +71,13 @@
       "when": 1785862450921,
       "tag": "0009_tan_sheva_callister",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786495068965,
+      "tag": "0010_fine_leader",
+      "breakpoints": true
     }
   ]
 }

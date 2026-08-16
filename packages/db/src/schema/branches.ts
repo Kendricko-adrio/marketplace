@@ -29,6 +29,10 @@ export const branches = pgTable("branch", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   code: text("code").notNull().unique(),
+  // Jubelio sync link — natural key (location_id) for this branch in Jubelio
+  // (from /locations/list). Nullable + unique so admin/legacy branches still
+  // insert. `code` is set to Jubelio `location_code`. See jubelio-sync.ts.
+  jubelioLocationId: integer("jubelio_location_id").unique(),
   city: text("city").notNull(),
   address: text("address").notNull(),
   latitude: numeric("latitude", { precision: 10, scale: 7 }),

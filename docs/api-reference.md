@@ -48,6 +48,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 |---|---|---|
 | `CRON_SECRET` | `POST /api/cron/sweep-reservations` | `X-Cron-Secret` |
 | `SOH_WEBHOOK_SECRET` | `POST /api/webhooks/soh` | `X-SOH-Webhook-Secret` |
+| `JUBELIO_WEBHOOK_SECRET` | `POST /api/webhooks/jubelio` | `webhook-signature` (`SHA256(body+secret)`) |
 | `MIDTRANS_SERVER_KEY` | `POST /api/webhooks/midtrans`, payment creation | `signature_key` verification |
 | `BETTER_AUTH_SECRET` | `POST /api/internal/order-complete` | HMAC body secret (shared store↔admin) |
 
@@ -85,6 +86,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | POST | `/api/payments/midtrans/create` | client-session | Re-payment for a pending_payment order |
 | POST | `/api/webhooks/midtrans` | signature-verification | Midtrans payment notification → finalize/fail order |
 | POST | `/api/webhooks/soh` | secret-header `X-SOH-Webhook-Secret` | **SOH master-data sync (third-party push)** |
+| POST | `/api/webhooks/jubelio` | signature `SHA256(body+JUBELIO_WEBHOOK_SECRET)` | **Jubelio master-data sync (product/price/stock push)** |
 | POST | `/api/internal/order-complete` | internal (HMAC) | Admin→store: mark order completed + email |
 | POST | `/api/cron/sweep-reservations` | secret-header `X-Cron-Secret` | Release stale reservation safety-net |
 | GET | `/api/onboarding/sync` | client-session | Sync onboarding cookie, redirect |
@@ -98,8 +100,9 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | GET | `/api/admin/products` | admin-session (products:view) | List products (paginated) |
 | POST | `/api/admin/products` | admin-session (products:edit) | Create product + variants + images |
 | GET | `/api/admin/products/{id}` | admin-session (products:view) | Fetch product detail |
-| PUT | `/api/admin/products/{id}` | admin-session (products:edit) | Update product (full variant/image sync) |
-| DELETE | `/api/admin/products/{id}` | admin-session (products:delete) | Delete product + image files |
+| POST | `/api/admin/products/{id}/sync` | admin-session (products:edit) | Re-sync a single product from Jubelio |
+| ~~PUT~~ | ~~`/api/admin/products/{id}`~~ | — | **Removed** — Jubelio is the source of truth; use the Sync button |
+| ~~DELETE~~ | ~~`/api/admin/products/{id}`~~ | — | **Removed** — Jubelio is the source of truth |
 | GET | `/api/admin/categories` | admin-session (products:view) | List active categories |
 | GET | `/api/admin/branches` | admin-session (branches:view) | List branches (paginated) |
 | POST | `/api/admin/branches` | admin-session (branches:edit) | Create branch |
@@ -353,6 +356,14 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Response**: 503 `{ success: false, error: "Webhook not configured" }` (env unset); 401 `{ success: false, error: "Unauthorized" }` (mismatch); 400 `{ success: false, error: "Invalid JSON body" | "Invalid payload", issues? }`; 500 `{ success: false, error: "Sync failed" }`; 200 `{ success: true, ...summary }`
 - **Notes**: Upsert-only (additive/overwrite per record) — never deletes products/stock. **`branch_stock.reservedStock` is never touched.** New branches are created disabled (`"nonaktif"`). Rows missing `art` or `namaGudang` (the two natural keys) are dropped before upsert. Writes an `auditLogs` row (`action: "SOH_SYNC_WEBHOOK"`, `entityType: "branch_stock"`, `changes: { summary, recordCount }`). Env dependency: `SOH_WEBHOOK_SECRET`. Field names are the `SohRecord` field names (lowercase; note `disc`, **not** the CSV column `disc%`) — see `packages/db/src/soh-sync.ts`. Shared logic with the one-shot `db:import-soh` script. **Feature design & operational docs**: [`./soh-sync/`](./soh-sync/) — [README](./soh-sync/README.md) · [CSV import tool](./soh-sync/csv-import.md) · [webhook](./soh-sync/webhook.md).
 
+#### `POST` `/api/webhooks/jubelio`
+- **Auth**: signature — `SHA256(rawBodyString + JUBELIO_WEBHOOK_SECRET)` (hex), sent in the `webhook-signature` (or `x-jubelio-signature`) header; recomputed from the raw request body — **503** if env unset, **401** on mismatch
+- **Purpose**: Receive Jubelio push events when a product/price/stock changes and re-sync the affected entity from Jubelio (source of truth). Setup: Jubelio UI → Pengaturan → Developer → Webhook, register this URL for `update-product` / `update-price` / `update-qty` + set the Webhook Secret Key. See `docs/jubelio-sync.md` + `deployment/README.md` §10.6.
+- **Params**: —
+- **Body**: `update-product`/`update-price`: `{ action, item_group_id, item_group_name }`; `update-qty`: `{ action, item_group_id, item_group_name, item_ids: number[], location_id }`
+- **Response**: 503 `{ success: false, error: "Webhook not configured" }` (env unset); 401 `{ success: false, error: "Unauthorized" }` (bad signature); 400 `{ success: false, error: "Invalid JSON body" | "Missing item_group_id" | "Missing item_ids" }`; 500 `{ success: false, error: "Sync failed" }` (Jubelio retries up to 3×); 200 `{ success: true, ...summary }`
+- **Notes**: Payload is minimal (entity ids only) — the handler re-fetches the current state from Jubelio and upserts. `update-product`/`update-price` → `syncOneProduct(db, item_group_id)` (re-fetches `/inventory/catalog/{id}` + stock); `update-qty` → `fetchStocks(item_ids)` → `upsertJubelioStock`. Upsert-only, never deletes; `branch_stock.reservedStock` never touched; new branches created `"nonaktif"`. Writes an `auditLogs` row (`action: "JUBELIO_SYNC_WEBHOOK"`). Env: `JUBELIO_WEBHOOK_SECRET` + `JUBELIO_EMAIL`/`JUBELIO_PASSWORD` (login token, 12h, auto-refresh). Shared logic with `db:import-jubelio` + the admin Sync button (`POST /api/admin/products/{id}/sync`). Worker: `packages/db/src/jubelio-sync.ts`.
+
 #### `POST` `/api/internal/order-complete`
 - **Auth**: internal (HMAC shared secret in body — `secret` must equal `HMAC-SHA256(BETTER_AUTH_SECRET, orderId)`)
 - **Purpose**: Called by the admin app to mark an order `completed` and send the Order Completed email.
@@ -403,13 +414,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Response**: 200 `{ success, data: [...], pagination: { page, limit, total, totalPages } }`; 500 error
 - **Notes**: N+1 per product (variants, categories, branchStocks sums, productImages ordered by displayOrder). Per-product fields: `variants: [{id, price, isDefault}]`, `variantCount`, `totalStock`, `totalReserved`, `totalAvailable = max(0, totalStock - totalReserved)`, `categories: [name]`, `images: [{url}]`. Also spreads the full product row (incl. `collection` text label) and adds `gender` (resolved name from the `gender` dimension table via `genderId`, nullable — batch-looked-up per page) so carousel manual-mode preview cards can render the gender label.
 
-#### `POST` `/api/admin/products`
-- **Auth**: admin-session (permission: products/edit)
-- **Purpose**: Create a product with category links and variants (with images).
-- **Params**: —
-- **Body**: `{ name: string, slug: string, description?: string, basePrice: string, status: "aktif"|"habis"|"arsip" (default "aktif"), categoryIds: string[], variants: [{ color?: string, size?: string, price: string, sku: string, isDefault?: boolean (default false), images: [{ url: string, displayOrder?: number (default 0) }] (default []) }] }`
-- **Response**: 200 `{ success, data: { id } }`; 400 invalid; 500 error
-- **Notes**: IDs via `crypto.randomUUID()`. Inserts product, then `productToCategory` rows, then each variant and its images. No DB transaction wrapping the inserts; no `branchStocks` rows created.
+#### `POST` `/api/admin/products` — **REMOVED**
+- **Status**: Removed. Jubelio is the source of truth for the product catalog; products are created via the Jubelio sync (`db:import-jubelio` / the Jubelio webhook / the per-product Sync button). The `GET` list endpoint remains.
 
 #### `GET` `/api/admin/products/{id}`
 - **Auth**: admin-session (permission: products/view)
@@ -419,21 +425,19 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Response**: 200 `{ success, data: { ...product, categories: [{id, name, slug}], variants: [{ ...variant, images: [{id, url, displayOrder}] }] } }`; 404 not found; 500 error
 - **Notes**: Variants ordered by `isDefault` asc; images ordered by `displayOrder` asc.
 
-#### `PUT` `/api/admin/products/{id}`
-- **Auth**: admin-session (permission: products/edit)
-- **Purpose**: Update a product and fully sync its category links, variants, and images.
-- **Params**: `{id}`
-- **Body**: `{ name: string, slug: string, description?: string, basePrice: string, status: "aktif"|"habis"|"arsip", categoryIds: string[], variants: [{ id?: string, color?: string, size?: string, price: string, sku: string, isDefault?: boolean, images: [{ id?: string, url: string, displayOrder?: number }] (default []) }] }`
-- **Response**: 200 `{ success, data: { id } }`; 400 invalid; 404 not found; 500 error
-- **Notes**: Replaces all `productToCategory` rows (delete-then-insert). Variants in request with existing `id` are updated; request variants lacking a known id are created; existing variants absent from request are deleted. Before deleting a variant, its image files are unlinked from disk. Per-variant images are fully replaced (orphaned URLs unlinked, then delete-then-insert). `updatedAt` set on product and on updated variants. No DB transaction.
+#### `PUT` `/api/admin/products/{id}` — **REMOVED**
+- **Status**: Removed. Jubelio is the source of truth; refresh a product via `POST /api/admin/products/{id}/sync` (the Sync button on the admin product detail page).
 
-#### `DELETE` `/api/admin/products/{id}`
-- **Auth**: admin-session (permission: products/delete)
-- **Purpose**: Delete a product along with its variant image files.
+#### `DELETE` `/api/admin/products/{id}` — **REMOVED**
+- **Status**: Removed. Jubelio is the source of truth.
+
+#### `POST` `/api/admin/products/{id}/sync`
+- **Auth**: admin-session (permission: products/edit)
+- **Purpose**: Re-sync a single product from Jubelio (brand, description, gallery images, variants, per-branch stock). Triggered by the "Sync dari Jubelio" button on the admin product detail page.
 - **Params**: `{id}`
 - **Body**: none
-- **Response**: 200 `{ success: true }`; 404 not found; 500 error
-- **Notes**: Collects all variant `productImages.url` rows and `unlink()`s files under `/uploads/` before deleting the product row (cascade deletes variants/images rows). `branchStocks` cleanup not explicitly handled (unclear — relies on DB cascade).
+- **Response**: 200 `{ success: true, data: { product: string, variants: number, stockRows: number } }`; 404 product not found; 400 `{ error: "Product is not a Jubelio-synced product (no jubelio_item_group_id)" }`; 500 sync failed
+- **Notes**: Looks up the product's `jubelio_item_group_id`, calls `syncOneProduct(db, itemGroupId)` from `packages/db/src/jubelio-sync.ts` (fetches `/inventory/catalog/{id}` + `/inventory/items/all-stocks/`, upserts). Writes an `auditLogs` row (`action: "JUBELIO_SYNC_ADMIN"`). Env: `JUBELIO_EMAIL`/`JUBELIO_PASSWORD`/`JUBELIO_API_BASE_URL`.
 
 #### `GET` `/api/admin/categories`
 - **Auth**: admin-session (permission: products/view)

@@ -22,6 +22,7 @@ type ProductResult = {
   price: string | null;
   collection: string | null;
   gender: string | null;
+  thumbnail: string | null;
 };
 
 export async function GET(request: NextRequest) {
@@ -149,6 +150,7 @@ export async function GET(request: NextRequest) {
       price: minPriceSq.minPrice,
       collection: products.collection,
       gender: genders.name,
+      thumbnail: products.thumbnail,
     };
 
     const where = conditions.length > 0 ? and(...conditions) : undefined;
@@ -172,33 +174,34 @@ export async function GET(request: NextRequest) {
 
     const total = Number(countResult[0]?.count || 0);
 
-    // Attach the default-variant image. Price (cheapest variant net) already
-    // comes from the joined subquery above; image deliberately comes from the
-    // default/first variant — kept separate from the price source.
+    // Attach the card image. Prefer the product-level `thumbnail` (set by the
+    // Jubelio sync / seeder — a Jubelio CDN URL, hotlinked). Fall back to the
+    // default variant's first variant-level image for legacy products that
+    // predate the product-level thumbnail column.
     const productsWithImages = await Promise.all(
       queryResults.map(async (product) => {
-        const defaultVariant = await db
-          .select()
-          .from(productVariants)
-          .where(
-            and(
-              eq(productVariants.productId, product.id),
-              eq(productVariants.isDefault, true)
-            )
-          )
-          .limit(1);
-
-        const variant = defaultVariant[0];
-        let image = null;
-
-        if (variant) {
-          const images = await db
+        let image = product.thumbnail ?? null;
+        if (!image) {
+          const defaultVariant = await db
             .select()
-            .from(productImages)
-            .where(eq(productImages.variantId, variant.id))
-            .orderBy(asc(productImages.displayOrder))
+            .from(productVariants)
+            .where(
+              and(
+                eq(productVariants.productId, product.id),
+                eq(productVariants.isDefault, true)
+              )
+            )
             .limit(1);
-          image = images[0]?.url || null;
+          const variant = defaultVariant[0];
+          if (variant) {
+            const images = await db
+              .select()
+              .from(productImages)
+              .where(eq(productImages.variantId, variant.id))
+              .orderBy(asc(productImages.displayOrder))
+              .limit(1);
+            image = images[0]?.url || null;
+          }
         }
 
         return {

@@ -20,15 +20,11 @@ export default function ProductFilters() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [categories, setCategories] = useState<Option[]>([]);
   const [brands, setBrands] = useState<Option[]>([]);
   const [genders, setGenders] = useState<Option[]>([]);
 
   const [searchQuery, setSearchQuery] = useState(
     searchParams.get("search") || ""
-  );
-  const [selectedCategory, setSelectedCategory] = useState<string>(
-    searchParams.get("category") || ""
   );
   const [selectedBrand, setSelectedBrand] = useState<string>(
     searchParams.get("brand") || ""
@@ -49,17 +45,14 @@ export default function ProductFilters() {
   useEffect(() => {
     async function fetchOptions() {
       try {
-        const [catsRes, brandsRes, gendersRes] = await Promise.all([
-          fetch("/api/categories"),
+        const [brandsRes, gendersRes] = await Promise.all([
           fetch("/api/brands"),
           fetch("/api/genders"),
         ]);
-        const [cats, brs, gdr] = await Promise.all([
-          catsRes.json(),
+        const [brs, gdr] = await Promise.all([
           brandsRes.json(),
           gendersRes.json(),
         ]);
-        if (cats.success) setCategories(cats.data);
         if (brs.success) setBrands(brs.data);
         if (gdr.success) setGenders(gdr.data);
       } catch (error) {
@@ -73,7 +66,6 @@ export default function ProductFilters() {
     const params = new URLSearchParams();
 
     if (searchQuery) params.set("search", searchQuery);
-    if (selectedCategory) params.set("category", selectedCategory);
     if (selectedBrand) params.set("brand", selectedBrand);
     if (selectedGender) params.set("gender", selectedGender);
     if (minPrice) params.set("minPrice", minPrice);
@@ -87,7 +79,6 @@ export default function ProductFilters() {
   };
 
   const clearFilters = () => {
-    setSelectedCategory("");
     setSelectedBrand("");
     setSelectedGender("");
     setMinPrice("");
@@ -119,45 +110,6 @@ export default function ProductFilters() {
           onChange={(e) => setSearchQuery(e.target.value)}
           className="h-10"
         />
-      </div>
-
-      {/* Categories */}
-      <div className="mb-8">
-        <h3 className="font-semibold mb-4 text-foreground">Kategori</h3>
-        <div className="space-y-3">
-          <div className="flex items-center space-x-2">
-            <Checkbox
-              id="cat-all"
-              checked={selectedCategory === ""}
-              onCheckedChange={() => setSelectedCategory("")}
-            />
-            <Label
-              htmlFor="cat-all"
-              className="text-sm font-normal cursor-pointer text-muted-foreground"
-            >
-              Semua
-            </Label>
-          </div>
-          {categories.map((cat) => (
-            <div key={cat.id} className="flex items-center space-x-2">
-              <Checkbox
-                id={`cat-${cat.slug}`}
-                checked={selectedCategory === cat.slug}
-                onCheckedChange={() =>
-                  setSelectedCategory(
-                    selectedCategory === cat.slug ? "" : cat.slug
-                  )
-                }
-              />
-              <Label
-                htmlFor={`cat-${cat.slug}`}
-                className="text-sm font-normal cursor-pointer text-muted-foreground"
-              >
-                {cat.name}
-              </Label>
-            </div>
-          ))}
-        </div>
       </div>
 
       {/* Brand */}

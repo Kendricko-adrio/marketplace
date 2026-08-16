@@ -84,11 +84,17 @@ export async function GET(
 
     const variantsWithImagesAndStock = await Promise.all(
       variants.map(async (variant) => {
-        const images = await db
+        const variantImages = await db
           .select()
           .from(productImages)
           .where(eq(productImages.variantId, variant.id))
           .orderBy(asc(productImages.displayOrder));
+        // Gallery: variant-level images (legacy/admin uploads) when present,
+        // otherwise the product-level gallery (Jubelio catalog `images[]`).
+        const images =
+          variantImages.length > 0
+            ? variantImages.map((img) => img.url)
+            : (productData.images ?? []).map((img) => img.url);
 
         // Get branches with available stock for this variant.
         // Available = stock - reservedStock (units held by pending_payment
@@ -120,7 +126,7 @@ export async function GET(
 
         return {
           ...variant,
-          images: images.map((img) => img.url),
+          images,
           branchStock,
         };
       })

@@ -21,6 +21,7 @@ ke VPS menggunakan Docker. PostgreSQL berjalan **bare-metal di VPS**
 10. [Operasional Sehari-hari](#10-operasional-sehari-hari)
 10.5. [Sweep Reservasi Stok (cron)](#105-sweep-reservasi-stok-cron)
 10.6. [Sync SOH dari Third-Party (import dan webhook)](#106-sync-soh-dari-third-party-import-dan-webhook)
+10.7. [Sync Jubelio (import + webhook)](#107-sync-jubelio-import--webhook)
 11. [Rate-limit Let's Encrypt (Penting!)](#11-rate-limit-lets-encrypt-penting)
 12. [Troubleshooting](#12-troubleshooting)
 12.5. [Memisahkan Environment Staging & Production](#125-memisahkan-environment-staging--production)
@@ -1022,6 +1023,69 @@ SELECT SUM(stock) FROM branch_stock;
 > **Idempotensi:** jalankan `db:import-soh` 2x → counts sama, tidak ada
 > duplikat, status branch tetap `nonaktif` (tidak ter-reset). Ini juga yang
 > membuat webhook aman di-replay.
+
+---
+
+## 10.7 Sync Jubelio (import + webhook)
+
+Jubelio adalah source of truth untuk katalog produk, harga, gambar, dan stok
+per-cabang. Lihat `docs/jubelio-sync.md` untuk detail lengkap (data model,
+invariant, mapping). Tiga entry point berbagi `packages/db/src/jubelio-sync.ts`:
+one-shot import script, webhook push, dan tombol Sync per-produk di admin.
+
+### A. Env yang diperlukan (service `store` + `admin`)
+
+```
+JUBELIO_API_BASE_URL=https://api2.jubelio.com
+JUBELIO_EMAIL=<email-jubelio>
+JUBELIO_PASSWORD=<password-jubelio>
+JUBELIO_WEBHOOK_SECRET=<openssl rand -hex 32>
+JUBELIO_SYNC_CONCURRENCY=5
+JUBELIO_SYNC_MAX_PRODUCTS=      # kosong = fetch semua; integer = cap untuk testing
+```
+
+> Wire semua `JUBELIO_*` ke service `store` dan `admin` di `docker-compose.yml`
+> (mirip `CRON_SECRET`/`SOH_WEBHOOK_SECRET`).
+
+### B. One-shot import (full pull pertama / refresh)
+
+```bash
+# dari repo root — pakai env .env
+npm run db:import-jubelio
+# untuk testing cepat, cap jumlah produk:
+JUBELIO_SYNC_MAX_PRODUCTS=20 npm run db:import-jubelio
+```
+
+Mempaginasi `/inventory/items/masters` (~38rb produk), enrich per produk via
+`/inventory/catalog/{id}`, fetch stok per-location via `/inventory/items/all-stocks/`,
+lalu upsert per halaman. Idempoten — aman dijalankan ulang.
+
+### C. Webhook (delta berulang)
+
+1. Generate secret: `openssl rand -hex 32` → set sebagai `JUBELIO_WEBHOOK_SECRET`
+   dan sebagai **Webhook Secret Key** di Jubelio.
+2. Di Jubelio UI: **Pengaturan → Developer → Webhook**. Daftarkan callback URL
+   `https://<store-domain>/api/webhooks/jubelio` untuk action `update-product`,
+   `update-price`, `update-qty`.
+3. Jubelio menandatangani `SHA256(rawBody + secret)` (hex) di header
+   `webhook-signature`. Handler verify dari raw body — 503 jika secret unset,
+   401 jika signature salah, 500 jika upsert gagal (Jubelio retry sampai 3×).
+
+Payload minimal (cuma `item_group_id` + action) → handler re-fetch state
+terbaru dari Jubelio lalu upsert. Tiap call dicatat di `audit_log`
+(`action: "JUBELIO_SYNC_WEBHOOK"`).
+
+### D. Verifikasi pasca-import (psql)
+
+```sql
+SELECT COUNT(*) FROM product WHERE jubelio_item_group_id IS NOT NULL;
+SELECT COUNT(*) FROM product_variant WHERE jubelio_item_id IS NOT NULL;
+SELECT jubelio_location_id, code, name, status FROM branch WHERE jubelio_location_id IS NOT NULL;
+-- reserved_stock tetap 0 untuk row import
+SELECT COUNT(*) FROM branch_stock WHERE reserved_stock <> 0;
+-- thumbnail + gallery terisi
+SELECT name, thumbnail IS NOT NULL, jsonb_array_length(images) FROM product WHERE jubelio_item_group_id IS NOT NULL LIMIT 5;
+```
 
 ---
 

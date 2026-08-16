@@ -4,7 +4,7 @@ import {
   orders,
   orderItems,
   productVariants,
-  productImages,
+  products,
   branches,
 } from "@/db";
 import { eq, and, asc } from "drizzle-orm";
@@ -55,7 +55,7 @@ export async function GET(
         ? orderData.pickupCode
         : null;
 
-    // Get items with productId and images
+    // Get items with productId + product thumbnail (Jubelio CDN image).
     const items = await db
       .select({
         id: orderItems.id,
@@ -67,26 +67,18 @@ export async function GET(
         quantity: orderItems.quantity,
         createdAt: orderItems.createdAt,
         productId: productVariants.productId,
+        thumbnail: products.thumbnail,
+        slug: products.slug,
       })
       .from(orderItems)
       .innerJoin(productVariants, eq(orderItems.variantId, productVariants.id))
+      .innerJoin(products, eq(productVariants.productId, products.id))
       .where(eq(orderItems.orderId, orderData.id));
 
-    const itemsWithImages = await Promise.all(
-      items.map(async (item) => {
-        const images = await db
-          .select({ url: productImages.url })
-          .from(productImages)
-          .where(eq(productImages.variantId, item.variantId))
-          .orderBy(asc(productImages.displayOrder))
-          .limit(1);
-
-        return {
-          ...item,
-          imageUrl: images[0]?.url ?? null,
-        };
-      })
-    );
+    const itemsWithImages = items.map((item) => ({
+      ...item,
+      imageUrl: item.thumbnail ?? null,
+    }));
 
     return NextResponse.json({
       success: true,

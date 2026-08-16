@@ -13,6 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { signIn } from "@/lib/auth-client";
+import { isEmail } from "@/lib/login-utils";
 
 // Client form component for the admin login page.
 //
@@ -42,8 +43,6 @@ export default function AdminLoginForm() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-
-  const isEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();

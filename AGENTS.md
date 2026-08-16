@@ -58,6 +58,15 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 | `db:studio` / `db:check` | Drizzle Studio / schema check |
 | `db:import-jubelio` | Pull Jubelio master data |
 | `lint` / `lint:store` / `lint:admin` | ESLint |
+| `test:unit` | Vitest unit tests (workspace: store, admin, db) |
+| `test:e2e` / `test:e2e:headed` | Playwright E2E — headless / visible browser |
+| `test:e2e:ui` | Playwright UI mode (interactive browser runner) |
+| `test:e2e:install` | Install Playwright browsers (Chromium) |
+
+> **Testing prerequisites:** `test:unit` needs no infrastructure. `test:e2e`
+> needs Postgres up + seeded (`npm run db:push && npm run db:seed`), Chromium
+> installed (`npm run test:e2e:install`), and starts both dev servers via
+> `webServer` (reuses running ones). See [`docs/testing/README.md`](docs/testing/README.md).
 
 > ⚠️ **Use `db:push`, NOT `db:migrate`** (dev). The dev DB is schema-sync
 > managed; the `__drizzle_migrations` journal is not kept in sync, so
@@ -114,3 +123,24 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   [`docs/README.md`](docs/README.md) for where each doc belongs.
 - **Use `systematic-debugging` before guessing fixes** on any bug, test
   failure, or unexpected behavior.
+
+## 5. Testing Requirements
+
+- **Every new feature or bug fix must ship with tests.** If there is no existing
+  test seam for the code you are touching, create one (extract pure helpers,
+  expose a module-level function, or add an E2E spec). Do not consider a task
+  complete until tests cover the new behavior.
+- **Before committing or opening a PR, run the test suite.** At minimum:
+  - `npm run test:unit` for any logic change.
+  - `npm run test:e2e` for any UI, routing, or auth change.
+- **UI changes require Playwright E2E coverage.** If a feature touches pages,
+  components, forms, or navigation, add a `*.spec.ts` under `e2e/store/` or
+  `e2e/admin/` and assert the user-visible behavior (e.g., form submission,
+  redirect, rendered content). The canonical way to verify a UI feature works is
+  to run its Playwright spec and see it pass.
+- **Use the `tdd` skill** (`.claude/skills/tdd/SKILL.md`) for all test work:
+  red → green loop, one vertical slice at a time, tests at public seams only,
+  expected values from an independent source of truth. Load the skill before
+  writing any test code.
+- **Keep tests deterministic.** Do not depend on random data, time-of-day, or
+  external services that are not mocked / controlled in the test environment.

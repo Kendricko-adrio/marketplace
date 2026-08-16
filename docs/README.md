@@ -60,3 +60,4 @@ index/README if any of them mention a file that moved.
 | Deployment / ops | `docs/deployment-docs/README.md` |
 | Third-party APIs | `docs/jubelio-api/README.md` |
 | Internal architecture | `docs/architecture/README.md` |
+| Testing | `docs/testing/README.md` |

@@ -24,9 +24,20 @@
     "db:import-jubelio": "cd packages/db && npm run db:import-jubelio",
     "lint": "cd apps/store && npm run lint && cd ../admin && npm run lint",
     "lint:store": "cd apps/store && npm run lint",
-    "lint:admin": "cd apps/admin && npm run lint"
+    "lint:admin": "cd apps/admin && npm run lint",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:ui": "playwright test --ui",
+    "test:e2e:debug": "playwright test --debug",
+    "test:e2e:install": "playwright install",
+    "test:e2e:report": "playwright show-report"
   },
   "devDependencies": {
-    "concurrently": "^8.2.2"
+    "@playwright/test": "^1.62.1",
+    "concurrently": "^8.2.2",
+    "vitest": "^4.1.10"
   }
 }

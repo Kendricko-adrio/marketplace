@@ -9,6 +9,7 @@ export default defineConfig({
       "./apps/store/vitest.config.mts",
       "./apps/admin/vitest.config.mts",
       "./packages/db/vitest.config.mts",
+      "./apps/jubelio-mock/vitest.config.mts",
     ],
   },
 });

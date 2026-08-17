@@ -31,7 +31,7 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
   current code path writes it.
 - `paymentFailureReason` + `midtransFailureStatus` are set on failure for
   human-readable + raw debugging.
-- `expiresAt` = place-order time + `reservation.ttlMinutes` (default 30);
+- `expiresAt` = place-order time + `reservation.ttlMinutes` (default 15);
   drives the sweep cron and pairs with the Midtrans expiry.
 - Index `idx_orders_status_expires` on `(status, expiresAt)` supports the sweep
   batch lookup.
@@ -46,10 +46,14 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
    pickup slot (`validatePickupSlot`), soft stock pre-check, totals
    (`serviceFee = 0`, `total = subtotal`). A short transaction then:
    insert order (`pending_payment`/`pending`/`qris`, `expiresAt`), insert
-   `order_item` rows, and atomic stock reservation per item. After commit,
-   Midtrans Snap is created outside the transaction. A second short transaction
+   `order_item` rows, an atomic `pending_remote_stock` hold, and a durable
+   Jubelio reserve operation. After commit, a negative Jubelio adjustment is
+   sent outside the transaction. Midtrans Snap is created only after Jubelio
+   confirms the deduction. A second short transaction
    persists `snapRedirectUrl` and deletes only the checked-out cart items.
-   Gateway failure triggers compensation and preserves the cart. Returns
+   A Jubelio rejection/ambiguous result blocks Midtrans and preserves the cart;
+   Midtrans creation failure triggers a compensating positive Jubelio
+   adjustment. Returns
    `{ success, orderId, redirectUrl,
    token }`; customer is redirected to the Snap page.
 2. **Pay** — customer completes QRIS payment on Midtrans Snap.
@@ -69,9 +73,9 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
    - Processing failures return non-2xx so Midtrans retries the notification.
 4. **Finalize** — `claimAndFinalizePaidOrder`
    (`apps/store/src/lib/order-finalize.ts`): claim-guard UPDATE
-   (`pending_payment`/`pending` → `processing`/`paid`; 0 rows → skip), convert
-   reservation → real deduction (`stock` and `reservedStock` both conditionally
-   decremented; inventory drift aborts the transaction), generate a
+   (`pending_payment`/`pending` → `processing`/`paid`; 0 rows → skip). Jubelio
+   stock was already deducted before Midtrans, so finalization decreases only
+   `reservedStock`, marks the reserve operation `committed`, and generates a
    collision-checked 6-char pickup code,
    `status → ready_for_pickup`, insert `order_paid` notification +
    `pg_notify('new_notification', …)` (see `docs/features/notifications.md`), send
@@ -109,8 +113,9 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
 
 - **Webhook failure** — `deny` / `cancel` / `expire` →
   `claimAndFailOrder`: claim-guard (`pending_payment` → `failed_payment`,
-  `paymentStatus` → `failed`, reason + raw status stored), release
-  `reservedStock` per item (**`stock` untouched**), send payment-failed email.
+  `paymentStatus` → `failed`, reason + raw status stored), enqueue and attempt
+  a positive Jubelio adjustment, and release local `reservedStock` only after
+  Jubelio confirms the restore. Then send the payment-failed email.
 - **Sweep cron** — `POST /api/cron/sweep-reservations`
   (`apps/store/src/app/api/cron/sweep-reservations/route.ts`), auth
   `X-Cron-Secret` = `CRON_SECRET`. Safety-net for stale `pending_payment`
@@ -118,19 +123,22 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
   any tx → settled → `claimAndFinalizePaidOrder` (missed success webhook);
   otherwise best-effort `expireMidtransTransaction` (only if `pending`) then
   `claimAndFailOrder`. Transient Midtrans error → skip to the next run. Always
-  returns 200. The claim-guard makes webhook-vs-sweep races safe: first to flip
+  also reconciles ambiguous/durable Jubelio operations. The claim-guard makes
+  webhook-vs-sweep races safe: first to flip
   the order off `pending_payment` wins. See `docs/features/stock-reservation.md` and
   `docs/deployment-docs/cron-sweep.md`.
-- **Place-order failures** — `InsufficientStockError` → 400 (tx rolled back,
-  earlier reservations in the same tx released); Midtrans create failure → 502
-  after compensating the committed reservation; cart rows remain available.
+- **Place-order failures** — local insufficient stock → 400; a definitive
+  Jubelio rejection → 409; an ambiguous Jubelio result → 503. In both Jubelio
+  cases Midtrans is not called. Midtrans creation failure → 502 after queuing
+  a compensating positive Jubelio adjustment. Cart rows remain available.
 
 ## Re-payment
 
 `POST /api/payments/midtrans/create`
 (`apps/store/src/app/api/payments/midtrans/create/route.ts`): client session,
-order ownership check, **only `pending_payment` orders** (`failed_payment` is
-final). Re-creates a Snap payment from the stored order items (plus a
+order ownership check, **only `pending_payment` orders with an `applied` or
+`committed` Jubelio reserve operation** (`failed_payment` is final). Re-creates
+a Snap payment from the stored order items (plus a
 `SERVICE_FEE` line item), persists the new `snapRedirectUrl`, returns
 `{ redirectUrl, token }`. The existing reservation stays in place — no new
 reservation is made.
@@ -173,7 +181,10 @@ fresh id; `.child({ orderId })` binds order context while keeping the same
 `requestId`; `withRequestId` stamps the response header so clients can
 reference it. Modules: `place-order`, `midtrans-webhook`, `order-finalize`,
 `order-complete`, `admin-orders` (verify-pickup). `LOG_LEVEL` env controls the
-minimum level (default `info`).
+minimum level (default `info`). Checkout and the Jubelio stock saga additionally
+log local holds, remote adjustment outcomes, local counter synchronization,
+compensating release operations, and reconciliation summaries. Re-payment and
+sweep responses also expose the request id in `x-request-id`.
 
 ## Env
 
@@ -185,6 +196,7 @@ minimum level (default `info`).
 | `STORE_INTERNAL_URL` | admin | Base URL for the internal order-complete call (compose: `http://store:3000`) |
 | `SMTP_USER` / `SMTP_PASS` / `SMTP_FROM` | store | Order emails (Gmail App Password) |
 | `CRON_SECRET` | store | Sweep cron auth (`X-Cron-Secret`) |
+| `APP_ENV` / `JUBELIO_STOCK_WRITES_ENABLED` | store | Force mock outside production and explicitly enable live writes |
 | `LOG_LEVEL` | store + admin | Minimum log level (`debug`/`info`/`warn`/`error`) |
 
 ## Invariants (do NOT violate)

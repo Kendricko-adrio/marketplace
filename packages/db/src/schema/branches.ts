@@ -61,17 +61,25 @@ export const branchStocks = pgTable(
       .notNull()
       .references(() => productVariants.id, { onDelete: "cascade" }),
     stock: integer("stock").notNull().default(0),
-    // Quantity held by pending_payment orders (reserved at place-order, before
-    // the customer pays on Midtrans Snap). "Available stock" = stock - reservedStock.
-    // Decremented to 0 when the reservation converts to a real deduction on payment
-    // success, or is released on payment failure/expiry.
+    // Quantity already deducted from Jubelio for pending_payment orders. It is
+    // lifecycle/audit state, not subtracted from `stock` again because Jubelio
+    // on-hand already includes the deduction. Cleared on payment success or
+    // after a compensating Jubelio release is confirmed.
     reservedStock: integer("reserved_stock").notNull().default(0),
+    // Units held locally while the Jubelio adjustment result is not confirmed.
+    // Confirmed reservations are already reflected in `stock` (Jubelio
+    // on-hand), so storefront availability is `stock - pendingRemoteStock`.
+    pendingRemoteStock: integer("pending_remote_stock").notNull().default(0),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     primaryKey({ columns: [t.branchId, t.productVariantId] }),
     check("branch_stock_nonnegative", sql`${t.stock} >= 0`),
     check("branch_reserved_stock_nonnegative", sql`${t.reservedStock} >= 0`),
+    check(
+      "branch_pending_remote_stock_nonnegative",
+      sql`${t.pendingRemoteStock} >= 0`
+    ),
   ]
 );
 

@@ -128,6 +128,7 @@ export const GET = withPermission(async (ctx, request: NextRequest) => {
               branchId: branchStocks.branchId,
               stock: branchStocks.stock,
               reservedStock: branchStocks.reservedStock,
+              pendingRemoteStock: branchStocks.pendingRemoteStock,
             })
             .from(branchStocks)
             .where(

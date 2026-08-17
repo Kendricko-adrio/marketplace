@@ -10,6 +10,8 @@ import {
   claimAndFinalizePaidOrder,
   claimAndFailOrder,
 } from "@/lib/order-finalize";
+import { reconcileJubelioStockOperations } from "@/lib/jubelio-stock-saga";
+import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
 
 /**
  * Sweep cron — safety-net release for stock reservations whose order expired
@@ -33,26 +35,37 @@ import {
  * Idempotent: re-running over already-handled orders is a no-op.
  */
 export async function POST(request: NextRequest) {
+  const log = requestLogger(request, { module: "sweep-reservations" });
+  log.info("reservation sweep requested");
   const expected = process.env.CRON_SECRET;
   if (!expected) {
-    console.error("sweep-reservations: CRON_SECRET is not set on the server");
-    return NextResponse.json(
+    log.error("reservation sweep unavailable — CRON_SECRET is not configured");
+    return withRequestId(NextResponse.json(
       { success: false, error: "Cron not configured" },
       { status: 503 }
-    );
+    ), log);
   }
   const provided = request.headers.get("x-cron-secret");
   if (!provided || provided !== expected) {
-    return NextResponse.json({ success: false, error: "Unauthorized" }, {
+    log.warn("reservation sweep unauthorized");
+    return withRequestId(NextResponse.json({ success: false, error: "Unauthorized" }, {
       status: 401,
-    });
+    }), log);
   }
 
   let finalized = 0;
   let failed = 0;
   let scanned = 0;
+  let jubelioSync = { scanned: 0, applied: 0, failed: 0, pending: 0 };
 
   try {
+    // Recover durable stock writes first. This handles process crashes and
+    // ambiguous Jubelio timeouts without exposing stock prematurely.
+    try {
+      jubelioSync = await reconcileJubelioStockOperations(50, undefined, log);
+    } catch (error) {
+      log.error("Jubelio reconciliation failed", { error: serializeError(error) });
+    }
     // Batch of stale pending_payment orders (uses idx_orders_status_expires).
     const stale = await db
       .select()
@@ -82,10 +95,10 @@ export async function POST(request: NextRequest) {
             status = "not_found";
           }
         } catch (err) {
-          console.error(
-            `sweep-reservations: status check failed for ${order.id}:`,
-            err
-          );
+          log.error("Midtrans status check failed", {
+            orderId: order.id,
+            error: serializeError(err),
+          });
           // Don't fail the order on a transient Midtrans error — leave it for
           // the next sweep run. Avoids wrongly failing a paid-but-unreachable
           // order.
@@ -114,24 +127,26 @@ export async function POST(request: NextRequest) {
           if (result.claimed) failed++;
         }
       } catch (err) {
-        console.error(`sweep-reservations: error processing ${order.id}:`, err);
+        log.error("reservation sweep order processing failed", {
+          orderId: order.id,
+          error: serializeError(err),
+        });
       }
     }
 
-    console.log(
-      `sweep-reservations: scanned=${scanned} finalized=${finalized} failed=${failed}`
-    );
-    return NextResponse.json({
+    log.info("reservation sweep completed", { scanned, finalized, failed, jubelioSync });
+    return withRequestId(NextResponse.json({
       success: true,
       scanned,
       finalized,
       failed,
-    });
+      jubelioSync,
+    }), log);
   } catch (error) {
-    console.error("sweep-reservations: fatal error:", error);
-    return NextResponse.json(
+    log.error("reservation sweep failed", { error: serializeError(error) });
+    return withRequestId(NextResponse.json(
       { success: false, error: "Sweep failed" },
       { status: 500 }
-    );
+    ), log);
   }
 }

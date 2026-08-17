@@ -12,6 +12,7 @@ export const seedCleanupEntries: ReadonlyArray<
   ["homepageSections", schema.homepageSections],
   ["cartItems", schema.cartItems],
   ["carts", schema.carts],
+  ["jubelioStockOperations", schema.jubelioStockOperations],
   ["orderItems", schema.orderItems],
   ["orders", schema.orders],
   ["auditLogs", schema.auditLogs],

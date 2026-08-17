@@ -137,6 +137,7 @@ export const GET = withPermission(async (
           color: productVariants.color,
           stock: branchStocks.stock,
           reservedStock: branchStocks.reservedStock,
+          pendingRemoteStock: branchStocks.pendingRemoteStock,
         })
         .from(branchStocks)
         .innerJoin(branches, eq(branchStocks.branchId, branches.id))

@@ -13,7 +13,7 @@ how the marketplace syncs from Jubelio, replacing the older CSV-based SOH sync
 | `item_group` (`item_group_id`, `item_group_name`, `sell_price`, `description`, `selected_brand_name`, `thumbnail`, `images[]`) | `product` | `jubelio_item_group_id` (unique) | `base_price` = group `sell_price`; `thumbnail` = card image; `images` JSONB = gallery from `/inventory/catalog/{id}` |
 | `item` / sku (`item_id`, `item_code`, `sell_price`, `barcode`, `variation_values`) | `product_variant` | `jubelio_item_id` (unique) | `sku` = `item_code` (GTIN); `price` = variant `sell_price`; `size`/`color` from `variation_values` (`Ukuran`→size, `Warna`→color) |
 | `location` (`location_id`, `location_code`, `location_name`) | `branch` | `jubelio_location_id` (unique) | Source: `GET /locations/list` (NOT `/locations/`, which returns only the webstore). `code` = `location_code`. **This is the branch** — not the channel. |
-| stock: `(item_id, location_id)` `on_hand`/`available` | `branch_stock` | composite `(branchId, productVariantId)` | `stock` = `on_hand` (physical pool). **`reservedStock` never written** (checkout-managed). |
+| stock: `(item_id, location_id)` `on_hand`/`available` | `branch_stock` | composite `(branchId, productVariantId)` | `stock` = `on_hand`. Catalog sync never writes checkout counters (`reservedStock`, `pendingRemoteStock`). |
 | `category` (`category_id`, `category_name`) | `category` | `jubelio_category_id` (unique) | Created **on demand** — only categories used by synced products (see decision 8). Upserted by slug (merges with CSV-SOH categories). |
 | `selected_brand_name` | `brand` | `slug` | Upserted by slug per product (create if new, link if existing). |
 
@@ -42,6 +42,24 @@ Three entry points share `packages/db/src/jubelio-sync.ts`:
    the "Sync dari Jubelio" button on the admin product detail page. Calls
    `syncOneProduct(db, item_group_id)`.
 
+## Checkout stock adjustments
+
+Checkout writes use a separate gateway in
+`apps/store/src/lib/jubelio-stock-client.ts`:
+
+- `POST /inventory/adjustments/` with negative `qty_in_base` reserves stock.
+- The same endpoint with positive `qty_in_base` compensates a failed or
+  expired payment.
+- `GET /inventory/items/to-stock/{location_id}` supplies unit/cost metadata.
+- `GET /wms/default-bin/{location_id}` supplies `bin_id`.
+- `POST /inventory/items/all-stocks/` confirms absolute on-hand after a write.
+- `GET /inventory/adjustments/` is searched by the unique operation note after
+  ambiguous timeouts.
+
+The marketplace does not retry an ambiguous POST blindly. Durable operation
+state and the unique note make crash recovery and reconciliation fail-closed.
+See `docs/features/stock-reservation.md`.
+
 ## Auth
 
 `POST /login` `{email, password}` → `{token}` (12h expiry). The client caches
@@ -50,8 +68,8 @@ the token and auto re-logins on 401. Env: `JUBELIO_EMAIL`, `JUBELIO_PASSWORD`,
 
 ## Invariants (do NOT violate)
 
-- `branch_stock.reservedStock` is **never** written by sync (checkout-managed
-  only — see `stock-reservation-design`).
+- `branch_stock.reservedStock` and `pendingRemoteStock` are **never** written by
+  catalog sync (checkout-managed only).
 - New branches upsert as `status:"nonaktif"`; existing branches keep status.
   Exception: the **import script** (`db:import-jubelio`) forces `status:"aktif"`
   + fixed operating hours (Mon–Sun 07:00–22:00) on every pulled branch, and
@@ -98,6 +116,11 @@ the token and auto re-logins on 401. Env: `JUBELIO_EMAIL`, `JUBELIO_PASSWORD`,
 | `JUBELIO_SYNC_CONCURRENCY` | parallel catalog fetches during import | `5` |
 | `JUBELIO_SYNC_MAX_PRODUCTS` | cap products synced (empty = all) | empty |
 | `JUBELIO_SKIP_LOCATIONS` | comma-sep non-outlet location names to skip as branches | `Transit,WEBSITE ADF,MONO *,MULTI *` |
+| `APP_ENV` | safety boundary for stock writes (`production` is the only live value) | `NODE_ENV` |
+| `JUBELIO_MOCK_API_BASE_URL` | stateful mock used by every non-production environment | `http://127.0.0.1:3002` |
+| `JUBELIO_STOCK_WRITES_ENABLED` | explicit production live-write kill switch | `false` |
+| `JUBELIO_ADJUSTMENT_ACCOUNT_ID` | Jubelio account id in adjustment line items | `75` |
+| `JUBELIO_STOCK_TIMEOUT_MS` | HTTP timeout; a POST timeout is treated as ambiguous | `8000` |
 
 ## Webhook setup (operational)
 
@@ -110,7 +133,7 @@ the token and auto re-logins on 401. Env: `JUBELIO_EMAIL`, `JUBELIO_PASSWORD`,
    returns 500 on upsert failure (so Jubelio retries), 401 on bad signature,
    503 if the secret is unset.
 
-## Schema (migration `0010_fine_leader.sql`)
+## Schema
 
 Additive only: `product.jubelio_item_group_id` + `product.thumbnail` +
 `product.images` (jsonb) + `product_variant.jubelio_item_id` +
@@ -118,6 +141,11 @@ Additive only: `product.jubelio_item_group_id` + `product.thumbnail` +
 unique nullable). The legacy variant-level `product_image` table is kept
 untouched. The seeder now also sets `product.thumbnail` + `product.images` for
 sample products.
+
+Migration `0013_absurd_vampiro.sql` adds
+`branch_stock.pending_remote_stock` and `jubelio_stock_operation`. The latter
+stores the reserve/release type, unique note, item mapping, remote adjustment
+id, retry state, and diagnostic error.
 
 ## Verification
 

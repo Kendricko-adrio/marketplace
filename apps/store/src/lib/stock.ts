@@ -1,10 +1,12 @@
 /**
  * True when at least one branch has at least one unit available
- * (stock minus reserved). Used to grey out product cards whose product
- * exists in the DB but has no sellable stock in any branch.
+ * (Jubelio on-hand minus holds not yet confirmed by Jubelio). Confirmed
+ * reservations are already reflected in `stock`, so subtracting
+ * `reservedStock` again would double-count them. Returns false when stock rows
+ * exist but no branch has a sellable unit.
  */
 export function hasAvailableStock(
-  branchStocks: { stock: number; reservedStock: number }[]
+  branchStocks: { stock: number; pendingRemoteStock: number }[]
 ): boolean {
-  return branchStocks.some((s) => s.stock - s.reservedStock > 0);
+  return branchStocks.some((s) => s.stock - s.pendingRemoteStock > 0);
 }

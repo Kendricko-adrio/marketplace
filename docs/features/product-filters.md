@@ -44,7 +44,7 @@ surfaces: the storefront product list and the admin homepage editor.
 - **Branch filter is stock-aware**: the sidebar's branch dropdown lists **active**
   branches only (sourced from `GET /api/branches`, which already filters
   `status = "aktif"`). Selecting a branch narrows results to products with at
-  least one variant that has **available stock** (`stock - reservedStock > 0`)
+  least one variant that has **available stock** (`stock - pendingRemoteStock > 0`)
   at that branch — a product with zero sellable units there is excluded, not
   greyed out.
 
@@ -94,7 +94,7 @@ has been consolidated.)
 - API (`apps/store/src/app/api/products/route.ts`): resolves the `brand` slug to
   an id and applies `eq(products.brandId, …)`. Category is a junction-table
   subquery. **Branch** (`branch` = branch id) is a subquery requiring at least
-  one variant with available stock (`stock - reservedStock > 0`) at that branch.
+  one variant with available stock (`stock - pendingRemoteStock > 0`) at that branch.
   **All filters apply to both the list and the count query**, so
   `pagination.total` is correct under any combination (this also fixes the
   previous count/category mismatch). Unknown slug → 0 results.

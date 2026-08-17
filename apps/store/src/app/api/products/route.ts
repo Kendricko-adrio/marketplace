@@ -100,7 +100,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Branch filter (branch id) via a subquery: the product must have at least
-    // one variant with available stock (stock - reservedStock > 0) at that
+    // one variant with available stock (stock - pendingRemoteStock > 0) at that
     // branch. Composes with the other conditions and applies to the count
     // query too, so pagination.total reflects the branch-filtered set.
     if (branchId) {
@@ -117,7 +117,7 @@ export async function GET(request: NextRequest) {
             .where(
               and(
                 eq(branchStocks.branchId, branchId),
-                sql`${branchStocks.stock} - ${branchStocks.reservedStock} > 0`
+                sql`${branchStocks.stock} - ${branchStocks.pendingRemoteStock} > 0`
               )
             )
         )
@@ -222,7 +222,7 @@ export async function GET(request: NextRequest) {
           .select({
             productVariantId: branchStocks.productVariantId,
             stock: branchStocks.stock,
-            reservedStock: branchStocks.reservedStock,
+            pendingRemoteStock: branchStocks.pendingRemoteStock,
           })
           .from(branchStocks)
           .innerJoin(branches, eq(branchStocks.branchId, branches.id))
@@ -232,12 +232,18 @@ export async function GET(request: NextRequest) {
     const variantToProduct = new Map(
       pageVariantRows.map((v) => [v.id, v.productId])
     );
-    const stockByProduct = new Map<string, { stock: number; reservedStock: number }[]>();
+    const stockByProduct = new Map<
+      string,
+      { stock: number; pendingRemoteStock: number }[]
+    >();
     for (const row of pageStockRows) {
       const productId = variantToProduct.get(row.productVariantId);
       if (!productId) continue;
       const list = stockByProduct.get(productId) ?? [];
-      list.push({ stock: row.stock, reservedStock: row.reservedStock });
+      list.push({
+        stock: row.stock,
+        pendingRemoteStock: row.pendingRemoteStock,
+      });
       stockByProduct.set(productId, list);
     }
 

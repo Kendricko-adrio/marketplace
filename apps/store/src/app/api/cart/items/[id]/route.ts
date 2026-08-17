@@ -72,9 +72,9 @@ export async function PUT(
         )
         .limit(1);
 
-      // Available = stock - reservedStock (units held by pending_payment orders).
+      // Confirmed reservations are already reflected in Jubelio on-hand.
       const availableStock =
-        (stockRow[0]?.stock ?? 0) - (stockRow[0]?.reservedStock ?? 0);
+        (stockRow[0]?.stock ?? 0) - (stockRow[0]?.pendingRemoteStock ?? 0);
       if (quantity > availableStock) {
         return NextResponse.json(
           { success: false, error: "Insufficient stock at this branch" },

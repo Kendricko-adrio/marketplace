@@ -33,3 +33,6 @@ export * from "./permissions";
 
 // Notifications schema
 export * from "./notifications";
+
+// Durable Jubelio stock reserve/release saga
+export * from "./jubelio-stock";

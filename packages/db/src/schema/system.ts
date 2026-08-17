@@ -22,12 +22,12 @@ export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
   }),
 }));
 
-// System config â€” general-purpose key/value settings, edited via SQL (no admin UI
+// System config — general-purpose key/value settings, edited via SQL (no admin UI
 // for now). Loaded once into an in-memory cache at app boot
 // (see apps/store/src/lib/config.ts); restart the app to pick up changes.
 //
 // Known keys (see seed.ts):
-//   reservation.ttlMinutes (number) â€” minutes stock is reserved while a customer
+//   reservation.ttlMinutes (number) — minutes stock is reserved while a customer
 //   is on the Midtrans Snap payment page before the order expires.
 export const systemConfig = pgTable("system_config", {
   key: text("key").primaryKey(),

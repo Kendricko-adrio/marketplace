@@ -97,8 +97,8 @@ export async function GET(
             : (productData.images ?? []).map((img) => img.url);
 
         // Get branches with available stock for this variant.
-        // Available = stock - reservedStock (units held by pending_payment
-        // orders). Branches with zero/negative available are hidden.
+        // Confirmed reservations are already reflected in Jubelio on-hand.
+        // Branches with zero/negative available are hidden.
         const branchStockRows = await db
           .select({
             branchId: branches.id,
@@ -107,6 +107,7 @@ export async function GET(
             city: branches.city,
             stock: branchStocks.stock,
             reservedStock: branchStocks.reservedStock,
+            pendingRemoteStock: branchStocks.pendingRemoteStock,
           })
           .from(branchStocks)
           .innerJoin(branches, eq(branchStocks.branchId, branches.id))
@@ -114,14 +115,14 @@ export async function GET(
             and(
               eq(branchStocks.productVariantId, variant.id),
               eq(branches.status, "aktif"),
-              sql`${branchStocks.stock} - ${branchStocks.reservedStock} > 0`
+              sql`${branchStocks.stock} - ${branchStocks.pendingRemoteStock} > 0`
             )
           )
           .orderBy(asc(branches.name));
 
         const branchStock = branchStockRows.map((b) => ({
           ...b,
-          available: b.stock - b.reservedStock,
+          available: b.stock - b.pendingRemoteStock,
         }));
 
         return {

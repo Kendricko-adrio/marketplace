@@ -5,7 +5,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: deps — install all workspace dependencies (cached layer)
 # -----------------------------------------------------------------------------
-FROM node:20-alpine AS deps
+FROM node:24-alpine AS deps
 
 WORKDIR /app
 
@@ -13,6 +13,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/store/package.json apps/store/
 COPY apps/admin/package.json apps/admin/
+COPY apps/jubelio-mock/package.json apps/jubelio-mock/
 COPY packages/db/package.json packages/db/
 COPY packages/ui/package.json packages/ui/
 
@@ -22,12 +23,13 @@ RUN npm ci --include=dev
 # -----------------------------------------------------------------------------
 # Stage 2: builder — build the store app with standalone output
 # -----------------------------------------------------------------------------
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
 # Bring over installed node_modules from deps stage.
 COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/apps/store/node_modules ./apps/store/node_modules
 
 # Copy the full source (respecting .dockerignore).
 COPY . .
@@ -51,7 +53,7 @@ RUN npm run build:store
 # -----------------------------------------------------------------------------
 # Stage 3: runner — minimal runtime image
 # -----------------------------------------------------------------------------
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 
 WORKDIR /app
 

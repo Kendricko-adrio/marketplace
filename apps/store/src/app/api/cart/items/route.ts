@@ -85,9 +85,9 @@ export async function POST(request: NextRequest) {
       )
       .limit(1);
 
-    // Available = stock - reservedStock (units held by pending_payment orders).
+    // Confirmed reservations are already reflected in Jubelio on-hand.
     const availableStock =
-      (stockRow[0]?.stock ?? 0) - (stockRow[0]?.reservedStock ?? 0);
+      (stockRow[0]?.stock ?? 0) - (stockRow[0]?.pendingRemoteStock ?? 0);
 
     const cart = await getOrCreateCart(session.user.id);
 

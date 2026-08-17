@@ -4,7 +4,7 @@ Unit and E2E test infrastructure for the marketplace monorepo.
 
 | Tool | Covers | Config |
 |---|---|---|
-| **Vitest** | Unit tests (pure logic, no DB/browser) | `vitest.config.ts` (root workspace → per-package configs) |
+| **Vitest** | Unit tests (pure logic + stateful Jubelio mock contract) | `vitest.config.ts` (root workspace → per-package configs) |
 | **Playwright Test** | Automated E2E (login flow, authenticated smoke) | `playwright.config.ts` + `e2e/` |
 
 Run everything from the repo root.
@@ -16,7 +16,7 @@ Run everything from the repo root.
   - PostgreSQL up (`docker compose up -d`) with schema + seed applied:
     `npm run db:push && npm run db:seed`.
   - Playwright browsers installed (once): `npm run test:e2e:install`.
-  - The dev servers are started automatically by Playwright's `webServer`
+  - The Jubelio mock and dev servers are started automatically by Playwright's `webServer`
     (and **reused** if you already have `npm run dev:store` / `dev:admin`
     running).
 
@@ -58,6 +58,7 @@ E2E_ADMIN_IDENTIFIER=... E2E_ADMIN_PASSWORD=...
 
 ```
 playwright.config.ts      # projects: setup, store, admin + webServer
+apps/jubelio-mock/        # stateful HTTP mock for Jubelio stock adjustments
 e2e/
   config.ts               # auth-state paths + TEST_USERS (env-overridable)
   auth.setup.ts           # logs in once per app, saves storageState
@@ -83,6 +84,16 @@ packages/db/vitest.config.ts
 ```
 
 ### E2E pitfalls (learned the hard way)
+
+- `npm run dev:store` starts both the storefront and Jubelio mock. Playwright
+  starts them as separate managed processes. Non-production stock writes never
+  use the live Jubelio host.
+- Mock controls: `POST http://127.0.0.1:3002/__control/reset`, then
+  `PUT /__control/scenario` with one of `success`, `insufficient-stock`,
+  `server-error`, `rate-limit-once`, `unauthorized-once`,
+  `timeout-before-apply`, `timeout-after-apply`, or `malformed-success`.
+- `checkout.spec.ts` asserts both the successful reserve-before-Midtrans flow
+  and that a Jubelio rejection keeps the customer on checkout.
 
 - The store Playwright project sends `x-e2e-payment-mock: true`. The route
   accepts it only outside production and redirects to the local

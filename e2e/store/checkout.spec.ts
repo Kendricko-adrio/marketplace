@@ -3,33 +3,100 @@ import { Pool } from "pg";
 import dotenv from "dotenv";
 
 dotenv.config({ path: ".env" });
-let createdOrderId: string | null = null;
+const createdOrderIds: string[] = [];
+const temporarilyMappedVariantIds: string[] = [];
+const temporarilyMappedBranchIds: string[] = [];
+
+test.beforeAll(async () => {
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const variants = await pool.query(
+    `SELECT pv.id
+     FROM product_variant pv
+     JOIN product p ON p.id = pv.product_id
+     WHERE p.slug = 'wild-glide-38' AND pv.jubelio_item_id IS NULL
+     ORDER BY pv.id`
+  );
+  for (const [index, row] of variants.rows.entries()) {
+    await pool.query(
+      "UPDATE product_variant SET jubelio_item_id = $1 WHERE id = $2",
+      [1_910_000_000 + index, row.id]
+    );
+    temporarilyMappedVariantIds.push(row.id);
+  }
+
+  const branches = await pool.query(
+    `SELECT DISTINCT b.id
+     FROM branch b
+     JOIN branch_stock bs ON bs.branch_id = b.id
+     JOIN product_variant pv ON pv.id = bs.product_variant_id
+     JOIN product p ON p.id = pv.product_id
+     WHERE p.slug = 'wild-glide-38' AND b.jubelio_location_id IS NULL
+     ORDER BY b.id`
+  );
+  for (const [index, row] of branches.rows.entries()) {
+    await pool.query(
+      "UPDATE branch SET jubelio_location_id = $1 WHERE id = $2",
+      [1_920_000_000 + index, row.id]
+    );
+    temporarilyMappedBranchIds.push(row.id);
+  }
+  await pool.end();
+});
 
 test.afterAll(async () => {
-  if (!createdOrderId) return;
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
-    const order = await client.query(
-      "SELECT branch_id FROM orders WHERE id = $1 FOR UPDATE",
-      [createdOrderId]
-    );
-    if (order.rows[0]?.branch_id) {
-      const items = await client.query(
-        "SELECT variant_id, quantity FROM order_item WHERE order_id = $1",
+    for (const createdOrderId of createdOrderIds) {
+      const order = await client.query(
+        "SELECT branch_id FROM orders WHERE id = $1 FOR UPDATE",
         [createdOrderId]
       );
-      for (const item of items.rows) {
-        await client.query(
-          `UPDATE branch_stock
-           SET reserved_stock = GREATEST(0, reserved_stock - $1), updated_at = NOW()
-           WHERE branch_id = $2 AND product_variant_id = $3`,
-          [item.quantity, order.rows[0].branch_id, item.variant_id]
+      if (order.rows[0]?.branch_id) {
+        const items = await client.query(
+          "SELECT variant_id, quantity FROM order_item WHERE order_id = $1",
+          [createdOrderId]
         );
+        const operation = await client.query(
+          `SELECT status FROM jubelio_stock_operation
+           WHERE order_id = $1 AND type = 'reserve' LIMIT 1`,
+          [createdOrderId]
+        );
+        const restorePhysicalStock = ["applied", "committed"].includes(
+          operation.rows[0]?.status
+        );
+        for (const item of items.rows) {
+          await client.query(
+            `UPDATE branch_stock
+             SET stock = stock + CASE WHEN $1 THEN $2 ELSE 0 END,
+                 reserved_stock = GREATEST(0, reserved_stock - $2),
+                 pending_remote_stock = GREATEST(0, pending_remote_stock - $2),
+                 updated_at = NOW()
+             WHERE branch_id = $3 AND product_variant_id = $4`,
+            [
+              restorePhysicalStock,
+              item.quantity,
+              order.rows[0].branch_id,
+              item.variant_id,
+            ]
+          );
+        }
       }
+      await client.query("DELETE FROM orders WHERE id = $1", [createdOrderId]);
     }
-    await client.query("DELETE FROM orders WHERE id = $1", [createdOrderId]);
+    if (temporarilyMappedVariantIds.length > 0) {
+      await client.query(
+        "UPDATE product_variant SET jubelio_item_id = NULL WHERE id = ANY($1::text[])",
+        [temporarilyMappedVariantIds]
+      );
+    }
+    if (temporarilyMappedBranchIds.length > 0) {
+      await client.query(
+        "UPDATE branch SET jubelio_location_id = NULL WHERE id = ANY($1::text[])",
+        [temporarilyMappedBranchIds]
+      );
+    }
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");
@@ -77,12 +144,38 @@ async function addItemToCart(page: import("@playwright/test").Page) {
   );
 }
 
+async function reachCheckoutReview(
+  page: import("@playwright/test").Page,
+  email: string
+) {
+  await addItemToCart(page);
+  await page.goto("/cart");
+  await page.getByRole("checkbox").first().check();
+  await page.getByRole("button", { name: "Checkout" }).click();
+  await page.waitForURL("**/checkout");
+  await page.getByLabel("Nomor Telepon *").fill("081234567890");
+  await page.getByLabel("Email *").fill(email);
+  await page.getByRole("button", { name: "Lanjut" }).click();
+  await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
+  await page.getByRole("combobox").click();
+  await page.getByRole("option", { name: "10:00" }).click();
+  await page.getByRole("button", { name: "Lanjut" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Pembayaran QRIS" })
+  ).toBeVisible();
+  await page.getByText(/Saya telah memeriksa pesanan/).click();
+}
+
 test.describe("storefront cart & checkout", () => {
   // All tests share the same customer's cart (single storageState) — run
   // serially so the beforeEach cart-clear is deterministic.
   test.describe.configure({ mode: "serial" });
 
   test.beforeEach(async ({ page }) => {
+    const mockReset = await page.request.post(
+      "http://127.0.0.1:3002/__control/reset"
+    );
+    expect(mockReset.ok()).toBe(true);
     // Deterministic start: empty the cart (leftover items from other runs
     // would break single-branch checkout).
     const res = await page.request.get("/api/cart");
@@ -126,31 +219,7 @@ test.describe("storefront cart & checkout", () => {
   test("full checkout: cart → place-order → Midtrans redirect", async ({
     page,
   }) => {
-    await addItemToCart(page);
-
-    // Select the item on the cart page and proceed to checkout (the checkout
-    // page redirects back to /cart when nothing is selected).
-    await page.goto("/cart");
-    await page.getByRole("checkbox").first().check();
-    await page.getByRole("button", { name: "Checkout" }).click();
-    await page.waitForURL("**/checkout");
-
-    // Step 1 — Kontak.
-    await page.getByLabel("Nomor Telepon *").fill("081234567890");
-    await page.getByLabel("Email *").fill("john@example.com");
-    await page.getByRole("button", { name: "Lanjut" }).click();
-
-    // Step 2 — Ambil di Toko: date + time.
-    await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
-    await page.getByRole("combobox").click();
-    await page.getByRole("option", { name: "10:00" }).click();
-    await page.getByRole("button", { name: "Lanjut" }).click();
-
-    // Step 3 — Review & place order.
-    await expect(
-      page.getByRole("heading", { name: "Pembayaran QRIS" })
-    ).toBeVisible();
-    await page.getByText(/Saya telah memeriksa pesanan/).click();
+    await reachCheckoutReview(page, "john@example.com");
     await page.getByRole("button", { name: "Bayar Sekarang" }).click();
 
     // The default E2E suite uses a local payment boundary. Sandbox contract
@@ -158,7 +227,40 @@ test.describe("storefront cart & checkout", () => {
     await expect(page).toHaveURL(/\/checkout\/payment-test\?orderId=/, {
       timeout: 30_000,
     });
-    createdOrderId = new URL(page.url()).searchParams.get("orderId");
+    const createdOrderId = new URL(page.url()).searchParams.get("orderId");
+    expect(createdOrderId).toBeTruthy();
+    createdOrderIds.push(createdOrderId!);
+  });
+
+  test("does not continue to Midtrans when Jubelio rejects the reservation", async ({
+    page,
+  }) => {
+    const email = "stock-failure-e2e@example.com";
+    await reachCheckoutReview(page, email);
+    const scenario = await page.request.put(
+      "http://127.0.0.1:3002/__control/scenario",
+      { data: { scenario: "insufficient-stock" } }
+    );
+    expect(scenario.ok()).toBe(true);
+
+    await page.getByRole("button", { name: "Bayar Sekarang" }).click();
+    await expect(
+      page.getByText(
+        "Stock produk berubah atau tidak mencukupi. Silakan periksa keranjang Anda."
+      )
+    ).toBeVisible();
+    await expect(page).toHaveURL(/\/checkout$/);
+
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const failed = await pool.query(
+      `SELECT id FROM orders
+       WHERE contact_email = $1 AND midtrans_failure_status = 'stock_reservation_failed'
+       ORDER BY created_at DESC LIMIT 1`,
+      [email]
+    );
+    await pool.end();
+    expect(failed.rows[0]?.id).toBeTruthy();
+    createdOrderIds.push(failed.rows[0].id);
   });
 
   test("voucher validation API: valid, minimum-purchase, and unknown codes", async ({

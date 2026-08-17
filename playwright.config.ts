@@ -62,7 +62,13 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "npm run dev:store",
+      command: "npm run dev:jubelio-mock",
+      url: "http://localhost:3002/health",
+      reuseExistingServer: !IS_CI,
+      timeout: 120_000,
+    },
+    {
+      command: "npm run dev:store:app",
       url: "http://localhost:3000",
       reuseExistingServer: !IS_CI,
       timeout: 120_000,

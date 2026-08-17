@@ -167,8 +167,8 @@ export async function POST(request: NextRequest) {
     }
 
     // ===== Check stock for each selected item (soft UX pre-check) =====
-    // Available stock = stock - reservedStock (units held by pending_payment
-    // orders). Same calculation as the soft pre-check in place-order. The
+    // Available stock = Jubelio on-hand minus holds awaiting remote confirmation.
+    // Same calculation as the soft pre-check in place-order. The
     // authoritative race-free guard remains the atomic conditional UPDATE
     // inside the place-order transaction; this pre-check just gives the
     // customer early feedback on the cart page instead of failing at step 3.
@@ -192,7 +192,7 @@ export async function POST(request: NextRequest) {
         .limit(1);
 
       const available =
-        (stockRow[0]?.stock ?? 0) - (stockRow[0]?.reservedStock ?? 0);
+        (stockRow[0]?.stock ?? 0) - (stockRow[0]?.pendingRemoteStock ?? 0);
 
       if (item.quantity > available) {
         if (available <= 0) {

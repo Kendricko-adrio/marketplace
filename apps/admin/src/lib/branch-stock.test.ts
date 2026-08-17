@@ -24,6 +24,7 @@ const ROWS: BranchStockInputRow[] = [
     color: "Hitam",
     stock: 10,
     reservedStock: 1,
+    pendingRemoteStock: 1,
   },
   {
     branchId: "br-jkt",
@@ -37,6 +38,7 @@ const ROWS: BranchStockInputRow[] = [
     color: "Hitam",
     stock: 15,
     reservedStock: 0,
+    pendingRemoteStock: 0,
   },
   {
     branchId: "br-jkt",
@@ -50,6 +52,7 @@ const ROWS: BranchStockInputRow[] = [
     color: "Hitam",
     stock: 20,
     reservedStock: 2,
+    pendingRemoteStock: 2,
   },
   {
     branchId: "br-bdg",
@@ -63,6 +66,7 @@ const ROWS: BranchStockInputRow[] = [
     color: "Hitam",
     stock: 3,
     reservedStock: 5, // reserved > stock → available clamps to 0
+    pendingRemoteStock: 5,
   },
 ];
 
@@ -125,6 +129,7 @@ describe("groupBranchStock", () => {
         color: "Hitam",
         stock: 0,
         reservedStock: 0,
+        pendingRemoteStock: 0,
       },
     ];
     const out = groupBranchStock({ mode: "all" }, rows);
@@ -160,10 +165,10 @@ describe("groupBranchStock", () => {
 // Mirrors the same scope rules as groupBranchStock (defence in depth: the SQL
 // `where` is the real access control; this pure filter is the tested guarantee).
 const TOTALS_ROWS: ScopedTotalsInputRow[] = [
-  { branchId: "br-jkt", stock: 20, reservedStock: 2 },
-  { branchId: "br-jkt", stock: 15, reservedStock: 0 },
-  { branchId: "br-srb", stock: 10, reservedStock: 1 },
-  { branchId: "br-bdg", stock: 3, reservedStock: 5 }, // reserved > stock → clamps
+  { branchId: "br-jkt", stock: 20, reservedStock: 2, pendingRemoteStock: 2 },
+  { branchId: "br-jkt", stock: 15, reservedStock: 0, pendingRemoteStock: 0 },
+  { branchId: "br-srb", stock: 10, reservedStock: 1, pendingRemoteStock: 1 },
+  { branchId: "br-bdg", stock: 3, reservedStock: 5, pendingRemoteStock: 5 }, // pending > stock → clamps
 ];
 
 describe("computeScopedTotals", () => {
@@ -192,7 +197,7 @@ describe("computeScopedTotals", () => {
 
   it("available clamps to 0 when reserved exceeds stock (own branch)", () => {
     const rows: ScopedTotalsInputRow[] = [
-      { branchId: "br-bdg", stock: 3, reservedStock: 5 },
+      { branchId: "br-bdg", stock: 3, reservedStock: 5, pendingRemoteStock: 5 },
     ];
     const out = computeScopedTotals({ mode: "own", branchId: "br-bdg" }, rows);
     expect(out).toEqual({ totalStock: 3, totalReserved: 5, totalAvailable: 0 });

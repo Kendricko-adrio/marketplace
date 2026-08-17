@@ -79,7 +79,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | POST | `/api/cart/validate-checkout` | client-session | Pre-checkout branch/stock validation |
 | POST | `/api/checkout/validate-step-2` | client-session | Validate pickup slot vs operating hours |
 | GET | `/api/checkout/order-status` | client-session | Poll order status/paymentStatus |
-| POST | `/api/checkout/place-order` | client-session | Create order, reserve stock, Midtrans Snap |
+| POST | `/api/checkout/place-order` | client-session | Reserve stock in Jubelio, then create Midtrans Snap |
 | GET | `/api/orders` | client-session | List the user's orders |
 | GET | `/api/orders/{id}` | client-session | Order detail (+ pickup code when applicable) |
 | PATCH | `/api/account/profile` | client-session | Update client name/phone |
@@ -196,15 +196,15 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: `search` (string, optional), `category` (slug, optional), `brand` (slug, optional), `minPrice` (string, optional), `maxPrice` (string, optional), `status` (string, default `"aktif"`), `hasDiscount` (`"true"` to filter products whose `basePrice > min(variant.price)`), `sortBy` (`"price"`|`"createdAt"`, default `"createdAt"`), `sortOrder` (`"asc"`|`"desc"`, default `"desc"`), `page` (int, default `1`), `limit` (int, default `12`, clamped to 1–100 via `parseListParams` in `apps/store/src/lib/list-params.ts`)
 - **Body**: none
 - **Response**: 200 `{ success: true, data: [{ id, name, slug, description, basePrice, status, createdAt, price, image, collection: string|null, gender: string|null, hasStock: boolean }], pagination: { page, limit, total, totalPages } }`; 500 `{ success: false, error }`
-- **Notes**: `price` is the **cheapest variant net price** per product (`min(productVariants.price)` via a grouped subquery join) — the price the customer pays and the value shown on product cards; `basePrice` is the RRP (strikethrough/original). `image` is the first image (`displayOrder` asc) of the **default** variant (separate from price). `hasStock` is true when at least one variant has available units (`stock - reservedStock > 0`) in at least one `status = "aktif"` branch — computed in JS via `hasAvailableStock` (`apps/store/src/lib/stock.ts`) over the page's branch-stock rows (two queries, no N+1); product cards grey out (opacity + disabled link) when `hasStock` is false. `minPrice`/`maxPrice` and `sortBy=price` operate on the cheapest-variant net price; `hasDiscount` filters to `basePrice > min(variant.price)`. `category` (slug) and `brand` (slug) are each resolved to an id and applied as conditions to **both** the list and the count query, so `pagination.total` is correct under any filter combination (category uses a junction-table subquery; brand is a direct `brandId` equality). An unknown slug yields zero results.
+- **Notes**: `price` is the cheapest variant net price and `basePrice` is the RRP. `hasStock` is true when at least one active-branch variant has `stock - pendingRemoteStock > 0`; product cards grey out otherwise. Price/category/brand filtering remains server-side and pagination-aware.
 
 #### `GET` `/api/products/{id}`
 - **Auth**: none
 - **Purpose**: Full product detail with variants, per-variant branch availability, and categories.
 - **Params**: `{id}` — accepts either the product `id` or its `slug` (looked up by id first, then by slug)
 - **Body**: none
-- **Response**: 200 `{ success: true, data: { ...product, brand: string|null, gender: string|null, collection: string|null, categories: [{ id, name, slug }], variants: [{ ...variant, images: string[], branchStock: [{ branchId, name, code, city, stock, reservedStock, available }] }], colors: string[], sizes: string[] } }`; 404 if not found by id or slug; 500 `{ success: false, error }`
-- **Notes**: Variants ordered by `isDefault` asc. `branchStock` is restricted to `branches.status = "aktif"` and only rows where `stock - reservedStock > 0`; `available = stock - reservedStock` is computed in JS. `colors`/`sizes` are unique non-null variant values. Read-only. Each variant `price` is the net price the customer pays; `product.basePrice` is the RRP. `brand`/`gender` are the resolved names from the sync-managed `brand`/`gender` dimension tables (looked up from `product.brandId`/`product.genderId`, nullable); `collection` is the plain-text collection label column on the product row.
+- **Response**: 200 `{ success: true, data: { ...product, variants: [{ ...variant, branchStock: [{ branchId, stock, reservedStock, pendingRemoteStock, available }] }] } }`; 404 if not found; 500 on error
+- **Notes**: Active branch rows are exposed when `stock - pendingRemoteStock > 0`; `available` uses that same expression. Confirmed `reservedStock` is already reflected in reduced Jubelio on-hand and is not subtracted again.
 
 #### `GET` `/api/homepage`
 - **Auth**: none
@@ -246,7 +246,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: —
 - **Body**: `{ variantId: string, branchId: string, quantity: number (int, positive, default 1) }`
 - **Response**: 200 `{ success, message }` (`"Cart item updated"` or `"Item added to cart"`); 400 invalid body / `"Branch not available"` / `"Insufficient stock at this branch"`; 401 if unauth; 404 `"Variant not found"`; 500 on error
-- **Notes**: Available = `branch_stock.stock - branch_stock.reservedStock`. Branch must exist with `status === "aktif"`. If a matching line exists, increments quantity and re-validates against available stock. Auto-creates cart if needed.
+- **Notes**: Available = `branch_stock.stock - branch_stock.pendingRemoteStock`. Branch must be active. A matching line increments quantity and re-validates availability.
 
 #### `PUT` `/api/cart/items/{id}`
 - **Auth**: client-session
@@ -254,7 +254,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: `{id}` (cart item id)
 - **Body**: `{ quantity: number (int, positive) }`
 - **Response**: 200 `{ success, message: "Cart item updated" }`; 400 invalid body / `"Insufficient stock at this branch"`; 401 if unauth; 404 `"Cart not found"` / `"Cart item not found"`; 500 on error
-- **Notes**: Item is scoped to the user's cart (`cartId` match). Stock check (`stock - reservedStock >= quantity`) only run when `item.branchId` is set. Does not reserve stock.
+- **Notes**: Item is scoped to the user's cart. Stock check uses `stock - pendingRemoteStock >= quantity`; cart changes do not reserve stock.
 
 #### `DELETE` `/api/cart/items/{id}`
 - **Auth**: client-session
@@ -290,11 +290,11 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 #### `POST` `/api/checkout/place-order`
 - **Auth**: client-session
-- **Purpose**: Reserve stock atomically, create Midtrans Snap outside the DB transaction, then persist the redirect and remove checked-out cart items.
+- **Purpose**: Hold stock locally, confirm a negative Jubelio adjustment, then create Midtrans Snap and remove checked-out cart items.
 - **Params**: —
 - **Body**: `{ phone: string (8-20), email: string (email), pickupDate: string (YYYY-MM-DD), pickupTime: string (HH:mm), selectedItemIds: string[] (min 1) }`
-- **Response**: 200 `{ success, orderId, redirectUrl, token }`; 400 invalid body / `"Cart is empty"` / `"No selected items to checkout"` / multi-branch error / `"Branch is no longer available"` / invalid pickup slot / `Insufficient stock for <productName> at this branch` (soft check) / `Insufficient stock for <productName>` (atomic guard rollback); 401 if unauth; 500 on error; 502 on Midtrans failure (cart preserved)
-- **Notes**: Enforces single-branch checkout and a Jakarta-time pickup slot. A short transaction creates the order/items and uses an atomic conditional stock reservation. Midtrans is called only after commit. Gateway failure triggers `claimAndFailOrder` compensation and preserves the cart. Gateway success is followed by a short transaction that stores `snapRedirectUrl` and deletes only `selectedItemIds`; a local reconciliation error does not discard a valid gateway response. `serviceFee = 0`, `total = subtotal`, `shippingCost`/`discount` = `"0"`.
+- **Response**: 200 `{ success, orderId, redirectUrl, token }`; 400 invalid body/local stock failure; 401 if unauth; 409 definitive Jubelio rejection; 503 ambiguous Jubelio confirmation; 500 on error; 502 on Midtrans failure (cart preserved)
+- **Notes**: Enforces single-branch checkout and a Jakarta-time pickup slot. A short transaction creates the order/items, increments `pending_remote_stock`, and creates a durable reserve operation. Midtrans is called only after Jubelio confirms the negative adjustment. A Jubelio failure never creates a Midtrans transaction. Midtrans failure queues a positive compensation. `serviceFee = 0`, `total = subtotal`, `shippingCost`/`discount` = `"0"`.
 
 #### `GET` `/api/orders`
 - **Auth**: client-session
@@ -327,8 +327,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Purpose**: Create a Midtrans Snap payment session for a pending_payment order (re-payment flow).
 - **Params**: —
 - **Body**: `{ orderId: string }`
-- **Response**: 401 `{ success: false, error: "Unauthorized" }`; 400 `{ success: false, error: "orderId is required" | "Order is not pending payment" }`; 404 `{ success: false, error: "Order not found" }`; 403 `{ success: false, error: "Forbidden" }`; 500 `{ success: false, error: "Failed to create payment" }`; 200 `{ success: true, redirectUrl: string, token: string }`
-- **Notes**: Loads order and verifies `order.userId === session.user.id`; only `pending_payment` orders allowed (`failed_payment` is final). Persists `snapRedirectUrl` on the order. Sends item_details including a `SERVICE_FEE` line item. Env dependency: Midtrans keys via `createPayment`.
+- **Response**: 401 unauthorized; 400 missing id/not pending; 403 forbidden; 404 not found; 409 `{ error: "Stock has not been confirmed by Jubelio" }`; 500 provider error; 200 `{ success, redirectUrl, token }`
+- **Notes**: Only owned `pending_payment` orders with an `applied` or `committed` Jubelio reserve operation can create another Midtrans session.
 
 #### `POST` `/api/webhooks/midtrans`
 - **Auth**: signature-verification (Midtrans `signature_key` = `SHA512(order_id + status_code + gross_amount + serverKey)`; plus authoritative re-verify with `getMidtransTransactionStatus`)
@@ -359,8 +359,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Purpose**: Safety-net sweep that releases stock reservations for stale `pending_payment` orders whose `expiresAt` has passed without a Midtrans `expire` webhook.
 - **Params**: —
 - **Body**: none
-- **Response**: 503 `{ success: false, error: "Cron not configured" }`; 401 `{ success: false, error: "Unauthorized" }`; 500 `{ success: false, error: "Sweep failed" }`; 200 `{ success: true, scanned: number, finalized: number, failed: number }`
-- **Notes**: Batch of up to 100 stale orders (uses `idx_orders_status_expires`). Re-verifies Midtrans status OUTSIDE any tx (no locks held across HTTP). `settlement`/`capture`+`accept` → `claimAndFinalizePaidOrder` (missed success webhook). `pending` → best-effort `expireMidtransTransaction` then `claimAndFailOrder`; `expire`/`deny`/`cancel`/`not_found` → `claimAndFailOrder` with a descriptive reason. Transient Midtrans errors skip the order (left for next run). Claim-guard makes it idempotent and safe to run concurrently with the webhook. Always returns 200 so the crontab log stays clean. Env dependency: `CRON_SECRET` + Midtrans keys.
+- **Response**: 503 `{ success: false, error: "Cron not configured" }`; 401 `{ success: false, error: "Unauthorized" }`; 500 `{ success: false, error: "Sweep failed" }`; 200 `{ success: true, scanned, finalized, failed, jubelioSync: { scanned, applied, failed, pending } }`
+- **Notes**: Reconciles due Jubelio stock operations first, then processes up to 100 stale orders. Provider calls remain outside DB transactions. Unique adjustment notes prevent blind retries after ambiguous writes. Claim guards make order finalization idempotent and safe with webhooks.
 
 #### `GET` `/api/onboarding/sync`
 - **Auth**: client-session
@@ -404,8 +404,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Purpose**: Fetch a single product with its categories, variants (with images), and **per-branch stock scoped by the caller's role**.
 - **Params**: `{id}`
 - **Body**: none
-- **Response**: 200 `{ success, data: { ...product, categories: [{id, name, slug}], variants: [{ ...variant, images: [{id, url, displayOrder}] }], branchStock: { scope: "all" | "own", branches: [{ id, name, code, city, status, rows: [{ variantId, sku, size, color, stock, reservedStock, available }] }] } } }`; 404 not found; 500 error
-- **Notes**: Variants ordered by `isDefault` asc; images ordered by `displayOrder` asc. **Branch visibility**: a branch admin who opens a product their branch does not carry (no `branch_stock` row for their `branchId`) gets 404 — mirroring the list's carried-product filter so a non-carried product can't be reached by navigating to its detail URL directly. HQ / branchless admin is unaffected. `branchStock` is filtered server-side via `getBranchScope`: HQ / branchless admin → all branches; branch admin → only their own branch. `available = max(0, stock - reservedStock)`. Branches are sorted by name; rows within a branch by size then color.
+- **Response**: 200 product detail with branch rows containing `stock`, `reservedStock`, `pendingRemoteStock`, and `available`; 404 not found; 500 error
+- **Notes**: Branch visibility remains role-scoped. `available = max(0, stock - pendingRemoteStock)`; `reservedStock` is shown separately for operational visibility.
 
 #### `PUT` `/api/admin/products/{id}` — **REMOVED**
 - **Status**: Removed. Jubelio is the source of truth; refresh a product via `POST /api/admin/products/{id}/sync` (the Sync button on the admin product detail page).
@@ -823,7 +823,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 ## Appendix — Cross-cutting behaviors
 
-- **Stock reservation model**: `branch_stock.stock` (SOH) + `branch_stock.reservedStock` (runtime). Cart operations check `stock - reservedStock` but do **not** reserve. Reservation happens atomically inside `place-order`'s transaction; release happens via the Midtrans webhook (payment fail/expire) or the `sweep-reservations` cron for stale `pending_payment` orders. The Jubelio webhook/import **never** touches `reservedStock`. See `docs/deployment-docs/cron-sweep.md` and `docs/deployment-docs/jubelio-sync.md`.
+- **Stock reservation model**: availability is `branch_stock.stock - pendingRemoteStock`. `reservedStock` represents a confirmed Jubelio deduction and is not subtracted again. Place-order writes a negative adjustment before Midtrans; failure/expiry writes a positive compensation. Catalog sync never touches either runtime counter. See `docs/features/stock-reservation.md`.
 - **RBAC (admin)**: admin list/detail endpoints are branch-scoped via `getBranchScope` — branch admins see only their own branch; HQ sees all. Edit/delete operations additionally check the permission map (`<module>:<view|edit|delete>`); a few endpoints require `role: "hq"`.
 - **Audit log**: significant mutations write `audit_log` rows (e.g. `VERIFY_PICKUP_CODE`, `JUBELIO_SYNC_WEBHOOK`). Several upsert/delete endpoints (products, pages, footer, users) do **not** write audit entries — noted per endpoint.
 - **Idempotency**: payment webhooks (Midtrans + sweep) use a claim-guard so duplicate/replayed notifications are safe. The Jubelio webhook is upsert-only on natural keys, so replays are safe.

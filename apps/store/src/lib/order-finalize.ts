@@ -1,5 +1,12 @@
 import { db } from "@/db";
-import { orders, orderItems, branchStocks, branches, notifications } from "@/db";
+import {
+  orders,
+  orderItems,
+  branchStocks,
+  branches,
+  notifications,
+  jubelioStockOperations,
+} from "@/db";
 import { eq, and, gte, inArray, sql } from "drizzle-orm";
 import { sendEmail } from "@/lib/email";
 import {
@@ -10,6 +17,7 @@ import {
 } from "@/lib/email-templates-order";
 import { createLogger, serializeError, type Logger } from "@/lib/logger";
 import { randomInt } from "node:crypto";
+import { releaseJubelioStockForOrder } from "@/lib/jubelio-stock-saga";
 
 // 6-char pickup code alphabet (no ambiguous chars: O, I, 0, 1)
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -22,11 +30,21 @@ export function generatePickupCode(): string {
 }
 
 export function canFinalizeReservedStock(
-  stock: number,
   reservedStock: number,
   quantity: number
 ): boolean {
-  return stock >= quantity && reservedStock >= quantity;
+  return reservedStock >= quantity;
+}
+
+export function getStockFinalizationDeltas(
+  quantity: number,
+  usesRemoteAdjustment: boolean
+): { stock: number; reservedStock: number; pendingRemoteStock: number } {
+  return {
+    stock: usesRemoteAdjustment ? 0 : -quantity,
+    reservedStock: -quantity,
+    pendingRemoteStock: usesRemoteAdjustment ? 0 : -quantity,
+  };
 }
 
 /**
@@ -78,9 +96,8 @@ type OrderView = {
  *   1. claim-guard UPDATE (pending_payment/pending → processing/paid). If it
  *      returns 0 rows, another handler (webhook or sweep) already processed the
  *      order → return { claimed: false } so the caller skips side effects.
- *   2. convert the stock reservation into a real deduction per order item:
- *      stock -= qty, reservedStock -= qty. A conditional UPDATE rejects
- *      inventory drift instead of silently clamping it to zero.
+ *   2. commit the already-applied Jubelio deduction by decreasing only
+ *      reservedStock. `stock` already mirrors Jubelio's reduced on-hand value.
  *   3. generate a collision-checked pickup code and move to ready_for_pickup.
  *   4. send the pickup-ready email (best-effort, outside the tx).
  *
@@ -119,7 +136,21 @@ export async function claimAndFinalizePaidOrder(
       .returning({ id: orders.id });
     if (claimed.length === 0) return null; // already handled by another path
 
-    // 2. Convert reservation → real deduction per item.
+    // Orders created before this feature have no durable Jubelio operation.
+    // Keep their former local-stock semantics during a rolling deployment.
+    const reserveOperations = await tx
+      .select({ id: jubelioStockOperations.id })
+      .from(jubelioStockOperations)
+      .where(
+        and(
+          eq(jubelioStockOperations.orderId, orderId),
+          eq(jubelioStockOperations.type, "reserve")
+        )
+      )
+      .limit(1);
+    const usesRemoteAdjustment = reserveOperations.length > 0;
+
+    // 2. Commit the already-applied remote reservation per item.
     const items = await tx
       .select()
       .from(orderItems)
@@ -129,7 +160,12 @@ export async function claimAndFinalizePaidOrder(
       const updatedStock = await tx
         .update(branchStocks)
         .set({
-          stock: sql`${branchStocks.stock} - ${item.quantity}`,
+          ...(usesRemoteAdjustment
+            ? {}
+            : {
+                stock: sql`${branchStocks.stock} - ${item.quantity}`,
+                pendingRemoteStock: sql`${branchStocks.pendingRemoteStock} - ${item.quantity}`,
+              }),
           reservedStock: sql`${branchStocks.reservedStock} - ${item.quantity}`,
           updatedAt: new Date(),
         })
@@ -137,8 +173,13 @@ export async function claimAndFinalizePaidOrder(
           and(
             eq(branchStocks.branchId, order.branchId!),
             eq(branchStocks.productVariantId, item.variantId),
-            gte(branchStocks.stock, item.quantity),
-            gte(branchStocks.reservedStock, item.quantity)
+            gte(branchStocks.reservedStock, item.quantity),
+            ...(usesRemoteAdjustment
+              ? []
+              : [
+                  gte(branchStocks.stock, item.quantity),
+                  gte(branchStocks.pendingRemoteStock, item.quantity),
+                ])
           )
         )
         .returning({ branchId: branchStocks.branchId });
@@ -149,6 +190,17 @@ export async function claimAndFinalizePaidOrder(
         );
       }
     }
+
+    await tx
+      .update(jubelioStockOperations)
+      .set({ status: "committed", updatedAt: new Date() })
+      .where(
+        and(
+          eq(jubelioStockOperations.orderId, orderId),
+          eq(jubelioStockOperations.type, "reserve"),
+          eq(jubelioStockOperations.status, "applied")
+        )
+      );
 
     // 3. Generate a collision-checked pickup code.
     let code = generatePickupCode();
@@ -272,9 +324,8 @@ export async function claimAndFinalizePaidOrder(
  * reservation:
  *   1. claim-guard UPDATE (pending_payment → failed_payment). If 0 rows,
  *      another handler already processed it → return { claimed: false }.
- *   2. release reservedStock per item (GREATEST(0, reservedStock - qty)). Stock
- *      itself is untouched: pending orders never deducted stock, they only
- *      held a reservation.
+ *   2. enqueue and attempt a compensating Jubelio +qty adjustment. Local
+ *      reservedStock remains held until Jubelio confirms the release.
  *   3. send the payment-failed email (best-effort, outside the tx).
  *
  * Note: paid-order reversal (refund after settlement) is intentionally NOT
@@ -314,32 +365,52 @@ export async function claimAndFailOrder(
       .returning({ id: orders.id });
     if (res.length === 0) return false;
 
-    // Release the reservation for each item (pending→failed: stock was never
-    // deducted, only reserved).
-    if (order.branchId) {
-      const items = await tx
-        .select()
-        .from(orderItems)
-        .where(eq(orderItems.orderId, orderId));
-      for (const item of items) {
-        await tx
-          .update(branchStocks)
-          .set({
-            reservedStock: sql`GREATEST(0, ${branchStocks.reservedStock} - ${item.quantity})`,
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(branchStocks.branchId, order.branchId),
-              eq(branchStocks.productVariantId, item.variantId)
-            )
-          );
-      }
-    }
     return true;
   });
 
   if (!claimed) return { claimed: false };
+
+  // The order is terminal immediately, but stock is not exposed locally until
+  // the compensating Jubelio adjustment is confirmed. Failures remain durable
+  // in jubelio_stock_operation and are retried by the sweep cron.
+  try {
+    const releaseResult = await releaseJubelioStockForOrder(orderId, undefined, log);
+    if (releaseResult.status === "skipped" && order.branchId) {
+      await db.transaction(async (tx) => {
+        const items = await tx
+          .select()
+          .from(orderItems)
+          .where(eq(orderItems.orderId, orderId));
+        for (const item of items) {
+          const released = await tx
+            .update(branchStocks)
+            .set({
+              reservedStock: sql`${branchStocks.reservedStock} - ${item.quantity}`,
+              pendingRemoteStock: sql`${branchStocks.pendingRemoteStock} - ${item.quantity}`,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(branchStocks.branchId, order.branchId!),
+                eq(branchStocks.productVariantId, item.variantId),
+                gte(branchStocks.reservedStock, item.quantity),
+                gte(branchStocks.pendingRemoteStock, item.quantity)
+              )
+            )
+            .returning({ branchId: branchStocks.branchId });
+          if (released.length === 0) {
+            throw new Error(
+              `Legacy inventory reservation drift for variant ${item.variantId}`
+            );
+          }
+        }
+      });
+    }
+  } catch (releaseError) {
+    log.error("Jubelio stock release queued for retry", {
+      error: serializeError(releaseError),
+    });
+  }
 
   // Send payment-failed email (best-effort, outside the tx).
   try {

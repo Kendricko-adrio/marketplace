@@ -1,7 +1,8 @@
 // Pure helper for the admin product-detail "Stok" tab. The product-detail API
 // fetches the raw branch_stock rows (scoped by the caller's branch access)
 // and hands them here; this filters by scope, groups by branch, and computes
-// `available` = max(0, stock - reservedStock). Kept pure (no DB) so it can be
+// `available` = max(0, stock - pendingRemoteStock). Confirmed reservations are
+// already reflected in Jubelio on-hand (`stock`).
 // unit-tested with deterministic fixtures. See branch-stock.test.ts.
 //
 // Scope rules mirror getBranchScope (../lib/auth-guard):
@@ -24,6 +25,7 @@ export type BranchStockInputRow = {
   color: string | null;
   stock: number;
   reservedStock: number;
+  pendingRemoteStock: number;
 };
 
 export type BranchStockRow = {
@@ -33,6 +35,7 @@ export type BranchStockRow = {
   color: string | null;
   stock: number;
   reservedStock: number;
+  pendingRemoteStock: number;
   available: number;
 };
 
@@ -40,7 +43,7 @@ export type BranchStockRow = {
 // compute the per-product totals shown on the products list. The list API fetches
 // the raw branch_stock rows for a product's variants (scoped in SQL by branch when
 // the caller is a branch admin) and hands them here; this filters by scope and sums
-// `available` = max(0, stock - reservedStock). Kept pure (no DB) so it can be unit-
+// `available` = max(0, stock - pendingRemoteStock). Kept pure (no DB) so it can be unit-
 // tested with deterministic fixtures. See branch-stock.test.ts.
 //
 // Scope rules mirror getBranchScope (../lib/auth-guard):
@@ -52,6 +55,7 @@ export type ScopedTotalsInputRow = {
   branchId: string;
   stock: number;
   reservedStock: number;
+  pendingRemoteStock: number;
 };
 
 export type ScopedTotals = {
@@ -70,15 +74,17 @@ export function computeScopedTotals(
 
   let totalStock = 0;
   let totalReserved = 0;
+  let totalPendingRemote = 0;
   for (const r of visible) {
     totalStock += r.stock;
     totalReserved += r.reservedStock;
+    totalPendingRemote += r.pendingRemoteStock;
   }
 
   return {
     totalStock,
     totalReserved,
-    totalAvailable: Math.max(0, totalStock - totalReserved),
+    totalAvailable: Math.max(0, totalStock - totalPendingRemote),
   };
 }
 
@@ -133,7 +139,8 @@ export function groupBranchStock(
       color: r.color,
       stock: r.stock,
       reservedStock: r.reservedStock,
-      available: Math.max(0, r.stock - r.reservedStock),
+      pendingRemoteStock: r.pendingRemoteStock,
+      available: Math.max(0, r.stock - r.pendingRemoteStock),
     });
   }
 

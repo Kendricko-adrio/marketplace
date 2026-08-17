@@ -906,6 +906,7 @@ async function seed() {
           // by the Jubelio import / webhook.
           barcode: null,
           discount: null,
+          jubelioItemId: 100_001 + allVariantIds.length,
         });
 
         // Track variant id for branch stock seeding
@@ -952,6 +953,7 @@ async function seed() {
         id: branchIds[0],
         name: "Cabang Jakarta Pusat",
         code: "JKT-01",
+        jubelioLocationId: 2_001,
         city: "Jakarta Pusat",
         address: "Jl. Sudirman No. 45, Gambir, Jakarta Pusat 10110",
         latitude: "-6.1944",
@@ -965,6 +967,7 @@ async function seed() {
         id: branchIds[1],
         name: "Cabang Surabaya",
         code: "SRB-01",
+        jubelioLocationId: 2_002,
         city: "Surabaya",
         address: "Jl. Tunjungan No. 80, Genteng, Surabaya 60275",
         latitude: "-7.2575",
@@ -978,6 +981,7 @@ async function seed() {
         id: branchIds[2],
         name: "Cabang Bandung Dago",
         code: "BDG-01",
+        jubelioLocationId: 2_003,
         city: "Bandung",
         address: "Jl. Ir. H. Juanda No. 101, Coblong, Bandung 40135",
         latitude: "-6.8888",
@@ -1648,7 +1652,7 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
     await db.insert(schema.systemConfig).values([
       {
         key: "reservation.ttlMinutes",
-        value: "30",
+        value: "15",
         type: "number",
         description:
           "Menit TTL reservasi stok saat customer menunggu pembayaran QRIS di Midtrans Snap. Setelah TTL, order dianggap expired dan reservasi dilepas (oleh webhook expire Midtrans / cron sweep).",

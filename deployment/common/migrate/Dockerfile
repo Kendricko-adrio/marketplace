@@ -4,7 +4,7 @@
 #
 # Build context = repo root (set in docker-compose.yml)
 
-FROM node:20-alpine AS runner
+FROM node:24-alpine AS runner
 
 WORKDIR /app
 
@@ -13,6 +13,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/store/package.json apps/store/
 COPY apps/admin/package.json apps/admin/
+COPY apps/jubelio-mock/package.json apps/jubelio-mock/
 COPY packages/db/package.json packages/db/
 COPY packages/ui/package.json packages/ui/
 

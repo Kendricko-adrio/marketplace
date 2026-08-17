@@ -1,24 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { orders, orderItems } from "@/db";
-import { eq } from "drizzle-orm";
+import { orders, orderItems, jubelioStockOperations } from "@/db";
+import { and, eq, inArray } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { createPayment } from "@/lib/midtrans";
+import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
 
 export async function POST(request: NextRequest) {
+  let log = requestLogger(request, { module: "midtrans-create" });
+  log.info("repayment requested");
   try {
     const access = await requireOnboardedApiSession();
-    if (!access.ok) return access.response;
+    if (!access.ok) return withRequestId(access.response, log);
     const { session } = access;
 
     const body = await request.json();
     const { orderId } = body;
 
     if (!orderId) {
-      return NextResponse.json(
+      log.warn("repayment rejected — orderId missing");
+      return withRequestId(NextResponse.json(
         { success: false, error: "orderId is required" },
         { status: 400 }
-      );
+      ), log);
     }
 
     // Load the order and verify ownership
@@ -36,8 +40,10 @@ export async function POST(request: NextRequest) {
     }
 
     const order = orderRows[0];
+    log = log.child({ orderId, userId: session.user.id });
 
     if (order.userId !== session.user.id) {
+      log.warn("repayment rejected — ownership mismatch");
       return NextResponse.json(
         { success: false, error: "Forbidden" },
         { status: 403 }
@@ -46,12 +52,35 @@ export async function POST(request: NextRequest) {
 
     // Only allow re-payment for pending_payment orders (failed_payment is final)
     if (order.status !== "pending_payment") {
+      log.warn("repayment rejected — order is not pending payment", { status: order.status });
       return NextResponse.json(
         {
           success: false,
           error: "Order is not pending payment",
         },
         { status: 400 }
+      );
+    }
+
+    const reserveRows = await db
+      .select({ status: jubelioStockOperations.status })
+      .from(jubelioStockOperations)
+      .where(
+        and(
+          eq(jubelioStockOperations.orderId, orderId),
+          eq(jubelioStockOperations.type, "reserve"),
+          inArray(jubelioStockOperations.status, ["applied", "committed"])
+        )
+      )
+      .limit(1);
+    if (reserveRows.length === 0) {
+      log.warn("repayment rejected — Jubelio reserve not confirmed");
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Stock has not been confirmed by Jubelio",
+        },
+        { status: 409 }
       );
     }
 
@@ -95,17 +124,18 @@ export async function POST(request: NextRequest) {
       .update(orders)
       .set({ snapRedirectUrl: result.redirectUrl })
       .where(eq(orders.id, orderId));
+    log.info("repayment payment created", { redirectUrl: !!result.redirectUrl });
 
-    return NextResponse.json({
+    return withRequestId(NextResponse.json({
       success: true,
       redirectUrl: result.redirectUrl,
       token: result.token,
-    });
+    }), log);
   } catch (error) {
-    console.error("Error creating Midtrans payment:", error);
-    return NextResponse.json(
+    log.error("repayment failed", { error: serializeError(error) });
+    return withRequestId(NextResponse.json(
       { success: false, error: "Failed to create payment" },
       { status: 500 }
-    );
+    ), log);
   }
 }

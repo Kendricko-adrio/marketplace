@@ -15,7 +15,7 @@ import { systemConfig } from "@/db";
  * fallbacks.
  *
  * Known keys (seeded in packages/db/src/seed.ts):
- *   reservation.ttlMinutes (number, default 30) — minutes a customer has to pay
+ *   reservation.ttlMinutes (number, default 15) — minutes a customer has to pay
  *   on the Midtrans Snap page before the order expires and its stock reservation
  *   is released.
  */

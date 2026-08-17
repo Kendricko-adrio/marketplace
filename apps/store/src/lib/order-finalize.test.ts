@@ -3,6 +3,7 @@ import {
   canFinalizeReservedStock,
   describeFailureReason,
   generatePickupCode,
+  getStockFinalizationDeltas,
 } from "./order-finalize";
 
 // Backs the Midtrans webhook failure path (claimAndFailOrder) and the sweep
@@ -46,9 +47,26 @@ describe("generatePickupCode", () => {
 });
 
 describe("canFinalizeReservedStock", () => {
-  it("requires both physical stock and reservation to cover the order", () => {
-    expect(canFinalizeReservedStock(5, 3, 3)).toBe(true);
-    expect(canFinalizeReservedStock(2, 3, 3)).toBe(false);
-    expect(canFinalizeReservedStock(5, 2, 3)).toBe(false);
+  it("requires the reservation to cover the order", () => {
+    expect(canFinalizeReservedStock(3, 3)).toBe(true);
+    expect(canFinalizeReservedStock(2, 3)).toBe(false);
+  });
+});
+
+describe("getStockFinalizationDeltas", () => {
+  it("only clears reserved stock for a remotely adjusted order", () => {
+    expect(getStockFinalizationDeltas(2, true)).toEqual({
+      stock: 0,
+      reservedStock: -2,
+      pendingRemoteStock: 0,
+    });
+  });
+
+  it("preserves the old local finalization behavior for pre-migration orders", () => {
+    expect(getStockFinalizationDeltas(2, false)).toEqual({
+      stock: -2,
+      reservedStock: -2,
+      pendingRemoteStock: -2,
+    });
   });
 });

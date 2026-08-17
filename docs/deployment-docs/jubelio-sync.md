@@ -19,6 +19,39 @@ JUBELIO_SYNC_MAX_PRODUCTS=      # kosong = fetch semua; integer = cap untuk test
 > Wire semua `JUBELIO_*` ke service `store` dan `admin` di `docker-compose.yml`
 > (mirip `CRON_SECRET`).
 
+## A.1 Stock adjustment safety
+
+Stock writes used by checkout have stricter environment controls than catalog
+reads.
+
+Staging runs `jubelio-mock` as a private Compose service and sets:
+
+```env
+APP_ENV=staging
+JUBELIO_MOCK_API_BASE_URL=http://jubelio-mock:3002
+JUBELIO_STOCK_WRITES_ENABLED=false
+JUBELIO_ADJUSTMENT_ACCOUNT_ID=75
+JUBELIO_STOCK_TIMEOUT_MS=8000
+```
+
+Production sets `APP_ENV=production`, but live writes remain disabled until
+this explicit value is changed and the store container is restarted:
+
+```env
+JUBELIO_STOCK_WRITES_ENABLED=true
+```
+
+The gateway also requires `NODE_ENV=production` and the exact HTTPS host
+`https://api2.jubelio.com`. If any check fails, checkout stops before Midtrans.
+Before enabling production, apply migration `0013_absurd_vampiro.sql`, verify
+all sellable variants have `jubelio_item_id`, verify active branches have
+`jubelio_location_id`, and create a database backup.
+
+The stateful mock supports `success`, `insufficient-stock`, `server-error`,
+`rate-limit-once`, `unauthorized-once`, `timeout-before-apply`,
+`timeout-after-apply`, and `malformed-success`. Control it with
+`PUT /__control/scenario` and reset it with `POST /__control/reset`.
+
 ## B. One-shot import (full pull pertama / refresh)
 
 ```bash
@@ -53,8 +86,8 @@ terbaru dari Jubelio lalu upsert. Tiap call dicatat di `audit_log`
 SELECT COUNT(*) FROM product WHERE jubelio_item_group_id IS NOT NULL;
 SELECT COUNT(*) FROM product_variant WHERE jubelio_item_id IS NOT NULL;
 SELECT jubelio_location_id, code, name, status FROM branch WHERE jubelio_location_id IS NOT NULL;
--- reserved_stock tetap 0 untuk row import
-SELECT COUNT(*) FROM branch_stock WHERE reserved_stock <> 0;
+-- master-data sync never makes runtime checkout counters negative
+SELECT COUNT(*) FROM branch_stock WHERE pending_remote_stock < 0 OR reserved_stock < 0;
 -- thumbnail + gallery terisi
 SELECT name, thumbnail IS NOT NULL, jsonb_array_length(images) FROM product WHERE jubelio_item_group_id IS NOT NULL LIMIT 5;
 ```

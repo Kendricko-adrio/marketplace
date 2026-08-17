@@ -39,6 +39,14 @@ x-pg: &pg-conn
   DATABASE_URL: "${DATABASE_URL}"
 
 services:
+  jubelio-mock:
+    build:
+      context: ../..
+      dockerfile: deployment/common/jubelio-mock/Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3002"
+
   # ---------------------------------------------------------------------------
   # STOREFRONT
   # ---------------------------------------------------------------------------
@@ -55,6 +63,7 @@ services:
     environment:
       <<: *pg-conn
       NODE_ENV: production
+      APP_ENV: staging
       # Better Auth (store)
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
       BETTER_AUTH_URL: "https://dev-store.adfsport.cloud"
@@ -80,6 +89,11 @@ services:
       JUBELIO_WEBHOOK_SECRET: ${JUBELIO_WEBHOOK_SECRET}
       JUBELIO_SYNC_CONCURRENCY: ${JUBELIO_SYNC_CONCURRENCY:-5}
       JUBELIO_SYNC_MAX_PRODUCTS: ${JUBELIO_SYNC_MAX_PRODUCTS:-}
+      # Stock writes never reach live Jubelio outside APP_ENV=production.
+      JUBELIO_MOCK_API_BASE_URL: "http://jubelio-mock:3002"
+      JUBELIO_STOCK_WRITES_ENABLED: "false"
+      JUBELIO_ADJUSTMENT_ACCOUNT_ID: ${JUBELIO_ADJUSTMENT_ACCOUNT_ID:-75}
+      JUBELIO_STOCK_TIMEOUT_MS: ${JUBELIO_STOCK_TIMEOUT_MS:-8000}
       # Uploads — shared named volume mounted at /app/uploads
       UPLOADS_DIR: /app/uploads
       # Internal URL the admin app uses to call this store's internal endpoints.
@@ -94,6 +108,9 @@ services:
     # Ports are NOT published to the host — Caddy handles public ingress.
     expose:
       - "3000"
+    depends_on:
+      jubelio-mock:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
       interval: 30s

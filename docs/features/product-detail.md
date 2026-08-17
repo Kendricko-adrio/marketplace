@@ -33,7 +33,8 @@ with a heading (branch name, status badge, city/code) and a table of:
 
 - `Stok` = physical units on hand (`branch_stock.stock`).
 - `Reserved` = units held by pending-payment orders (`branch_stock.reserved_stock`).
-- `Tersedia` = `max(0, stock - reservedStock)`.
+- `Tersedia` = `max(0, stock - pendingRemoteStock)`. Confirmed reservations
+  are already included in Jubelio's reduced `stock`.
 
 #### Role-based branch scoping
 

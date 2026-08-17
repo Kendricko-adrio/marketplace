@@ -88,6 +88,12 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 - **Every timestamp column uses `timestamptz`** (`withTimezone: true`) — never
   bare `timestamp`. Send `Date` objects on insert.
   (Details: [`docs/architecture/database.md`](docs/architecture/database.md).)
+- **Logging is mandatory for backend logic** — every change to an API route
+  or backend logic under `/api/**` must log through the app's structured
+  logger (`apps/store/src/lib/logger.ts` / `apps/admin/src/lib/logger.ts`):
+  at minimum an `info` on success and an `error` with context on failure, so
+  the order lifecycle stays auditable. Details:
+  [`docs/features/logging.md`](docs/features/logging.md).
 - **Docs are mandatory** — every new/changed endpoint and feature needs a doc
   entry. Folder rules: [`docs/README.md`](docs/README.md).
 - Write AGENTS.md and code-facing docs in **English**.

@@ -392,6 +392,34 @@ export function keyId(prefix: string, key: string): string {
   );
 }
 
+export type JubelioStockRow = {
+  itemId: number;
+  locationId: number;
+  onHand: number;
+};
+
+/**
+ * Resolve remote stock rows to existing local variant ids. The stock endpoint
+ * can return stale/extra item ids, and older rows may use a different local
+ * id for the same Jubelio item. Both cases must be handled before the FK write.
+ */
+export function resolveKnownJubelioStockRows(
+  rows: JubelioStockRow[],
+  variantIdByItemId: ReadonlyMap<number, string>
+): { branchId: string; productVariantId: string; stock: number }[] {
+  return rows.flatMap((row) => {
+    const productVariantId = variantIdByItemId.get(row.itemId);
+    if (!productVariantId) return [];
+    return [
+      {
+        branchId: keyId("jubelio:branch:", String(row.locationId)),
+        productVariantId,
+        stock: row.onHand,
+      },
+    ];
+  });
+}
+
 /** Format a Jubelio price ("1700000.0000" | 1700000) → numeric(15,2) string. */
 export function money(v: number | string | null | undefined): string {
   const n = Number(v ?? 0);
@@ -843,29 +871,39 @@ export async function upsertJubelioProducts(
  */
 export async function upsertJubelioStock(
   db: Db,
-  rows: { itemId: number; locationId: number; onHand: number }[],
+  rows: JubelioStockRow[],
   options: UpsertOptions = {}
 ): Promise<number> {
   const log = options.onProgress ?? (() => {});
   const now = new Date();
   if (rows.length === 0) return 0;
-  log(`upserting ${rows.length} branch_stock rows...`);
-  for (const chunk of chunked(rows, BATCH_SIZE)) {
+  const itemIds = [...new Set(rows.map((row) => row.itemId))];
+  const variants = await db
+    .select({ id: productVariants.id, jubelioItemId: productVariants.jubelioItemId })
+    .from(productVariants)
+    .where(inArray(productVariants.jubelioItemId, itemIds));
+  const variantIdByItemId = new Map(
+    variants
+      .filter((variant) => variant.jubelioItemId != null)
+      .map((variant) => [variant.jubelioItemId as number, variant.id])
+  );
+  const resolvedRows = resolveKnownJubelioStockRows(rows, variantIdByItemId);
+  const skippedItemIds = itemIds.filter((itemId) => !variantIdByItemId.has(itemId));
+  if (skippedItemIds.length > 0) {
+    log(`skipped ${skippedItemIds.length} stock item ids without a local variant`);
+  }
+  if (resolvedRows.length === 0) return 0;
+  log(`upserting ${resolvedRows.length} branch_stock rows...`);
+  for (const chunk of chunked(resolvedRows, BATCH_SIZE)) {
     await db
       .insert(branchStocks)
-      .values(
-        chunk.map((r) => ({
-          branchId: keyId("jubelio:branch:", String(r.locationId)),
-          productVariantId: keyId("jubelio:variant:", String(r.itemId)),
-          stock: r.onHand,
-        }))
-      )
+      .values(chunk)
       .onConflictDoUpdate({
         target: [branchStocks.branchId, branchStocks.productVariantId],
         set: { stock: sql`excluded.stock`, updatedAt: now },
       });
   }
-  return rows.length;
+  return resolvedRows.length;
 }
 
 /**

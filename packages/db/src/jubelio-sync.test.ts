@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { parseJubelioStartPage, resolveJubelioThumbnail } from "./jubelio-sync";
+import {
+  parseJubelioStartPage,
+  resolveJubelioThumbnail,
+  resolveKnownJubelioStockRows,
+} from "./jubelio-sync";
+
+describe("resolveKnownJubelioStockRows", () => {
+  it("keeps known variants, uses their database ids, and skips unknown stock items", () => {
+    const rows = resolveKnownJubelioStockRows(
+      [
+        { itemId: 101, locationId: 7, onHand: 3 },
+        { itemId: 999, locationId: 7, onHand: 4 },
+      ],
+      new Map([[101, "legacy-variant-id"]])
+    );
+
+    expect(rows).toEqual([
+      {
+        branchId: "jubelio:branch:902ba3cda1883801594b6e1b",
+        productVariantId: "legacy-variant-id",
+        stock: 3,
+      },
+    ]);
+  });
+});
 
 describe("resolveJubelioThumbnail", () => {
   it("returns null when both master thumbnail and catalog images are absent", () => {

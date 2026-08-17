@@ -24,6 +24,7 @@ export default async function RolesPage() {
   const adminPermissions: PermissionMap = {
     products: { canView: false, canEdit: false, canDelete: false },
     orders: { canView: false, canEdit: false, canDelete: false },
+    customers: { canView: false, canEdit: false, canDelete: false },
     branches: { canView: false, canEdit: false, canDelete: false },
     homepage: { canView: false, canEdit: false, canDelete: false },
     pages: { canView: false, canEdit: false, canDelete: false },

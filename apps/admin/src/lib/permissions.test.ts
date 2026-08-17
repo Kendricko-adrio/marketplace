@@ -9,6 +9,7 @@ import type { PermissionMap } from "@marketplace/db/src/schema/permissions";
 const adminMap: PermissionMap = {
   products: { canView: true, canEdit: true, canDelete: false },
   orders: { canView: true, canEdit: false, canDelete: false },
+  customers: { canView: true, canEdit: false, canDelete: false },
   branches: { canView: false, canEdit: false, canDelete: false },
   homepage: { canView: false, canEdit: false, canDelete: false },
   pages: { canView: false, canEdit: false, canDelete: false },
@@ -49,6 +50,7 @@ describe("getFirstViewableModule", () => {
     const none = {
       products: { canView: false, canEdit: false, canDelete: false },
       orders: { canView: false, canEdit: false, canDelete: false },
+      customers: { canView: false, canEdit: false, canDelete: false },
       branches: { canView: false, canEdit: false, canDelete: false },
       homepage: { canView: false, canEdit: false, canDelete: false },
       pages: { canView: false, canEdit: false, canDelete: false },

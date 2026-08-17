@@ -12,6 +12,7 @@ import { relations } from "drizzle-orm";
 export const moduleNames = [
 	"products",
 	"orders",
+	"customers",
 	"branches",
 	"homepage",
 	"pages",
@@ -30,6 +31,14 @@ export interface ModulePermissions {
 }
 
 export type PermissionMap = Record<ModuleName, ModulePermissions>;
+
+export const adminDefaultCustomerPermission = {
+	role: "admin",
+	module: "customers",
+	canView: false,
+	canEdit: false,
+	canDelete: false,
+} as const;
 
 export const permissions = pgTable(
 	"permission",

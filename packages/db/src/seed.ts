@@ -269,7 +269,8 @@ async function seed() {
     // =====================
     // HQ is treated as implicit superuser in application code, so only the
     // "admin" role gets explicit rows here. Default: products + orders with
-    // view + edit (edit includes create), no delete, everything else denied.
+    // view + edit (edit includes create), customers with view-only access,
+    // and no delete. Other operational modules follow the rows below.
     console.log("🔒 Seeding admin role permissions...");
     await db.insert(schema.permissions).values([
       {
@@ -287,6 +288,10 @@ async function seed() {
         canView: true,
         canEdit: true,
         canDelete: false,
+      },
+      {
+        id: generateId(),
+        ...schema.adminDefaultCustomerPermission,
       },
       {
         id: generateId(),
@@ -344,6 +349,10 @@ async function seed() {
         email: "john@example.com",
         emailVerified: true,
         image: null,
+        phone: "81234567890",
+        birthDate: "2000-01-01",
+        gender: "male",
+        onboardingCompleted: true,
       },
       {
         id: customer2Id,

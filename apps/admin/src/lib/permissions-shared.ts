@@ -5,6 +5,7 @@ import type { ModuleName, PermissionMap } from "@/db";
 export const HQ_PERMISSIONS: PermissionMap = {
 	products: { canView: true, canEdit: true, canDelete: true },
 	orders: { canView: true, canEdit: true, canDelete: true },
+	customers: { canView: true, canEdit: true, canDelete: true },
 	branches: { canView: true, canEdit: true, canDelete: true },
 	homepage: { canView: true, canEdit: true, canDelete: true },
 	pages: { canView: true, canEdit: true, canDelete: true },
@@ -15,6 +16,7 @@ export const HQ_PERMISSIONS: PermissionMap = {
 export const MODULE_LABELS: Record<ModuleName, string> = {
 	products: "Produk",
 	orders: "Pesanan",
+	customers: "Customer",
 	branches: "Cabang",
 	homepage: "Homepage",
 	pages: "Halaman",

@@ -99,6 +99,13 @@
       "when": 1786958953847,
       "tag": "0013_absurd_vampiro",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786964398633,
+      "tag": "0014_add_customers_permission",
+      "breakpoints": true
     }
   ]
 }

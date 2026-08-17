@@ -6,6 +6,7 @@ import {
   Package,
   ShoppingBag,
   Users,
+  UserRoundSearch,
   Store,
   LayoutTemplate,
   FileText,
@@ -58,6 +59,7 @@ export default function AdminSidebar() {
     module?:
       | "products"
       | "orders"
+      | "customers"
       | "notifications"
       | "branches"
       | "homepage"
@@ -69,6 +71,7 @@ export default function AdminSidebar() {
   const links: SidebarLink[] = [
     { href: "/admin/products", label: "Produk", icon: Package, module: "products" },
     { href: "/admin/orders", label: "Pesanan", icon: ShoppingBag, module: "orders" },
+    { href: "/admin/customers", label: "Customer", icon: UserRoundSearch, module: "customers" },
     { href: "/admin/notifications", label: "Notifikasi", icon: Bell, module: "notifications" },
     { href: "/admin/branches", label: "Cabang", icon: Store, module: "branches" },
     { href: "/admin/homepage", label: "Homepage", icon: LayoutTemplate, module: "homepage" },

@@ -31,6 +31,7 @@ interface RolesClientProps {
 const MODULES: ModuleName[] = [
   "products",
   "orders",
+  "customers",
   "branches",
   "homepage",
   "pages",

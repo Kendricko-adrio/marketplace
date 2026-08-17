@@ -6,10 +6,14 @@ import {
   productToCategory,
   categories,
   productImages,
+  branchStocks,
+  branches,
   brands,
   genders,
 } from "@/db";
 import { eq, ilike, and, or, sql, desc, asc, gte, lte, inArray } from "drizzle-orm";
+import { hasAvailableStock } from "@/lib/stock";
+import { parseListParams } from "@/lib/list-params";
 
 type ProductResult = {
   id: string;
@@ -33,16 +37,14 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get("search") || "";
     const categorySlug = searchParams.get("category");
     const brandSlug = searchParams.get("brand");
-    const genderSlug = searchParams.get("gender");
+    const branchId = searchParams.get("branch");
     const minPrice = searchParams.get("minPrice");
     const maxPrice = searchParams.get("maxPrice");
     const status = searchParams.get("status") || "aktif";
     const hasDiscount = searchParams.get("hasDiscount") === "true";
-    const sortBy = searchParams.get("sortBy") || "createdAt";
-    const sortOrder = searchParams.get("sortOrder") || "desc";
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = parseInt(searchParams.get("limit") || "12");
-    const offset = (page - 1) * limit;
+    const { page, limit, offset, sortBy, sortOrder } = parseListParams(
+      searchParams
+    );
 
     // Cheapest variant net price per product — the price shown on cards and the
     // basis for the price-range filter, the "has discount" filter, and price
@@ -58,7 +60,7 @@ export async function GET(request: NextRequest) {
 
     // Build conditions (applied to BOTH the list query and the count query so
     // the pagination total stays correct under every filter, including brand /
-    // gender / category).
+    // category).
     const conditions = [];
 
     if (search) {
@@ -97,14 +99,29 @@ export async function GET(request: NextRequest) {
       conditions.push(brand.length ? eq(products.brandId, brand[0].id) : sql`false`);
     }
 
-    // Gender filter (slug → genderId).
-    if (genderSlug) {
-      const gender = await db
-        .select({ id: genders.id })
-        .from(genders)
-        .where(eq(genders.slug, genderSlug))
-        .limit(1);
-      conditions.push(gender.length ? eq(products.genderId, gender[0].id) : sql`false`);
+    // Branch filter (branch id) via a subquery: the product must have at least
+    // one variant with available stock (stock - reservedStock > 0) at that
+    // branch. Composes with the other conditions and applies to the count
+    // query too, so pagination.total reflects the branch-filtered set.
+    if (branchId) {
+      conditions.push(
+        inArray(
+          products.id,
+          db
+            .select({ productId: productVariants.productId })
+            .from(productVariants)
+            .innerJoin(
+              branchStocks,
+              eq(branchStocks.productVariantId, productVariants.id)
+            )
+            .where(
+              and(
+                eq(branchStocks.branchId, branchId),
+                sql`${branchStocks.stock} - ${branchStocks.reservedStock} > 0`
+              )
+            )
+        )
+      );
     }
 
     // Category filter (slug → id) via a subquery on the junction table, so it
@@ -174,6 +191,56 @@ export async function GET(request: NextRequest) {
 
     const total = Number(countResult[0]?.count || 0);
 
+    // Per-product stock availability — used to grey out cards whose product
+    // has no sellable stock in any branch. Two queries (no N+1): variants of
+    // the page's products, then their branch-stock rows restricted to active
+    // branches (same rule as the product-detail API).
+    const pageVariantRows = await db
+      .select({ id: productVariants.id, productId: productVariants.productId })
+      .from(productVariants)
+      .where(
+        inArray(
+          productVariants.productId,
+          queryResults.map((p) => p.id)
+        )
+      );
+
+    // When a branch filter is active, hasStock reflects availability at that
+    // branch only (products shown are all in-stock there anyway — this keeps
+    // the grey-out logic consistent with the filtered set).
+    const stockConditions = [
+      inArray(
+        branchStocks.productVariantId,
+        pageVariantRows.map((v) => v.id)
+      ),
+      eq(branches.status, "aktif"),
+    ];
+    if (branchId) stockConditions.push(eq(branchStocks.branchId, branchId));
+
+    const pageStockRows = pageVariantRows.length
+      ? await db
+          .select({
+            productVariantId: branchStocks.productVariantId,
+            stock: branchStocks.stock,
+            reservedStock: branchStocks.reservedStock,
+          })
+          .from(branchStocks)
+          .innerJoin(branches, eq(branchStocks.branchId, branches.id))
+          .where(and(...stockConditions))
+      : [];
+
+    const variantToProduct = new Map(
+      pageVariantRows.map((v) => [v.id, v.productId])
+    );
+    const stockByProduct = new Map<string, { stock: number; reservedStock: number }[]>();
+    for (const row of pageStockRows) {
+      const productId = variantToProduct.get(row.productVariantId);
+      if (!productId) continue;
+      const list = stockByProduct.get(productId) ?? [];
+      list.push({ stock: row.stock, reservedStock: row.reservedStock });
+      stockByProduct.set(productId, list);
+    }
+
     // Attach the card image. Prefer the product-level `thumbnail` (set by the
     // Jubelio sync / seeder — a Jubelio CDN URL, hotlinked). Fall back to the
     // default variant's first variant-level image for legacy products that
@@ -208,6 +275,7 @@ export async function GET(request: NextRequest) {
           ...product,
           price: product.price ?? product.basePrice,
           image,
+          hasStock: hasAvailableStock(stockByProduct.get(product.id) ?? []),
         };
       })
     );

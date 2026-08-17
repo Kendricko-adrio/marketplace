@@ -9,6 +9,7 @@ import { eq, asc, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { withPermission } from "@/lib/auth-guard";
 import { deleteFile } from "@/lib/uploads";
+import { validateContent } from "@/lib/homepage-content";
 
 export const GET = withPermission(
   async (_ctx, _request: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
@@ -78,72 +79,6 @@ export const GET = withPermission(
   "homepage",
   "view"
 );
-
-// --- Zod schemas for content validation ---
-
-const productFilterSchema = z.object({
-  search: z.string().optional(),
-  category: z.string().optional(),
-  brand: z.string().optional(),
-  gender: z.string().optional(),
-  minPrice: z.string().optional(),
-  maxPrice: z.string().optional(),
-  hasDiscount: z.boolean().optional(),
-  sortOrder: z
-    .enum(["newest", "priceAsc", "priceDesc"])
-    .optional(),
-});
-
-const bannerSlideSchema = z.object({
-  imageUrl: z.string(),
-  altText: z.string().optional(),
-});
-
-const bannerContentSchema = z.object({
-  slides: z.array(bannerSlideSchema).max(5).default([]),
-  ctaText: z.string().optional(),
-  ctaLink: z.string().optional(),
-  autoRotateIntervalSec: z.number().int().min(2).max(30).optional(),
-});
-
-const carouselContentSchema = z.object({
-  mode: z.enum(["manual", "filter"]),
-  filter: productFilterSchema.optional(),
-  limit: z.number().int().min(1).max(20).optional(),
-});
-
-const promoCardItemSchema = z.object({
-  id: z.string(),
-  imageUrl: z.string(),
-  title: z.string(),
-  filter: productFilterSchema.optional(),
-});
-
-const promoCardsContentSchema = z.object({
-  cards: z.array(promoCardItemSchema).max(6).default([]),
-});
-
-const announcementBarContentSchema = z.object({
-  message: z.string(),
-  variant: z.enum(["info", "warning", "success"]).optional(),
-});
-
-function validateContent(type: string, content: unknown): unknown {
-  if (content === null || content === undefined) return {};
-  switch (type) {
-    case "banner":
-      return bannerContentSchema.parse(content);
-    case "carousel_product":
-      return carouselContentSchema.parse(content);
-    case "promo_cards":
-      return promoCardsContentSchema.parse(content);
-    case "announcement_bar":
-      return announcementBarContentSchema.parse(content);
-    case "store_banner":
-    default:
-      return content;
-  }
-}
 
 /**
  * Extracts all /uploads/ image URLs stored inside a section's JSONB content.

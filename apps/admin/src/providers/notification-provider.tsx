@@ -102,6 +102,10 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<NotificationListItem[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isMuted, setIsMuted] = useState(false);
+  // Bumped to restart the long-poll loop (e.g. after markAllRead, so an
+  // in-flight response captured before the DB update can't overwrite the
+  // fresh unread count with a stale one).
+  const [pollEpoch, setPollEpoch] = useState(0);
   const sinceRef = useRef<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   // Track every notification id we've already delivered to this session so a
@@ -250,7 +254,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       abortRef.current?.abort();
     };
-  }, [isMuted, prependNotifications]);
+  }, [isMuted, prependNotifications, pollEpoch]);
 
   const markAllRead = useCallback(async () => {
     try {
@@ -262,6 +266,11 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
       setNotifications((prev) =>
         prev.map((n) => (n.isRead ? n : { ...n, isRead: true, readAt: new Date().toISOString() }))
       );
+      // Restart the poll loop from a fresh initial poll: the in-flight
+      // response was computed before this DB update and would otherwise
+      // overwrite the count we just zeroed with a stale value.
+      sinceRef.current = null;
+      setPollEpoch((e) => e + 1);
     } catch (error) {
       console.error("markAllRead error:", error);
     }

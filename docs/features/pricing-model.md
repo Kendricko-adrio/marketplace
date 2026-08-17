@@ -54,6 +54,13 @@ net price (`variant.price`), not the cheapest — the customer picks a variant a
 sees that variant's price. This is what fixes the original detail-vs-cart
 mismatch (both now use `variant.price`).
 
+The detail page also renders the full metadata available in the DB so the page
+is never sparse: brand, gender, collection, season, article number, the
+selected variant's SKU, and category chips (from the `categories` array of
+`GET /api/products/{id}`). The discount badge uses the shared
+`computeDiscountPercent` helper (`apps/store/src/lib/pricing.ts`), the same
+derivation as product cards.
+
 ## `hasDiscount` filter
 
 The "ada diskon" / "has discount" filter (replaces the old "Flash Sale" filter)

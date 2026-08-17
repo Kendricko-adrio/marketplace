@@ -14,7 +14,7 @@ how the marketplace syncs from Jubelio, replacing the older CSV-based SOH sync
 | `item` / sku (`item_id`, `item_code`, `sell_price`, `barcode`, `variation_values`) | `product_variant` | `jubelio_item_id` (unique) | `sku` = `item_code` (GTIN); `price` = variant `sell_price`; `size`/`color` from `variation_values` (`Ukuran`→size, `Warna`→color) |
 | `location` (`location_id`, `location_code`, `location_name`) | `branch` | `jubelio_location_id` (unique) | Source: `GET /locations/list` (NOT `/locations/`, which returns only the webstore). `code` = `location_code`. **This is the branch** — not the channel. |
 | stock: `(item_id, location_id)` `on_hand`/`available` | `branch_stock` | composite `(branchId, productVariantId)` | `stock` = `on_hand` (physical pool). **`reservedStock` never written** (checkout-managed). |
-| `category` (`category_id`, `category_name`) | `category` | `jubelio_category_id` (unique) | Upserted by slug (merges with CSV-SOH categories). |
+| `category` (`category_id`, `category_name`) | `category` | `jubelio_category_id` (unique) | Created **on demand** — only categories used by synced products (see decision 8). Upserted by slug (merges with CSV-SOH categories). |
 | `selected_brand_name` | `brand` | `slug` | Upserted by slug per product (create if new, link if existing). |
 
 **Branches are locations, not channels.** Jubelio `channel_id` (64 = Shopee,
@@ -53,6 +53,9 @@ the token and auto re-logins on 401. Env: `JUBELIO_EMAIL`, `JUBELIO_PASSWORD`,
 - `branch_stock.reservedStock` is **never** written by sync (checkout-managed
   only — see `stock-reservation-design`).
 - New branches upsert as `status:"nonaktif"`; existing branches keep status.
+  Exception: the **import script** (`db:import-jubelio`) forces `status:"aktif"`
+  + fixed operating hours (Mon–Sun 07:00–22:00) on every pulled branch, and
+  skips the "Dago 123" location (see `upsertJubelioBranches` options).
 - Upserts keyed on Jubelio natural keys → idempotent re-runs.
 - Brand/category linked by **slug lookup** (not a computed prefixed id) so
   Jubelio rows coexist with pre-existing CSV-SOH rows.
@@ -77,6 +80,12 @@ the token and auto re-logins on 401. Env: `JUBELIO_EMAIL`, `JUBELIO_PASSWORD`,
    (empty = all).
 7. Admin product CRUD removed (Jubelio is source of truth); replaced by the
    per-product Sync button.
+8. Categories are created **on demand**, not bulk-imported: the import script
+   and webhook only ensure the categories used by the products they sync
+   (`ensureJubelioCategories`). The full ~1.6k Jubelio tree is never imported
+   wholesale, so our `category` table stays in sync with the products we
+   carry. The webhook path checks our DB first and only fetches the Jubelio
+   tree when the product's category is actually missing.
 
 ## Env
 

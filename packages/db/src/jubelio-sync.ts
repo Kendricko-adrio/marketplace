@@ -20,7 +20,9 @@
  * Invariants (mirror the former SOH sync; do NOT violate):
  *   - branch_stock.reservedStock is NEVER written here (runtime-managed by
  *     checkout — see [[stock-reservation-design]]). Only `stock` is written.
- *   - New branches upsert as status="nonaktif"; existing branches keep status.
+ *   - New branches upsert as status="nonaktif"; existing branches keep status
+ *     (unless the caller opts in via `upsertJubelioBranches` options — the
+ *     import script forces status="aktif" + fixed operating hours).
  *   - Upserts keyed on Jubelio natural keys (jubelioItemGroupId / jubelioItemId /
  *     jubelioLocationId / jubelioCategoryId) → idempotent re-runs.
  *   - Brand/category linked by slug (upsert on slug) so Jubelio rows coexist
@@ -32,7 +34,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { sql, inArray } from "drizzle-orm";
+import { sql, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   branches,
@@ -42,6 +44,7 @@ import {
   productToCategory,
   products,
   productVariants,
+  type OperatingHours,
   type ProductImage,
 } from "./schema";
 import * as schema from "./schema";
@@ -272,6 +275,18 @@ export type UpsertSummary = {
 
 export type UpsertOptions = { onProgress?: (msg: string) => void };
 
+/** Options for upsertJubelioBranches. */
+export type UpsertBranchesOptions = UpsertOptions & {
+  /** Extra location names to skip (case-insensitive), on top of NON_OUTLET_LOCATIONS. */
+  excludeNames?: string[];
+  /** Status applied to every upserted branch (insert + update). When omitted,
+   *  new branches get "nonaktif" and existing branches keep their status. */
+  status?: "aktif" | "nonaktif";
+  /** Operating hours applied to every upserted branch (insert + update).
+   *  When omitted, operating hours are left untouched. */
+  operatingHours?: OperatingHours;
+};
+
 // ---------------------------------------------------------------------------
 // Fetch helpers
 // ---------------------------------------------------------------------------
@@ -427,19 +442,29 @@ export async function mapWithConcurrency<T, R>(
 // ---------------------------------------------------------------------------
 
 /**
- * Upsert branches (locations). Skips non-outlet staging locations. New
- * branches → status "nonaktif" (disabled) until an admin enables; existing
- * branches keep their status. Returns the count of upserted outlets.
+ * Upsert branches (locations). Skips non-outlet staging locations plus any
+ * `excludeNames`. By default new branches → status "nonaktif" (disabled) until
+ * an admin enables, and existing branches keep their status; pass `status` /
+ * `operatingHours` to force those on every upserted branch (the import script
+ * does — see import-jubelio.ts). Returns the count of upserted outlets.
  */
 export async function upsertJubelioBranches(
   db: Db,
   locations: JubelioLocation[],
-  options: UpsertOptions = {}
+  options: UpsertBranchesOptions = {}
 ): Promise<number> {
   const log = options.onProgress ?? (() => {});
   const now = new Date();
+  const extraExcluded = new Set(
+    (options.excludeNames ?? [])
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+  );
   const outlets = locations.filter(
-    (l) => l.location_name && !NON_OUTLET_LOCATIONS.has(l.location_name.trim())
+    (l) =>
+      l.location_name &&
+      !NON_OUTLET_LOCATIONS.has(l.location_name.trim()) &&
+      !extraExcluded.has(l.location_name.trim().toLowerCase())
   );
   log(`upserting ${outlets.length} outlet branches (of ${locations.length} locations)...`);
   for (const chunk of chunked(outlets, BATCH_SIZE)) {
@@ -467,7 +492,10 @@ export async function upsertJubelioBranches(
             latitude: m?.[1] ?? null,
             longitude: m?.[2] ?? null,
             jubelioLocationId: l.location_id,
-            status: "nonaktif",
+            status: options.status ?? "nonaktif",
+            ...(options.operatingHours
+              ? { operatingHours: options.operatingHours }
+              : {}),
           };
         })
       )
@@ -480,7 +508,12 @@ export async function upsertJubelioBranches(
           latitude: sql`excluded.latitude`,
           longitude: sql`excluded.longitude`,
           updatedAt: now,
-          // status intentionally NOT updated — preserve admin/enabled state.
+          // status/operatingHours only when the caller opts in — default
+          // preserves admin/enabled state.
+          ...(options.status ? { status: sql`excluded.status` } : {}),
+          ...(options.operatingHours
+            ? { operatingHours: sql`excluded.operating_hours` }
+            : {}),
         },
       });
   }
@@ -488,38 +521,102 @@ export async function upsertJubelioBranches(
 }
 
 /**
- * Upsert all categories by slug (merges with pre-existing CSV-SOH categories).
- * Multiple Jubelio categories may share a name (→ same slug) — they're deduped
- * for the insert (first category_id wins the row's jubelioCategoryId) and all
- * map to the same our-category id. Returns a map jubelioCategoryId → our id
- * covering ALL input categories (so product links resolve for dup-name cats).
+ * Ensure categories exist for the given Jubelio category ids — creates ONLY
+ * the missing ones (unlike the old bulk `upsertJubelioCategories`, which
+ * imported the whole ~1.6k Jubelio tree whether or not any product used it).
+ * Returns a map jubelioCategoryId → our category id for every resolvable id.
+ *
+ * `jubelioCats` is the full Jubelio category tree (id → name). Pass `null`
+ * when you don't already have it (e.g. the webhook path): the tree is then
+ * fetched from Jubelio only when at least one requested id is missing from
+ * our DB — the common case (category already exists) costs zero Jubelio calls.
+ *
+ * Resolution order per id:
+ *   1. Direct hit by `jubelioCategoryId` (existing sync-managed row).
+ *   2. Slug hit — a legacy CSV-SOH row with the same name but no
+ *      `jubelioCategoryId`: claimed (jubelioCategoryId set) instead of
+ *      creating a duplicate.
+ *   3. Otherwise insert a new row (upsert on slug, so dup-name Jubelio
+ *      categories collapse onto one row and all map to the same our-id).
  */
-export async function upsertJubelioCategories(
+export async function ensureJubelioCategories(
   db: Db,
-  cats: JubelioCategory[],
+  jubelioCats: JubelioCategory[] | null,
+  categoryIds: number[],
   options: UpsertOptions = {}
 ): Promise<Map<number, string>> {
   const log = options.onProgress ?? (() => {});
   const now = new Date();
+  const uniqueIds = [...new Set(categoryIds.filter((id) => id != null))];
+  if (uniqueIds.length === 0) return new Map();
+
+  // 1. Direct hits — rows already linked to these Jubelio ids.
+  const existing = await db
+    .select({ id: categories.id, jubelioCategoryId: categories.jubelioCategoryId })
+    .from(categories)
+    .where(inArray(categories.jubelioCategoryId, uniqueIds));
+  const map = new Map<number, string>();
+  for (const row of existing) {
+    if (row.jubelioCategoryId != null) map.set(row.jubelioCategoryId, row.id);
+  }
+
+  // 2. Missing ids — resolve their Jubelio records (lazy fetch when the
+  //    caller didn't already have the tree).
+  const missingIds = uniqueIds.filter((id) => !map.has(id));
+  if (missingIds.length === 0) return map;
+  const cats = jubelioCats ?? (await fetchCategories());
+  const byId = new Map(cats.map((c) => [c.category_id, c]));
+  const missingCats = missingIds
+    .map((id) => byId.get(id))
+    .filter((c): c is JubelioCategory => Boolean(c));
+  const unknown = missingIds.filter((id) => !byId.has(id));
+  if (unknown.length > 0) {
+    log(
+      `⚠️ ${unknown.length} category id(s) not found in Jubelio tree: ${unknown.join(", ")}`
+    );
+  }
+  if (missingCats.length === 0) return map;
+
   const slugOf = (c: JubelioCategory) =>
     slugify(c.category_name) || `cat-${c.category_id}`;
 
-  // Dedupe by slug (first wins) — avoids "ON CONFLICT affect row a second time"
-  // when a single INSERT batch contains duplicate slugs.
-  const seen = new Set<string>();
-  const deduped: JubelioCategory[] = [];
-  for (const c of cats) {
-    const slug = slugOf(c);
-    if (!seen.has(slug)) {
-      seen.add(slug);
-      deduped.push(c);
+  // 3. Slug hits — rows that already exist under the same slug (legacy
+  //    CSV-SOH rows with jubelioCategoryId = null, or dup-name Jubelio rows).
+  //    Legacy rows are claimed (jubelioCategoryId set) instead of creating a
+  //    duplicate; dup-name Jubelio rows are left as-is and resolved by slug
+  //    in step 5.
+  const missingSlugs = [...new Set(missingCats.map(slugOf))];
+  const slugRows = await db
+    .select({
+      id: categories.id,
+      slug: categories.slug,
+      jubelioCategoryId: categories.jubelioCategoryId,
+    })
+    .from(categories)
+    .where(inArray(categories.slug, missingSlugs));
+  const rowBySlug = new Map(slugRows.map((r) => [r.slug, r]));
+  let claimed = 0;
+  for (const c of missingCats) {
+    const row = rowBySlug.get(slugOf(c));
+    if (row && row.jubelioCategoryId == null) {
+      await db
+        .update(categories)
+        .set({ jubelioCategoryId: c.category_id, updatedAt: now })
+        .where(eq(categories.id, row.id));
+      claimed++;
     }
   }
-  log(
-    `upserting ${deduped.length} categories (of ${cats.length} — ${
-      cats.length - deduped.length
-    } dup-name merged)...`
-  );
+
+  // 4. Create the rest — only slugs with no existing row at all (deduped by
+  //    slug so dup-name Jubelio cats collapse onto one row).
+  const toCreate = missingCats.filter((c) => !rowBySlug.has(slugOf(c)));
+  const seen = new Set<string>();
+  const deduped = toCreate.filter((c) => {
+    const slug = slugOf(c);
+    if (seen.has(slug)) return false;
+    seen.add(slug);
+    return true;
+  });
   for (const chunk of chunked(deduped, BATCH_SIZE)) {
     await db
       .insert(categories)
@@ -540,17 +637,23 @@ export async function upsertJubelioCategories(
         },
       });
   }
-  // Build jubelioCategoryId → our id by slug (covers ALL inputs incl. dups).
+
+  // 5. Re-resolve by slug — covers created rows AND dup-name cats that
+  //    collapsed onto the same row (first category_id wins the row's
+  //    jubelioCategoryId; all map to the same our-id).
   const rows = await db
     .select({ id: categories.id, slug: categories.slug })
     .from(categories)
-    .where(inArray(categories.slug, [...seen]));
+    .where(inArray(categories.slug, missingSlugs));
   const slugToId = new Map(rows.map((r) => [r.slug, r.id]));
-  const map = new Map<number, string>();
-  for (const c of cats) {
+  for (const c of missingCats) {
     const id = slugToId.get(slugOf(c));
     if (id) map.set(c.category_id, id);
   }
+
+  log(
+    `ensured ${map.size} categories (${existing.length} existing, ${claimed} legacy-linked, ${deduped.length} created)`
+  );
   return map;
 }
 
@@ -790,11 +893,14 @@ export async function syncOneProduct(
   db: Db,
   itemGroupId: number
 ): Promise<{ product: string; variants: number; stockRows: number }> {
-  // Ensure categories are present + build the link map.
-  const cats = await fetchCategories();
-  const categoryMap = await upsertJubelioCategories(db, cats);
-
   const catalog = await fetchProductCatalog(itemGroupId);
+
+  // Category — check our DB first; only hit Jubelio when it's missing
+  // (avoids the full ~1.6k-category fetch on every webhook event).
+  const categoryMap = await ensureJubelioCategories(db, null, [
+    catalog.item_category_id,
+  ]);
+
   const prod = await upsertJubelioProducts(db, [{ catalog }], categoryMap);
 
   // Stock for this product's variants.

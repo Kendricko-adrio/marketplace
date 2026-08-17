@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { vouchers } from "@/db";
 import { eq, and, gt, lt } from "drizzle-orm";
+import { computeVoucherDiscount } from "@/lib/vouchers";
 
 export async function POST(request: NextRequest) {
   try {
@@ -64,16 +65,12 @@ export async function POST(request: NextRequest) {
     // Calculate discount
     let discount = 0;
     if (subtotal) {
-      if (v.discountType === "percentage") {
-        discount = subtotal * (parseFloat(v.value) / 100);
-        if (v.maxDiscount) {
-          discount = Math.min(discount, parseFloat(v.maxDiscount));
-        }
-      } else if (v.discountType === "fixed") {
-        discount = parseFloat(v.value);
-      } else if (v.discountType === "shipping") {
-        discount = parseFloat(v.value);
-      }
+      discount = computeVoucherDiscount(
+        v.discountType,
+        v.value,
+        subtotal,
+        v.maxDiscount
+      );
     }
 
     return NextResponse.json({

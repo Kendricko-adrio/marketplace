@@ -9,16 +9,28 @@ import {
   branchStocks,
   genders,
 } from "@/db";
-import { eq, desc, sql, inArray, sum, asc, ilike, or } from "drizzle-orm";
-import { withPermission } from "@/lib/auth-guard";
+import { eq, desc, sql, inArray, asc, ilike, or, and } from "drizzle-orm";
+import { withPermission, getBranchScope } from "@/lib/auth-guard";
+import {
+  computeScopedTotals,
+  type ScopedTotalsInputRow,
+} from "@/lib/branch-stock";
 
-export const GET = withPermission(async (_ctx, request: NextRequest) => {
+export const GET = withPermission(async (ctx, request: NextRequest) => {
   try {
     const { searchParams } = new URL(request.url);
     const page = parseInt(searchParams.get("page") || "1");
     const limit = parseInt(searchParams.get("limit") || "20");
     const search = searchParams.get("search")?.trim() || "";
     const offset = (page - 1) * limit;
+
+    // Branch scope:
+    //   - HQ / branchless admin → all products, stock summed across branches.
+    //   - Branch admin          → only products their branch carries (i.e. has a
+    //     branch_stock row for their branchId), with stock scoped to that branch.
+    // The SQL `where` is the real access control; computeScopedTotals (pure) is
+    // the tested filter+sum. See lib/branch-stock.ts + lib/auth-guard.ts.
+    const scope = getBranchScope(ctx.user);
 
     // Server-side search: match against name or slug. Empty search returns all.
     const searchCondition = search
@@ -28,10 +40,33 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
         )
       : undefined;
 
+    // Branch admins are restricted to products their branch carries. Resolve the
+    // carried product ids once (bounded catalog) and combine with the search
+    // filter so both the list and the count query stay in sync for pagination.
+    let visibilityCondition = undefined;
+    if (scope.mode === "own") {
+      const carried = await db
+        .selectDistinct({ pid: productVariants.productId })
+        .from(productVariants)
+        .innerJoin(
+          branchStocks,
+          eq(branchStocks.productVariantId, productVariants.id)
+        )
+        .where(eq(branchStocks.branchId, scope.branchId));
+      const carriedIds = carried.map((r) => r.pid);
+      // A branch with no stock rows carries nothing → empty result, not "all".
+      visibilityCondition = inArray(
+        products.id,
+        carriedIds.length > 0 ? carriedIds : [""]
+      );
+    }
+
+    const whereCondition = and(searchCondition, visibilityCondition) ?? undefined;
+
     const allProducts = await db
       .select()
       .from(products)
-      .where(searchCondition)
+      .where(whereCondition)
       .orderBy(desc(products.createdAt))
       .limit(limit)
       .offset(offset);
@@ -53,11 +88,11 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
       for (const g of genderRows) genderNameMap.set(g.id, g.name);
     }
 
-    // Get total count (respect the same search filter so pagination matches)
+    // Get total count (respect the same search + visibility filter so pagination matches)
     const countResult = await db
       .select({ count: sql<number>`count(*)` })
       .from(products)
-      .where(searchCondition);
+      .where(whereCondition);
     const total = Number(countResult[0]?.count || 0);
 
     // Get variants and categories for each product
@@ -82,18 +117,31 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
         let totalReserved = 0;
         let totalAvailable = 0;
         if (variantIds.length > 0) {
-          // totalStock = all units on hand; totalReserved = units held by
-          // pending_payment orders; totalAvailable = units actually buyable.
+          // Fetch the raw per-branch rows for this product's variants, scoped in
+          // SQL to the caller's branch when a branch admin, then sum through the
+          // pure helper (tested guarantee; SQL where is the real control).
           const stockRows = await db
             .select({
-              total: sum(branchStocks.stock),
-              reserved: sum(branchStocks.reservedStock),
+              branchId: branchStocks.branchId,
+              stock: branchStocks.stock,
+              reservedStock: branchStocks.reservedStock,
             })
             .from(branchStocks)
-            .where(inArray(branchStocks.productVariantId, variantIds));
-          totalStock = Number(stockRows[0]?.total || 0);
-          totalReserved = Number(stockRows[0]?.reserved || 0);
-          totalAvailable = Math.max(0, totalStock - totalReserved);
+            .where(
+              and(
+                inArray(branchStocks.productVariantId, variantIds),
+                scope.mode === "own"
+                  ? eq(branchStocks.branchId, scope.branchId)
+                  : undefined
+              )
+            );
+          const totals = computeScopedTotals(
+            scope,
+            stockRows as ScopedTotalsInputRow[]
+          );
+          totalStock = totals.totalStock;
+          totalReserved = totals.totalReserved;
+          totalAvailable = totals.totalAvailable;
         }
 
         // Image: prefer the product-level thumbnail (Jubelio CDN); fall back to

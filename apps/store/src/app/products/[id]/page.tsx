@@ -7,6 +7,7 @@ import { ShoppingCart, Minus, Plus, MapPin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useCart } from "@/providers/cart-provider";
+import { computeDiscountPercent } from "@/lib/pricing";
 
 interface BranchStock {
   branchId: string;
@@ -29,6 +30,12 @@ interface ProductVariant {
   branchStock: BranchStock[];
 }
 
+interface ProductCategory {
+  id: string;
+  name: string;
+  slug: string;
+}
+
 interface Product {
   id: string;
   name: string;
@@ -39,6 +46,9 @@ interface Product {
   brand: string | null;
   gender: string | null;
   collection: string | null;
+  season: string | null;
+  articleNumber: string | null;
+  categories: ProductCategory[];
   variants: ProductVariant[];
   colors: string[];
   sizes: string[];
@@ -165,9 +175,7 @@ export default function ProductDetailPage() {
   const currentPrice = parseFloat(selectedVariant?.price || product.basePrice);
 
   const originalPrice = parseFloat(product.basePrice);
-  const discount = Math.round(
-    ((originalPrice - currentPrice) / originalPrice) * 100
-  );
+  const discount = computeDiscountPercent(originalPrice, currentPrice);
 
   const availableBranches = selectedVariant?.branchStock ?? [];
   const selectedBranchStock = availableBranches.find(
@@ -381,19 +389,18 @@ export default function ProductDetailPage() {
 
           </div>
 
-          {/* Brand / Collection / Gender metadata */}
-          {(product.brand || product.collection || product.gender) && (
-            <dl className="grid grid-cols-3 gap-4 border-t border-border pt-6 text-sm">
+          {/* Brand / Gender / Collection / Season / Article / SKU metadata */}
+          {(product.brand ||
+            product.gender ||
+            product.collection ||
+            product.season ||
+            product.articleNumber ||
+            selectedVariant?.sku) && (
+            <dl className="grid grid-cols-2 sm:grid-cols-3 gap-4 border-t border-border pt-6 text-sm">
               {product.brand && (
                 <div>
                   <dt className="text-muted-foreground">Brand</dt>
                   <dd className="font-medium">{product.brand}</dd>
-                </div>
-              )}
-              {product.collection && (
-                <div>
-                  <dt className="text-muted-foreground">Koleksi</dt>
-                  <dd className="font-medium">{product.collection}</dd>
                 </div>
               )}
               {product.gender && (
@@ -402,7 +409,45 @@ export default function ProductDetailPage() {
                   <dd className="font-medium">{product.gender}</dd>
                 </div>
               )}
+              {product.collection && (
+                <div>
+                  <dt className="text-muted-foreground">Koleksi</dt>
+                  <dd className="font-medium">{product.collection}</dd>
+                </div>
+              )}
+              {product.season && (
+                <div>
+                  <dt className="text-muted-foreground">Season</dt>
+                  <dd className="font-medium">{product.season}</dd>
+                </div>
+              )}
+              {product.articleNumber && (
+                <div>
+                  <dt className="text-muted-foreground">Kode Artikel</dt>
+                  <dd className="font-medium">{product.articleNumber}</dd>
+                </div>
+              )}
+              {selectedVariant?.sku && (
+                <div>
+                  <dt className="text-muted-foreground">SKU</dt>
+                  <dd className="font-medium">{selectedVariant.sku}</dd>
+                </div>
+              )}
             </dl>
+          )}
+
+          {/* Categories */}
+          {product.categories.length > 0 && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {product.categories.map((cat) => (
+                <span
+                  key={cat.id}
+                  className="inline-flex items-center rounded-md bg-primary/10 text-primary px-2.5 py-1 text-xs font-medium"
+                >
+                  {cat.name}
+                </span>
+              ))}
+            </div>
           )}
         </div>
       </div>

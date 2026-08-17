@@ -4,6 +4,7 @@ import { footerConfig } from "@/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { withAuth } from "@/lib/auth-guard";
+import { footerConfigSchema } from "@/lib/footer-config";
 
 // -----------------------------
 // GET /api/admin/footer — fetch footer config (HQ only)
@@ -39,47 +40,7 @@ export const GET = withAuth(async () => {
 // PUT /api/admin/footer — upsert footer config (HQ only)
 // Body: FooterConfigData (validated by zod)
 // -----------------------------
-const footerConfigSchema = z.object({
-  brandName: z.string().min(1, "Nama brand wajib diisi").max(100),
-  tagline: z.string().max(300, "Tagline maksimal 300 karakter").default(""),
-  copyrightText: z
-    .string()
-    .min(1, "Teks copyright wajib diisi")
-    .max(200, "Copyright maksimal 200 karakter"),
-  columns: z
-    .array(
-      z.object({
-        title: z.string().min(1, "Judul kolom wajib diisi").max(100),
-        links: z
-          .array(
-            z.object({
-              label: z.string().min(1, "Label wajib diisi").max(100),
-              href: z.string().min(1, "Link wajib diisi").max(500),
-            })
-          )
-          .max(5, "Maksimal 5 link per kolom"),
-      })
-    )
-    .max(3, "Maksimal 3 kolom")
-    .default([]),
-  socialMedia: z
-    .array(
-      z.object({
-        platform: z.enum([
-          "instagram",
-          "facebook",
-          "twitter",
-          "tiktok",
-          "youtube",
-          "linkedin",
-          "whatsapp",
-        ]),
-        url: z.string().max(500).default(""),
-        enabled: z.boolean().default(false),
-      })
-    )
-    .default([]),
-});
+
 
 export const PUT = withAuth(async (ctx, request: NextRequest) => {
   try {

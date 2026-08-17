@@ -14,7 +14,6 @@ export function buildProductFilterParams(
   if (filter.search) params.set("search", filter.search);
   if (filter.category) params.set("category", filter.category);
   if (filter.brand) params.set("brand", filter.brand);
-  if (filter.gender) params.set("gender", filter.gender);
   if (filter.minPrice) params.set("minPrice", filter.minPrice);
   if (filter.maxPrice) params.set("maxPrice", filter.maxPrice);
   if (filter.hasDiscount) params.set("hasDiscount", "true");

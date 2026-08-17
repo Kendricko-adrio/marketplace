@@ -71,9 +71,20 @@ Admin users are scoped to a branch via `users.branchId` (FK to `branches.id`,
 
 The same pattern is applied per feature, e.g. `getNotificationScope()` /
 `buildScopeCondition()` in `apps/admin/src/lib/notifications.ts` (notifications
-are filtered by `branchId` for branch admins, unfiltered for HQ), and the
+are filtered by `branchId` for branch admins, unfiltered for HQ), the
 orders API rejects orders belonging to a different branch
-(`apps/admin/src/app/api/admin/orders/[id]/route.ts`).
+(`apps/admin/src/app/api/admin/orders/[id]/route.ts`), and the products API:
+
+- `GET /api/admin/products` — a branch admin sees **only products their branch
+  carries** (products with a `branch_stock` row for their `branchId`); the
+  stock totals are scoped to their branch. HQ sees every product with stock
+  summed across branches. Per-product stock is summed through the pure
+  `computeScopedTotals` helper (`apps/admin/src/lib/branch-stock.ts`) — the
+  SQL `where` is the real access control, the helper is the tested guarantee.
+- `GET /api/admin/products/{id}` — a branch admin who opens a product their
+  branch does **not** carry gets 404 (mirrors the list filter so a non-carried
+  product can't be reached via its detail URL). HQ is unaffected; the Stok tab
+  still scopes per-branch stock as before via `groupBranchStock`.
 
 ## Guards
 
@@ -91,7 +102,7 @@ orders API rejects orders belonging to a different branch
 |---|---|---|---|
 | GET | `/api/admin/permissions` | admin-session, **role: hq** | List all permission rows |
 | PUT | `/api/admin/permissions` | admin-session, **role: hq** | Upsert one permission |
-| GET | `/api/admin/permissions/me` | admin-session | Current user's role + resolved permission map |
+| GET | `/api/admin/permissions/me` | admin-session | Current user's role + resolved permission map + placed branch (`{ id, name, code, city }` or `null` for HQ) |
 
 `PUT` body: `{ role, module, canView, canEdit, canDelete }`. Validation:
 
@@ -158,8 +169,14 @@ Full endpoint docs: `docs/api-reference.md`.
   switches disabled; toggle a module off for admin and save → the admin user
   loses the sidebar link and gets 403 on that module's API.
 - Log in as a branch admin (`role = "admin"`, `branchId` set): `GET
-  /api/admin/permissions/me` returns the resolved map; orders/notifications
-  lists only contain that branch's data.
+  /api/admin/permissions/me` returns the resolved map **and** the placed
+  branch; orders/notifications lists only contain that branch's data; the
+  products list (`GET /api/admin/products`) only shows products their branch
+  carries with stock scoped to their branch, and the admin sidebar shows the
+  branch name below the role.
+- Log in as HQ: the products list shows the full catalog (including
+  no-stock products) with stock summed across branches; the sidebar shows
+  "Head Quarter".
 - `PUT /api/admin/permissions` with `role: "hq"` → 400
   `"Only the admin role can be modified"`.
 - `GET /api/admin/permissions` as a branch admin → 403.

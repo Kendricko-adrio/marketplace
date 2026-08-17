@@ -15,6 +15,9 @@ interface ProductCardProps {
   preview?: boolean;
   gender?: string;
   collection?: string;
+  /** True when the product has no sellable stock in any branch — the card is
+   *  greyed out and the detail link is disabled. */
+  outOfStock?: boolean;
 }
 
 export default function ProductCard({
@@ -26,6 +29,7 @@ export default function ProductCard({
   preview,
   gender,
   collection,
+  outOfStock,
 }: ProductCardProps) {
   const discount = originalPrice
     ? Math.round(((originalPrice - price) / originalPrice) * 100)
@@ -51,6 +55,11 @@ export default function ProductCard({
           {discount}%
         </Badge>
       )}
+      {outOfStock && (
+        <Badge className="absolute top-2 left-2 bg-muted text-muted-foreground">
+          Stok Habis
+        </Badge>
+      )}
     </>
   );
 
@@ -61,13 +70,21 @@ export default function ProductCard({
   );
 
   return (
-    <Card className="overflow-hidden h-full flex flex-col hover:shadow-lg transition-shadow duration-200">
+    <Card
+      className={`overflow-hidden h-full flex flex-col hover:shadow-lg transition-shadow duration-200 ${
+        outOfStock ? "opacity-50" : ""
+      }`}
+    >
       <div
         className="relative block aspect-square bg-muted overflow-hidden"
         {...(preview ? {} : { "data-href": `/products/${slug}` })}
       >
         {preview ? (
           imageBlock
+        ) : outOfStock ? (
+          // Out of stock: no navigation — the card is greyed out and the
+          // detail link is disabled (nothing to add to cart).
+          <span className="contents">{imageBlock}</span>
         ) : (
           <Link href={`/products/${slug}`} className="contents">
             {imageBlock}
@@ -78,6 +95,10 @@ export default function ProductCard({
       <CardContent className="p-4 flex-1 flex flex-col">
         {preview ? (
           titleBlock
+        ) : outOfStock ? (
+          <span className="font-medium text-sm text-card-foreground line-clamp-2 mb-2 h-10">
+            {title}
+          </span>
         ) : (
           <Link
             href={`/products/${slug}`}

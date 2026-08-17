@@ -1,10 +1,23 @@
 "use client";
 import { useState, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import { ChevronsUpDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { buildProductsQuery } from "@/lib/product-filters";
 
 interface Option {
   id: string;
@@ -20,17 +33,21 @@ export default function ProductFilters() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const [categories, setCategories] = useState<Option[]>([]);
   const [brands, setBrands] = useState<Option[]>([]);
-  const [genders, setGenders] = useState<Option[]>([]);
+  const [branches, setBranches] = useState<Option[]>([]);
 
   const [searchQuery, setSearchQuery] = useState(
     searchParams.get("search") || ""
   );
+  const [selectedCategory, setSelectedCategory] = useState<string>(
+    searchParams.get("category") || ""
+  );
   const [selectedBrand, setSelectedBrand] = useState<string>(
     searchParams.get("brand") || ""
   );
-  const [selectedGender, setSelectedGender] = useState<string>(
-    searchParams.get("gender") || ""
+  const [selectedBranch, setSelectedBranch] = useState<string>(
+    searchParams.get("branch") || ""
   );
   const [minPrice, setMinPrice] = useState(searchParams.get("minPrice") || "");
   const [maxPrice, setMaxPrice] = useState(searchParams.get("maxPrice") || "");
@@ -38,23 +55,33 @@ export default function ProductFilters() {
   const [sortOrder, setSortOrder] = useState(
     searchParams.get("sortOrder") || "desc"
   );
-  const [hasDiscount, setHasDiscount] = useState(
-    searchParams.get("hasDiscount") === "true"
-  );
+  const [categoryOpen, setCategoryOpen] = useState(false);
 
   useEffect(() => {
     async function fetchOptions() {
       try {
-        const [brandsRes, gendersRes] = await Promise.all([
+        const [categoriesRes, brandsRes, branchesRes] = await Promise.all([
+          fetch("/api/categories"),
           fetch("/api/brands"),
-          fetch("/api/genders"),
+          fetch("/api/branches"),
         ]);
-        const [brs, gdr] = await Promise.all([
+        const [cats, brs, brn] = await Promise.all([
+          categoriesRes.json(),
           brandsRes.json(),
-          gendersRes.json(),
+          branchesRes.json(),
         ]);
+        if (cats.success) setCategories(cats.data);
         if (brs.success) setBrands(brs.data);
-        if (gdr.success) setGenders(gdr.data);
+        // /api/branches returns active branches only; the Option shape needs a
+        // slug, so the branch id doubles as the value.
+        if (brn.success)
+          setBranches(
+            brn.data.map((b: { id: string; name: string }) => ({
+              id: b.id,
+              name: b.name,
+              slug: b.id,
+            }))
+          );
       } catch (error) {
         console.error("Error fetching filter options:", error);
       }
@@ -63,30 +90,28 @@ export default function ProductFilters() {
   }, []);
 
   const applyFilters = () => {
-    const params = new URLSearchParams();
-
-    if (searchQuery) params.set("search", searchQuery);
-    if (selectedBrand) params.set("brand", selectedBrand);
-    if (selectedGender) params.set("gender", selectedGender);
-    if (minPrice) params.set("minPrice", minPrice);
-    if (maxPrice) params.set("maxPrice", maxPrice);
-    if (hasDiscount) params.set("hasDiscount", "true");
-    if (sortBy) params.set("sortBy", sortBy);
-    if (sortOrder) params.set("sortOrder", sortOrder);
-    params.set("page", "1"); // Reset to first page on filter change
-
-    router.push(`/products?${params.toString()}`);
+    const query = buildProductsQuery({
+      search: searchQuery,
+      category: selectedCategory,
+      brand: selectedBrand,
+      branch: selectedBranch,
+      minPrice,
+      maxPrice,
+      sortBy,
+      sortOrder,
+    });
+    router.push(`/products?${query}`);
   };
 
   const clearFilters = () => {
+    setSelectedCategory("");
     setSelectedBrand("");
-    setSelectedGender("");
+    setSelectedBranch("");
     setMinPrice("");
     setMaxPrice("");
     setSearchQuery("");
     setSortBy("createdAt");
     setSortOrder("desc");
-    setHasDiscount(false);
     router.push("/products");
   };
 
@@ -112,6 +137,88 @@ export default function ProductFilters() {
         />
       </div>
 
+      {/* Branch — active branches only (sourced from /api/branches). Selecting
+          one narrows results to products with available stock at that branch. */}
+      <div className="mb-8">
+        <h3 className="font-semibold mb-4 text-foreground">Cabang</h3>
+        <select
+          className={selectClass}
+          value={selectedBranch}
+          onChange={(e) => setSelectedBranch(e.target.value)}
+        >
+          <option value="">Semua cabang</option>
+          {branches.map((b) => (
+            <option key={b.id} value={b.slug}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {/* Category — searchable combobox, not a native select: the category
+          dimension is large (Jubelio sync-managed, thousands of rows) and a
+          plain dropdown would be unusable. */}
+      <div className="mb-8">
+        <h3 className="font-semibold mb-4 text-foreground">Kategori</h3>
+        <Popover open={categoryOpen} onOpenChange={setCategoryOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              role="combobox"
+              aria-expanded={categoryOpen}
+              // role="combobox" doesn't derive a name from content — label it
+              // explicitly (the visible text changes with the selection).
+              aria-label="Kategori"
+              className="w-full justify-between font-normal"
+            >
+              {selectedCategory
+                ? categories.find((c) => c.slug === selectedCategory)?.name ??
+                  "Semua kategori"
+                : "Semua kategori"}
+              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent
+            className="w-[var(--radix-popover-trigger-width)] p-0"
+            align="start"
+          >
+            <Command>
+              <CommandInput placeholder="Cari kategori..." />
+              <CommandList>
+                <CommandEmpty>Tidak ada kategori ditemukan.</CommandEmpty>
+                <CommandGroup>
+                  {/* Sentinel value (never a real slug) so cmdk's onSelect
+                      always receives a non-empty string. */}
+                  <CommandItem
+                    value="__all__"
+                    onSelect={(currentValue) => {
+                      setSelectedCategory(
+                        currentValue === "__all__" ? "" : currentValue
+                      );
+                      setCategoryOpen(false);
+                    }}
+                  >
+                    Semua kategori
+                  </CommandItem>
+                  {categories.map((c) => (
+                    <CommandItem
+                      key={c.id}
+                      value={c.slug}
+                      onSelect={(currentValue) => {
+                        setSelectedCategory(currentValue);
+                        setCategoryOpen(false);
+                      }}
+                    >
+                      {c.name}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+      </div>
+
       {/* Brand */}
       <div className="mb-8">
         <h3 className="font-semibold mb-4 text-foreground">Brand</h3>
@@ -124,23 +231,6 @@ export default function ProductFilters() {
           {brands.map((b) => (
             <option key={b.id} value={b.slug}>
               {b.name}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {/* Gender */}
-      <div className="mb-8">
-        <h3 className="font-semibold mb-4 text-foreground">Gender</h3>
-        <select
-          className={selectClass}
-          value={selectedGender}
-          onChange={(e) => setSelectedGender(e.target.value)}
-        >
-          <option value="">Semua gender</option>
-          {genders.map((g) => (
-            <option key={g.id} value={g.slug}>
-              {g.name}
             </option>
           ))}
         </select>
@@ -180,23 +270,6 @@ export default function ProductFilters() {
           <option value="price|asc">Harga Termurah</option>
           <option value="price|desc">Harga Termahal</option>
         </select>
-      </div>
-
-      {/* Discount toggle */}
-      <div className="mb-8">
-        <div className="flex items-center space-x-2">
-          <Checkbox
-            id="hasDiscount"
-            checked={hasDiscount}
-            onCheckedChange={(v) => setHasDiscount(v === true)}
-          />
-          <Label
-            htmlFor="hasDiscount"
-            className="text-sm font-normal cursor-pointer text-muted-foreground"
-          >
-            Hanya produk diskon
-          </Label>
-        </div>
       </div>
 
       <div className="space-y-2">

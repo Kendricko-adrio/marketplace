@@ -39,7 +39,7 @@ Composite primary key `(sectionId, productId)`.
 | `announcement_bar` | `{ message, variant?: "info" \| "warning" \| "success" }` | Dismissible by visitors (per-section `localStorage` key); rendered above all other sections |
 | `store_banner` | free-form (no zod validation) | Renders a grid of **active** branches (`branches.status = "aktif"`), hydrated server-side |
 
-`ProductFilterConfig` (`search`, `category`, `brand`, `gender`, `minPrice`,
+`ProductFilterConfig` (`search`, `category`, `brand`, `minPrice`,
 `maxPrice`, `hasDiscount`, `sortOrder`) is the shared filter shape — see
 [product-filters.md](./product-filters.md) for the full story; this doc only
 covers how the homepage CMS uses it.
@@ -123,10 +123,9 @@ covers how the homepage CMS uses it.
   `PromoCardsSectionForm`, `AnnouncementBarSectionForm`,
   `StoreBannerSectionForm`).
 - `ProductFilterEditor` — shared filter editor used by carousel filter mode
-  and per promo card: search, category, brand, gender, sort, price range,
-  hasDiscount (brand/gender sourced from `/api/admin/brands` and
-  `/api/admin/genders`; `showBrand` / `showGender` / `showSort` /
-  `showHasDiscount` / `showSearch` props toggle fields).
+  and per promo card: search, category, brand, sort, price range,
+  hasDiscount (brand sourced from `/api/admin/brands`; `showBrand` /
+  `showSort` / `showHasDiscount` / `showSearch` props toggle fields).
 - `buildProductFilterParams` / `buildProductFilterQuery` /
   `buildStoreFilterQuery` in `packages/ui/src/components/homepage/filter-query.ts`
   serialize `ProductFilterConfig` → `/products` query string for promo card
@@ -160,10 +159,10 @@ covers how the homepage CMS uses it.
   delete; check the list reflects changes and the preview page renders both
   active and inactive (badge "Nonaktif").
 - Carousel manual: pick products → save → storefront shows them in order;
-  switch to filter mode with brand/gender/sort/hasDiscount → save → storefront
+  switch to filter mode with brand/sort/hasDiscount → save → storefront
   carousel matches `/products` results for the same filter (see
   [product-filters.md](./product-filters.md)).
-- Promo cards: card with a filter links to `/products?brand=…&gender=…` with
+- Promo cards: card with a filter links to `/products?brand=…` with
   the right results; card without a filter is not clickable.
 - Image cleanup: replace a banner slide image → the old file disappears from
   the uploads directory; delete a section → its images are gone.

@@ -72,16 +72,6 @@ async function resolveFilterModeProducts(
     conditions.push(brand.length ? eq(products.brandId, brand[0].id) : sql`false`);
   }
 
-  // Gender filter (slug → genderId).
-  if (filter.gender) {
-    const gender = await db
-      .select({ id: genders.id })
-      .from(genders)
-      .where(eq(genders.slug, filter.gender))
-      .limit(1);
-    conditions.push(gender.length ? eq(products.genderId, gender[0].id) : sql`false`);
-  }
-
   // Category filter (slug → id) via a subquery on the junction table.
   if (filter.category) {
     const category = await db

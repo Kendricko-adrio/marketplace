@@ -277,7 +277,7 @@ Setelah perbaiki, **restart `npm run dev:all`**.
 | Tipe | Field | Catatan |
 |---|---|---|
 | `banner` (Banner Hero) | `slides[]` 1–5 {imageUrl, altText?}, `ctaText?`, `ctaLink?` (URL Manual / Filter Produk), `autoRotateIntervalSec?` 2–30 default 5 | Auto-rotate hanya jika >1 slide; pause on hover. Image upload, old file dihapus saat replace/remove. Legacy single imageUrl → 1 slide. |
-| `carousel_product` (Carousel Produk) | `mode` manual\|filter; `filter?` {search, category, brand, gender, minPrice, maxPrice, hasDiscount, sortOrder}; `limit?` 1–20 default 10 | Manual = pilih produk (junction table, drag order). Filter = dinamis saat render (auto-update kalau produk berubah). Brand/gender = slug (dimensi sync-managed, opsi dari `/api/admin/brands` & `/api/admin/genders`). |
+| `carousel_product` (Carousel Produk) | `mode` manual\|filter; `filter?` {search, category, brand, minPrice, maxPrice, hasDiscount, sortOrder}; `limit?` 1–20 default 10 | Manual = pilih produk (junction table, drag order). Filter = dinamis saat render (auto-update kalau produk berubah). Brand = slug (dimensi sync-managed, opsi dari `/api/admin/brands`). |
 | `promo_cards` (Promo Cards) | `cards[]` max 6 {id, imageUrl, title, filter?} | Tanpa `filter` → card non-clickable. Image upload. |
 | `announcement_bar` (Announcement Bar) | `message` (wajib), `variant` info\|warning\|success | Title/subtitle disembunyikan. **Dismissible via localStorage per-section — persist antar sesi!** |
 | `store_banner` (Store Banner) | (tidak ada field) | Render grid cabang `aktif` dari DB. Tidak ada cabang → null. |
@@ -293,7 +293,7 @@ Setelah perbaiki, **restart `npm run dev:all`**.
 6. Buka store `/` (hard refresh).
    - Ekspektasi: section tampil sesuai `displayOrder`; `announcement_bar` (jika aktif) tampil **paling atas**.
 7. Carousel manual: tambah section `carousel_product` mode manual → pilih produk (paginate, search) → Save. Cek store `/` → carousel tampil produk terpilih.
-8. Carousel filter: mode filter → set {category, brand, gender, sortOrder, hasDiscount, limit} → Save. Store render produk dinamis sesuai filter (preview via `/api/admin/homepage/preview-products`).
+8. Carousel filter: mode filter → set {category, brand, sortOrder, hasDiscount, limit} → Save. Store render produk dinamis sesuai filter (preview via `/api/admin/homepage/preview-products`).
 
 ### 6.B Edge cases
 
@@ -311,8 +311,8 @@ Setelah perbaiki, **restart `npm run dev:all`**.
 | 6.10 | Perubahan tidak muncul di store | Hard refresh `/`; fetch `cache: no-store` → harus muncul. Bila gambar lama muncul → cache browser 1 thn (`Cache-Control immutable`); URL baru (UUID) otomatis. |
 | 6.11 | Store down saat admin preview gambar | Admin rewrite URL ke `${NEXT_PUBLIC_STORE_URL}/uploads/...` → gambar preview pecah bila store mati. |
 | 6.12 | `autoRotateIntervalSec` di luar 2–30 | Clamp 2–30 (client + server + renderer). |
-| 6.13 | Filter (carousel atau `/products`) dgn **brand/gender slug tidak ada** | 0 produk → carousel renderer null; `/products` tampil kosong (total 0, bukan error). |
-| 6.14 | `/products` filter category + brand + gender sekaligus | `pagination.total` benar (count ikut semua filter — fix bug count lama yg hanya ikut sebagian). |
+| 6.13 | Filter (carousel atau `/products`) dgn **brand slug tidak ada** | 0 produk → carousel renderer null; `/products` tampil kosong (total 0, bukan error). |
+| 6.14 | `/products` filter category + brand sekaligus | `pagination.total` benar (count ikut semua filter — fix bug count lama yg hanya ikut sebagian). |
 | 6.15 | `/products` sidebar: sort dropdown + toggle diskon | Sort (Terbaru/Harga Termurah/Harga Termahal) ubah `sortBy`+`sortOrder`; toggle "Hanya produk diskon" set `hasDiscount=true` → hanya produk dgn `basePrice > min(variant.price)`. |
 
 ---

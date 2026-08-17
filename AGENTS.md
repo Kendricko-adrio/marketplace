@@ -144,3 +144,8 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   writing any test code.
 - **Keep tests deterministic.** Do not depend on random data, time-of-day, or
   external services that are not mocked / controlled in the test environment.
+- **When a Playwright run fails, read the Markdown output — do NOT open the
+  screenshot/image file.** Playwright emits a text/Markdown report (the snapshot,
+  trace, and error context as text) alongside any `.png`/attachment. Diagnose
+  from the Markdown only; opening the image attachment wastes a turn and is
+  forbidden here.

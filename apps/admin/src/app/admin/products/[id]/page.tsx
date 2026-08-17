@@ -22,6 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
 interface ApiVariant {
   id: string;
@@ -33,6 +34,30 @@ interface ApiVariant {
   isDefault: boolean;
   jubelioItemId: number | null;
   images: { id: string; url: string; displayOrder: number }[];
+}
+
+interface ApiBranchStockRow {
+  variantId: string;
+  sku: string;
+  size: string | null;
+  color: string | null;
+  stock: number;
+  reservedStock: number;
+  available: number;
+}
+
+interface ApiBranchStockGroup {
+  id: string;
+  name: string;
+  code: string;
+  city: string;
+  status: string;
+  rows: ApiBranchStockRow[];
+}
+
+interface ApiBranchStock {
+  scope: "all" | "own";
+  branches: ApiBranchStockGroup[];
 }
 
 interface ApiProduct {
@@ -47,6 +72,7 @@ interface ApiProduct {
   jubelioItemGroupId: number | null;
   categories: { id: string; name: string; slug: string }[];
   variants: ApiVariant[];
+  branchStock: ApiBranchStock;
 }
 
 export default function ProductDetailPage() {
@@ -164,14 +190,14 @@ export default function ProductDetailPage() {
           </CardHeader>
           <CardContent>
             {gallery.length > 0 ? (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="flex gap-3 overflow-x-auto pb-2">
                 {gallery.map((url, i) => (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     key={i}
                     src={url}
                     alt={`${product.name} ${i + 1}`}
-                    className="aspect-square w-full rounded-md border object-cover"
+                    className="h-40 w-40 shrink-0 rounded-md border object-cover"
                   />
                 ))}
               </div>
@@ -224,44 +250,134 @@ export default function ProductDetailPage() {
         </Card>
       </div>
 
-      {/* Variants */}
+      {/* Variants + per-branch stock, tabbed in one container */}
       <Card>
         <CardHeader>
-          <CardTitle>Varian ({product.variants.length})</CardTitle>
+          <CardTitle>Varian & Stok</CardTitle>
+          <CardDescription>
+            Varian produk dan stok per cabang. Stok bersumber dari Jubelio.
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Default</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead>Ukuran</TableHead>
-                  <TableHead>Warna</TableHead>
-                  <TableHead className="text-right">Harga</TableHead>
-                  <TableHead>Barcode</TableHead>
-                  <TableHead>Jubelio item_id</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {product.variants.map((v) => (
-                  <TableRow key={v.id}>
-                    <TableCell>{v.isDefault ? "✓" : ""}</TableCell>
-                    <TableCell className="font-mono text-xs">{v.sku}</TableCell>
-                    <TableCell>{v.size || "-"}</TableCell>
-                    <TableCell>{v.color || "-"}</TableCell>
-                    <TableCell className="text-right">
-                      Rp {parseFloat(v.price).toLocaleString("id-ID")}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{v.barcode || "-"}</TableCell>
-                    <TableCell className="font-mono text-xs">
-                      {v.jubelioItemId ?? "-"}
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <Tabs defaultValue="variants">
+            <TabsList>
+              <TabsTrigger value="variants">
+                Varian ({product.variants.length})
+              </TabsTrigger>
+              <TabsTrigger value="stock">Stok</TabsTrigger>
+            </TabsList>
+
+            {/* Varian — existing variant table */}
+            <TabsContent value="variants">
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Default</TableHead>
+                      <TableHead>SKU</TableHead>
+                      <TableHead>Ukuran</TableHead>
+                      <TableHead>Warna</TableHead>
+                      <TableHead className="text-right">Harga</TableHead>
+                      <TableHead>Barcode</TableHead>
+                      <TableHead>Jubelio item_id</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {product.variants.map((v) => (
+                      <TableRow key={v.id}>
+                        <TableCell>{v.isDefault ? "✓" : ""}</TableCell>
+                        <TableCell className="font-mono text-xs">{v.sku}</TableCell>
+                        <TableCell>{v.size || "-"}</TableCell>
+                        <TableCell>{v.color || "-"}</TableCell>
+                        <TableCell className="text-right">
+                          Rp {parseFloat(v.price).toLocaleString("id-ID")}
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{v.barcode || "-"}</TableCell>
+                        <TableCell className="font-mono text-xs">
+                          {v.jubelioItemId ?? "-"}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </TabsContent>
+
+            {/* Stok — per-variant stock grouped by branch, role-scoped */}
+            <TabsContent value="stock">
+              <p className="mb-4 text-sm text-muted-foreground">
+                {product.branchStock.scope === "all"
+                  ? "Menampilkan semua cabang."
+                  : "Menampilkan cabang Anda saja."}
+              </p>
+              {product.branchStock.branches.length > 0 ? (
+                <div className="space-y-6">
+                  {product.branchStock.branches.map((branch) => (
+                    <div key={branch.id} className="space-y-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h4 className="text-sm font-semibold">{branch.name}</h4>
+                        <Badge
+                          variant={
+                            branch.status === "aktif" ? "default" : "secondary"
+                          }
+                          className="capitalize"
+                        >
+                          {branch.status}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {branch.city} · {branch.code}
+                        </span>
+                      </div>
+                      {branch.rows.length > 0 ? (
+                        <div className="rounded-md border">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>SKU</TableHead>
+                                <TableHead>Ukuran</TableHead>
+                                <TableHead>Warna</TableHead>
+                                <TableHead className="text-right">Stok</TableHead>
+                                <TableHead className="text-right">Reserved</TableHead>
+                                <TableHead className="text-right">Tersedia</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {branch.rows.map((row) => (
+                                <TableRow key={row.variantId}>
+                                  <TableCell className="font-mono text-xs">
+                                    {row.sku}
+                                  </TableCell>
+                                  <TableCell>{row.size || "-"}</TableCell>
+                                  <TableCell>{row.color || "-"}</TableCell>
+                                  <TableCell className="text-right">{row.stock}</TableCell>
+                                  <TableCell className="text-right">
+                                    {row.reservedStock}
+                                  </TableCell>
+                                  <TableCell className="text-right">
+                                    {row.available}
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      ) : (
+                        <p className="text-sm text-muted-foreground">
+                          Belum ada data stok untuk produk ini di cabang ini.
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {product.branchStock.scope === "all"
+                    ? "Belum ada data stok untuk produk ini di cabang manapun."
+                    : "Belum ada data stok untuk produk ini di cabang Anda."}
+                </p>
+              )}
+            </TabsContent>
+          </Tabs>
         </CardContent>
       </Card>
     </div>

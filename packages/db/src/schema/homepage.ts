@@ -26,7 +26,6 @@ export interface ProductFilterConfig {
   search?: string;
   category?: string; // category slug
   brand?: string; // brand slug
-  gender?: string; // gender slug
   minPrice?: string;
   maxPrice?: string;
   hasDiscount?: boolean;

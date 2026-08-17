@@ -6,6 +6,7 @@ import { z } from "zod";
 import crypto from "crypto";
 import { withPermission, getBranchScope } from "@/lib/auth-guard";
 import { requestLogger, serializeError } from "@/lib/logger";
+import { verifyPickupCode } from "@/lib/pickup-code";
 
 const verifyPickupSchema = z.object({
   pickupCodeInput: z.string().min(1).max(10),
@@ -90,12 +91,8 @@ export const POST = withPermission(async (
     }
 
     // Constant-time comparison to avoid timing attacks
-    const expected = order.pickupCode || "";
     const input = pickupCodeInput.toUpperCase().trim();
-    const isMatch =
-      expected.length > 0 &&
-      input.length === expected.length &&
-      crypto.timingSafeEqual(Buffer.from(input), Buffer.from(expected));
+    const isMatch = verifyPickupCode(input, order.pickupCode);
 
     if (!isMatch) {
       orderLog.warn("pickup code mismatch");

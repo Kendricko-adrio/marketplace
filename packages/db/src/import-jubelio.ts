@@ -13,10 +13,13 @@
  *   JUBELIO_SYNC_MAX_PRODUCTS                  — cap products synced (empty = all;
  *                                                 set a small int for fast dev tests)
  *
- * Flow: locations → branches; categories → category map; paginate
- * /inventory/items/masters, and per product fetch /inventory/catalog/{id} for
- * brand/description/images/variants + /inventory/items/all-stocks/ for
- * per-branch stock; upsert page-by-page (memory-bounded).
+ * Flow: locations → branches; fetch the Jubelio category tree (id → name map,
+ * NOT bulk-imported); paginate /inventory/items/masters, and per product fetch
+ * /inventory/catalog/{id} for brand/description/images/variants +
+ * /inventory/items/all-stocks/ for per-branch stock; upsert page-by-page
+ * (memory-bounded). Categories are created on demand — only the ones used by
+ * the synced products (see ensureJubelioCategories), so our category table
+ * matches the products we actually carry.
  */
 
 import dotenv from "dotenv";
@@ -34,7 +37,7 @@ import {
   fetchStocks,
   flattenStock,
   upsertJubelioBranches,
-  upsertJubelioCategories,
+  ensureJubelioCategories,
   upsertJubelioProducts,
   upsertJubelioStock,
   mapWithConcurrency,
@@ -73,13 +76,32 @@ async function main() {
   try {
     // 1. Branches (outlet locations).
     const locations = await fetchLocationsList();
-    const branchCount = await upsertJubelioBranches(db, locations, { onProgress: log });
+    const branchCount = await upsertJubelioBranches(db, locations, {
+      onProgress: log,
+      // "Dago 123" is not a customer-facing outlet — skip it.
+      excludeNames: ["dago 123"],
+      // All pulled branches are active with fixed operating hours (Mon–Sun 07:00–22:00).
+      status: "aktif",
+      operatingHours: {
+        monday: { open: "07:00", close: "22:00" },
+        tuesday: { open: "07:00", close: "22:00" },
+        wednesday: { open: "07:00", close: "22:00" },
+        thursday: { open: "07:00", close: "22:00" },
+        friday: { open: "07:00", close: "22:00" },
+        saturday: { open: "07:00", close: "22:00" },
+        sunday: { open: "07:00", close: "22:00" },
+      },
+    });
     console.log(`✅ branches: ${branchCount} outlets`);
 
-    // 2. Categories + link map.
-    const cats = await fetchCategories();
-    const categoryMap = await upsertJubelioCategories(db, cats, { onProgress: log });
-    console.log(`✅ categories: ${cats.length} (map ${categoryMap.size})`);
+    // 2. Categories — fetch the full Jubelio tree once (id → name map) but do
+    //    NOT bulk-import it. Only categories actually used by synced products
+    //    are created (per page below), so our category table matches the
+    //    products we actually carry.
+    const jubelioCats = await fetchCategories();
+    console.log(
+      `✅ categories: ${jubelioCats.length} in Jubelio (created on demand)`
+    );
 
     // 3. Paginate masters, enrich per product, upsert page-by-page.
     let page = 1;
@@ -107,6 +129,18 @@ async function main() {
           if (done % 10 === 0 || done === total)
             log(`page ${page}: fetched catalog ${done}/${total}`);
         }
+      );
+
+      // Categories — ensure only the ones used by this page's products exist
+      // (created on demand; the rest of the Jubelio tree stays out of our DB).
+      const usedCatIds = inputs
+        .map((i) => i.catalog.item_category_id)
+        .filter((id) => id != null);
+      const categoryMap = await ensureJubelioCategories(
+        db,
+        jubelioCats,
+        usedCatIds,
+        { onProgress: log }
       );
 
       const prodRes = await upsertJubelioProducts(db, inputs, categoryMap, {

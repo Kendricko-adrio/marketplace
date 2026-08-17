@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 dotenv.config({ path: "../../.env" });
 import { drizzle } from "drizzle-orm/node-postgres";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { Pool } from "pg";
 import * as schema from "./schema";
 import { keyId, slugify } from "./ids";
@@ -76,25 +76,6 @@ function buildGeneratedProducts(categoryIds: {
     "Edge",
     "Force",
   ];
-  const nouns = [
-    "Runner",
-    "Walker",
-    "Sneaker",
-    "Oxford",
-    "Boot",
-    "Sandal",
-    "Trainer",
-    "Hiker",
-    "Slider",
-    "Court",
-    "Stride",
-    "Trek",
-    "Step",
-    "Dash",
-    "Glide",
-    "Motion",
-    "Pace",
-  ];
   // Collection → category mapping (one category per generated product).
   const collectionToCategory: Record<string, keyof typeof categoryIds> = {
     Running: "runningShoes",
@@ -106,6 +87,20 @@ function buildGeneratedProducts(categoryIds: {
     Basketball: "sneakers",
     Trail: "runningShoes",
     Boots: "boots",
+  };
+  // Collection → noun pool for the generated name. The noun MUST match the
+  // category the product is linked to (via collectionToCategory) — a random
+  // noun made the category filter look broken ("Peak Sandal 14" under Boots).
+  const collectionNouns: Record<string, string[]> = {
+    Running: ["Runner", "Trainer", "Dash", "Pace"],
+    Lifestyle: ["Sneaker", "Walker", "Glide", "Motion"],
+    Formal: ["Oxford", "Court", "Step"],
+    Casual: ["Sneaker", "Walker", "Stride", "Trek"],
+    Outdoor: ["Boot", "Hiker", "Trek", "Stride"],
+    Sandals: ["Sandal", "Slider", "Glide"],
+    Basketball: ["Court", "Stride", "Dash"],
+    Trail: ["Runner", "Hiker", "Trek"],
+    Boots: ["Boot", "Hiker", "Trek"],
   };
   const collectionKeys = Object.keys(collectionToCategory);
 
@@ -138,8 +133,11 @@ function buildGeneratedProducts(categoryIds: {
     const collection = collectionKeys[i % collectionKeys.length];
     const categoryId = categoryIds[collectionToCategory[collection]];
 
+    const nounPool = collectionNouns[collection];
+    // (i + 1) instead of i so the noun never collides with the adjective
+    // (e.g. "Court Court 12").
     const name = `${adjectives[i % adjectives.length]} ${
-      nouns[(i * 3) % nouns.length]
+      nounPool[(i + 1) % nounPool.length]
     } ${i + 1}`;
     const slug = slugify(name);
     const articleNumber = `SEED-GEN-${String(i + 11).padStart(3, "0")}`;
@@ -1035,6 +1033,23 @@ async function seed() {
         });
       }
     }
+
+    // The first seeded product ("AirRunner Pro Running Shoes") intentionally
+    // has NO stock in any branch — the storefront greys out its card
+    // (opacity + disabled link, "Stok Habis" badge). Deterministic fixture for
+    // the products E2E spec; the product still exists in the DB.
+    const noStockProductId = allProductIds[0];
+    await db
+      .delete(schema.branchStocks)
+      .where(
+        inArray(
+          schema.branchStocks.productVariantId,
+          db
+            .select({ id: schema.productVariants.id })
+            .from(schema.productVariants)
+            .where(eq(schema.productVariants.productId, noStockProductId))
+        )
+      );
 
     // =====================
     // VOUCHERS

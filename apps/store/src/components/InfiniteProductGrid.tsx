@@ -15,6 +15,8 @@ export interface Product {
   image: string | null;
   collection: string | null;
   gender: string | null;
+  /** False when the product has no sellable stock in any branch. */
+  hasStock: boolean;
 }
 
 export interface Pagination {
@@ -145,6 +147,7 @@ export default function InfiniteProductGrid({
               image={product.image || ""}
               gender={product.gender ?? undefined}
               collection={product.collection ?? undefined}
+              outOfStock={!product.hasStock}
             />
           );
         })}

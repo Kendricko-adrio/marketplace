@@ -4,6 +4,7 @@ import { staticPages } from "@/db";
 import { eq, and, ne } from "drizzle-orm";
 import { z } from "zod";
 import { withPermission } from "@/lib/auth-guard";
+import { updatePageSchema } from "@/lib/static-pages";
 
 // -----------------------------
 // GET /api/admin/pages/[id] — single page (HQ only)
@@ -56,18 +57,7 @@ export const GET = withPermission(
 // PUT /api/admin/pages/[id] — update page (HQ only)
 // Body: { slug?, title?, content?, isPublished?, displayOrder? }
 // -----------------------------
-const updatePageSchema = z.object({
-  slug: z
-    .string()
-    .min(1)
-    .max(60)
-    .regex(/^[a-z0-9-]+$/)
-    .optional(),
-  title: z.string().min(1).max(200).optional(),
-  content: z.string().optional(),
-  isPublished: z.boolean().optional(),
-  displayOrder: z.number().int().min(0).optional(),
-});
+
 
 export const PUT = withPermission(
   async (

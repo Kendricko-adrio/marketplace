@@ -67,7 +67,6 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | GET | `/api/branches/{id}` | none | Fetch a single branch |
 | GET | `/api/categories` | none | List active categories |
 | GET | `/api/brands` | none | List all product brands (dimension) for storefront filter dropdowns |
-| GET | `/api/genders` | none | List all product genders (dimension) for storefront filter dropdowns |
 | GET | `/api/products` | none | Paginated/filterable product list |
 | GET | `/api/products/{id}` | none | Product detail + variants + per-branch stock |
 | GET | `/api/homepage` | none | Assemble active homepage sections (hydrated) |
@@ -105,7 +104,6 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | ~~DELETE~~ | ~~`/api/admin/products/{id}`~~ | — | **Removed** — Jubelio is the source of truth |
 | GET | `/api/admin/categories` | admin-session (products:view) | List active categories |
 | GET | `/api/admin/brands` | admin-session (products:view) | List all product brands (dimension) for the homepage ProductFilterEditor dropdown |
-| GET | `/api/admin/genders` | admin-session (products:view) | List all product genders (dimension) for the homepage ProductFilterEditor dropdown |
 | GET | `/api/admin/branches` | admin-session (branches:view) | List branches (paginated) |
 | POST | `/api/admin/branches` | admin-session (branches:edit) | Create branch |
 | GET | `/api/admin/branches/{id}` | admin-session (branches:view) | Fetch a branch |
@@ -193,21 +191,13 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Response**: 200 `{ success: true, data: [{ id, name, slug }] }`; 500 `{ success: false, error }`
 - **Notes**: Sync-managed dimension (populated by the Jubelio import / webhook — see `docs/features/jubelio-sync.md`). Ordered by `name` asc. No `isActive` flag — all rows returned.
 
-#### `GET` `/api/genders`
-- **Auth**: none
-- **Purpose**: List all product genders (dimension) for storefront filter dropdowns.
-- **Params**: —
-- **Body**: none
-- **Response**: 200 `{ success: true, data: [{ id, name, slug }] }`; 500 `{ success: false, error }`
-- **Notes**: Sync-managed dimension (supplier `sex` → `genders`), populated by the Jubelio import / webhook. Ordered by `name` asc. Distinct from the `clients.gender` onboarding field.
-
 #### `GET` `/api/products`
 - **Auth**: none
 - **Purpose**: Paginated, filterable product list for storefront browsing.
-- **Params**: `search` (string, optional), `category` (slug, optional), `brand` (slug, optional), `gender` (slug, optional), `minPrice` (string, optional), `maxPrice` (string, optional), `status` (string, default `"aktif"`), `hasDiscount` (`"true"` to filter products whose `basePrice > min(variant.price)`), `sortBy` (`"price"`|`"createdAt"`, default `"createdAt"`), `sortOrder` (`"asc"`|`"desc"`, default `"desc"`), `page` (int, default `1`), `limit` (int, default `12`)
+- **Params**: `search` (string, optional), `category` (slug, optional), `brand` (slug, optional), `minPrice` (string, optional), `maxPrice` (string, optional), `status` (string, default `"aktif"`), `hasDiscount` (`"true"` to filter products whose `basePrice > min(variant.price)`), `sortBy` (`"price"`|`"createdAt"`, default `"createdAt"`), `sortOrder` (`"asc"`|`"desc"`, default `"desc"`), `page` (int, default `1`), `limit` (int, default `12`, clamped to 1–100 via `parseListParams` in `apps/store/src/lib/list-params.ts`)
 - **Body**: none
-- **Response**: 200 `{ success: true, data: [{ id, name, slug, description, basePrice, status, createdAt, price, image, collection: string|null, gender: string|null }], pagination: { page, limit, total, totalPages } }`; 500 `{ success: false, error }`
-- **Notes**: `price` is the **cheapest variant net price** per product (`min(productVariants.price)` via a grouped subquery join) — the price the customer pays and the value shown on product cards; `basePrice` is the RRP (strikethrough/original). `image` is the first image (`displayOrder` asc) of the **default** variant (separate from price). `minPrice`/`maxPrice` and `sortBy=price` operate on the cheapest-variant net price; `hasDiscount` filters to `basePrice > min(variant.price)`. `category` (slug), `brand` (slug), and `gender` (slug) are each resolved to an id and applied as conditions to **both** the list and the count query, so `pagination.total` is correct under any filter combination (category uses a junction-table subquery; brand/gender are direct `brandId`/`genderId` equality). An unknown slug yields zero results.
+- **Response**: 200 `{ success: true, data: [{ id, name, slug, description, basePrice, status, createdAt, price, image, collection: string|null, gender: string|null, hasStock: boolean }], pagination: { page, limit, total, totalPages } }`; 500 `{ success: false, error }`
+- **Notes**: `price` is the **cheapest variant net price** per product (`min(productVariants.price)` via a grouped subquery join) — the price the customer pays and the value shown on product cards; `basePrice` is the RRP (strikethrough/original). `image` is the first image (`displayOrder` asc) of the **default** variant (separate from price). `hasStock` is true when at least one variant has available units (`stock - reservedStock > 0`) in at least one `status = "aktif"` branch — computed in JS via `hasAvailableStock` (`apps/store/src/lib/stock.ts`) over the page's branch-stock rows (two queries, no N+1); product cards grey out (opacity + disabled link) when `hasStock` is false. `minPrice`/`maxPrice` and `sortBy=price` operate on the cheapest-variant net price; `hasDiscount` filters to `basePrice > min(variant.price)`. `category` (slug) and `brand` (slug) are each resolved to an id and applied as conditions to **both** the list and the count query, so `pagination.total` is correct under any filter combination (category uses a junction-table subquery; brand is a direct `brandId` equality). An unknown slug yields zero results.
 
 #### `GET` `/api/products/{id}`
 - **Auth**: none
@@ -223,7 +213,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: —
 - **Body**: none
 - **Response**: 200 `{ success: true, data: sections[] }` where each section varies by `type`: `carousel_product` sections gain a `products` array; `store_banner` sections gain a `branches` array (active branches, `name` asc); other types pass through unchanged. Empty array if no sections. 500 `{ success: false, error }`
-- **Notes**: Only `isActive = true` sections, ordered by `displayOrder` asc. `carousel_product` content has a `mode`: `"filter"` resolves products dynamically (mirrors `/api/products` filters: `search`, `category` slug, `brand` slug, `gender` slug, `hasDiscount`, `minPrice`, `maxPrice`, `sortOrder` of `newest|priceAsc|priceDesc`; `limit` clamped 1–20, default 10) and runs in parallel; otherwise manual mode reads `homepageSectionProducts` junction rows ordered by `displayOrder`. Carousel product `price` is the cheapest variant net price, `basePrice` is the RRP. Each carousel product also carries `collection` (text label from the product row, nullable) and `gender` (resolved name from the sync-managed `gender` dimension table via `genderId`, nullable) so product cards can render both. `store_banner` sections attach all `status = "aktif"` branches. Read-only.
+- **Notes**: Only `isActive = true` sections, ordered by `displayOrder` asc. `carousel_product` content has a `mode`: `"filter"` resolves products dynamically (mirrors `/api/products` filters: `search`, `category` slug, `brand` slug, `hasDiscount`, `minPrice`, `maxPrice`, `sortOrder` of `newest|priceAsc|priceDesc`; `limit` clamped 1–20, default 10) and runs in parallel; otherwise manual mode reads `homepageSectionProducts` junction rows ordered by `displayOrder`. Carousel product `price` is the cheapest variant net price, `basePrice` is the RRP. Each carousel product also carries `collection` (text label from the product row, nullable) and `gender` (resolved name from the sync-managed `gender` dimension table via `genderId`, nullable) so product cards can render both. `store_banner` sections attach all `status = "aktif"` branches. Read-only.
 
 #### `POST` `/api/vouchers/validate`
 - **Auth**: none
@@ -401,22 +391,22 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 #### `GET` `/api/admin/products`
 - **Auth**: admin-session (permission: products/view)
-- **Purpose**: List products with variants, categories, stock totals, and images (paginated).
-- **Params**: query `page` (default 1), `limit` (default 20)
+- **Purpose**: List products with variants, categories, stock totals, and images (paginated), **scoped by the caller's branch access**.
+- **Params**: query `page` (default 1), `limit` (default 20), `search` (optional — case-insensitive partial match on name or slug)
 - **Body**: none
 - **Response**: 200 `{ success, data: [...], pagination: { page, limit, total, totalPages } }`; 500 error
-- **Notes**: N+1 per product (variants, categories, branchStocks sums, productImages ordered by displayOrder). Per-product fields: `variants: [{id, price, isDefault}]`, `variantCount`, `totalStock`, `totalReserved`, `totalAvailable = max(0, totalStock - totalReserved)`, `categories: [name]`, `images: [{url}]`. Also spreads the full product row (incl. `collection` text label) and adds `gender` (resolved name from the `gender` dimension table via `genderId`, nullable — batch-looked-up per page) so carousel manual-mode preview cards can render the gender label.
+- **Notes**: Branch scope is applied via `getBranchScope` (`apps/admin/src/lib/auth-guard.ts`): HQ / branchless admin → every product, with stock summed across all branches; branch admin → **only products their branch carries** (products that have a `branch_stock` row for their `branchId`), with stock totals scoped to their branch only. The carried-product filter and the search filter are both applied to the list and the `count(*)` query so pagination stays in sync. Per-product stock totals come from the raw per-branch rows summed through the pure `computeScopedTotals` helper (`apps/admin/src/lib/branch-stock.ts`); the SQL `where` is the real access control and the helper is the tested guarantee (defence in depth). Per-product fields: `variants: [{id, price, isDefault}]`, `variantCount`, `totalStock`, `totalReserved`, `totalAvailable = max(0, totalStock - totalReserved)`, `categories: [name]`, `images: [{url}]`. Also spreads the full product row (incl. `collection` text label) and adds `gender` (resolved name from the `gender` dimension table via `genderId`, nullable — batch-looked-up per page) so carousel manual-mode preview cards can render the gender label. N+1 per product (variants, categories, branch stocks, productImages ordered by displayOrder).
 
 #### `POST` `/api/admin/products` — **REMOVED**
 - **Status**: Removed. Jubelio is the source of truth for the product catalog; products are created via the Jubelio sync (`db:import-jubelio` / the Jubelio webhook / the per-product Sync button). The `GET` list endpoint remains.
 
 #### `GET` `/api/admin/products/{id}`
 - **Auth**: admin-session (permission: products/view)
-- **Purpose**: Fetch a single product with its categories and variants (with images).
+- **Purpose**: Fetch a single product with its categories, variants (with images), and **per-branch stock scoped by the caller's role**.
 - **Params**: `{id}`
 - **Body**: none
-- **Response**: 200 `{ success, data: { ...product, categories: [{id, name, slug}], variants: [{ ...variant, images: [{id, url, displayOrder}] }] } }`; 404 not found; 500 error
-- **Notes**: Variants ordered by `isDefault` asc; images ordered by `displayOrder` asc.
+- **Response**: 200 `{ success, data: { ...product, categories: [{id, name, slug}], variants: [{ ...variant, images: [{id, url, displayOrder}] }], branchStock: { scope: "all" | "own", branches: [{ id, name, code, city, status, rows: [{ variantId, sku, size, color, stock, reservedStock, available }] }] } } }`; 404 not found; 500 error
+- **Notes**: Variants ordered by `isDefault` asc; images ordered by `displayOrder` asc. **Branch visibility**: a branch admin who opens a product their branch does not carry (no `branch_stock` row for their `branchId`) gets 404 — mirroring the list's carried-product filter so a non-carried product can't be reached by navigating to its detail URL directly. HQ / branchless admin is unaffected. `branchStock` is filtered server-side via `getBranchScope`: HQ / branchless admin → all branches; branch admin → only their own branch. `available = max(0, stock - reservedStock)`. Branches are sorted by name; rows within a branch by size then color.
 
 #### `PUT` `/api/admin/products/{id}` — **REMOVED**
 - **Status**: Removed. Jubelio is the source of truth; refresh a product via `POST /api/admin/products/{id}/sync` (the Sync button on the admin product detail page).
@@ -447,14 +437,6 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Body**: none
 - **Response**: 200 `{ success, data: [{ id, name, slug }] }`; 500 error
 - **Notes**: Sync-managed dimension (no admin CRUD). Ordered by `name` asc. Read-only `GET`.
-
-#### `GET` `/api/admin/genders`
-- **Auth**: admin-session (permission: products/view)
-- **Purpose**: List all product genders (dimension) for the homepage ProductFilterEditor dropdown.
-- **Params**: —
-- **Body**: none
-- **Response**: 200 `{ success, data: [{ id, name, slug }] }`; 500 error
-- **Notes**: Sync-managed dimension (CSV `sex`). Ordered by `name` asc. Read-only `GET`.
 
 #### `GET` `/api/admin/branches`
 - **Auth**: admin-session (permission: branches/view)
@@ -706,12 +688,12 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: —
 - **Body**: none
 - **Response**: 200 `{ success: true, data: Section[] }` (empty array if no sections); 500 on error
-- **Notes**: Unlike the storefront endpoint, includes inactive sections. For `carousel_product` in `manual` mode, hydrates products with the cheapest-variant net price and the default-variant image, returning `products: { id, name, slug, price, basePrice, image, collection, gender }[]` (`price` = net, `basePrice` = RRP; `collection` from the product row, `gender` resolved from `genderId` via a per-page gender-name lookup — both nullable). For `filter` mode, runs `resolveFilterModeProducts` mirroring storefront logic (status `aktif`, optional `search`/`category`/`brand`/`gender`/price range/`hasDiscount`/`sortOrder` of `newest|priceAsc|priceDesc`, limit clamped 1-20); filter-mode products also carry `collection`/`gender` (via a left join on `genders`). `store_banner` sections include `branches` (status `aktif`, ordered by `name`).
+- **Notes**: Unlike the storefront endpoint, includes inactive sections. For `carousel_product` in `manual` mode, hydrates products with the cheapest-variant net price and the default-variant image, returning `products: { id, name, slug, price, basePrice, image, collection, gender }[]` (`price` = net, `basePrice` = RRP; `collection` from the product row, `gender` resolved from `genderId` via a per-page gender-name lookup — both nullable). For `filter` mode, runs `resolveFilterModeProducts` mirroring storefront logic (status `aktif`, optional `search`/`category`/`brand`/price range/`hasDiscount`/`sortOrder` of `newest|priceAsc|priceDesc`, limit clamped 1-20); filter-mode products also carry `collection`/`gender` (via a left join on `genders`). `store_banner` sections include `branches` (status `aktif`, ordered by `name`).
 
 #### `GET` `/api/admin/homepage/preview-products`
 - **Auth**: admin-session (permission: `homepage:view`)
 - **Purpose**: Server-side proxy to storefront `/api/products` for carousel filter-mode preview.
-- **Params**: query — forwards whitelisted `search`, `category`, `brand`, `gender`, `minPrice`, `maxPrice`, `hasDiscount`, `sortOrder`, `sortBy`, `page`, `limit`
+- **Params**: query — forwards whitelisted `search`, `category`, `brand`, `minPrice`, `maxPrice`, `hasDiscount`, `sortOrder`, `sortBy`, `page`, `limit`
 - **Body**: none
 - **Response**: Proxied storefront response (status + JSON passed through); 500 on fetch error
 - **Notes**: Forwards only the whitelisted params; defaults `limit=10`, `page=1`. Store base URL from `NEXT_PUBLIC_STORE_URL` || `STORE_URL` || `http://localhost:3000`. Uses `cache: "no-store"`. Avoids CORS by fetching server-to-store.
@@ -774,11 +756,11 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 #### `GET` `/api/admin/permissions/me`
 - **Auth**: admin-session
-- **Purpose**: Return the current user's role and permissions.
+- **Purpose**: Return the current user's role, permissions, and placed branch.
 - **Params**: —
 - **Body**: none
-- **Response**: 200 `{ success: true, data: { role, permissions } }` (permissions from `getPermissionsForRole(role)`); 401 if no session; 500 on error
-- **Notes**: Any authenticated admin can read their own permissions; no role restriction.
+- **Response**: 200 `{ success: true, data: { role, permissions, branch: { id, name, code, city } | null } }` (permissions from `getPermissionsForRole(role)`; `branch` is the admin's placed branch resolved by joining `branches` on `session.user.branchId`, `null` for HQ / branchless admins); 401 if no session; 500 on error
+- **Notes**: Any authenticated admin can read their own permissions; no role restriction. `branch` lets the admin sidebar render the placement ("Cabang …" for branch admins, "Head Quarter" for HQ) without a second request — the auth-provider already calls this endpoint on every admin page.
 
 #### `GET` & `POST` `/api/auth/*`
 - **Auth**: managed per-endpoint by Better Auth `auth.handler`

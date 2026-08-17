@@ -64,12 +64,37 @@ e2e/
   store/                  # storefront specs (baseURL http://localhost:3000)
     login.spec.ts         # login flow (valid / invalid / redirect)
     account.spec.ts       # authenticated smoke (reuses saved session)
+    products.spec.ts      # infinite scroll, sidebar filters, pricing, grey-out
+    product-detail.spec.ts# metadata (brand/gender/category/price/discount/stock)
+    checkout.spec.ts      # cart → checkout → place-order → Midtrans redirect; vouchers
+    onboarding.spec.ts   # fresh user → /onboarding → cookie (isolated user via pg)
+    static-pages.spec.ts  # CMS pages + footer rendering
   admin/                  # admin specs (baseURL http://localhost:3001)
     login.spec.ts         # login flow (valid / invalid / redirect)
     dashboard.spec.ts     # authenticated smoke (reuses saved session)
+    products.spec.ts      # list/search/detail, sync + upload APIs
+    orders.spec.ts        # list/detail, verify-pickup, audit-log entry
+    rbac.spec.ts          # roles page guard, permissions API, branch scope
+    analytics.spec.ts     # metrics endpoint invariants
+    notifications.spec.ts # long-poll, mark-all-read
+    cms.spec.ts           # homepage/pages/footer editor + storefront render
 apps/*/vitest.config.ts   # per-app unit config (aliases, include)
 packages/db/vitest.config.ts
 ```
+
+### E2E pitfalls (learned the hard way)
+
+- **React hydration race**: filling a controlled input right after navigation
+  gets reverted when hydration takes over. Wait for a client-side signal first
+  (submit button `toBeEnabled()`, or `waitForResponse` on a useEffect fetch).
+- **Shared state**: specs that share a user's cart or mutate DB rows must use
+  `test.describe.configure({ mode: "serial" })` — `fullyParallel: true` is on.
+- **Heavy pages**: `waitForURL` with `{ waitUntil: "commit" }` when the target
+  page loads slowly under parallel load.
+- **DB fixtures**: specs that need deterministic data (fresh users, order
+  status, notifications, footer brand) create/reset rows via `pg` in
+  `beforeAll`/`afterAll` (see `onboarding.spec.ts`, `orders.spec.ts`,
+  `notifications.spec.ts`, `cms.spec.ts`).
 
 ### Auth pattern (important)
 

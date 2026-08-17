@@ -20,7 +20,6 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
       "search",
       "category",
       "brand",
-      "gender",
       "minPrice",
       "maxPrice",
       "hasDiscount",

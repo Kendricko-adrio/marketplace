@@ -4,6 +4,7 @@ import InfiniteProductGrid, {
   type Pagination,
 } from "@/components/InfiniteProductGrid";
 import ProductFilters from "@/components/ProductFilters";
+import { buildProductsApiParams } from "@/lib/product-filters";
 
 async function getProducts(searchParams: {
   [key: string]: string | undefined;
@@ -12,18 +13,10 @@ async function getProducts(searchParams: {
   data: Product[];
   pagination: Pagination;
 }> {
-  const params = new URLSearchParams();
-
-  if (searchParams.search) params.set("search", searchParams.search);
-  if (searchParams.brand) params.set("brand", searchParams.brand);
-  if (searchParams.gender) params.set("gender", searchParams.gender);
-  if (searchParams.minPrice) params.set("minPrice", searchParams.minPrice);
-  if (searchParams.maxPrice) params.set("maxPrice", searchParams.maxPrice);
-  if (searchParams.hasDiscount) params.set("hasDiscount", searchParams.hasDiscount);
-  if (searchParams.sortBy) params.set("sortBy", searchParams.sortBy);
-  if (searchParams.sortOrder) params.set("sortOrder", searchParams.sortOrder);
-  params.set("page", searchParams.page || "1");
-  params.set("limit", "20");
+  // Forward every active sidebar filter to the API. Centralized in
+  // buildProductsApiParams so a dropped param (the category filter was
+  // previously missed here) is caught by unit tests.
+  const params = buildProductsApiParams(searchParams, 20);
 
   try {
     const res = await fetch(

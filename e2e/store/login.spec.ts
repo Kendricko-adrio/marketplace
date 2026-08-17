@@ -6,16 +6,28 @@ import { TEST_USERS } from "../config";
 test.use({ storageState: { cookies: [], origins: [] } });
 
 test.describe("store login flow", () => {
+  // The submit button is disabled until the session check finishes — waiting
+  // for it guarantees hydration + readiness before submitting (a keypress
+  // before hydration would be lost).
+  async function readySubmit(page: import("@playwright/test").Page) {
+    const submit = page
+      .getByRole("main")
+      .getByRole("button", { name: "Masuk", exact: true });
+    await expect(submit).toBeEnabled();
+    return submit;
+  }
+
   test("signs in with valid credentials and lands on onboarding", async ({
     page,
   }) => {
     await page.goto("/login");
     // Use a customer the auth setup never onboards, so the fresh-user flow is
     // deterministic (middleware sends a successful sign-in to /onboarding).
+    const submit = await readySubmit(page);
     await page.getByLabel("Email").fill(TEST_USERS.storeFresh.email);
     await page.keyboard.press("Tab");
     await page.getByLabel("Password").fill(TEST_USERS.storeFresh.password);
-    await page.keyboard.press("Enter");
+    await submit.click();
 
     // The onboarding form's CardTitle is a <div> (not a heading role), so
     // assert a form field instead.
@@ -25,10 +37,11 @@ test.describe("store login flow", () => {
 
   test("shows an error for invalid credentials", async ({ page }) => {
     await page.goto("/login");
+    const submit = await readySubmit(page);
     await page.getByLabel("Email").fill(TEST_USERS.store.email);
     await page.keyboard.press("Tab");
     await page.getByLabel("Password").fill("wrong-password");
-    await page.keyboard.press("Enter");
+    await submit.click();
 
     const error = page.locator("div.bg-destructive\\/10");
     await expect(error).toBeVisible();

@@ -46,7 +46,7 @@ function useIsMounted(): boolean {
 
 export default function AdminSidebar() {
   const pathname = usePathname();
-  const { user, hasPermission, permissionsLoading } = useAuth();
+  const { user, hasPermission, permissionsLoading, branch } = useAuth();
   const [loggingOut, setLoggingOut] = useState(false);
   const mounted = useIsMounted();
 
@@ -122,6 +122,14 @@ export default function AdminSidebar() {
   const displayName = mounted ? user?.name || "Admin" : "Admin";
   const roleLabel = mounted ? (user?.role === "hq" ? "HQ" : "Admin Cabang") : "Admin Cabang";
   const displayEmail = mounted ? user?.email || displayName : "";
+  // Branch placement line: branch admins show their branch name; HQ (no branch)
+  // shows "Head Quarter". Empty until mounted/loaded so SSR markup is stable.
+  // `branch` arrives via /api/admin/permissions/me (async); for a branch admin it
+  // populates shortly after mount, so the line appears once — no wrong-label flash
+  // (HQ is null from the start and resolves to "Head Quarter" immediately).
+  const branchLabel = mounted
+    ? branch?.name ?? (user?.role === "hq" ? "Head Quarter" : "")
+    : "";
 
   return (
     <aside className="w-64 h-screen bg-card text-muted-foreground flex flex-col sticky top-0 border-r">
@@ -173,6 +181,11 @@ export default function AdminSidebar() {
                     {displayName}
                   </div>
                   <div className="text-xs truncate">{roleLabel}</div>
+                  {branchLabel && (
+                    <div className="text-xs truncate text-muted-foreground">
+                      {branchLabel}
+                    </div>
+                  )}
                 </div>
                 <ChevronDown className="h-4 w-4 shrink-0" />
               </button>
@@ -208,6 +221,11 @@ export default function AdminSidebar() {
                 {displayName}
               </div>
               <div className="text-xs truncate">{roleLabel}</div>
+              {branchLabel && (
+                <div className="text-xs truncate text-muted-foreground">
+                  {branchLabel}
+                </div>
+              )}
             </div>
           </div>
         )}

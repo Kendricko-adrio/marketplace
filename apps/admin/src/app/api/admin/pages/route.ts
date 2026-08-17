@@ -4,6 +4,7 @@ import { staticPages } from "@/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { withPermission } from "@/lib/auth-guard";
+import { createPageSchema } from "@/lib/static-pages";
 
 // -----------------------------
 // GET /api/admin/pages — list pages (HQ only)
@@ -37,20 +38,7 @@ export const GET = withPermission(async () => {
 // POST /api/admin/pages — create page (HQ only)
 // Body: { slug, title, content, isPublished?, displayOrder? }
 // -----------------------------
-const createPageSchema = z.object({
-  slug: z
-    .string()
-    .min(1, "Slug wajib diisi")
-    .max(60, "Slug maksimal 60 karakter")
-    .regex(
-      /^[a-z0-9-]+$/,
-      "Slug hanya boleh huruf kecil, angka, dan tanda hubung"
-    ),
-  title: z.string().min(1, "Judul wajib diisi").max(200),
-  content: z.string().default(""),
-  isPublished: z.boolean().default(true),
-  displayOrder: z.number().int().min(0).default(0),
-});
+
 
 export const POST = withPermission(async (_ctx, request: NextRequest) => {
   try {

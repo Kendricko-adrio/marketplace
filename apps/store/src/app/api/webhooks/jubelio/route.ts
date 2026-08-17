@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHash } from "node:crypto";
 import { db, auditLogs } from "@/db";
 import {
   syncOneProduct,
@@ -7,6 +6,7 @@ import {
   flattenStock,
   upsertJubelioStock,
 } from "@marketplace/db/src/jubelio-sync";
+import { verifyJubelioSignature } from "@/lib/jubelio-webhook";
 
 /**
  * Jubelio webhook — receives push events from Jubelio (source of truth) when a
@@ -46,8 +46,7 @@ export async function POST(request: NextRequest) {
   const provided =
     request.headers.get("webhook-signature") ||
     request.headers.get("x-jubelio-signature");
-  const expected = createHash("sha256").update(rawBody + secret).digest("hex");
-  if (!provided || provided !== expected) {
+  if (!verifyJubelioSignature(rawBody, secret, provided)) {
     return NextResponse.json(
       { success: false, error: "Unauthorized" },
       { status: 401 }

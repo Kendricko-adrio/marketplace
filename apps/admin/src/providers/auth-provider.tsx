@@ -17,6 +17,15 @@ interface Session {
   user: User;
 }
 
+// The admin's placed branch (from /api/admin/permissions/me). HQ has no branch
+// → null. Used by the sidebar to show "Cabang …" / "Head Quarter".
+interface BranchInfo {
+  id: string;
+  name: string;
+  code: string;
+  city: string;
+}
+
 interface AuthContextType {
   user: User | null;
   session: Session | null;
@@ -24,6 +33,7 @@ interface AuthContextType {
   isAuthenticated: boolean;
   permissions: PermissionMap | null;
   permissionsLoading: boolean;
+  branch: BranchInfo | null;
   hasPermission: (moduleName: ModuleName, action: PermissionAction) => boolean;
 }
 
@@ -34,6 +44,7 @@ const AuthContext = createContext<AuthContextType>({
   isAuthenticated: false,
   permissions: null,
   permissionsLoading: true,
+  branch: null,
   hasPermission: () => false,
 });
 
@@ -44,11 +55,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const userRole = user?.role;
   const [permissions, setPermissions] = useState<PermissionMap | null>(null);
   const [permissionsLoading, setPermissionsLoading] = useState(true);
+  const [branch, setBranch] = useState<BranchInfo | null>(null);
 
   useEffect(() => {
     if (!userId || !userRole) {
       setPermissions(null);
       setPermissionsLoading(false);
+      setBranch(null);
       return;
     }
 
@@ -64,10 +77,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } else {
           setPermissions(null);
         }
+        setBranch(result.data?.branch ?? null);
       })
       .catch((err) => {
         console.error("Failed to load permissions:", err);
         if (!cancelled) setPermissions(null);
+        if (!cancelled) setBranch(null);
       })
       .finally(() => {
         if (!cancelled) setPermissionsLoading(false);
@@ -98,6 +113,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isAuthenticated: !!user,
     permissions,
     permissionsLoading,
+    branch,
     hasPermission,
   };
 

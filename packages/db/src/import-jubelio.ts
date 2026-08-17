@@ -41,6 +41,7 @@ import {
   upsertJubelioProducts,
   upsertJubelioStock,
   mapWithConcurrency,
+  parseJubelioStartPage,
 } from "./jubelio-sync";
 
 const PAGE_SIZE = 200;
@@ -58,10 +59,11 @@ async function main() {
       `JUBELIO_SYNC_MAX_PRODUCTS must be a number or empty (got "${maxProductsRaw}")`
     );
   }
+  const startPage = parseJubelioStartPage(process.env.JUBELIO_SYNC_START_PAGE);
   console.log(
     `🔧 concurrency=${concurrency} | maxProducts=${
       cap === Infinity ? "ALL" : cap
-    }`
+    } | startPage=${startPage}`
   );
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -104,7 +106,7 @@ async function main() {
     );
 
     // 3. Paginate masters, enrich per product, upsert page-by-page.
-    let page = 1;
+  let page = startPage;
     while (totalProducts < cap) {
       const masters = await fetchMastersPage(page, PAGE_SIZE);
       if (!masters.data.length) break;

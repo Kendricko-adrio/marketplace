@@ -236,7 +236,7 @@ export type JubelioCatalogProduct = {
   item_category_id: number;
   selected_brand_name: string | null;
   is_active: boolean;
-  images: JubelioCatalogImage[];
+  images: JubelioCatalogImage[] | null;
   product_skus: JubelioCatalogSku[];
 };
 
@@ -263,6 +263,26 @@ export type JubelioProductInput = {
   /** Group thumbnail from /inventory/items/masters (avoids a 2nd hit). */
   thumbnail?: string | null;
 };
+
+export function resolveJubelioThumbnail(
+  masterThumbnail: string | null | undefined,
+  images: JubelioCatalogImage[] | null | undefined
+): string | null {
+  return (masterThumbnail ?? images?.[0]?.thumbnail ?? images?.[0]?.url) || null;
+}
+
+export function parseJubelioStartPage(value: string | undefined): number {
+  const raw = (value ?? "").trim();
+  if (!raw) return 1;
+
+  const page = Number(raw);
+  if (!Number.isInteger(page) || page < 1) {
+    throw new Error(
+      `JUBELIO_SYNC_START_PAGE must be a positive integer (got "${raw}")`
+    );
+  }
+  return page;
+}
 
 export type UpsertSummary = {
   branches: number;
@@ -720,8 +740,7 @@ export async function upsertJubelioProducts(
 
     const name = c.item_group_name?.trim() || `product-${groupId}`;
     const slug = `${slugify(name)}-${groupId}`;
-    const thumbnail =
-      (inp.thumbnail ?? c.images[0]?.thumbnail ?? c.images[0]?.url) || null;
+    const thumbnail = resolveJubelioThumbnail(inp.thumbnail, c.images);
     const gallery: ProductImage[] = (c.images ?? [])
       .slice()
       .sort((a, b) => (a.sequence_number ?? 0) - (b.sequence_number ?? 0))

@@ -115,6 +115,7 @@ the token and auto re-logins on 401. Env: `JUBELIO_EMAIL`, `JUBELIO_PASSWORD`,
 | `JUBELIO_WEBHOOK_SECRET` | webhook signature secret | — |
 | `JUBELIO_SYNC_CONCURRENCY` | parallel catalog fetches during import | `5` |
 | `JUBELIO_SYNC_MAX_PRODUCTS` | cap products synced (empty = all) | empty |
+| `JUBELIO_SYNC_START_PAGE` | masters page to start/resume from | `1` |
 | `JUBELIO_SKIP_LOCATIONS` | comma-sep non-outlet location names to skip as branches | `Transit,WEBSITE ADF,MONO *,MULTI *` |
 | `APP_ENV` | safety boundary for stock writes (`production` is the only live value) | `NODE_ENV` |
 | `JUBELIO_MOCK_API_BASE_URL` | stateful mock used by every non-production environment | `http://127.0.0.1:3002` |

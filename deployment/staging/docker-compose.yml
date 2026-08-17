@@ -73,6 +73,13 @@ services:
       # Cron secret for the stock-reservation sweep endpoint
       # (POST /api/cron/sweep-reservations, header X-Cron-Secret).
       CRON_SECRET: ${CRON_SECRET}
+      JUBELIO_API_BASE_URL: ${JUBELIO_API_BASE_URL:-https://api2.jubelio.com}
+      JUBELIO_EMAIL: ${JUBELIO_EMAIL}
+      JUBELIO_PASSWORD: ${JUBELIO_PASSWORD}
+      JUBELIO_CHANNEL_ID: ${JUBELIO_CHANNEL_ID:-64}
+      JUBELIO_WEBHOOK_SECRET: ${JUBELIO_WEBHOOK_SECRET}
+      JUBELIO_SYNC_CONCURRENCY: ${JUBELIO_SYNC_CONCURRENCY:-5}
+      JUBELIO_SYNC_MAX_PRODUCTS: ${JUBELIO_SYNC_MAX_PRODUCTS:-}
       # Uploads — shared named volume mounted at /app/uploads
       UPLOADS_DIR: /app/uploads
       # Internal URL the admin app uses to call this store's internal endpoints.
@@ -121,6 +128,12 @@ services:
       SMTP_USER: ${SMTP_USER}
       SMTP_PASS: ${SMTP_PASS}
       SMTP_FROM: ${SMTP_FROM}
+      JUBELIO_API_BASE_URL: ${JUBELIO_API_BASE_URL:-https://api2.jubelio.com}
+      JUBELIO_EMAIL: ${JUBELIO_EMAIL}
+      JUBELIO_PASSWORD: ${JUBELIO_PASSWORD}
+      JUBELIO_CHANNEL_ID: ${JUBELIO_CHANNEL_ID:-64}
+      JUBELIO_SYNC_CONCURRENCY: ${JUBELIO_SYNC_CONCURRENCY:-5}
+      JUBELIO_SYNC_MAX_PRODUCTS: ${JUBELIO_SYNC_MAX_PRODUCTS:-}
       # Uploads — shared named volume (admin writes, store reads)
       UPLOADS_DIR: /app/uploads
       # URL the admin app uses to call the store's internal endpoints
@@ -171,10 +184,11 @@ services:
       dockerfile: deployment/common/migrate/Dockerfile
     environment:
       <<: *pg-conn
+      NODE_ENV: staging
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Default CMD runs `drizzle-kit migrate && tsx src/seed.ts`.
-    # Override to run only one: ...run --rm migrate npx drizzle-kit migrate
+    # Safe default runs migrations only. Seed explicitly when staging data is desired:
+    # docker compose --profile tools run --rm migrate npx tsx src/seed.ts
 
 volumes:
   uploads:        # shared by store + admin for /app/uploads

@@ -50,6 +50,22 @@ export interface CreateSnapPaymentResult {
   token: string;
 }
 
+export function getMockPaymentResult(
+  orderId: string,
+  env: { MIDTRANS_E2E_MOCK?: string; NODE_ENV?: string } = {
+    MIDTRANS_E2E_MOCK: process.env.MIDTRANS_E2E_MOCK,
+    NODE_ENV: process.env.NODE_ENV,
+  }
+): CreateSnapPaymentResult | null {
+  if (env.MIDTRANS_E2E_MOCK !== "true" || env.NODE_ENV === "production") {
+    return null;
+  }
+  return {
+    redirectUrl: `http://localhost:3000/checkout/payment-test?orderId=${encodeURIComponent(orderId)}`,
+    token: `e2e-${orderId}`,
+  };
+}
+
 /**
  * Create a Snap transaction restricted to QRIS payment.
  * Returns the redirect_url (Snap payment page) and token.
@@ -131,6 +147,8 @@ export async function createPayment(
   itemDetails?: QrisItemDetail[],
   expiryMinutes?: number
 ): Promise<CreateSnapPaymentResult> {
+  const mock = getMockPaymentResult(orderId);
+  if (mock) return mock;
   return createSnapQrisPayment(
     orderId,
     grossAmount,
@@ -158,7 +176,72 @@ export function verifyMidtransSignature(
     .update(orderId + statusCode + grossAmount + serverKey)
     .digest("hex");
 
-  return expected === signatureKey;
+  const expectedBuffer = Buffer.from(expected, "utf8");
+  const actualBuffer = Buffer.from(signatureKey, "utf8");
+  return (
+    expectedBuffer.length === actualBuffer.length &&
+    crypto.timingSafeEqual(expectedBuffer, actualBuffer)
+  );
+}
+
+export type VerifiedMidtransWebhook = {
+  orderId: string;
+  transactionStatus: string;
+  statusCode: string;
+  grossAmount: string;
+  fraudStatus?: string;
+};
+
+export function validateMidtransWebhookPayload(body: unknown):
+  | { ok: true; data: VerifiedMidtransWebhook }
+  | { ok: false; error: string; status: 400 | 401 } {
+  if (!body || typeof body !== "object") {
+    return { ok: false, error: "Invalid notification", status: 400 };
+  }
+  const payload = body as Record<string, unknown>;
+  const orderId = typeof payload.order_id === "string" ? payload.order_id : "";
+  const transactionStatus =
+    typeof payload.transaction_status === "string"
+      ? payload.transaction_status
+      : "";
+  const statusCode =
+    typeof payload.status_code === "string" ? payload.status_code : "";
+  const grossAmount =
+    typeof payload.gross_amount === "string" ? payload.gross_amount : "";
+  const signatureKey =
+    typeof payload.signature_key === "string" ? payload.signature_key : "";
+
+  if (!orderId || !transactionStatus || !statusCode || !grossAmount || !signatureKey) {
+    return { ok: false, error: "Invalid notification", status: 400 };
+  }
+  if (
+    !verifyMidtransSignature(orderId, statusCode, grossAmount, signatureKey)
+  ) {
+    return { ok: false, error: "Invalid signature", status: 401 };
+  }
+  return {
+    ok: true,
+    data: {
+      orderId,
+      transactionStatus,
+      statusCode,
+      grossAmount,
+      fraudStatus:
+        typeof payload.fraud_status === "string"
+          ? payload.fraud_status
+          : undefined,
+    },
+  };
+}
+
+export function amountsMatch(expected: string | number, actual: string | number): boolean {
+  const expectedAmount = Number(expected);
+  const actualAmount = Number(actual);
+  return (
+    Number.isFinite(expectedAmount) &&
+    Number.isFinite(actualAmount) &&
+    Math.round(expectedAmount * 100) === Math.round(actualAmount * 100)
+  );
 }
 
 /**

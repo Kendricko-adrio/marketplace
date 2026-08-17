@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { safeAdminRedirect } from "@/lib/safe-redirect";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,8 +37,9 @@ import { isEmail } from "@/lib/login-utils";
 // get the authoritative `mustResetPassword` value (read server-side from the
 // just-set cookie) and branch the redirect target accordingly.
 export default function AdminLoginForm() {
+  const router = useRouter();
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") || "/admin";
+  const callbackUrl = safeAdminRedirect(searchParams.get("callbackUrl"));
 
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
@@ -58,17 +60,15 @@ export default function AdminLoginForm() {
         const mustReset = checkJson?.mustResetPassword === true;
 
         if (mustReset) {
-          // Set a lightweight edge cookie so middleware can gate without a
-          // DB hit on every request. Not httpOnly so the client can clear it
-          // after a successful reset.
-          document.cookie = "admin.must_reset=1; path=/; max-age=600"; // 10 min
-          window.location.href = "/reset-password?force=1";
+          router.replace("/reset-password?force=1");
+          router.refresh();
         } else {
-          window.location.href = callbackUrl;
+          router.replace(callbackUrl);
+          router.refresh();
         }
       } catch {
-        // If the check fails, default to the callback URL (safe fallback).
-        window.location.href = callbackUrl;
+        router.replace(callbackUrl);
+        router.refresh();
       }
     };
 

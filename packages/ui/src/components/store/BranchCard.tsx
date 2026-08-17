@@ -18,7 +18,13 @@ function formatHours(h: DayHours | undefined): string {
   return `${h.open} - ${h.close}`;
 }
 
-export default function BranchCard({ branch }: { branch: Branch }) {
+export default function BranchCard({
+  branch,
+  showOperatingHours = true,
+}: {
+  branch: Branch;
+  showOperatingHours?: boolean;
+}) {
   const mapsUrl =
     branch.googleMapsUrl ||
     (branch.latitude && branch.longitude
@@ -26,7 +32,7 @@ export default function BranchCard({ branch }: { branch: Branch }) {
       : null);
 
   return (
-    <div className="rounded-xl border bg-card text-card-foreground shadow-sm overflow-hidden flex flex-col">
+    <div className="rounded-xl border bg-card text-card-foreground shadow-sm overflow-hidden flex flex-col h-full w-full">
       <div className="bg-primary/5 p-5 border-b">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-3">
@@ -58,22 +64,24 @@ export default function BranchCard({ branch }: { branch: Branch }) {
           </p>
         </div>
 
-        <div className="space-y-1">
-          <div className="flex items-center gap-2">
-            <Clock className="h-4 w-4 text-muted-foreground" />
-            <p className="text-sm font-medium text-muted-foreground">
-              Jam Operasional
-            </p>
+        {showOperatingHours && (
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Clock className="h-4 w-4 text-muted-foreground" />
+              <p className="text-sm font-medium text-muted-foreground">
+                Jam Operasional
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm pl-6">
+              {DAY_LABELS.map(({ key, label }) => (
+                <div key={key} className="flex justify-between">
+                  <span className="text-muted-foreground">{label}</span>
+                  <span>{formatHours(branch.operatingHours[key])}</span>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm pl-6">
-            {DAY_LABELS.map(({ key, label }) => (
-              <div key={key} className="flex justify-between">
-                <span className="text-muted-foreground">{label}</span>
-                <span>{formatHours(branch.operatingHours[key])}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        )}
       </div>
 
       {mapsUrl && (

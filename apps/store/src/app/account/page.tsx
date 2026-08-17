@@ -124,7 +124,7 @@ export default function AccountPage() {
       setProfileName(user.name ?? "");
       setProfilePhone(user.phone ?? "");
     }
-  }, [user?.id, user?.name, user?.phone]);
+  }, [user]);
 
   async function handleSaveProfile() {
     setSavingProfile(true);

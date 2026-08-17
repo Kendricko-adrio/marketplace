@@ -7,7 +7,7 @@ deployment/
 ├── common/                      # file yang SAMA untuk staging & production
 │   ├── store/Dockerfile         # image storefront
 │   ├── admin/Dockerfile         # image admin
-│   └── migrate/Dockerfile       # image one-shot migration + seed
+│   └── migrate/Dockerfile       # image one-shot migration (seed eksplisit)
 ├── staging/                     # config KHUSUS staging
 │   ├── docker-compose.yml
 │   ├── caddy/Caddyfile          # domain dev-store / dev-admin
@@ -52,7 +52,7 @@ cp .env.example .env
 nano .env                       # isi secret
 
 docker compose -p staging --env-file .env up -d --build
-docker compose -p staging --env-file .env --profile tools run --rm migrate            # migration + seed
+docker compose -p staging --env-file .env --profile tools run --rm migrate            # migration saja
 docker compose -p staging --env-file .env --profile tools run --rm migrate npx drizzle-kit migrate   # migration saja
 docker compose -p staging --env-file .env --profile tools run --rm migrate npx tsx src/seed.ts       # seed saja (hapus data!)
 docker compose -p staging --env-file .env logs -f

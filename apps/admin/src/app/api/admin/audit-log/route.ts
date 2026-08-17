@@ -3,11 +3,12 @@ import { db } from "@/db";
 import { auditLogs, users } from "@/db";
 import { eq, desc } from "drizzle-orm";
 import { withAuth } from "@/lib/auth-guard";
+import { parsePagination } from "@/lib/pagination";
 
 export const GET = withAuth(async (_ctx, request: NextRequest) => {
   try {
     const { searchParams } = new URL(request.url);
-    const limit = parseInt(searchParams.get("limit") || "50");
+    const { limit } = parsePagination(null, searchParams.get("limit"), 50);
 
     const logs = await db
       .select({

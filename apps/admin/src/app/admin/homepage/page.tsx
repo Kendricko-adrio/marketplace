@@ -18,7 +18,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Plus, GripVertical, Edit, Trash2, Eye, Loader2, ExternalLink } from "lucide-react";
+import { Plus, GripVertical, Edit, Trash2, Eye, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

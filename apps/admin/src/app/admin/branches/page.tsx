@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -61,11 +61,7 @@ export default function AdminBranchesPage() {
   const [deleteTarget, setDeleteTarget] = useState<Branch | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  useEffect(() => {
-    fetchBranches();
-  }, [page]);
-
-  async function fetchBranches() {
+  const fetchBranches = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/admin/branches?page=${page}&limit=10`);
@@ -79,7 +75,11 @@ export default function AdminBranchesPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [page]);
+
+  useEffect(() => {
+    void fetchBranches();
+  }, [fetchBranches]);
 
   const getStatusBadge = (status: string) => {
     const variants: Record<string, "default" | "destructive" | "secondary"> = {

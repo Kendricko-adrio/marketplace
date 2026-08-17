@@ -16,7 +16,7 @@ sets. They must never be treated as interchangeable.
 | Social login | Google OAuth | none |
 | Email verification | Required (`sendOnSignUp: true`, 1h expiry) | not configured |
 | Username plugin | no | yes (`better-auth/plugins` `username`) |
-| Onboarding gate | yes (`onboardingCompleted` field + middleware) | no |
+| Onboarding gate | yes (`onboardingCompleted` + server layouts/API guards) | no |
 | Extra user fields | phone, birthDate, gender, onboardingCompleted | role (`admin` \| `hq`, default `admin`, `input:false`) |
 
 ## Shared Behavior
@@ -38,6 +38,17 @@ sets. They must never be treated as interchangeable.
   separate tables/instances, not a unified role enum.
 
 ## See Also
+
+## Password and forced-reset hardening
+
+- Both apps enforce the same password complexity policy at password entry
+  points: at least eight characters with lowercase, uppercase, and a digit.
+- Admin `mustResetPassword` is enforced by the server layout and API guard;
+  client cookies cannot clear or bypass it.
+- Better Auth clears the flag only after a successful reset/change-password
+  hook and revokes sessions on password reset.
+- Login callback URLs are restricted to safe same-app paths, preventing open
+  redirects.
 
 - [middleware.md](middleware.md) — how each app protects its routes
 - [../features/onboarding.md](../features/onboarding.md) — store onboarding flow

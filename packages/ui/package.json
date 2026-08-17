@@ -2,6 +2,7 @@
   "name": "@marketplace/ui",
   "version": "0.1.0",
   "description": "Shared UI components (shadcn primitives + homepage section renderers) for marketplace apps",
+  "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

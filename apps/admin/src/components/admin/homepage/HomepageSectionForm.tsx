@@ -16,6 +16,7 @@ import {
   buildStoreFilterQuery,
   type HomepageSectionData,
   type HomepageProduct,
+  type HomepageBranch,
   type CarouselContent,
 } from "@marketplace/ui";
 import BannerSectionForm from "./BannerSectionForm";
@@ -84,6 +85,9 @@ export default function HomepageSectionForm({
   // Preview products for carousel modal — fetched when the modal opens.
   const [previewProducts, setPreviewProducts] = useState<HomepageProduct[]>([]);
   const [previewLoading, setPreviewLoading] = useState(false);
+  // Preview branches for store_banner modal — fetched when the modal opens.
+  const [previewBranches, setPreviewBranches] = useState<HomepageBranch[]>([]);
+  const [previewBranchesLoading, setPreviewBranchesLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -171,6 +175,11 @@ export default function HomepageSectionForm({
     if (type === "carousel_product") {
       section.products = previewProducts;
     }
+    // For store_banner sections, attach preview branches (fetched on modal
+    // open). Without this the renderer receives no branches and renders null.
+    if (type === "store_banner") {
+      section.branches = previewBranches;
+    }
     return section;
   };
 
@@ -253,6 +262,36 @@ export default function HomepageSectionForm({
     // Re-fetch when the modal opens or when the carousel content/selection
     // changes while the modal is open.
   }, [previewOpen, type, content, productIds]);
+
+  // When the preview modal opens for a store_banner section, fetch the active
+  // branches so the renderer has data to render. Without this the store banner
+  // preview shows nothing (renderer returns null on empty branches).
+  useEffect(() => {
+    if (!previewOpen || type !== "store_banner") return;
+    let cancelled = false;
+
+    const fetchPreviewBranches = async () => {
+      setPreviewBranchesLoading(true);
+      try {
+        const res = await fetch("/api/admin/homepage/preview-branches", {
+          cache: "no-store",
+        });
+        const data = await res.json();
+        if (!cancelled && data.success) {
+          setPreviewBranches(data.data);
+        }
+      } catch (error) {
+        console.error("Error fetching preview branches:", error);
+      } finally {
+        if (!cancelled) setPreviewBranchesLoading(false);
+      }
+    };
+
+    fetchPreviewBranches();
+    return () => {
+      cancelled = true;
+    };
+  }, [previewOpen, type]);
 
   return (
     <form onSubmit={handleSubmit} className="space-y-8">
@@ -362,6 +401,20 @@ export default function HomepageSectionForm({
                   {((content ?? {}) as Partial<CarouselContent>).mode === "filter"
                     ? "Tidak ada produk yang cocok dengan filter. Sesuaikan filter atau limit lalu coba lagi."
                     : "Belum ada produk yang dipilih. Pilih produk di form terlebih dahulu."}
+                </p>
+              </div>
+            ) : type === "store_banner" && previewBranchesLoading ? (
+              <div className="flex flex-col items-center justify-center py-20 gap-3">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">
+                  Memuat cabang untuk preview...
+                </p>
+              </div>
+            ) : type === "store_banner" && previewBranches.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-20 gap-2 text-center px-4">
+                <p className="text-sm text-muted-foreground">
+                  Tidak ada cabang aktif. Atur status cabang ke &quot;Aktif&quot;
+                  di halaman Kelola Cabang agar muncul di homepage.
                 </p>
               </div>
             ) : (

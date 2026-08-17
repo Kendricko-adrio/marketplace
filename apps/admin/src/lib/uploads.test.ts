@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
-import { deleteFile, ALLOWED_FOLDERS, MAX_FILE_SIZE } from "./uploads";
+import {
+  deleteFile,
+  detectImageType,
+  ALLOWED_FOLDERS,
+  MAX_FILE_SIZE,
+} from "./uploads";
 
 // Backs POST/DELETE /api/admin/upload guards.
 describe("uploads constants", () => {
@@ -12,6 +17,22 @@ describe("uploads constants", () => {
 
   it("caps file size at 5 MB", () => {
     expect(MAX_FILE_SIZE).toBe(5 * 1024 * 1024);
+  });
+});
+
+describe("detectImageType", () => {
+  it("detects image content from magic bytes", () => {
+    expect(detectImageType(Buffer.from([0xff, 0xd8, 0xff, 0x00]))).toEqual({
+      mime: "image/jpeg",
+      extension: "jpg",
+    });
+    expect(
+      detectImageType(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    ).toEqual({ mime: "image/png", extension: "png" });
+  });
+
+  it("rejects content that is not an allowed image", () => {
+    expect(detectImageType(Buffer.from("<script>alert(1)</script>"))).toBeNull();
   });
 });
 

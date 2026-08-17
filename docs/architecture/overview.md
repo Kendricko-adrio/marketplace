@@ -20,9 +20,9 @@ tech stack, how each app talks to the database, and path aliases.
 marketplace/
 ├── apps/
 │   ├── store/      # Storefront (customers)      — http://localhost:3000
-│   │   └── src/{app,components,db,lib,providers,middleware.ts}
+│   │   └── src/{app,components,db,lib,providers,proxy.ts}
 │   └── admin/      # Admin dashboard (ops)       — http://localhost:3001
-│       └── src/{app,components,db,lib,providers,middleware.ts}
+│       └── src/{app,components,db,lib,providers,proxy.ts}
 ├── packages/
 │   └── db/         # 🏛️ Shared schema owner (@marketplace/db)
 │       └── src/{schema/,seed.ts,reset.ts,import-jubelio.ts,jubelio-sync.ts,ids.ts}
@@ -31,7 +31,7 @@ marketplace/
 ```
 
 Each app mirrors the same layout: its own `src/db/index.ts` (local `db`
-instance + schema re-export), `lib/auth.ts`, `providers/`, and `middleware.ts`.
+instance + schema re-export), `lib/auth.ts`, `providers/`, and `proxy.ts`.
 
 ## How Each App Connects to the Database
 

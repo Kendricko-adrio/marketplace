@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { carts, cartItems, productVariants, branchStocks, branches } from "@/db";
-import { eq, and } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
+import { eq, and, sql } from "drizzle-orm";
+import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
 
 const addItemSchema = z.object({
@@ -14,37 +13,25 @@ const addItemSchema = z.object({
 
 // Helper to get or create cart
 async function getOrCreateCart(userId: string) {
-  const existingCart = await db
+  const newCartId = crypto.randomUUID();
+  await db
+    .insert(carts)
+    .values({ id: newCartId, userId })
+    .onConflictDoNothing({ target: carts.userId });
+  const [cart] = await db
     .select()
     .from(carts)
     .where(eq(carts.userId, userId))
     .limit(1);
-
-  if (existingCart.length > 0) {
-    return existingCart[0];
-  }
-
-  const newCartId = crypto.randomUUID();
-  await db.insert(carts).values({
-    id: newCartId,
-    userId,
-  });
-
-  return { id: newCartId, userId, updatedAt: new Date() };
+  if (!cart) throw new Error("Failed to create cart");
+  return cart;
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
-
-    if (!session) {
-      return NextResponse.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
-      );
-    }
+    const access = await requireOnboardedApiSession();
+    if (!access.ok) return access.response;
+    const { session } = access;
 
     const body = await request.json();
     const parsed = addItemSchema.safeParse(body);
@@ -104,59 +91,40 @@ export async function POST(request: NextRequest) {
 
     const cart = await getOrCreateCart(session.user.id);
 
-    // Check if same (variant + branch) line already in cart
-    const existingItem = await db
-      .select()
-      .from(cartItems)
-      .where(
-        and(
-          eq(cartItems.cartId, cart.id),
-          eq(cartItems.variantId, variantId),
-          eq(cartItems.branchId, branchId)
-        )
-      )
-      .limit(1);
+    if (quantity > availableStock) {
+      return NextResponse.json(
+        { success: false, error: "Insufficient stock at this branch" },
+        { status: 400 }
+      );
+    }
 
-    if (existingItem.length > 0) {
-      const newQuantity = existingItem[0].quantity + quantity;
-
-      if (newQuantity > availableStock) {
-        return NextResponse.json(
-          { success: false, error: "Insufficient stock at this branch" },
-          { status: 400 }
-        );
-      }
-
-      await db
-        .update(cartItems)
-        .set({ quantity: newQuantity, updatedAt: new Date() })
-        .where(eq(cartItems.id, existingItem[0].id));
-
-      return NextResponse.json({
-        success: true,
-        message: "Cart item updated",
-      });
-    } else {
-      if (quantity > availableStock) {
-        return NextResponse.json(
-          { success: false, error: "Insufficient stock at this branch" },
-          { status: 400 }
-        );
-      }
-
-      await db.insert(cartItems).values({
+    const changed = await db
+      .insert(cartItems)
+      .values({
         id: crypto.randomUUID(),
         cartId: cart.id,
         variantId,
         branchId,
         quantity,
-      });
+      })
+      .onConflictDoUpdate({
+        target: [cartItems.cartId, cartItems.variantId, cartItems.branchId],
+        set: {
+          quantity: sql`${cartItems.quantity} + ${quantity}`,
+          updatedAt: new Date(),
+        },
+        setWhere: sql`${cartItems.quantity} + ${quantity} <= ${availableStock}`,
+      })
+      .returning({ id: cartItems.id });
 
-      return NextResponse.json({
-        success: true,
-        message: "Item added to cart",
-      });
+    if (changed.length === 0) {
+      return NextResponse.json(
+        { success: false, error: "Insufficient stock at this branch" },
+        { status: 400 }
+      );
     }
+
+    return NextResponse.json({ success: true, message: "Item added to cart" });
   } catch (error) {
     console.error("Error adding to cart:", error);
     return NextResponse.json(

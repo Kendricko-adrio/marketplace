@@ -2,7 +2,7 @@
 
 > Reference for **every HTTP API endpoint** in the project, derived from the
 > `route.ts` handlers under `apps/store/src/app` and `apps/admin/src/app`.
-> Last updated: 2026-08-16.
+> Last updated: 2026-08-17.
 >
 > This document describes behavior as implemented in source. If code and this
 > doc disagree, the **code is authoritative** — re-run the extraction or read
@@ -124,7 +124,6 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | GET | `/api/admin/audit-log` | admin-session | List audit log (newest first) |
 | GET | `/api/admin/me` | admin-session | Current admin identity |
 | GET | `/api/admin/session-check` | admin-session (soft) | Must-reset-password check |
-| POST | `/api/admin/clear-must-reset` | admin-session | Clear must-reset + revoke other sessions |
 | GET | `/api/admin/linkable-destinations` | admin-session (hq) | Footer link target catalog |
 | GET | `/api/admin/footer` | admin-session (hq) | Fetch footer config |
 | PUT | `/api/admin/footer` | admin-session (hq) | Upsert footer config |
@@ -291,11 +290,11 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 #### `POST` `/api/checkout/place-order`
 - **Auth**: client-session
-- **Purpose**: Atomically create the order + order items, reserve stock, call Midtrans Snap, persist `snapRedirectUrl`, and remove only the checked-out cart items.
+- **Purpose**: Reserve stock atomically, create Midtrans Snap outside the DB transaction, then persist the redirect and remove checked-out cart items.
 - **Params**: —
 - **Body**: `{ phone: string (8-20), email: string (email), pickupDate: string (YYYY-MM-DD), pickupTime: string (HH:mm), selectedItemIds: string[] (min 1) }`
 - **Response**: 200 `{ success, orderId, redirectUrl, token }`; 400 invalid body / `"Cart is empty"` / `"No selected items to checkout"` / multi-branch error / `"Branch is no longer available"` / invalid pickup slot / `Insufficient stock for <productName> at this branch` (soft check) / `Insufficient stock for <productName>` (atomic guard rollback); 401 if unauth; 500 on error; 502 on Midtrans failure (cart preserved)
-- **Notes**: Enforces single-branch checkout; validates branch `status === "aktif"` and pickup slot. Soft stock pre-check then authoritative guard inside a DB transaction: `UPDATE branchStocks SET reservedStock = reservedStock + qty WHERE stock - reservedStock >= qty` — 0 matching rows throws `InsufficientStockError` and rolls back the whole tx (releasing reservations made for earlier items in the same tx). Order created with `status: "pending_payment"`, `paymentMethod: "qris"`, `paymentStatus: "pending"`, `expiresAt = now + reservation.ttlMinutes` (from `system_config`, default 30) — drives the sweep cron and pairs with Midtrans expiry. `createPayment` (Midtrans Snap) is called inside the tx so any failure rolls back order + reservations + cart deletion. Only the `selectedItemIds` cart items are deleted (inside tx). `serviceFee = 0`, `total = subtotal`, `shippingCost`/`discount` = `"0"`.
+- **Notes**: Enforces single-branch checkout and a Jakarta-time pickup slot. A short transaction creates the order/items and uses an atomic conditional stock reservation. Midtrans is called only after commit. Gateway failure triggers `claimAndFailOrder` compensation and preserves the cart. Gateway success is followed by a short transaction that stores `snapRedirectUrl` and deletes only `selectedItemIds`; a local reconciliation error does not discard a valid gateway response. `serviceFee = 0`, `total = subtotal`, `shippingCost`/`discount` = `"0"`.
 
 #### `GET` `/api/orders`
 - **Auth**: client-session
@@ -336,8 +335,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Purpose**: Receive Midtrans payment notification callbacks and finalize/fail orders accordingly.
 - **Params**: —
 - **Body**: `{ order_id, transaction_status, status_code, gross_amount, signature_key, fraud_status }` (raw JSON body; signature verified)
-- **Response**: 400 `{ success: false, error: "Invalid notification" }` (missing `order_id`/`transaction_status`); 401 `{ success: false, error: "Invalid signature" }`; 404 `{ success: false, error: "Order not found" }`; 200 `{ success: true }` (also returned on idempotent skip and on handler error to prevent Midtrans retries)
-- **Notes**: Signature skipped only when `signature_key` absent. Idempotency: skips orders already `paid` or `failed_payment`. Re-verifies authoritative status from Midtrans to defend against spoofed callbacks. `settlement` / `capture`+`fraud_status: accept` → `claimAndFinalizePaidOrder` (reservation → real deduction, pickup code, ready_for_pickup, email). `deny`/`cancel`/`expire` → `claimAndFailOrder` (releases reservation). `pending` → no action. Claim-guard makes it safe vs. the sweep cron. Env dependency: `MIDTRANS_SERVER_KEY`.
+- **Response**: 400 for missing required signed fields or amount/order mismatch; 401 for invalid signature; 404 for unknown order; 503 when authoritative provider verification is unavailable; 500 on processing failure; 200 on success/idempotent skip.
+- **Notes**: `signature_key`, `order_id`, `transaction_status`, `status_code`, and `gross_amount` are mandatory. Signature comparison is constant-time. Both callback and authoritative provider amounts/order IDs must match the local order. There is no unverified payload fallback; non-2xx responses intentionally allow Midtrans retry. Claim guards keep success/failure finalization idempotent against webhook/sweep races.
 
 #### `POST` `/api/webhooks/jubelio`
 - **Auth**: signature — `SHA256(rawBodyString + JUBELIO_WEBHOOK_SECRET)` (hex), sent in the `webhook-signature` (or `x-jubelio-signature`) header; recomputed from the raw request body — **503** if env unset, **401** on mismatch
@@ -565,8 +564,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Purpose**: Verify the customer's pickup code and, on match, trigger the store's internal order-complete flow to mark the order completed.
 - **Params**: path `id` (order id)
 - **Body**: `{ pickupCodeInput: string (1..10 chars) }` (zod-validated)
-- **Response**: 200 `{ success: true, message: "Order completed successfully" }`; 400 (invalid input, or order not `ready_for_pickup`); 403 (non-branch admin, or order belongs to another branch); 404 order not found; 409 `"Invalid pickup code. Please verify with the customer."`; 502 `"Failed to complete order. Please try again."` (store internal call failed); 500 on exception
-- **Notes**: Branch-admin-only. Order must be `status === "ready_for_pickup"`. Pickup code compared with `crypto.timingSafeEqual` (constant-time, uppercase+trimmed) against `order.pickupCode`. On match: POSTs `{ orderId, secret }` to `${STORE_INTERNAL_URL||"http://localhost:3000"}/api/internal/order-complete`, where `secret = HMAC-SHA256(BETTER_AUTH_SECRET, id)`. Writes an `auditLogs` row: `action: "VERIFY_PICKUP_CODE"`, `entityType: "order"`, `entityId: id`, `changes: { status: { from: "ready_for_pickup", to: "completed" } }`. The status transition is delegated to the store endpoint (not mutated directly here).
+- **Response**: 200 on completion; 400 for invalid input/state; 403 for role/branch mismatch; 404 unknown order; 409 invalid code; 429 while temporarily locked (with `Retry-After`); 502 when store completion fails; 500 on exception.
+- **Notes**: Branch-admin-only. Pickup codes use constant-time comparison. Five failed attempts lock verification for 15 minutes; a successful verification resets attempt/lock state. Completion is delegated to the store HMAC-protected internal endpoint and recorded in `auditLogs`.
 
 #### `GET` `/api/admin/analytics`
 - **Auth**: admin-session (roles: `admin`, `hq`)
@@ -599,14 +598,6 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Body**: none
 - **Response**: 200 (auth) `{ success: true, authenticated: true, mustResetPassword: boolean }`; 200 (no session/error) `{ success: false, mustResetPassword: false, authenticated: false }`
 - **Notes**: Reads `session.user.mustResetPassword`. Errors swallowed and returned as `authenticated: false` with `200` — no error surface to the client.
-
-#### `POST` `/api/admin/clear-must-reset`
-- **Auth**: admin-session (no role check; missing session → `401`)
-- **Purpose**: After a forced password reset succeeds, clear the `mustResetPassword` flag and revoke all other sessions for the user.
-- **Params**: —
-- **Body**: none
-- **Response**: 200 `{ success: true }`; 401 `"Unauthorized"`; 500 `"Failed to update"`
-- **Notes**: Updates `users` set `mustResetPassword = false`, `updatedAt = now()` for the session user. Then deletes all `adminSessions` for the user except the current session token — revoking other sessions so the old initial password can no longer be used. No audit-log write.
 
 #### `GET` `/api/admin/linkable-destinations`
 - **Auth**: admin-session (role: `hq`)

@@ -11,6 +11,7 @@ import type {
 } from "@marketplace/ui";
 import { toStoreUrl } from "@/lib/store-url";
 import ProductFilterEditor from "./ProductFilterEditor";
+import Image from "next/image";
 
 const MAX_CARDS = 6;
 
@@ -156,11 +157,13 @@ export default function PromoCardsSectionForm({
               <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
                 <div className="border rounded-md p-2 space-y-2">
                   {card.imageUrl ? (
-                    <div className="relative">
-                      <img
+                    <div className="relative h-24">
+                      <Image
                         src={toStoreUrl(card.imageUrl)}
                         alt={card.title}
-                        className="w-full h-24 object-cover rounded"
+                        fill
+                        sizes="(max-width: 768px) 100vw, 480px"
+                        className="object-cover rounded"
                       />
                       <button
                         type="button"

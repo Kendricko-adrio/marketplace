@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { branches } from "@/db";
+import { branches, users } from "@/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { withPermission } from "@/lib/auth-guard";
@@ -140,6 +140,21 @@ export const DELETE = withPermission(
         return NextResponse.json(
           { success: false, error: "Branch not found" },
           { status: 404 }
+        );
+      }
+
+      const assignedAdmins = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.branchId, id))
+        .limit(1);
+      if (assignedAdmins.length > 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Branch masih memiliki admin. Pindahkan admin sebelum menghapus branch.",
+          },
+          { status: 409 }
         );
       }
 

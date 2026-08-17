@@ -1,7 +1,7 @@
 "use client";
 import React, { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   Package,
   ShoppingBag,
@@ -45,6 +45,7 @@ function useIsMounted(): boolean {
 }
 
 export default function AdminSidebar() {
+  const router = useRouter();
   const pathname = usePathname();
   const { user, hasPermission, permissionsLoading, branch } = useAuth();
   const [loggingOut, setLoggingOut] = useState(false);
@@ -89,7 +90,6 @@ export default function AdminSidebar() {
     // Clear the must-reset edge cookie first so the login page (which now
     // reads the session server-side) doesn't observe a stale reset flag if
     // the user re-authenticates as someone else within the 10-minute window.
-    document.cookie = "admin.must_reset=; path=/; max-age=0";
     try {
       // Navigate inside fetchOptions.onSuccess (idiomatic Better Auth pattern)
       // rather than after `await signOut()`. The reactive `useSession()` state
@@ -102,7 +102,8 @@ export default function AdminSidebar() {
       await signOut({
         fetchOptions: {
           onSuccess: () => {
-            window.location.href = "/login";
+            router.replace("/login");
+            router.refresh();
           },
           onError: (ctx: { response: Response }) => {
             console.error("Logout failed:", ctx.response.status);

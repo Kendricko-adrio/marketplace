@@ -62,25 +62,45 @@ export function generateTimeSlots(dayHours: DayHours): string[] {
 export function validatePickupSlot(
   operatingHours: OperatingHours | null | undefined,
   pickupDate: string, // "YYYY-MM-DD"
-  pickupTime: string // "HH:mm"
+  pickupTime: string, // "HH:mm"
+  now: Date = new Date()
 ): PickupValidationResult {
   if (!pickupDate) return { ok: false, error: "Pickup date is required." };
   if (!pickupTime) return { ok: false, error: "Pickup time is required." };
 
-  // Parse the date at local midnight (avoid timezone shift issues)
-  const [y, mo, d] = pickupDate.split("-").map(Number);
-  const date = new Date(y, mo - 1, d);
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-  if (isNaN(date.getTime())) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(pickupDate)) {
     return { ok: false, error: "Invalid pickup date." };
   }
-  if (date < today) {
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(pickupTime)) {
+    return { ok: false, error: "Invalid pickup time." };
+  }
+
+  const [y, mo, d] = pickupDate.split("-").map(Number);
+  const date = new Date(Date.UTC(y, mo - 1, d));
+
+  if (
+    date.getUTCFullYear() !== y ||
+    date.getUTCMonth() !== mo - 1 ||
+    date.getUTCDate() !== d
+  ) {
+    return { ok: false, error: "Invalid pickup date." };
+  }
+
+  const jakartaDateParts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    jakartaDateParts.find((value) => value.type === type)?.value ?? "";
+  const todayInJakarta = `${part("year")}-${part("month")}-${part("day")}`;
+
+  if (pickupDate < todayInJakarta) {
     return { ok: false, error: "Pickup date cannot be in the past." };
   }
 
-  const dayHours = getDayHours(operatingHours, date);
+  const dayHours = operatingHours?.[DAY_KEYS[date.getUTCDay()]] ?? null;
   if (!dayHours) {
     return { ok: false, error: "Branch is closed on the selected day." };
   }
@@ -93,7 +113,18 @@ export function validatePickupSlot(
     };
   }
 
+  if (pickupDateToInstant(pickupDate, pickupTime) <= now) {
+    return { ok: false, error: "Pickup date and time must be in the future." };
+  }
+
   return { ok: true };
+}
+
+export function pickupDateToInstant(
+  pickupDate: string,
+  pickupTime = "00:00"
+): Date {
+  return new Date(`${pickupDate}T${pickupTime}:00+07:00`);
 }
 
 /**

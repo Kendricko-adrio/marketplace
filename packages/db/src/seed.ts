@@ -6,6 +6,10 @@ import { Pool } from "pg";
 import * as schema from "./schema";
 import { keyId, slugify } from "./ids";
 import bcrypt from "bcryptjs";
+import { assertSeedEnvironmentSafe } from "./seed-safety";
+import { seedCleanupEntries } from "./seed-cleanup";
+
+assertSeedEnvironmentSafe({ NODE_ENV: process.env.NODE_ENV });
 
 // Helper to generate random ID
 function generateId(): string {
@@ -206,37 +210,9 @@ async function seed() {
   try {
     // Clear existing data
     console.log("🗑️  Clearing existing data...");
-    await db.delete(schema.notifications);
-    await db.delete(schema.permissions);
-    await db.delete(schema.staticPages);
-    await db.delete(schema.footerConfig);
-    await db.delete(schema.homepageSectionProducts);
-    await db.delete(schema.homepageSections);
-    await db.delete(schema.cartItems);
-    await db.delete(schema.carts);
-    await db.delete(schema.orderItems);
-    await db.delete(schema.orders);
-    await db.delete(schema.auditLogs);
-    await db.delete(schema.systemConfig);
-    await db.delete(schema.branchStocks);
-    await db.delete(schema.productImages);
-    await db.delete(schema.productVariants);
-    await db.delete(schema.productToCategory);
-    await db.delete(schema.products);
-    await db.delete(schema.brands);
-    await db.delete(schema.genders);
-    await db.delete(schema.categories);
-    await db.delete(schema.branches);
-    await db.delete(schema.vouchers);
-    await db.delete(schema.addresses);
-    await db.delete(schema.clientSessions);
-    await db.delete(schema.clientAccounts);
-    await db.delete(schema.clientVerifications);
-    await db.delete(schema.clients);
-    await db.delete(schema.adminSessions);
-    await db.delete(schema.adminAccounts);
-    await db.delete(schema.adminVerifications);
-    await db.delete(schema.users);
+    for (const [, table] of seedCleanupEntries) {
+      await db.delete(table);
+    }
 
     // =====================
     // ADMIN USERS
@@ -1234,14 +1210,17 @@ async function seed() {
     const pickupTime = "14:00";
 
     for (let i = 0; i < orderStatuses.length; i++) {
-      const orderId = generateId();
+      const status = orderStatuses[i];
+      const orderId =
+        status === "ready_for_pickup"
+          ? "90681d15-fc1a-4377-bdb7-1060da208ed6"
+          : generateId();
       const variant = variants[i % variants.length];
-      const qty = Math.floor(Math.random() * 3) + 1;
+      const qty = (i % 3) + 1;
       const subtotal = parseFloat(variant.price) * qty;
       // Phase 1 = pickup, no shipping cost, no service fee
       const total = subtotal;
 
-      const status = orderStatuses[i];
       const isPaid =
         status !== "cancelled" &&
         status !== "pending_payment" &&
@@ -1251,12 +1230,10 @@ async function seed() {
       const isFailedPayment = status === "failed_payment";
 
       // 6-char pickup code (uppercase alphanumeric, no ambiguous chars)
-      const codeChars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
       const pickupCode = hasPickupCode
-        ? Array.from(
-            { length: 6 },
-            () => codeChars[Math.floor(Math.random() * codeChars.length)]
-          ).join("")
+        ? status === "ready_for_pickup"
+          ? "G4XUNM"
+          : "H5YVNP"
         : null;
 
       await db.insert(schema.orders).values({

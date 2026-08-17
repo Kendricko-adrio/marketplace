@@ -7,25 +7,17 @@ import {
   products,
   branches,
 } from "@/db";
-import { eq, and, asc } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
+import { eq, and } from "drizzle-orm";
+import { requireOnboardedApiSession } from "@/lib/route-access";
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
-
-    if (!session) {
-      return NextResponse.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
-      );
-    }
+    const access = await requireOnboardedApiSession();
+    if (!access.ok) return access.response;
+    const { session } = access;
 
     const { id } = await params;
 

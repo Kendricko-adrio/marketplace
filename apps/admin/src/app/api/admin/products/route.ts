@@ -15,12 +15,15 @@ import {
   computeScopedTotals,
   type ScopedTotalsInputRow,
 } from "@/lib/branch-stock";
+import { parsePagination } from "@/lib/pagination";
 
 export const GET = withPermission(async (ctx, request: NextRequest) => {
   try {
     const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = parseInt(searchParams.get("limit") || "20");
+    const { page, limit } = parsePagination(
+      searchParams.get("page"),
+      searchParams.get("limit")
+    );
     const search = searchParams.get("search")?.trim() || "";
     const offset = (page - 1) * limit;
 

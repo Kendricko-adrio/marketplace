@@ -7,10 +7,15 @@ import bcrypt from "bcryptjs";
 import { username } from "better-auth/plugins";
 import { APIError } from "better-auth/api";
 import { sendResetPasswordEmail } from "@/lib/email";
+import { getPasswordPolicyError } from "@/lib/password-policy";
+import { eq } from "drizzle-orm";
 
-// Password must be 8+ chars and contain at least one lowercase letter, one
-// uppercase letter, and one digit (alphanumeric complexity rule).
-const PASSWORD_COMPLEXITY_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/;
+async function clearMustResetPassword(userId: string) {
+  await db
+    .update(schema.users)
+    .set({ mustResetPassword: false, updatedAt: new Date() })
+    .where(eq(schema.users.id, userId));
+}
 
 export const auth = betterAuth({
   database: drizzleAdapter(db, {
@@ -46,26 +51,22 @@ export const auth = betterAuth({
         resetUrl: data.url,
       });
     },
+    revokeSessionsOnPasswordReset: true,
+    onPasswordReset: async ({ user }) => {
+      await clearMustResetPassword(user.id);
+    },
   },
   hooks: {
     before: createAuthMiddleware(async (ctx) => {
-      // Enforce alphanumeric + uppercase + lowercase complexity on the
-      // sign-up and reset-password endpoints (Better Auth only enforces
-      // length by default).
-      if (
-        (ctx.path === "/sign-up/email" || ctx.path === "/reset-password") &&
-        ctx.method === "POST"
-      ) {
-        const password =
-          (ctx.body as { password?: string } | null)?.password ?? "";
-        if (password && !PASSWORD_COMPLEXITY_REGEX.test(password)) {
-          throw new APIError("BAD_REQUEST", {
-            message:
-              "Password harus mengandung huruf besar, huruf kecil, dan angka.",
-          });
-        }
+      const policyError = getPasswordPolicyError(ctx.path, ctx.method, ctx.body);
+      if (policyError) {
+        throw new APIError("BAD_REQUEST", { message: policyError });
       }
-      return;
+    }),
+    after: createAuthMiddleware(async (ctx) => {
+      if (ctx.path !== "/change-password") return;
+      const userId = ctx.context.session?.user.id;
+      if (userId) await clearMustResetPassword(userId);
     }),
   },
   socialProviders: {},

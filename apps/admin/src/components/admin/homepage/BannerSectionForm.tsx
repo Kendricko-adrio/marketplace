@@ -8,6 +8,7 @@ import type { BannerContent, BannerSlide, ProductFilterConfig } from "@marketpla
 import { buildProductFilterQuery } from "@marketplace/ui";
 import { toStoreUrl } from "@/lib/store-url";
 import ProductFilterEditor from "./ProductFilterEditor";
+import Image from "next/image";
 
 const MAX_SLIDES = 5;
 const MIN_INTERVAL_SEC = 2;
@@ -208,11 +209,13 @@ export default function BannerSectionForm({
                 <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
                   <div className="border rounded-md p-2 space-y-2">
                     {slide.imageUrl ? (
-                      <div className="relative">
-                        <img
+                      <div className="relative h-24">
+                        <Image
                           src={toStoreUrl(slide.imageUrl)}
                           alt={slide.altText || `Slide ${index + 1}`}
-                          className="w-full h-24 object-cover rounded"
+                          fill
+                          sizes="(max-width: 768px) 100vw, 640px"
+                          className="object-cover rounded"
                         />
                         <button
                           type="button"

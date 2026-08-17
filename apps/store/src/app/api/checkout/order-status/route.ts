@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { orders } from "@/db";
 import { eq } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
+import { requireOnboardedApiSession } from "@/lib/route-access";
 
 /**
  * GET /api/checkout/order-status?orderId=xxx
@@ -14,16 +13,9 @@ import { headers } from "next/headers";
  */
 export async function GET(request: NextRequest) {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
-
-    if (!session) {
-      return NextResponse.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
-      );
-    }
+    const access = await requireOnboardedApiSession();
+    if (!access.ok) return access.response;
+    const { session } = access;
 
     const orderId = request.nextUrl.searchParams.get("orderId");
     if (!orderId) {

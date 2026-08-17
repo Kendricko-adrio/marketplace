@@ -3,8 +3,9 @@ import { db } from "@/db";
 import { orders } from "@/db";
 import { eq } from "drizzle-orm";
 import {
-  verifyMidtransSignature,
+  amountsMatch,
   getMidtransTransactionStatus,
+  validateMidtransWebhookPayload,
 } from "@/lib/midtrans";
 import {
   claimAndFinalizePaidOrder,
@@ -17,43 +18,22 @@ export async function POST(request: NextRequest) {
   const log = requestLogger(request, { module: "midtrans-webhook" });
   try {
     const body = await request.json();
-
+    const verified = validateMidtransWebhookPayload(body);
+    if (!verified.ok) {
+      log.warn("webhook authentication rejected", { error: verified.error });
+      return NextResponse.json(
+        { success: false, error: verified.error },
+        { status: verified.status }
+      );
+    }
     const {
-      order_id,
-      transaction_status,
-      status_code,
-      gross_amount,
-      signature_key,
-      fraud_status,
-    } = body;
+      orderId: order_id,
+      transactionStatus: transaction_status,
+      grossAmount: gross_amount,
+      statusCode: status_code,
+    } = verified.data;
 
     log.info("webhook received", { order_id, transaction_status, status_code });
-
-    if (!order_id || !transaction_status) {
-      log.warn("invalid notification — missing fields");
-      return NextResponse.json(
-        { success: false, error: "Invalid notification" },
-        { status: 400 }
-      );
-    }
-
-    // ===== Signature verification =====
-    // Classic Snap: SHA512(order_id + status_code + gross_amount + serverKey)
-    if (signature_key) {
-      const isValid = verifyMidtransSignature(
-        String(order_id),
-        String(status_code || "200"),
-        String(gross_amount),
-        String(signature_key)
-      );
-      if (!isValid) {
-        log.error("invalid signature", { order_id });
-        return NextResponse.json(
-          { success: false, error: "Invalid signature" },
-          { status: 401 }
-        );
-      }
-    }
 
     const orderLog = log.child({ orderId: String(order_id) });
 
@@ -73,6 +53,17 @@ export async function POST(request: NextRequest) {
     }
 
     const order = orderRows[0];
+
+    if (!amountsMatch(order.total, gross_amount)) {
+      orderLog.error("gross amount mismatch", {
+        expected: order.total,
+        received: gross_amount,
+      });
+      return NextResponse.json(
+        { success: false, error: "Gross amount mismatch" },
+        { status: 400 }
+      );
+    }
 
     // ===== Idempotency: skip if already in a terminal state =====
     // (The claim-guard inside the finalizers also enforces this, but checking
@@ -95,22 +86,41 @@ export async function POST(request: NextRequest) {
     // ===== Re-verify with Midtrans (best practice) =====
     // Fetch authoritative status directly from Midtrans to defend against
     // spoofed callbacks, even when the signature looks valid.
-    let authoritativeStatus = String(transaction_status);
-    let authoritativeFraud = fraud_status ? String(fraud_status) : undefined;
+    let authoritativeStatus: string;
+    let authoritativeFraud: string | undefined;
     let authoritativeStatusMessage: string | undefined;
     try {
       const statusRes = await getMidtransTransactionStatus(String(order_id));
-      if (statusRes) {
-        authoritativeStatus = statusRes.transaction_status;
-        authoritativeFraud = statusRes.fraud_status ?? authoritativeFraud;
-        authoritativeStatusMessage = statusRes.status_message;
+      if (!statusRes) {
+        orderLog.error("transaction not found during status re-verify");
+        return NextResponse.json(
+          { success: false, error: "Unable to verify transaction" },
+          { status: 503 }
+        );
       }
+      if (statusRes.order_id && statusRes.order_id !== order_id) {
+        return NextResponse.json(
+          { success: false, error: "Transaction order mismatch" },
+          { status: 400 }
+        );
+      }
+      if (!amountsMatch(order.total, statusRes.gross_amount ?? "")) {
+        return NextResponse.json(
+          { success: false, error: "Verified gross amount mismatch" },
+          { status: 400 }
+        );
+      }
+      authoritativeStatus = statusRes.transaction_status;
+      authoritativeFraud = statusRes.fraud_status;
+      authoritativeStatusMessage = statusRes.status_message;
     } catch (verifyError) {
-      // If re-verify fails, fall back to the webhook payload (signature was
-      // already verified above). Log the issue for investigation.
       orderLog.error("status re-verify failed", {
         error: serializeError(verifyError),
       });
+      return NextResponse.json(
+        { success: false, error: "Unable to verify transaction" },
+        { status: 503 }
+      );
     }
 
     // ===== Handle transaction status =====
@@ -146,11 +156,12 @@ export async function POST(request: NextRequest) {
       orderLog.info("non-terminal status — no action", { authoritativeStatus });
     }
 
-    // Always return 200 to Midtrans (prevents retries)
     return NextResponse.json({ success: true });
   } catch (error) {
     log.error("webhook handler failed", { error: serializeError(error) });
-    // Still return 200 to prevent Midtrans from retrying excessively
-    return NextResponse.json({ success: true });
+    return NextResponse.json(
+      { success: false, error: "Webhook processing failed" },
+      { status: 500 }
+    );
   }
 }

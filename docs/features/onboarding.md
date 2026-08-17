@@ -1,9 +1,9 @@
 # Store Onboarding Flow
 
 After signup, store customers must complete an identity step (phone, birth
-date, gender) before they can use the storefront. The gate is enforced at the
-**edge** (middleware) via a lightweight cookie, with the DB as the source of
-truth.
+date, gender) before they can use protected customer features. The database is
+the source of truth: protected layouts and APIs verify session and onboarding
+state on the server. The proxy cookie check is only an early redirect.
 
 ## Flow
 
@@ -27,27 +27,21 @@ signup (email+password | Google OAuth)
 - **Verify page** (`/auth/verify`): calls `authClient.verifyEmail` with
   `callbackURL` defaulting to `/onboarding`, then pushes there on success.
 
-## Middleware gate
+## Proxy and authoritative server gate
 
-`apps/store/src/middleware.ts`:
+`apps/store/src/proxy.ts` redirects unauthenticated protected-page requests.
+The `/cart`, `/checkout`, and `/account` server layouts and their APIs then
+require a valid Better Auth session and
+`clients.onboardingCompleted === true`.
 
 | Rule | Behavior |
 |---|---|
 | Protected routes (`/cart`, `/checkout`, `/account`) without session | redirect `/login?callbackUrl={path}` |
-| Auth routes (`/login`, `/register`) while authenticated **and** onboarded | redirect `/` |
-| Authenticated, **not** onboarded, not on bypass list | redirect `/onboarding` |
-| Authenticated, not onboarded, on `/` (homepage) | redirect `/onboarding` |
-| Authenticated, onboarded, visiting `/onboarding` | redirect `/` |
+| Authenticated, not onboarded, protected page | server redirect `/onboarding` |
+| Authenticated, not onboarded, protected API | `403 Onboarding required` |
 
-**Bypass list** (logged-in users may visit these without onboarding):
-
-- Prefixes: `/onboarding`, `/auth/verify`, `/api/auth`, `/api/onboarding`,
-  `/forgot-password`, `/reset-password`
-- Exact: `/logout`
-- Plus implicit exclusions: any `/api/` path, `/_next`, and the matcher
-  excludes `api`, `_next/static`, `_next/image`, `favicon.ico`, `public`, and
-  any path containing a `.` (static files — otherwise root images like
-  `/adf-logo.png` would be caught by the gate).
+Authentication, verification, onboarding, password-reset, logout, and static
+asset routes remain public or usable before onboarding is complete.
 
 The session cookie is read with Better Auth's `getSessionCookie(request, {
 cookiePrefix: "client" })` so the `__Secure-` prefix (auto-applied when
@@ -87,7 +81,10 @@ bounce the user to `/onboarding`, and the page would bounce them back to `/`
 - No session → 307 to `/login?callbackUrl=/onboarding`.
 - Session + `onboardingCompleted` → sets `client.onboarding=1` (same
   attributes as above) and 307 to `/`.
-- Session, not completed → 307 to `/` (no cookie; middleware will re-gate).
+- Session, not completed → 307 to `/onboarding` (no cookie).
+- Session, completed → sets the cookie and redirects to a validated local
+  `callbackUrl` (default `/`). Login always passes through this server route,
+  so the post-login decision is based on database state rather than a cookie.
 
 The onboarding page itself (`apps/store/src/app/onboarding/page.tsx`) also
 redirects to `/api/onboarding/sync` when the user is already onboarded but the
@@ -126,8 +123,9 @@ field) so admins cannot sign in on the store.
 
 ## Invariants (do NOT violate)
 
-- **DB is the source of truth** — the cookie is only a cache for the edge
-  middleware; `onboardingCompleted` in `clients` decides the real state.
+- **DB is the source of truth** — the cookie is only a UX cache and cannot
+  authorize protected pages or APIs; `onboardingCompleted` in `clients`
+  decides the real state.
 - **Onboarding is store-only** — never assume a `role`/onboarding field on the
   admin `users` table (and vice versa).
 - The cookie is **not httpOnly** by design (client clears it on logout) and

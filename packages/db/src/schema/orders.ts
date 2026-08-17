@@ -6,8 +6,10 @@
   numeric,
   integer,
   index,
+  check,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import { clients, users } from "./auth";
 import { productVariants } from "./products";
 import { branches } from "./branches";
@@ -57,6 +59,10 @@ export const orders = pgTable("orders", {
   midtransFailureStatus: text("midtrans_failure_status"),
   // Pickup-in-store fields (Phase 1)
   pickupCode: text("pickup_code"), // 6-char uppercase alphanumeric, set on payment success
+  pickupVerificationAttempts: integer("pickup_verification_attempts")
+    .notNull()
+    .default(0),
+  pickupLockedUntil: timestamp("pickup_locked_until", { withTimezone: true }),
   pickupDate: timestamp("pickup_date", { withTimezone: true }),
   pickupTime: text("pickup_time"), // "HH:mm"
   contactPhone: text("contact_phone").notNull(),
@@ -90,6 +96,23 @@ export const orders = pgTable("orders", {
   // Supports the sweep cron's batch lookup of stale pending_payment orders
   // (WHERE status = 'pending_payment' AND expires_at < now()).
   statusExpiresIdx: index("idx_orders_status_expires").on(t.status, t.expiresAt),
+  pickupCodeUniqueIdx: uniqueIndex("orders_pickup_code_unique").on(t.pickupCode),
+  statusCheck: check(
+    "orders_status_valid",
+    sql`${t.status} in ('pending_payment', 'processing', 'ready_for_pickup', 'completed', 'cancelled', 'failed_payment')`
+  ),
+  paymentStatusCheck: check(
+    "orders_payment_status_valid",
+    sql`${t.paymentStatus} in ('pending', 'paid', 'failed')`
+  ),
+  amountCheck: check(
+    "orders_amounts_nonnegative",
+    sql`${t.subtotal} >= 0 and ${t.shippingCost} >= 0 and ${t.discount} >= 0 and ${t.serviceFee} >= 0 and ${t.total} >= 0`
+  ),
+  pickupAttemptsCheck: check(
+    "orders_pickup_attempts_nonnegative",
+    sql`${t.pickupVerificationAttempts} >= 0`
+  ),
 }));
 
 // Order Items table
@@ -106,7 +129,10 @@ export const orderItems = pgTable("order_item", {
   price: numeric("price", { precision: 15, scale: 2 }).notNull(),
   quantity: integer("quantity").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  check("order_item_quantity_positive", sql`${t.quantity} > 0`),
+  check("order_item_price_nonnegative", sql`${t.price} >= 0`),
+]);
 
 // Relations
 export const addressesRelations = relations(addresses, ({ one, many }) => ({

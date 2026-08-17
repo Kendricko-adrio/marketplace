@@ -202,17 +202,17 @@ export default function ProductDetailPage() {
               />
             )}
           </div>
-          <div className="grid grid-cols-4 gap-4">
-            {(selectedVariant?.images || []).slice(0, 4).map((img, i) => (
+          <div className="flex gap-4 overflow-x-auto pb-2 -mx-1 px-1 [scrollbar-width:thin]">
+            {(selectedVariant?.images || []).map((img, i) => (
               <button
                 key={i}
                 type="button"
                 onClick={() => setSelectedImageIndex(i)}
-                className={`aspect-square bg-secondary/30 rounded-lg cursor-pointer border-2 ${
+                className={`relative shrink-0 w-24 sm:w-28 aspect-square bg-secondary/30 rounded-lg cursor-pointer border-2 ${
                   i === selectedImageIndex
                     ? "border-primary"
                     : "border-transparent hover:border-primary/50"
-                } transition-colors relative overflow-hidden`}
+                } transition-colors overflow-hidden`}
               >
                 {img && (
                   <Image src={img} alt="" fill className="object-cover" />

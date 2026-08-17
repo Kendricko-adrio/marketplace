@@ -11,13 +11,14 @@ import {
   orderItems,
 } from "@/db";
 import { eq, and, sql } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
+import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
-import { validatePickupSlot } from "@/lib/pickup-validation";
-import { createPayment } from "@/lib/midtrans";
+import { pickupDateToInstant, validatePickupSlot } from "@/lib/pickup-validation";
+import { createPayment, getMockPaymentResult } from "@/lib/midtrans";
 import { getConfigNumber } from "@/lib/config";
 import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
+import { claimAndFailOrder } from "@/lib/order-finalize";
+import { initializeReservedOrderPayment } from "@/lib/payment-initialization";
 
 /**
  * Thrown inside the place-order transaction when the atomic stock-reservation
@@ -48,20 +49,9 @@ export async function POST(request: NextRequest) {
   let log = requestLogger(request, { module: "place-order" });
   log.info("place order requested");
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
-
-    if (!session) {
-      log.warn("unauthorized — no session");
-      return withRequestId(
-        NextResponse.json(
-          { success: false, error: "Unauthorized" },
-          { status: 401 }
-        ),
-        log
-      );
-    }
+    const access = await requireOnboardedApiSession();
+    if (!access.ok) return withRequestId(access.response, log);
+    const { session } = access;
 
     const body = await request.json();
     const parsed = placeOrderSchema.safeParse(body);
@@ -232,13 +222,13 @@ export async function POST(request: NextRequest) {
     // ===== Reservation TTL (minutes) from system_config (cached at boot) =====
     const ttlMinutes = await getConfigNumber("reservation.ttlMinutes", 30);
 
-    // ===== Create the order, order items, reserve stock, call Midtrans, and clear cart — all atomically =====
+    // ===== Persist order + reservation atomically, then call Midtrans outside the transaction =====
     const orderId = crypto.randomUUID();
     log = log.child({ orderId });
     log.info("creating order", { total, ttlMinutes });
 
     try {
-      const midtransResult = await db.transaction(async (tx) => {
+      await db.transaction(async (tx) => {
         // ===== Create the order =====
         // expiresAt drives the sweep cron and pairs with the Midtrans expiry
         // so the reservation is released even if the `expire` webhook is missed.
@@ -249,7 +239,7 @@ export async function POST(request: NextRequest) {
           status: "pending_payment",
           paymentMethod: "qris",
           paymentStatus: "pending",
-          pickupDate: new Date(pickupDate + "T00:00:00"),
+          pickupDate: pickupDateToInstant(pickupDate),
           pickupTime,
           contactPhone: phone,
           contactEmail: email,
@@ -301,46 +291,76 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // ===== Call Midtrans Snap to create the payment =====
-        // Any thrown error auto-rollbacks the transaction in Drizzle (releasing
-        // the reservations above). Expiry is set to the reservation TTL so
-        // Midtrans auto-expires the transaction and fires an `expire` webhook.
-        const paymentResult = await createPayment(
-          orderId,
-          total,
-          {
-            first_name: session.user.name || "Customer",
-            email,
-            phone,
-          },
-          [
-            ...selectedItems.map((item) => ({
+      });
+
+      const initialized = await initializeReservedOrderPayment({
+        create: () => {
+          const mockRequested =
+            process.env.NODE_ENV !== "production" &&
+            request.headers.get("x-e2e-payment-mock") === "true";
+          const mock = mockRequested
+            ? getMockPaymentResult(orderId, {
+                MIDTRANS_E2E_MOCK: "true",
+                NODE_ENV: "test",
+              })
+            : null;
+          return mock
+            ? Promise.resolve(mock)
+            : createPayment(
+            orderId,
+            total,
+            {
+              first_name: session.user.name || "Customer",
+              email,
+              phone,
+            },
+            selectedItems.map((item) => ({
               id: item.variantId,
               name: item.productName,
               price: parseFloat(item.variantPrice),
               quantity: item.quantity,
             })),
-          ],
-          ttlMinutes
-        );
+            ttlMinutes
+          );
+        },
+        persist: async (paymentResult) => {
+          await db.transaction(async (tx) => {
+            await tx
+              .update(orders)
+              .set({
+                snapRedirectUrl: paymentResult.redirectUrl,
+                updatedAt: new Date(),
+              })
+              .where(eq(orders.id, orderId));
 
-        // Persist Snap redirect URL so the customer can resume payment later
-        await tx
-          .update(orders)
-          .set({ snapRedirectUrl: paymentResult.redirectUrl })
-          .where(eq(orders.id, orderId));
-
-        // ===== Remove only the checked-out items from the cart (inside the tx) =====
-        // Kept inside the transaction so a Midtrans/reservation failure rolls
-        // cart deletion back too — the customer's cart is preserved on retry.
-        for (const itemId of selectedItemIds) {
-          await tx
-            .delete(cartItems)
-            .where(and(eq(cartItems.id, itemId), eq(cartItems.cartId, cart.id)));
-        }
-
-        return paymentResult;
+            for (const itemId of selectedItemIds) {
+              await tx
+                .delete(cartItems)
+                .where(
+                  and(eq(cartItems.id, itemId), eq(cartItems.cartId, cart.id))
+                );
+            }
+          });
+        },
+        compensate: async (error) => {
+          await claimAndFailOrder(
+            orderId,
+            "Payment initialization failed",
+            "initialization_error",
+            log
+          );
+          log.error("payment initialization failed; reservation released", {
+            error: serializeError(error),
+          });
+        },
       });
+
+      const midtransResult = initialized.payment;
+      if (initialized.persistenceError) {
+        log.error("payment created but local metadata needs reconciliation", {
+          error: serializeError(initialized.persistenceError),
+        });
+      }
 
       log.info("order placed successfully", {
         redirectUrl: !!midtransResult.redirectUrl,
@@ -357,7 +377,7 @@ export async function POST(request: NextRequest) {
     } catch (midtransError) {
       // Insufficient stock → 400 (customer can retry / pick fewer units).
       if (midtransError instanceof InsufficientStockError) {
-        log.warn("insufficient stock — order rolled back", {
+        log.warn("insufficient stock — reservation transaction rolled back", {
           productName: midtransError.productName,
         });
         return withRequestId(
@@ -373,12 +393,13 @@ export async function POST(request: NextRequest) {
         httpStatusCode?: number;
         ApiResponse?: unknown;
       };
-      log.error("Midtrans payment creation failed — order rolled back", {
+      log.error("Midtrans payment creation failed", {
         message: err.message,
         httpStatusCode: err.httpStatusCode,
         apiResponse: err.ApiResponse,
       });
-      // Transaction rolled back — order, reservation & cart are preserved. Customer can retry.
+      // The compensation path marks the order failed and releases reservation;
+      // checked-out cart rows are preserved so the customer can retry.
       return withRequestId(
         NextResponse.json(
           {

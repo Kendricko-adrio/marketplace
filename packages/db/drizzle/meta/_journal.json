@@ -78,6 +78,20 @@
       "when": 1786495068965,
       "tag": "0010_fine_leader",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786951170250,
+      "tag": "0011_long_professor_monster",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786951498560,
+      "tag": "0012_lowly_thanos",
+      "breakpoints": true
     }
   ]
 }

@@ -5,6 +5,8 @@ import InfiniteProductGrid, {
 } from "@/components/InfiniteProductGrid";
 import ProductFilters from "@/components/ProductFilters";
 import { buildProductsApiParams } from "@/lib/product-filters";
+import { GET as getProductsResponse } from "@/app/api/products/route";
+import { NextRequest } from "next/server";
 
 async function getProducts(searchParams: {
   [key: string]: string | undefined;
@@ -18,24 +20,17 @@ async function getProducts(searchParams: {
   // previously missed here) is caught by unit tests.
   const params = buildProductsApiParams(searchParams, 20);
 
-  try {
-    const res = await fetch(
-      `${
-        process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
-      }/api/products?${params.toString()}`,
-      { cache: "no-store" }
-    );
-    const data = await res.json();
-    return data;
-  } catch (error) {
-    console.error("Error fetching products:", error);
-    return {
-      success: false,
-      data: [],
-      pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
-    };
+  const response = await getProductsResponse(
+    new NextRequest(`http://internal.local/api/products?${params.toString()}`)
+  );
+  const data = await response.json();
+  if (!response.ok || !data.success) {
+    throw new Error(data.error || "Failed to load products");
   }
+  return data;
 }
+
+export const dynamic = "force-dynamic";
 
 export default async function ProductsPage({
   searchParams,

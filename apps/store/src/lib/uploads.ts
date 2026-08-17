@@ -1,5 +1,4 @@
-import { writeFile, mkdir, unlink } from "fs/promises";
-import { existsSync } from "fs";
+import { unlink } from "fs/promises";
 import path from "path";
 
 export function getUploadsDir(): string {
@@ -13,10 +12,12 @@ export async function deleteFile(fileUrl: string): Promise<void> {
   if (!fileUrl.startsWith("/uploads/")) return;
 
   const relativePath = fileUrl.replace("/uploads/", "");
-  if (relativePath.includes("..")) return;
-
-  const fullPath = path.join(getUploadsDir(), relativePath);
-  if (existsSync(fullPath)) {
-    await unlink(fullPath);
+  const root = path.resolve(/* turbopackIgnore: true */ getUploadsDir());
+  const fullPath = path.resolve(/* turbopackIgnore: true */ root, relativePath);
+  if (!fullPath.startsWith(`${root}${path.sep}`)) return;
+  try {
+    await unlink(/* turbopackIgnore: true */ fullPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }

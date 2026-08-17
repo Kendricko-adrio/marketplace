@@ -1,6 +1,6 @@
 "use client";
 import { useState, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,10 +15,12 @@ import {
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { signIn, authClient } from "@/lib/auth-client";
+import { safeStoreRedirect } from "@/lib/safe-redirect";
 
 function LoginForm() {
+  const router = useRouter();
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") || "/";
+  const callbackUrl = safeStoreRedirect(searchParams.get("callbackUrl"));
   const resetSuccess = searchParams.get("reset") === "success";
 
   const [email, setEmail] = useState("");
@@ -47,9 +49,12 @@ function LoginForm() {
         { email, password },
         {
           onSuccess: () => {
-            // Let middleware route to /onboarding if needed, otherwise
-            // callbackUrl. Hard navigation bypasses the Router Cache.
-            window.location.href = callbackUrl;
+            // Ask the server to resolve onboarding from the authenticated DB
+            // state, synchronize the UX cookie, then continue safely.
+            router.replace(
+              `/api/onboarding/sync?callbackUrl=${encodeURIComponent(callbackUrl)}`
+            );
+            router.refresh();
           },
           onError: (ctx: { response: Response }) => {
             ctx.response
@@ -119,7 +124,7 @@ function LoginForm() {
       // (Middleware will still gate home if onboarding isn't done.)
       await signIn.social({
         provider: "google",
-        callbackURL: "/",
+        callbackURL: "/api/onboarding/sync",
         newUserCallbackURL: "/onboarding",
       });
     } catch (err) {

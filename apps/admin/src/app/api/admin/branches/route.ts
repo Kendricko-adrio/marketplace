@@ -4,12 +4,15 @@ import { branches } from "@/db";
 import { desc, sql } from "drizzle-orm";
 import { z } from "zod";
 import { withPermission } from "@/lib/auth-guard";
+import { parsePagination } from "@/lib/pagination";
 
 export const GET = withPermission(async (_ctx, request: NextRequest) => {
   try {
     const { searchParams } = new URL(request.url);
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = parseInt(searchParams.get("limit") || "20");
+    const { page, limit } = parsePagination(
+      searchParams.get("page"),
+      searchParams.get("limit")
+    );
     const offset = (page - 1) * limit;
 
     const allBranches = await db

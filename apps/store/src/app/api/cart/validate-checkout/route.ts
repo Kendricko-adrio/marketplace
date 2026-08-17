@@ -9,8 +9,7 @@ import {
   products,
 } from "@/db";
 import { eq, and, inArray } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
+import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
 import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
 
@@ -29,20 +28,9 @@ export async function POST(request: NextRequest) {
   let log = requestLogger(request, { module: "validate-checkout" });
   log.info("checkout validation requested");
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
-
-    if (!session) {
-      log.warn("unauthorized — no session");
-      return withRequestId(
-        NextResponse.json(
-          { success: false, error: "Unauthorized" },
-          { status: 401 }
-        ),
-        log
-      );
-    }
+    const access = await requireOnboardedApiSession();
+    if (!access.ok) return withRequestId(access.response, log);
+    const { session } = access;
 
     const body = await request.json();
     const parsed = validateCheckoutSchema.safeParse(body);

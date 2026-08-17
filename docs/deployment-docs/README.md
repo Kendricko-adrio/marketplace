@@ -14,7 +14,7 @@ deployment/
 ├── common/                      # file yang SAMA untuk staging & production
 │   ├── store/Dockerfile         # image storefront
 │   ├── admin/Dockerfile         # image admin
-│   └── migrate/Dockerfile       # image one-shot migration + seed
+│   └── migrate/Dockerfile       # image one-shot migration (seed eksplisit)
 ├── staging/                     # config KHUSUS staging
 │   ├── docker-compose.yml
 │   ├── caddy/Caddyfile          # domain dev-store / dev-admin
@@ -43,7 +43,7 @@ deployment/
 | 5 | [dns.md](dns.md) | Konfigurasi DNS (A record) |
 | 6 | [google-oauth.md](google-oauth.md) | Google OAuth client + redirect URI |
 | 7 | [midtrans.md](midtrans.md) | Midtrans sandbox & production |
-| 8 | [deploy.md](deploy.md) | Deploy aplikasi (clone, env, build, migrate, seed) |
+| 8 | [deploy.md](deploy.md) | Deploy aplikasi (clone, env, build, migrate; seed disposable opsional) |
 | 9 | [verification.md](verification.md) | Verifikasi deployment |
 | 10 | [operations.md](operations.md) | Operasional sehari-hari (redeploy, backup, stop) |
 | 11 | [cron-sweep.md](cron-sweep.md) | Sweep reservasi stok (cron) |
@@ -88,7 +88,7 @@ struktur folder sudah disiapkan. Perbedaan utama:
 |-------|---------|------------|
 | Domain | `dev-store` / `dev-admin` | `store` / `admin` |
 | Midtrans | Sandbox (`IS_PRODUCTION=false`) | Live (`true`) |
-| Seed | Boleh (`migrate` default) | **JANGAN** (override `npx drizzle-kit migrate`) |
+| Seed | Jalankan eksplisit hanya untuk data disposable | **Diblokir oleh seeder** |
 | DB | `storefront_staging` | `storefront_production` |
 
 Lihat [environments.md](environments.md) untuk detail pemisahan environment.

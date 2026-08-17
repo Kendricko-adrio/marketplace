@@ -9,42 +9,29 @@ import {
   branches,
 } from "@/db";
 import { eq, asc } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
+import { requireOnboardedApiSession } from "@/lib/route-access";
 
 // Helper to get or create cart
 async function getOrCreateCart(userId: string) {
-  const existingCart = await db
+  const newCartId = crypto.randomUUID();
+  await db
+    .insert(carts)
+    .values({ id: newCartId, userId })
+    .onConflictDoNothing({ target: carts.userId });
+  const [cart] = await db
     .select()
     .from(carts)
     .where(eq(carts.userId, userId))
     .limit(1);
-
-  if (existingCart.length > 0) {
-    return existingCart[0];
-  }
-
-  const newCartId = crypto.randomUUID();
-  await db.insert(carts).values({
-    id: newCartId,
-    userId,
-  });
-
-  return { id: newCartId, userId, updatedAt: new Date() };
+  if (!cart) throw new Error("Failed to create cart");
+  return cart;
 }
 
 export async function GET() {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
-
-    if (!session) {
-      return NextResponse.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
-      );
-    }
+    const access = await requireOnboardedApiSession();
+    if (!access.ok) return access.response;
+    const { session } = access;
 
     const cart = await getOrCreateCart(session.user.id);
 
@@ -128,16 +115,9 @@ export async function GET() {
 
 export async function DELETE() {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
-
-    if (!session) {
-      return NextResponse.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
-      );
-    }
+    const access = await requireOnboardedApiSession();
+    if (!access.ok) return access.response;
+    const { session } = access;
 
     const cart = await db
       .select()

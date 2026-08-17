@@ -66,7 +66,7 @@ e2e/
     account.spec.ts       # authenticated smoke (reuses saved session)
     products.spec.ts      # infinite scroll, sidebar filters, pricing, grey-out
     product-detail.spec.ts# metadata (brand/gender/category/price/discount/stock)
-    checkout.spec.ts      # cart → checkout → place-order → Midtrans redirect; vouchers
+    checkout.spec.ts      # cart → checkout → local payment boundary; vouchers
     onboarding.spec.ts   # fresh user → /onboarding → cookie (isolated user via pg)
     static-pages.spec.ts  # CMS pages + footer rendering
   admin/                  # admin specs (baseURL http://localhost:3001)
@@ -83,6 +83,14 @@ packages/db/vitest.config.ts
 ```
 
 ### E2E pitfalls (learned the hard way)
+
+- The store Playwright project sends `x-e2e-payment-mock: true`. The route
+  accepts it only outside production and redirects to the local
+  `/checkout/payment-test` page, so CI never creates a real Midtrans charge.
+- Checkout uses deterministic seeded fixtures and cleans up orders plus stock
+  reservations in `afterAll`, keeping repeated runs isolated.
+- Unit tests remain infrastructure-free; E2E requires the disposable seeded
+  PostgreSQL database described above.
 
 - **React hydration race**: filling a controlled input right after navigation
   gets reverted when hydration takes over. Wait for a client-side signal first

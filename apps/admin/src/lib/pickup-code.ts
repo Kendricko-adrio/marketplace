@@ -14,3 +14,24 @@ export function verifyPickupCode(
   if (input.length !== expected.length) return false;
   return crypto.timingSafeEqual(Buffer.from(input), Buffer.from(expected));
 }
+
+const MAX_PICKUP_ATTEMPTS = 5;
+const PICKUP_LOCK_MS = 15 * 60_000;
+
+export function isPickupVerificationLocked(
+  lockedUntil: Date | null | undefined,
+  now = new Date()
+): boolean {
+  return Boolean(lockedUntil && lockedUntil.getTime() > now.getTime());
+}
+
+export function getFailedPickupAttemptUpdate(currentAttempts: number, now = new Date()) {
+  const attempts = currentAttempts + 1;
+  return {
+    attempts,
+    lockedUntil:
+      attempts >= MAX_PICKUP_ATTEMPTS
+        ? new Date(now.getTime() + PICKUP_LOCK_MS)
+        : null,
+  };
+}

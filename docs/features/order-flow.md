@@ -44,11 +44,13 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
    `selectedItemIds`), loads the user's cart, filters the selected items,
    enforces **single-branch checkout**, checks branch `status = "aktif"` +
    pickup slot (`validatePickupSlot`), soft stock pre-check, totals
-   (`serviceFee = 0`, `total = subtotal`). Then one `db.transaction`:
+   (`serviceFee = 0`, `total = subtotal`). A short transaction then:
    insert order (`pending_payment`/`pending`/`qris`, `expiresAt`), insert
-   `order_item` rows, atomic stock reservation per item, `createPayment`
-   (Midtrans Snap, QRIS-only, expiry = TTL), persist `snapRedirectUrl`, delete
-   only the checked-out cart items. Returns `{ success, orderId, redirectUrl,
+   `order_item` rows, and atomic stock reservation per item. After commit,
+   Midtrans Snap is created outside the transaction. A second short transaction
+   persists `snapRedirectUrl` and deletes only the checked-out cart items.
+   Gateway failure triggers compensation and preserves the cart. Returns
+   `{ success, orderId, redirectUrl,
    token }`; customer is redirected to the Snap page.
 2. **Pay** — customer completes QRIS payment on Midtrans Snap.
 3. **Webhook** — `POST /api/webhooks/midtrans`
@@ -58,17 +60,19 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
    - Early skip if already terminal (`paymentStatus = "paid"` or
      `status = "failed_payment"`).
    - **Authoritative re-verify** via `getMidtransTransactionStatus`
-     (`GET /v2/{order_id}/status`) to defend against spoofed callbacks; falls
-     back to the payload if the re-verify fails.
+     (`GET /v2/{order_id}/status`) to defend against spoofed callbacks. There
+     is no payload fallback; provider errors return retryable non-2xx without
+     mutating the order.
    - `settlement` / `capture`+`fraud=accept` → `claimAndFinalizePaidOrder`;
      `deny` / `cancel` / `expire` → `claimAndFailOrder` (reason via
      `describeFailureReason`); `pending` → no action.
-   - Always returns 200 (prevents Midtrans retries).
+   - Processing failures return non-2xx so Midtrans retries the notification.
 4. **Finalize** — `claimAndFinalizePaidOrder`
    (`apps/store/src/lib/order-finalize.ts`): claim-guard UPDATE
    (`pending_payment`/`pending` → `processing`/`paid`; 0 rows → skip), convert
-   reservation → real deduction (`stock` and `reservedStock` both decremented,
-   `GREATEST(0, …)` clamp), generate collision-checked 6-char pickup code,
+   reservation → real deduction (`stock` and `reservedStock` both conditionally
+   decremented; inventory drift aborts the transaction), generate a
+   collision-checked 6-char pickup code,
    `status → ready_for_pickup`, insert `order_paid` notification +
    `pg_notify('new_notification', …)` (see `docs/features/notifications.md`), send
    pickup-ready email (best-effort, outside the tx).
@@ -97,7 +101,8 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
    (`apps/store/src/app/api/internal/order-complete/route.ts`): admin→store
    auth via `secret = HMAC-SHA256(BETTER_AUTH_SECRET, orderId)` (shared secret
    between the two apps; mismatch → 403). Requires `ready_for_pickup`, sets
-   `status = "completed"`, sends the order-completed email (best-effort). The
+   `status = "completed"`, then schedules the order-completed email with
+   Next.js `after()` so SMTP latency does not block the response. The
    admin route then writes an `audit_log` row (`VERIFY_PICKUP_CODE`).
 
 ## Failure path
@@ -118,7 +123,7 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
   `docs/deployment-docs/cron-sweep.md`.
 - **Place-order failures** — `InsufficientStockError` → 400 (tx rolled back,
   earlier reservations in the same tx released); Midtrans create failure → 502
-  (tx rolled back — order, reservation, and cart preserved).
+  after compensating the committed reservation; cart rows remain available.
 
 ## Re-payment
 

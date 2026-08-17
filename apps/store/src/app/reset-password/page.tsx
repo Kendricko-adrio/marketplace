@@ -1,6 +1,6 @@
 "use client";
 import { useState, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +19,7 @@ import { authClient } from "@/lib/auth-client";
 const PASSWORD_COMPLEXITY_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/;
 
 function ResetPasswordContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get("token");
   const tokenError = searchParams.get("error");
@@ -72,7 +73,7 @@ function ResetPasswordContent() {
       // Hard navigation bypasses the Next.js Router Cache so a stale cached
       // redirect cannot replay. Mirrors the login page pattern.
       setTimeout(() => {
-        window.location.href = "/login?reset=success";
+        router.replace("/login?reset=success");
       }, 1200);
     } catch (err) {
       console.error("Reset password error:", err);

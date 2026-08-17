@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { footerConfig } from "@/db";
 import { eq } from "drizzle-orm";
-import { z } from "zod";
 import { withAuth } from "@/lib/auth-guard";
 import { footerConfigSchema } from "@/lib/footer-config";
 

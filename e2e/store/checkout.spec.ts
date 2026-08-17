@@ -1,4 +1,44 @@
 import { test, expect } from "@playwright/test";
+import { Pool } from "pg";
+import dotenv from "dotenv";
+
+dotenv.config({ path: ".env" });
+let createdOrderId: string | null = null;
+
+test.afterAll(async () => {
+  if (!createdOrderId) return;
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const order = await client.query(
+      "SELECT branch_id FROM orders WHERE id = $1 FOR UPDATE",
+      [createdOrderId]
+    );
+    if (order.rows[0]?.branch_id) {
+      const items = await client.query(
+        "SELECT variant_id, quantity FROM order_item WHERE order_id = $1",
+        [createdOrderId]
+      );
+      for (const item of items.rows) {
+        await client.query(
+          `UPDATE branch_stock
+           SET reserved_stock = GREATEST(0, reserved_stock - $1), updated_at = NOW()
+           WHERE branch_id = $2 AND product_variant_id = $3`,
+          [item.quantity, order.rows[0].branch_id, item.variant_id]
+        );
+      }
+    }
+    await client.query("DELETE FROM orders WHERE id = $1", [createdOrderId]);
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+    await pool.end();
+  }
+});
 
 // Cart & checkout — order-flow, stock-reservation, vouchers:
 // cart → checkout → place-order → Midtrans redirect; voucher validation API.
@@ -6,10 +46,12 @@ import { test, expect } from "@playwright/test";
 
 // Branches are closed on Sunday (no operating hours) — pick the next open day.
 function nextOpenDate(): string {
-  const d = new Date();
+  const d = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Jakarta" })
+  );
   d.setDate(d.getDate() + 1);
-  while (d.getDay() === 0) d.setDate(d.getDate() + 1); // skip Sunday
-  return d.toISOString().slice(0, 10);
+  while (d.getDay() === 0) d.setDate(d.getDate() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 // Adds one unit of the first in-stock product to the cart via the API and
@@ -111,8 +153,12 @@ test.describe("storefront cart & checkout", () => {
     await page.getByText(/Saya telah memeriksa pesanan/).click();
     await page.getByRole("button", { name: "Bayar Sekarang" }).click();
 
-    // place-order redirects the customer to the Midtrans Snap page.
-    await expect(page).toHaveURL(/midtrans\.com/, { timeout: 30_000 });
+    // The default E2E suite uses a local payment boundary. Sandbox contract
+    // tests are intentionally separate from deterministic regression tests.
+    await expect(page).toHaveURL(/\/checkout\/payment-test\?orderId=/, {
+      timeout: 30_000,
+    });
+    createdOrderId = new URL(page.url()).searchParams.get("orderId");
   });
 
   test("voucher validation API: valid, minimum-purchase, and unknown codes", async ({

@@ -6,8 +6,9 @@
   integer,
   jsonb,
   primaryKey,
+  check,
 } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import { productVariants } from "./products";
 import { cartItems } from "./cart";
 
@@ -45,7 +46,9 @@ export const branches = pgTable("branch", {
   status: text("status").notNull().default("aktif"), // aktif | nonaktif
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  check("branch_status_valid", sql`${t.status} in ('aktif', 'nonaktif')`),
+]);
 
 // Per-variant stock at each branch (source of truth for stock)
 export const branchStocks = pgTable(
@@ -65,7 +68,11 @@ export const branchStocks = pgTable(
     reservedStock: integer("reserved_stock").notNull().default(0),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.branchId, t.productVariantId] })]
+  (t) => [
+    primaryKey({ columns: [t.branchId, t.productVariantId] }),
+    check("branch_stock_nonnegative", sql`${t.stock} >= 0`),
+    check("branch_reserved_stock_nonnegative", sql`${t.reservedStock} >= 0`),
+  ]
 );
 
 export const branchesRelations = relations(branches, ({ many }) => ({

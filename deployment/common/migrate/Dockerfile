@@ -1,4 +1,4 @@
-# Migrate — one-shot container to run Drizzle migrations + seed.
+# Migrate — one-shot container. The safe default only applies migrations.
 # Not started with `docker compose up`; invoked manually:
 #   docker compose --profile tools run --rm migrate
 #
@@ -27,9 +27,8 @@ COPY packages/db ./packages/db
 
 WORKDIR /app/packages/db
 
-# Default command: apply migrations, then seed.
-# Override with: docker compose --profile tools run --rm migrate npx drizzle-kit migrate
-# or:            docker compose --profile tools run --rm migrate npx tsx src/seed.ts
+# Seeding is always explicit and seed.ts refuses NODE_ENV=production:
+#   docker compose --profile tools run --rm migrate npx tsx src/seed.ts
 #
 # Recovery (staging only — kalau "relation already exists" karena DB kotor
 # dari db:push sebelumnya, atau journal out-of-sync):
@@ -37,4 +36,4 @@ WORKDIR /app/packages/db
 #   2. docker compose --profile tools run --rm migrate
 # reset.ts akan DROP semua tabel (termasuk __drizzle_migrations) lalu migrate
 # apply dari awal + seed. JANGAN run reset.ts di production.
-CMD ["sh", "-c", "npx drizzle-kit migrate && npx tsx src/seed.ts"]
+CMD ["npx", "drizzle-kit", "migrate"]

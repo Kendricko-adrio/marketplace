@@ -105,13 +105,8 @@ function ResetPasswordContent() {
           );
           return;
         }
-        // Clear the mustResetPassword flag + edge cookie
-        document.cookie = "admin.must_reset=; path=/; max-age=0";
-        try {
-          await fetch("/api/admin/clear-must-reset", { method: "POST" });
-        } catch {
-          // non-fatal — the flag will be re-checked on next login
-        }
+        // Better Auth's successful change-password hook clears the server-side
+        // mustResetPassword flag atomically with the authenticated flow.
       }
       setSuccess(true);
       setTimeout(() => {
@@ -224,9 +219,6 @@ function ResetPasswordContent() {
                 <button
                   type="button"
                   onClick={async () => {
-                    // Clear the must-reset edge cookie first so it doesn't
-                    // leak into the next login session.
-                    document.cookie = "admin.must_reset=; path=/; max-age=0";
                     // Navigate inside onSuccess (idiomatic Better Auth) with a
                     // hard navigation so the Router Cache can't replay a
                     // stale /admin redirect and the reactive useSession state
@@ -234,7 +226,8 @@ function ResetPasswordContent() {
                     await signOut({
                       fetchOptions: {
                         onSuccess: () => {
-                          window.location.href = "/login";
+                          router.replace("/login");
+                          router.refresh();
                         },
                       },
                     });

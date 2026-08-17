@@ -1,6 +1,8 @@
 import { Suspense } from "react";
 import { MapPin } from "lucide-react";
 import BranchCard, { type Branch } from "@/components/BranchCard";
+import { db, branches } from "@/db";
+import { and, asc, eq, ilike } from "drizzle-orm";
 
 interface BranchesResponse {
   success: boolean;
@@ -8,22 +10,19 @@ interface BranchesResponse {
 }
 
 async function getBranches(city?: string): Promise<BranchesResponse> {
-  const params = new URLSearchParams();
-  if (city) params.set("city", city);
-  try {
-    const res = await fetch(
-      `${
-        process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"
-      }/api/branches?${params.toString()}`,
-      { cache: "no-store" }
-    );
-    const data = await res.json();
-    return data;
-  } catch (error) {
-    console.error("Error fetching branches:", error);
-    return { success: false, data: [] };
-  }
+  const rows = await db
+    .select()
+    .from(branches)
+    .where(
+      city
+        ? and(eq(branches.status, "aktif"), ilike(branches.city, `%${city}%`))
+        : eq(branches.status, "aktif")
+    )
+    .orderBy(asc(branches.name));
+  return { success: true, data: rows as Branch[] };
 }
+
+export const dynamic = "force-dynamic";
 
 export const metadata = {
   title: "Cabang Kami",

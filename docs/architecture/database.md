@@ -36,6 +36,9 @@ with `relation already exists`.
   (`withTimezone: true`) convention to all auth/domain tables that were
   previously `timestamp without time zone`.
 - Migration `0009_tan_sheva_callister.sql` adds the `notifications` table.
+- Migrations `0011`/`0012` add domain checks and uniqueness constraints,
+  pickup verification lockout state, deterministic cart uniqueness, and change
+  the admin-user branch FK to `ON DELETE RESTRICT`.
 
 ## Timestamp Convention (timestamptz)
 
@@ -67,6 +70,7 @@ produces a fully populated, testable DB without manual data entry:
 
 - Add a `DELETE` for any new table at the top of `seed()` (respecting FK order).
 - Add realistic sample rows for the new table/columns.
+- The seeder refuses to run when `NODE_ENV=production`.
 
 ## See Also
 

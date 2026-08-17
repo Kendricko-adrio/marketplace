@@ -1,5 +1,6 @@
 ﻿import { pgTable, text, timestamp, integer } from "drizzle-orm/pg-core";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
+import { check, uniqueIndex } from "drizzle-orm/pg-core";
 import { clients } from "./auth";
 import { productVariants } from "./products";
 import { branches } from "./branches";
@@ -32,7 +33,10 @@ export const cartItems = pgTable("cart_item", {
   quantity: integer("quantity").notNull().default(1),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  check("cart_item_quantity_positive", sql`${t.quantity} > 0`),
+  uniqueIndex("cart_item_cart_variant_branch_unique").on(t.cartId, t.variantId, t.branchId),
+]);
 
 // Relations
 export const cartsRelations = relations(carts, ({ one, many }) => ({

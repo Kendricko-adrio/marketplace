@@ -4,6 +4,7 @@ import { clients, orders, orderItems, branches } from "@/db";
 import { eq, and, desc, sql, ilike, or, gte, lte } from "drizzle-orm";
 import { withPermission, getBranchScope } from "@/lib/auth-guard";
 import { requestLogger, serializeError } from "@/lib/logger";
+import { parsePagination } from "@/lib/pagination";
 
 export const GET = withPermission(async (_ctx, request: NextRequest) => {
   const log = requestLogger(request, {
@@ -21,8 +22,10 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
     const pickupFrom = searchParams.get("pickupFrom");
     const pickupTo = searchParams.get("pickupTo");
     const search = searchParams.get("search");
-    const page = parseInt(searchParams.get("page") || "1");
-    const limit = parseInt(searchParams.get("limit") || "20");
+    const { page, limit } = parsePagination(
+      searchParams.get("page"),
+      searchParams.get("limit")
+    );
     const offset = (page - 1) * limit;
 
     log.info("orders list requested", { status, branchIdParam, page, limit });
@@ -93,6 +96,10 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
           name: branches.name,
           city: branches.city,
         },
+        itemCount: sql<number>`(
+          select count(*) from ${orderItems}
+          where ${orderItems.orderId} = ${orders.id}
+        )`,
       })
       .from(orders)
       .innerJoin(clients, eq(orders.userId, clients.id))
@@ -107,22 +114,12 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
 
     const allOrders = await query;
 
-    // Get item count per order
-    const ordersWithDetails = await Promise.all(
-      allOrders.map(async (row) => {
-        const items = await db
-          .select({ count: sql<number>`count(*)` })
-          .from(orderItems)
-          .where(eq(orderItems.orderId, row.order.id));
-
-        return {
-          ...row.order,
-          customer: row.customer,
-          branch: row.branch,
-          itemCount: Number(items[0]?.count || 0),
-        };
-      })
-    );
+    const ordersWithDetails = allOrders.map((row) => ({
+      ...row.order,
+      customer: row.customer,
+      branch: row.branch,
+      itemCount: Number(row.itemCount),
+    }));
 
     // ===== Total count (with the same filters) =====
     let countQuery = db

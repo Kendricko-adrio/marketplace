@@ -64,7 +64,7 @@ docker compose -p staging --env-file .env logs -f
 > | `drizzle-kit generate` | Setiap habis ubah `packages/db/src/schema/*` — generate file SQL migration baru di `packages/db/drizzle/`. **Commit file ini ke git.** | Lokal dev |
 > | `drizzle-kit migrate` | Apply migration SQL yang sudah di-commit ke DB target. **Inilah satu-satunya command yang boleh jalan di staging & production.** | Staging, Production |
 > | `drizzle-kit push` | Prototyping cepat di lokal — langsung push skema tanpa file migration. **TIDAK ada rollback, TIDAK ada history.** Hanya lokal dev. | **LOKAL SAJA** |
-> | `tsx src/seed.ts` | Isi data sample. **MENGHAPUS SEMUA DATA LAMA** dulu. Untuk staging OK kalau tidak ada data penting. | Staging (hati-hati), **PRODUCTION JANGAN** |
+> | `tsx src/seed.ts` | Isi data sample secara eksplisit dan **MENGHAPUS SEMUA DATA LAMA**. Seeder menolak `NODE_ENV=production`. | Database disposable saja |
 >
 > **Aturan keras:**
 > - **JANGAN PERNAH** `drizzle-kit push` ke DB staging/production. Tidak ada migration file, tidak bisa rollback, tidak reproducible. Lihat: https://orm.drizzle.team/docs/migrations
@@ -75,16 +75,15 @@ docker compose -p staging --env-file .env logs -f
 **Sekali saja** saat deploy pertama (atau ulang kalau ada migration baru):
 
 ```bash
-# Staging: migration + seed (staging boleh seed karena data dummy boleh hilang)
+# Staging: migration saja
 docker compose -p staging --env-file .env --profile tools run --rm migrate
 
-# Production: migration SAJA (JANGAN seed!)
-docker compose -p production --env-file .env --profile tools run --rm migrate npx drizzle-kit migrate
+# Seed staging hanya jika database memang disposable (command eksplisit)
+docker compose -p staging --env-file .env --profile tools run --rm migrate npx tsx src/seed.ts
 ```
 
-Ini (untuk staging) akan:
-1. `npx drizzle-kit migrate` — apply migration SQL yang sudah di-commit ke Postgres.
-2. `npx tsx src/seed.ts` — isi data sample (admin users, products, dll).
+Default container hanya menjalankan `npx drizzle-kit migrate`. Seed tidak lagi
+digabungkan ke migration; production juga memiliki guard di dalam seeder.
 
 Output yang diharapkan (staging):
 ```

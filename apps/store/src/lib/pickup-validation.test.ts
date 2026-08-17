@@ -49,31 +49,50 @@ describe("generateTimeSlots", () => {
 });
 
 describe("validatePickupSlot", () => {
+  const beforeOpening = new Date("2026-08-17T08:00:00+07:00");
+
   it("accepts a valid open-day slot", () => {
     expect(
-      validatePickupSlot(HOURS, "2026-08-17", "10:00")
+      validatePickupSlot(HOURS, "2026-08-17", "10:00", beforeOpening)
     ).toEqual({ ok: true });
   });
 
   it("rejects a closed day", () => {
-    expect(validatePickupSlot(HOURS, "2026-08-16", "10:00")).toMatchObject({
+    expect(validatePickupSlot(HOURS, "2026-08-16", "10:00", beforeOpening)).toMatchObject({
       ok: false,
       error: /closed/,
     });
   });
 
   it("rejects a time outside operating hours", () => {
-    expect(validatePickupSlot(HOURS, "2026-08-17", "08:00")).toMatchObject({
+    expect(validatePickupSlot(HOURS, "2026-08-17", "08:00", beforeOpening)).toMatchObject({
       ok: false,
       error: /between 09:00 and 21:00/,
     });
   });
 
   it("rejects a time that is not a 30-minute slot", () => {
-    expect(validatePickupSlot(HOURS, "2026-08-17", "10:15")).toMatchObject({
+    expect(validatePickupSlot(HOURS, "2026-08-17", "10:15", beforeOpening)).toMatchObject({
       ok: false,
       error: /30-min/,
     });
+  });
+
+  it("rejects an overflowing calendar date", () => {
+    expect(
+      validatePickupSlot(HOURS, "2026-02-31", "10:00", beforeOpening)
+    ).toMatchObject({ ok: false, error: /Invalid pickup date/ });
+  });
+
+  it("rejects a pickup time that already passed today in Jakarta", () => {
+    expect(
+      validatePickupSlot(
+        HOURS,
+        "2026-08-17",
+        "10:00",
+        new Date("2026-08-17T10:01:00+07:00")
+      )
+    ).toMatchObject({ ok: false, error: /future/ });
   });
 
   it("rejects a past date", () => {

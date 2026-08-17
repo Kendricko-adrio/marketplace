@@ -2,22 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { orders, orderItems } from "@/db";
 import { eq } from "drizzle-orm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
+import { requireOnboardedApiSession } from "@/lib/route-access";
 import { createPayment } from "@/lib/midtrans";
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
-
-    if (!session) {
-      return NextResponse.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
-      );
-    }
+    const access = await requireOnboardedApiSession();
+    if (!access.ok) return access.response;
+    const { session } = access;
 
     const body = await request.json();
     const { orderId } = body;

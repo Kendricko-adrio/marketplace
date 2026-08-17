@@ -1,13 +1,33 @@
-"use client";
 import AdminSidebar from "@/components/AdminSidebar";
 import NotificationBell from "@/components/NotificationBell";
 import { NotificationProvider } from "@/providers/notification-provider";
+import { auth } from "@/lib/auth";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 
-export default function AdminLayout({
+export default async function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const session = await auth.api.getSession({ headers: await headers() });
+  if (!session) redirect("/login?callbackUrl=/admin");
+  if (session.user.mustResetPassword) redirect("/reset-password?force=1");
+
+  if (session.user.role === "admin" && !session.user.branchId) {
+    return (
+      <main className="flex min-h-screen items-center justify-center p-6">
+        <div className="max-w-lg rounded-lg border bg-background p-8 text-center shadow-sm">
+          <h1 className="text-xl font-semibold">Akses cabang belum tersedia</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Akun admin ini belum terhubung ke cabang. Hubungi HQ untuk
+            menetapkan cabang sebelum melanjutkan.
+          </p>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <NotificationProvider>
       <div className="flex min-h-screen bg-muted/20">

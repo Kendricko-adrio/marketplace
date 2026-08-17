@@ -98,7 +98,7 @@ export const users = pgTable("user", {
   role: text("role").notNull().default("admin"), // admin | hq
   // Admin (branch staff) are scoped to one branch; HQ oversee all branches (null).
   branchId: text("branch_id").references(() => branches.id, {
-    onDelete: "set null",
+    onDelete: "restrict",
   }),
   // When true, the user must change their password on next login
   // (set by HQ on user creation or password reset).

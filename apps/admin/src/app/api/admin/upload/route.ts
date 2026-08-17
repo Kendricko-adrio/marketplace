@@ -5,6 +5,7 @@ import {
   ALLOWED_FOLDERS,
   MAX_FILE_SIZE,
   ALLOWED_TYPES,
+  detectImageType,
   saveFile,
   deleteFile,
 } from "@/lib/uploads";
@@ -45,11 +46,16 @@ export const POST = withAuth(async (_ctx, request: NextRequest) => {
       );
     }
 
-    const ext = file.name.split(".").pop() || "jpg";
-    const filename = `${crypto.randomUUID()}.${ext}`;
-
     const bytes = await file.arrayBuffer();
     const buffer = Buffer.from(bytes);
+    const detected = detectImageType(buffer);
+    if (!detected || detected.mime !== file.type) {
+      return NextResponse.json(
+        { success: false, error: "File content does not match an allowed image type" },
+        { status: 400 }
+      );
+    }
+    const filename = `${crypto.randomUUID()}.${detected.extension}`;
     await saveFile(folder, filename, buffer);
 
     return NextResponse.json({

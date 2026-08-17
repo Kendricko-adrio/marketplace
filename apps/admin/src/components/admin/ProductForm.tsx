@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
+import Image from "next/image";
 import { toStoreUrl } from "@/lib/store-url";
 
 export interface ProductImage {
@@ -475,10 +475,12 @@ export default function ProductForm({
                     key={imgIdx}
                     className="relative h-20 w-20 rounded-md border overflow-hidden group"
                   >
-                    <img
+                    <Image
                       src={toStoreUrl(img.url)}
                       alt=""
-                      className="h-full w-full object-cover"
+                      fill
+                      sizes="80px"
+                      className="object-cover"
                     />
                     <button
                       type="button"

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { orders, orderItems } from "@/db";
 import { eq } from "drizzle-orm";
@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    const completedOrderId = orderId;
 
     const orderLog = log.child({ orderId });
 
@@ -93,9 +94,11 @@ export async function POST(request: NextRequest) {
 
     orderLog.info("order completed", { completedAt: completedAt.toISOString() });
 
-    // Send Email #2
-    try {
-      const items = await db
+    // Email is a post-response side effect. SMTP latency must not keep the
+    // admin's pickup verification request open after the order is committed.
+    after(async () => {
+      try {
+        const items = await db
         .select({
           productName: orderItems.productName,
           variantInfo: orderItems.variantInfo,
@@ -103,45 +106,45 @@ export async function POST(request: NextRequest) {
           quantity: orderItems.quantity,
         })
         .from(orderItems)
-        .where(eq(orderItems.orderId, orderId));
+        .where(eq(orderItems.orderId, completedOrderId));
 
-      const html = orderCompletedEmailHTML({
-        order: {
-          id: order.id,
-          total: order.total,
-          subtotal: order.subtotal,
-          serviceFee: order.serviceFee,
-          pickupDate: order.pickupDate,
-          pickupTime: order.pickupTime,
-        },
-        items,
-      });
+        const html = orderCompletedEmailHTML({
+          order: {
+            id: order.id,
+            total: order.total,
+            subtotal: order.subtotal,
+            serviceFee: order.serviceFee,
+            pickupDate: order.pickupDate,
+            pickupTime: order.pickupTime,
+          },
+          items,
+        });
 
-      const text = orderCompletedEmailText({
-        order: {
-          id: order.id,
-          total: order.total,
-          subtotal: order.subtotal,
-          serviceFee: order.serviceFee,
-          pickupDate: order.pickupDate,
-          pickupTime: order.pickupTime,
-        },
-        items,
-      });
+        const text = orderCompletedEmailText({
+          order: {
+            id: order.id,
+            total: order.total,
+            subtotal: order.subtotal,
+            serviceFee: order.serviceFee,
+            pickupDate: order.pickupDate,
+            pickupTime: order.pickupTime,
+          },
+          items,
+        });
 
-      await sendEmail({
-        to: order.contactEmail,
-        subject: `Your Order has been Completed — #${order.id.slice(0, 8).toUpperCase()}`,
-        html,
-        text,
-      });
-    } catch (emailError) {
-      log.error("completion email failed", {
-        orderId,
-        error: serializeError(emailError),
-      });
-      // Don't fail the request — the order is already completed
-    }
+        await sendEmail({
+          to: order.contactEmail,
+          subject: `Your Order has been Completed — #${order.id.slice(0, 8).toUpperCase()}`,
+          html,
+          text,
+        });
+      } catch (emailError) {
+        log.error("completion email failed", {
+          orderId: completedOrderId,
+          error: serializeError(emailError),
+        });
+      }
+    });
 
     return NextResponse.json({
       success: true,

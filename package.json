@@ -6,12 +6,18 @@
     "apps/*",
     "packages/*"
   ],
+  "overrides": {
+    "defu": "6.1.7",
+    "linkify-it": "5.0.2",
+    "picomatch@2.3.1": "2.3.2"
+  },
   "scripts": {
     "dev": "npm run dev:store",
     "dev:store": "cd apps/store && npm run dev",
     "dev:admin": "cd apps/admin && npm run dev",
     "dev:all": "concurrently \"cd apps/store && npm run dev\" \"cd apps/admin && npm run dev\"",
-    "build": "npm run build:store && npm run build:admin",
+    "build": "npm run build:packages && npm run build:store && npm run build:admin",
+    "build:packages": "npm run build --workspace @marketplace/db && npm run build --workspace @marketplace/ui",
     "build:store": "cd apps/store && npm run build",
     "build:admin": "cd apps/admin && npm run build",
     "db:generate": "cd packages/db && npm run db:generate",

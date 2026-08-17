@@ -1,35 +1,34 @@
-# Middleware — Route Protection per App
+# Proxy and Server-Side Route Protection
 
-Deep-dive companion to AGENTS.md §1/§4. Each app has its own
-`src/middleware.ts`. Both read the session cookie via Better Auth's
-`getSessionCookie` helper (handles the `__Secure-` cookie prefix).
+Deep-dive companion to AGENTS.md §1/§4. Each app uses `src/proxy.ts`, the
+Next.js 16 convention. A proxy session-cookie check is only an early redirect
+optimization; cookies are never treated as authorization. Protected layouts
+and API handlers verify the Better Auth session and database state again.
 
-## Store (`apps/store/src/middleware.ts`)
+## Store (`apps/store/src/proxy.ts`)
 
-| Behavior | Routes |
+| Layer | Behavior |
 |---|---|
-| Require authentication | `/cart`, `/checkout`, `/account` → redirect to `/login?callbackUrl=` |
-| Redirect when already logged in | `/login`, `/register` |
-| Onboarding gate | Logged-in users without the `client.onboarding=1` cookie are redirected to `/onboarding`, except for a bypass list |
+| Proxy | Guests requesting `/cart`, `/checkout`, or `/account` are redirected to `/login?callbackUrl=` |
+| Protected layouts | Load the server session and require `clients.onboardingCompleted === true` |
+| Protected APIs | Return 401 without a client session and 403 when onboarding is incomplete |
 
-Onboarding-gate bypass list:
-- Prefixes: `/onboarding`, `/auth/verify`, `/api/auth`, `/api/onboarding`,
-  `/forgot-password`, `/reset-password`
-- Exact: `/logout`
+The `client.onboarding` cookie may still be synchronized for UX compatibility,
+but it cannot grant access. Missing, false, or null database state is denied.
 
-## Admin (`apps/admin/src/middleware.ts`)
+## Admin (`apps/admin/src/proxy.ts`)
 
-| Behavior | Routes |
+| Layer | Behavior |
 |---|---|
-| Require authentication | `/admin/*` → redirect to `/login?callbackUrl=` |
-| Redirect when already logged in | `/login` |
-| `mustResetPassword` gate | Authenticated users forced to change their password may only visit the bypass list |
+| Proxy | Guests requesting `/admin/*` are redirected to `/login?callbackUrl=` |
+| Admin layout | Verifies the server session, enforces forced password reset, and rejects branch admins without an assigned branch |
+| API wrappers | Apply the same reset/branch invariants before role and permission checks |
 
-Password-reset-gate bypass prefixes: `/reset-password`, `/api/auth`,
-`/api/admin/users` (lets HQ keep managing users mid-session, defensive),
-`/logout`.
+The forced-password-reset flag is read from the authenticated server session,
+not a client-writable cookie. HQ users may operate across branches; branch
+admins are always scoped to their assigned branch.
 
 ## See Also
 
-- [auth.md](auth.md) — the two Better Auth instances these gates rely on
+- [auth.md](auth.md) — the two independent Better Auth instances
 - [../features/onboarding.md](../features/onboarding.md) — onboarding flow

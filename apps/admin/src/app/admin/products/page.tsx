@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import Link from "next/link";
 import { Search, Loader2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -57,11 +57,7 @@ export default function AdminProductsPage() {
     setPage(1);
   }, [debouncedSearch]);
 
-  useEffect(() => {
-    fetchProducts();
-  }, [page, debouncedSearch]);
-
-  async function fetchProducts() {
+  const fetchProducts = useCallback(async () => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
@@ -80,7 +76,11 @@ export default function AdminProductsPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [page, debouncedSearch]);
+
+  useEffect(() => {
+    void fetchProducts();
+  }, [fetchProducts]);
 
   const getStatusBadge = (status: string) => {
     const variants: Record<string, "default" | "destructive" | "secondary"> = {

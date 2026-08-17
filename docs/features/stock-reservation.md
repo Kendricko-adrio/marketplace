@@ -26,8 +26,8 @@ counter, not physical inventory.
 
 ## When a reservation is created (place-order)
 
-`apps/store/src/app/api/checkout/place-order/route.ts`, inside a single
-`db.transaction`:
+`apps/store/src/app/api/checkout/place-order/route.ts` uses a two-phase flow so
+no database transaction stays open during the Midtrans network request:
 
 1. Insert `orders` row: `status = "pending_payment"`, `paymentStatus =
    "pending"`, `paymentMethod = "qris"`, `expiresAt = now + ttlMinutes * 60_000`.
@@ -46,12 +46,12 @@ counter, not physical inventory.
    rolls back, releasing reservations made for earlier items in the same tx.
    No `FOR UPDATE` needed: two concurrent checkouts for the last unit produce
    one match and one miss.
-4. `createPayment` (Midtrans Snap, QRIS-only, expiry = same TTL) is called
-   **inside the tx** — any Midtrans failure rolls back order + reservations +
-   cart deletion together.
-5. `snapRedirectUrl` is persisted on the order (customer can resume payment).
-6. Only the checked-out `selectedItemIds` cart items are deleted (inside the
-   tx, so a failure preserves the cart).
+4. Commit the reservation transaction, then call Midtrans Snap outside it.
+5. If Midtrans creation fails, `claimAndFailOrder` compensates by releasing
+   the reservation and preserves the selected cart rows.
+6. On success, a short second transaction persists `snapRedirectUrl` and
+   deletes only the checked-out `selectedItemIds`. If local persistence needs
+   reconciliation, the valid gateway result is still returned.
 
 A soft UX pre-check runs before the tx (`available = stock - reservedStock`;
 `qty > available` → 400) — it is **not** the guard; the atomic UPDATE is.
@@ -92,7 +92,7 @@ webhook vs. sweep race safe.
 
 | Finalizer | Claim-guard UPDATE | Then |
 |---|---|---|
-| `claimAndFinalizePaidOrder` | `status: pending_payment → processing`, `paymentStatus: pending → paid` | Per item: `stock = GREATEST(0, stock - qty)`, `reservedStock = GREATEST(0, reservedStock - qty)` (reservation → real deduction, clamped to absorb drift); generate collision-checked pickup code; `status → ready_for_pickup`; insert `order_paid` notification + `pg_notify`; send pickup-ready email (best-effort, outside tx) |
+| `claimAndFinalizePaidOrder` | `status: pending_payment → processing`, `paymentStatus: pending → paid` | Per item: conditionally decrement `stock` and `reservedStock` only when both cover qty; drift throws and rolls back for retry/alert instead of silently clamping; generate collision-checked pickup code; `status → ready_for_pickup`; insert `order_paid` notification + `pg_notify`; send pickup-ready email (best-effort, outside tx) |
 | `claimAndFailOrder` | `status: pending_payment → failed_payment`, `paymentStatus: pending → failed` (+ `paymentFailureReason`, `midtransFailureStatus`) | Per item: `reservedStock = GREATEST(0, reservedStock - qty)` — **`stock` untouched** (pending orders never deducted stock); send payment-failed email (best-effort, outside tx) |
 
 The webhook additionally early-skips when `paymentStatus = "paid"` or

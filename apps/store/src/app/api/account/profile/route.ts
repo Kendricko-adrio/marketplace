@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { headers } from "next/headers";
 import { db, clients } from "@/db";
-import { auth } from "@/lib/auth";
+import { requireOnboardedApiSession } from "@/lib/route-access";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 
@@ -17,16 +16,9 @@ const updateProfileSchema = z.object({
 
 export async function PATCH(request: NextRequest) {
   try {
-    const session = await auth.api.getSession({
-      headers: await headers(),
-    });
-
-    if (!session) {
-      return NextResponse.json(
-        { success: false, error: "Unauthorized" },
-        { status: 401 }
-      );
-    }
+    const access = await requireOnboardedApiSession();
+    if (!access.ok) return access.response;
+    const { session } = access;
 
     const body = await request.json().catch(() => null);
     const parsed = updateProfileSchema.safeParse(body);

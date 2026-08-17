@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { orders, orderItems, branchStocks, branches, notifications } from "@/db";
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { eq, and, gte, inArray, sql } from "drizzle-orm";
 import { sendEmail } from "@/lib/email";
 import {
   pickupReadyEmailHTML,
@@ -9,15 +9,24 @@ import {
   paymentFailedEmailText,
 } from "@/lib/email-templates-order";
 import { createLogger, serializeError, type Logger } from "@/lib/logger";
+import { randomInt } from "node:crypto";
 
 // 6-char pickup code alphabet (no ambiguous chars: O, I, 0, 1)
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
-function generatePickupCode(): string {
+export function generatePickupCode(): string {
   return Array.from(
     { length: 6 },
-    () => CODE_CHARS[Math.floor(Math.random() * CODE_CHARS.length)]
+    () => CODE_CHARS[randomInt(CODE_CHARS.length)]
   ).join("");
+}
+
+export function canFinalizeReservedStock(
+  stock: number,
+  reservedStock: number,
+  quantity: number
+): boolean {
+  return stock >= quantity && reservedStock >= quantity;
 }
 
 /**
@@ -70,9 +79,8 @@ type OrderView = {
  *      returns 0 rows, another handler (webhook or sweep) already processed the
  *      order → return { claimed: false } so the caller skips side effects.
  *   2. convert the stock reservation into a real deduction per order item:
- *      stock -= qty, reservedStock -= qty, both clamped by GREATEST(0, ...) to
- *      absorb any drift. This also fixes the pre-reservation oversell bug (the
- *      old code did a read-modify-write with Math.max(0, …) and no guard).
+ *      stock -= qty, reservedStock -= qty. A conditional UPDATE rejects
+ *      inventory drift instead of silently clamping it to zero.
  *   3. generate a collision-checked pickup code and move to ready_for_pickup.
  *   4. send the pickup-ready email (best-effort, outside the tx).
  *
@@ -118,19 +126,28 @@ export async function claimAndFinalizePaidOrder(
       .where(eq(orderItems.orderId, orderId));
 
     for (const item of items) {
-      await tx
+      const updatedStock = await tx
         .update(branchStocks)
         .set({
-          stock: sql`GREATEST(0, ${branchStocks.stock} - ${item.quantity})`,
-          reservedStock: sql`GREATEST(0, ${branchStocks.reservedStock} - ${item.quantity})`,
+          stock: sql`${branchStocks.stock} - ${item.quantity}`,
+          reservedStock: sql`${branchStocks.reservedStock} - ${item.quantity}`,
           updatedAt: new Date(),
         })
         .where(
           and(
             eq(branchStocks.branchId, order.branchId!),
-            eq(branchStocks.productVariantId, item.variantId)
+            eq(branchStocks.productVariantId, item.variantId),
+            gte(branchStocks.stock, item.quantity),
+            gte(branchStocks.reservedStock, item.quantity)
           )
+        )
+        .returning({ branchId: branchStocks.branchId });
+
+      if (updatedStock.length === 0) {
+        throw new Error(
+          `Inventory reservation drift for variant ${item.variantId}`
         );
+      }
     }
 
     // 3. Generate a collision-checked pickup code.

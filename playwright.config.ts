@@ -45,6 +45,7 @@ export default defineConfig({
         ...devices["Desktop Chrome"],
         baseURL: "http://localhost:3000",
         storageState: AUTH.store,
+        extraHTTPHeaders: { "x-e2e-payment-mock": "true" },
       },
       dependencies: ["setup"],
     },

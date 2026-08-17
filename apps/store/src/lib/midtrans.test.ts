@@ -1,6 +1,11 @@
 import { describe, it, expect, afterEach } from "vitest";
 import crypto from "crypto";
-import { verifyMidtransSignature } from "./midtrans";
+import {
+  amountsMatch,
+  getMockPaymentResult,
+  validateMidtransWebhookPayload,
+  verifyMidtransSignature,
+} from "./midtrans";
 
 // Backs POST /api/webhooks/midtrans signature verification.
 // Expected values computed independently with node:crypto (the same SHA512
@@ -60,5 +65,64 @@ describe("verifyMidtransSignature", () => {
     expect(
       verifyMidtransSignature(orderId, statusCode, "99999.00", expected)
     ).toBe(false);
+  });
+});
+
+describe("validateMidtransWebhookPayload", () => {
+  it("rejects a notification without a signature", () => {
+    process.env.MIDTRANS_SERVER_KEY = SERVER_KEY;
+    expect(
+      validateMidtransWebhookPayload({
+        order_id: "order-123",
+        transaction_status: "settlement",
+        status_code: "200",
+        gross_amount: "100000.00",
+      })
+    ).toEqual({ ok: false, error: "Invalid notification", status: 400 });
+  });
+
+  it("accepts a complete notification with a valid signature", () => {
+    process.env.MIDTRANS_SERVER_KEY = SERVER_KEY;
+    const signature = crypto
+      .createHash("sha512")
+      .update("order-123200100000.00" + SERVER_KEY)
+      .digest("hex");
+    expect(
+      validateMidtransWebhookPayload({
+        order_id: "order-123",
+        transaction_status: "settlement",
+        status_code: "200",
+        gross_amount: "100000.00",
+        signature_key: signature,
+      })
+    ).toMatchObject({ ok: true });
+  });
+});
+
+describe("amountsMatch", () => {
+  it("compares currency values at cent precision", () => {
+    expect(amountsMatch("100000", "100000.00")).toBe(true);
+    expect(amountsMatch("100000.01", "100000.00")).toBe(false);
+    expect(amountsMatch("not-a-number", "100000.00")).toBe(false);
+  });
+});
+
+describe("getMockPaymentResult", () => {
+  it("is available only outside production when explicitly enabled", () => {
+    expect(
+      getMockPaymentResult("order-123", {
+        MIDTRANS_E2E_MOCK: "true",
+        NODE_ENV: "test",
+      })
+    ).toEqual({
+      redirectUrl: "http://localhost:3000/checkout/payment-test?orderId=order-123",
+      token: "e2e-order-123",
+    });
+    expect(
+      getMockPaymentResult("order-123", {
+        MIDTRANS_E2E_MOCK: "true",
+        NODE_ENV: "production",
+      })
+    ).toBeNull();
   });
 });

@@ -26,14 +26,14 @@
        │ DB: storefront│
        └──────────────┘
 
-  [one-shot] migrate container → drizzle-kit migrate  [+ seed untuk staging only]
+  [one-shot] migrate container → drizzle-kit migrate
 ```
 
 > **PENTING — Best practice Drizzle migration:** Container `migrate` menjalankan
 > `drizzle-kit migrate` (apply file SQL yang sudah di-commit di
-> `packages/db/drizzle/`). Untuk staging, command default juga menjalankan
-> `seed.ts` setelah migrate. Untuk production, **JANGAN** pernah run seed —
-> jalankan `migrate npx drizzle-kit migrate` saja. Lihat [deploy.md](deploy.md)
+> `packages/db/drizzle/`). Container tidak menjalankan seed secara implisit.
+> Seed hanya boleh dipanggil eksplisit pada database disposable dan akan
+> menolak `NODE_ENV=production`. Lihat [deploy.md](deploy.md)
 > untuk workflow lengkap (generate → commit → pull → migrate).
 
 ## Komponen
@@ -43,7 +43,7 @@
 | `store` | Storefront Next.js (customer-facing) | internal 3000 (via Caddy) |
 | `admin` | Admin dashboard Next.js | internal 3001 (via Caddy) |
 | `caddy` | Reverse proxy + auto-HTTPS | 80, 443 (public) |
-| `migrate` | One-shot: jalankan DB migration + seed | — (profile `tools`) |
+| `migrate` | One-shot: jalankan DB migration; seed harus eksplisit | — (profile `tools`) |
 | Postgres | Database (bare-metal) | 5432 (hanya dari Docker bridge) |
 
 ## Struktur folder `deployment/`

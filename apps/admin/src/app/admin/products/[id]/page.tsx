@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useCallback, useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
@@ -83,11 +83,7 @@ export default function ProductDetailPage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
 
-  useEffect(() => {
-    fetchProduct();
-  }, [productId]);
-
-  async function fetchProduct() {
+  const fetchProduct = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/admin/products/${productId}`);
@@ -102,7 +98,11 @@ export default function ProductDetailPage() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [productId]);
+
+  useEffect(() => {
+    void fetchProduct();
+  }, [fetchProduct]);
 
   async function handleSync() {
     setSyncing(true);

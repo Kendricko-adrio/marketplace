@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { verifyPickupCode } from "./pickup-code";
+import {
+  getFailedPickupAttemptUpdate,
+  isPickupVerificationLocked,
+  verifyPickupCode,
+} from "./pickup-code";
 
 // Backs POST /api/admin/orders/{id}/verify-pickup code comparison.
 describe("verifyPickupCode", () => {
@@ -24,5 +28,25 @@ describe("verifyPickupCode", () => {
 
   it("is case-sensitive", () => {
     expect(verifyPickupCode("g4xunm", "G4XUNM")).toBe(false);
+  });
+});
+
+describe("pickup verification throttling", () => {
+  const now = new Date("2026-08-17T10:00:00Z");
+
+  it("locks verification after five failed attempts", () => {
+    expect(getFailedPickupAttemptUpdate(4, now)).toEqual({
+      attempts: 5,
+      lockedUntil: new Date("2026-08-17T10:15:00.000Z"),
+    });
+  });
+
+  it("recognizes an active lock and an expired lock", () => {
+    expect(
+      isPickupVerificationLocked(new Date("2026-08-17T10:01:00Z"), now)
+    ).toBe(true);
+    expect(
+      isPickupVerificationLocked(new Date("2026-08-17T09:59:00Z"), now)
+    ).toBe(false);
   });
 });

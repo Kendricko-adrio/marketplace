@@ -1,5 +1,9 @@
 import { test, expect } from "@playwright/test";
 import { TEST_USERS } from "../config";
+import { Pool } from "pg";
+import dotenv from "dotenv";
+
+dotenv.config({ path: ".env" });
 
 // Admin products — list/search, detail (gallery, info, variants), Jubelio
 // sync API, and the upload API. Product CRUD was removed when Jubelio became
@@ -47,28 +51,18 @@ test.describe("admin products", () => {
 
   test("branch admin cannot open a non-carried product detail", async ({
     page,
-    browser,
   }) => {
     // AirRunner is not carried by admintoko's branch → the detail API 404s and
-    // the page shows the not-found message. AirRunner is hidden from admintoko's
-    // scoped list, so locate its id via a fresh HQ session (HQ sees all).
-    const hqCtx = await browser.newContext({
-      storageState: { cookies: [], origins: [] },
-    });
-    const hqPage = await hqCtx.newPage();
-    await hqPage.goto("/login");
-    await hqPage.getByLabel("Email atau Username").fill("hqmanager");
-    await hqPage.getByLabel("Password").fill("hq123");
-    await hqPage.getByRole("button", { name: "Masuk", exact: true }).click();
-    await hqPage.waitForURL("**/admin/**");
-    const hqRes = await hqPage.request.get(
-      "/api/admin/products?limit=50&search=AirRunner"
+    // the page shows the not-found message. Resolve the deterministic fixture
+    // directly so this authorization test does not depend on a second login or
+    // on an unrelated storefront catalog request.
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const fixture = await pool.query(
+      "SELECT id, name FROM product WHERE slug = $1 LIMIT 1",
+      ["airrunner-pro-running-shoes"]
     );
-    const hqJson = await hqRes.json();
-    await hqCtx.close();
-    const airRunner = hqJson.data?.find((p: any) =>
-      p.name?.includes("AirRunner")
-    );
+    await pool.end();
+    const airRunner = fixture.rows[0];
     if (!airRunner) {
       throw new Error("AirRunner not found for detail-404 test");
     }
@@ -265,7 +259,15 @@ test.describe("HQ stock view", () => {
 
     await page.goto("/admin/products");
     // Search narrows the table to matching products.
-    await page.getByPlaceholder("Cari nama produk...").fill("AirRunner");
+    await Promise.all([
+      page.waitForResponse(
+        (response) =>
+          response.url().includes("/api/admin/products?") &&
+          response.url().includes("search=AirRunner") &&
+          response.ok()
+      ),
+      page.getByPlaceholder("Cari nama produk...").fill("AirRunner"),
+    ]);
     await expect(
       page.getByRole("cell", { name: /AirRunner Pro Running Shoes/ })
     ).toBeVisible();

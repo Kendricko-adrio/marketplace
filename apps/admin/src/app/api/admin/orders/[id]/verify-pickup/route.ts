@@ -6,7 +6,11 @@ import { z } from "zod";
 import crypto from "crypto";
 import { withPermission, getBranchScope } from "@/lib/auth-guard";
 import { requestLogger, serializeError } from "@/lib/logger";
-import { verifyPickupCode } from "@/lib/pickup-code";
+import {
+  getFailedPickupAttemptUpdate,
+  isPickupVerificationLocked,
+  verifyPickupCode,
+} from "@/lib/pickup-code";
 
 const verifyPickupSchema = z.object({
   pickupCodeInput: z.string().min(1).max(10),
@@ -90,12 +94,37 @@ export const POST = withPermission(async (
       );
     }
 
+    if (isPickupVerificationLocked(order.pickupLockedUntil)) {
+      const retryAfter = Math.max(
+        1,
+        Math.ceil((order.pickupLockedUntil!.getTime() - Date.now()) / 1000)
+      );
+      return NextResponse.json(
+        { success: false, error: "Too many attempts. Please try again later." },
+        { status: 429, headers: { "Retry-After": String(retryAfter) } }
+      );
+    }
+
     // Constant-time comparison to avoid timing attacks
     const input = pickupCodeInput.toUpperCase().trim();
     const isMatch = verifyPickupCode(input, order.pickupCode);
 
     if (!isMatch) {
-      orderLog.warn("pickup code mismatch");
+      const failedAttempt = getFailedPickupAttemptUpdate(
+        order.pickupVerificationAttempts
+      );
+      await db
+        .update(orders)
+        .set({
+          pickupVerificationAttempts: failedAttempt.attempts,
+          pickupLockedUntil: failedAttempt.lockedUntil,
+          updatedAt: new Date(),
+        })
+        .where(eq(orders.id, id));
+      orderLog.warn("pickup code mismatch", {
+        attempts: failedAttempt.attempts,
+        locked: Boolean(failedAttempt.lockedUntil),
+      });
       return NextResponse.json(
         { success: false, error: "Invalid pickup code. Please verify with the customer." },
         { status: 409 }
@@ -141,6 +170,16 @@ export const POST = withPermission(async (
         { status: 502 }
       );
     }
+
+
+    await db
+      .update(orders)
+      .set({
+        pickupVerificationAttempts: 0,
+        pickupLockedUntil: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(orders.id, id));
 
     // Write an audit log
     await db.insert(auditLogs).values({

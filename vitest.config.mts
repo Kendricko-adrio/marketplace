@@ -10,6 +10,7 @@ export default defineConfig({
       "./apps/admin/vitest.config.mts",
       "./packages/db/vitest.config.mts",
       "./apps/jubelio-mock/vitest.config.mts",
+      "./apps/jubelio-webhook-simulator/vitest.config.mts",
     ],
   },
 });

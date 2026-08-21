@@ -85,6 +85,9 @@ bounce the user to `/onboarding`, and the page would bounce them back to `/`
 - Session, completed → sets the cookie and redirects to a validated local
   `callbackUrl` (default `/`). Login always passes through this server route,
   so the post-login decision is based on database state rather than a cookie.
+- Redirect origins use the configured public app URL (`BETTER_AUTH_URL` or
+  `NEXT_PUBLIC_APP_URL`) instead of the request origin, which can resolve to
+  the internal container bind address behind a reverse proxy.
 
 The onboarding page itself (`apps/store/src/app/onboarding/page.tsx`) also
 redirects to `/api/onboarding/sync` when the user is already onboarded but the

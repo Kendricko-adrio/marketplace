@@ -14,6 +14,7 @@
   "scripts": {
     "dev": "npm run dev:store",
     "dev:jubelio-mock": "npm run dev --workspace @marketplace/jubelio-mock",
+    "jubelio:webhook": "npm run simulate --workspace @marketplace/jubelio-webhook-simulator",
     "dev:store:app": "cd apps/store && npm run dev",
     "dev:admin:app": "cd apps/admin && npm run dev",
     "dev:store": "concurrently \"npm run dev:jubelio-mock\" \"npm run dev:store:app\"",

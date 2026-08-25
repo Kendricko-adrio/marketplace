@@ -14,6 +14,7 @@ import {
 import { eq, ilike, and, or, sql, desc, asc, gte, lte, inArray } from "drizzle-orm";
 import { hasAvailableStock } from "@/lib/stock";
 import { parseListParams } from "@/lib/list-params";
+import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
 
 type ProductResult = {
   id: string;
@@ -30,6 +31,7 @@ type ProductResult = {
 };
 
 export async function GET(request: NextRequest) {
+  const log = requestLogger(request, { module: "products-list" });
   try {
     const { searchParams } = new URL(request.url);
 
@@ -147,7 +149,25 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const orderBy =
+    // "Has sellable stock in any active branch" — the same rule as
+    // `hasAvailableStock` (lib/stock.ts) but expressed in SQL so it can drive
+    // ordering. Used as the FIRST ORDER BY tier so out-of-stock products are
+    // always pushed below in-stock ones, regardless of the user's chosen sort.
+    // NOTE: no `.as()` here — an alias would make Drizzle emit `ORDER BY
+    // "has_sellable_stock"` referencing a column that isn't in the SELECT
+    // list (Postgres rejects it). Without the alias Drizzle inlines the full
+    // EXISTS expression in the ORDER BY clause, which is valid.
+    const hasSellableStock = sql<boolean>`EXISTS (
+      SELECT 1
+      FROM ${productVariants}
+      JOIN ${branchStocks} ON ${branchStocks.productVariantId} = ${productVariants.id}
+      JOIN ${branches} ON ${branches.id} = ${branchStocks.branchId}
+      WHERE ${productVariants.productId} = ${products.id}
+        AND ${branches.status} = 'aktif'
+        AND ${branchStocks.stock} - ${branchStocks.pendingRemoteStock} > 0
+    )`;
+
+    const chosenSort =
       sortBy === "price"
         ? sortOrder === "asc"
           ? asc(minPriceSq.minPrice)
@@ -155,6 +175,9 @@ export async function GET(request: NextRequest) {
         : sortOrder === "asc"
         ? asc(products.createdAt)
         : desc(products.createdAt);
+
+    // Tier 1: in-stock first (out-of-stock last). Tier 2: the user's sort.
+    const orderBy = [desc(hasSellableStock), chosenSort];
 
     const selectCols = {
       id: products.id,
@@ -178,7 +201,7 @@ export async function GET(request: NextRequest) {
       .innerJoin(minPriceSq, eq(products.id, minPriceSq.productId))
       .leftJoin(genders, eq(products.genderId, genders.id))
       .where(where)
-      .orderBy(orderBy)
+      .orderBy(...orderBy)
       .limit(limit)
       .offset(offset);
 
@@ -286,7 +309,7 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: productsWithImages,
       pagination: {
@@ -296,11 +319,33 @@ export async function GET(request: NextRequest) {
         totalPages: Math.ceil(total / limit),
       },
     });
+    log.info("products.list", {
+      filters: {
+        search,
+        category: categorySlug,
+        brand: brandSlug,
+        branch: branchId,
+        minPrice,
+        maxPrice,
+        status,
+        hasDiscount,
+        sortBy,
+        sortOrder,
+        page,
+        limit,
+      },
+      returned: productsWithImages.length,
+      total,
+    });
+    return withRequestId(response, log);
   } catch (error) {
-    console.error("Error fetching products:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to fetch products" },
-      { status: 500 }
+    log.error("products.list.failed", serializeError(error));
+    return withRequestId(
+      NextResponse.json(
+        { success: false, error: "Failed to fetch products" },
+        { status: 500 }
+      ),
+      log
     );
   }
 }

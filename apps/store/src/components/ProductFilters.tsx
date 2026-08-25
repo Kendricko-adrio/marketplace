@@ -1,7 +1,7 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useTransition } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { ChevronsUpDown } from "lucide-react";
+import { ChevronsUpDown, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -89,6 +89,11 @@ export default function ProductFilters() {
     fetchOptions();
   }, []);
 
+  // `useTransition` makes navigation feel responsive: `isPending` stays true
+  // while the App Router re-renders the page server-side for the new filters,
+  // so the "Terapkan Filter" button can show a spinner + dim the grid area.
+  const [isPending, startTransition] = useTransition();
+
   const applyFilters = () => {
     const query = buildProductsQuery({
       search: searchQuery,
@@ -100,7 +105,9 @@ export default function ProductFilters() {
       sortBy,
       sortOrder,
     });
-    router.push(`/products?${query}`);
+    startTransition(() => {
+      router.push(`/products?${query}`);
+    });
   };
 
   const clearFilters = () => {
@@ -112,7 +119,9 @@ export default function ProductFilters() {
     setSearchQuery("");
     setSortBy("createdAt");
     setSortOrder("desc");
-    router.push("/products");
+    startTransition(() => {
+      router.push("/products");
+    });
   };
 
   // Sort is a single dropdown mapped to the API's sortBy + sortOrder pair.
@@ -125,16 +134,26 @@ export default function ProductFilters() {
 
   return (
     <aside className="w-full md:w-64 flex-shrink-0 md:border-r border-border md:pr-6 pb-8 md:pb-0 mb-8 md:mb-0">
-      {/* Search */}
+      {/* Search — wrapped in a form so pressing Enter submits (applies the
+          filter immediately, no need to click "Terapkan Filter"). */}
       <div className="mb-8">
         <h3 className="font-semibold mb-4 text-foreground">Cari Produk</h3>
-        <Input
-          type="text"
-          placeholder="Nama produk..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="h-10"
-        />
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            applyFilters();
+          }}
+        >
+          <Input
+            type="text"
+            placeholder="Nama produk..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="h-10"
+            // Hint that Enter triggers the search.
+            aria-label="Cari produk (tekan Enter untuk menerapkan)"
+          />
+        </form>
       </div>
 
       {/* Branch — active branches only (sourced from /api/branches). Selecting
@@ -273,13 +292,47 @@ export default function ProductFilters() {
       </div>
 
       <div className="space-y-2">
-        <Button className="w-full" onClick={applyFilters}>
-          Terapkan Filter
+        <Button
+          className="w-full"
+          onClick={applyFilters}
+          disabled={isPending}
+        >
+          {isPending ? (
+            <>
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Memuat...
+            </>
+          ) : (
+            "Terapkan Filter"
+          )}
         </Button>
-        <Button variant="outline" className="w-full" onClick={clearFilters}>
+        <Button
+          variant="outline"
+          className="w-full"
+          onClick={clearFilters}
+          disabled={isPending}
+        >
           Reset Filter
         </Button>
       </div>
+
+      {/* Loading overlay — a translucent backdrop over the whole viewport so
+          the customer sees the filter change is in progress even though the
+          grid lives in a separate Server Component. Sits above the page content
+          (pointer-events-none) without blocking interaction while the new SSR
+          page streams in. */}
+      {isPending && (
+        <div
+          aria-live="polite"
+          role="status"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/40 backdrop-blur-[1px] pointer-events-none"
+        >
+          <div className="flex items-center gap-2 rounded-md bg-background/95 px-4 py-2 shadow-md border">
+            <Loader2 className="h-5 w-5 animate-spin" />
+            <span className="text-sm">Memuat produk...</span>
+          </div>
+        </div>
+      )}
     </aside>
   );
 }

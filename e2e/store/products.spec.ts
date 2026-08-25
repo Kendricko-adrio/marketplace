@@ -180,4 +180,76 @@ test.describe("storefront product listing", () => {
     // And the card root carries the opacity-50 class.
     await expect(card).toHaveClass(/opacity-50/);
   });
+
+  test("out-of-stock products always sort below in-stock ones", async ({
+    page,
+  }) => {
+    // The list endpoint applies a tier-1 ORDER BY "has sellable stock DESC"
+    // above the user's chosen sort, so every out-of-stock item must appear
+    // after every in-stock item in the full result set. Verified at the public
+    // API seam (the same response the grid consumes) for both the default
+    // (newest) and price-asc sorts.
+    await page.goto("/products");
+
+    const fetchList = (query: string) =>
+      page.evaluate(async (q: string) => {
+        const res = await fetch(`/api/products?${q}`);
+        const json = await res.json();
+        return (json.data ?? []) as { hasStock: boolean }[];
+      }, query);
+
+    for (const query of ["limit=100", "limit=100&sortBy=price&sortOrder=asc"]) {
+      const data = await fetchList(query);
+      expect(data.length).toBeGreaterThan(0);
+      const firstOos = data.findIndex((p) => !p.hasStock);
+      const lastInStock = data.map((p) => p.hasStock).lastIndexOf(true);
+      if (firstOos !== -1) {
+        // There is at least one in-stock item above the first out-of-stock one.
+        expect(lastInStock).toBeGreaterThan(-1);
+        expect(firstOos).toBeGreaterThan(lastInStock);
+      }
+    }
+  });
+
+  test("shows a loading indicator while filters are being applied", async ({
+    page,
+  }) => {
+    await page.goto("/products");
+
+    // Pick a category so "Terapkan Filter" navigates to a new filtered URL.
+    await page.getByRole("combobox", { name: "Kategori" }).click();
+    await page.getByRole("option", { name: "Sneakers", exact: true }).click();
+
+    // Delay the next /products navigation (the filtered result page) so the
+    // useTransition isPending state is observable before the new SSR page lands.
+    await page.route("**/products?**", async (route) => {
+      await new Promise((r) => setTimeout(r, 600));
+      await route.continue();
+    });
+
+    await page.getByRole("button", { name: "Terapkan Filter" }).click();
+
+    // While pending, the button flips to a spinner label and an overlay shows.
+    await expect(page.getByText("Memuat produk...")).toBeVisible({
+      timeout: 5_000,
+    });
+
+    // Eventually the new page renders with the filtered URL.
+    await expect(page).toHaveURL(/category=sneakers/);
+  });
+
+  test("pressing Enter in the search input applies the filter", async ({
+    page,
+  }) => {
+    await page.goto("/products");
+
+    await page.getByPlaceholder("Nama produk...").fill("sneakers");
+    await page.keyboard.press("Enter");
+
+    // No "Terapkan Filter" click needed — Enter submits the search form.
+    await expect(page).toHaveURL(/search=sneakers/);
+    await expect(
+      page.getByRole("heading", { name: /Hasil pencarian:/ })
+    ).toBeVisible();
+  });
 });

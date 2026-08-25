@@ -85,6 +85,16 @@ has been consolidated.)
   `GET /api/categories`, `GET /api/brands`, and `GET /api/branches`. (The
   "Hanya produk diskon" toggle was removed from the sidebar; the API still
   accepts `hasDiscount` for direct links, e.g. admin promo cards.)
+- **Search submits on Enter**: the search input is wrapped in a `<form>` whose
+  `onSubmit` calls `applyFilters`, so pressing Enter applies the filter
+  immediately — the customer does not have to click "Terapkan Filter".
+- **"Terapkan Filter" / "Reset Filter" show a loading state**: the navigation is
+  run inside `useTransition` (`isPending`). While the App Router re-renders the
+  page server-side for the new filters, the "Terapkan Filter" button shows a
+  spinner + "Memuat..." label (disabled) and a translucent viewport overlay
+  (`role="status"`, "Memuat produk...") signals progress. The grid lives in a
+  separate Server Component, so the overlay is rendered by the sidebar and
+  covers the whole viewport rather than sharing state with the grid.
 - The sidebar's URL building is a pure helper — `buildProductsQuery`
   (`apps/store/src/lib/product-filters.ts`, unit-tested) — which maps the
   filter state to the `/api/products` query string and always resets `page=1`.
@@ -98,6 +108,12 @@ has been consolidated.)
   **All filters apply to both the list and the count query**, so
   `pagination.total` is correct under any combination (this also fixes the
   previous count/category mismatch). Unknown slug → 0 results.
+- **Out-of-stock sorts to the bottom**: the list `ORDER BY` has a tier-1
+  `EXISTS(... has sellable stock in any active branch) DESC` above the user's
+  `sortBy`/`sortOrder`, so products with no sellable stock in any active branch
+  always appear after every in-stock product (regardless of sort). This is
+  always on — not a sidebar option — so the storefront never leads with sold-out
+  items. Logged via the structured logger (`module: "products-list"`).
 
 ### Admin homepage CMS
 

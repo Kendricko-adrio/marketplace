@@ -5,6 +5,7 @@
  *
  * Usage (from repo root):
  *   npm run db:import-jubelio
+ *   npm run db:import-jubelio -- --item-name="Exact Jubelio item name"
  *
  * Env (../../.env):
  *   JUBELIO_EMAIL, JUBELIO_PASSWORD            — login credentials
@@ -43,27 +44,34 @@ import {
   mapWithConcurrency,
   parseJubelioStartPage,
 } from "./jubelio-sync";
+import {
+  filterExactItemNameMatches,
+  parseJubelioImportArgs,
+  parseJubelioMaxProducts,
+} from "./jubelio-import-options";
 
 const PAGE_SIZE = 200;
 const STOCK_BATCH = 200;
 
 async function main() {
+  const { itemName } = parseJubelioImportArgs(process.argv.slice(2));
   const concurrency = Math.max(
     1,
     Number(process.env.JUBELIO_SYNC_CONCURRENCY || 5)
   );
-  const maxProductsRaw = (process.env.JUBELIO_SYNC_MAX_PRODUCTS || "").trim();
-  const cap = maxProductsRaw ? Math.max(0, Number(maxProductsRaw)) : Infinity;
-  if (!Number.isFinite(cap)) {
-    throw new Error(
-      `JUBELIO_SYNC_MAX_PRODUCTS must be a number or empty (got "${maxProductsRaw}")`
-    );
-  }
+  const configuredCap = parseJubelioMaxProducts(
+    process.env.JUBELIO_SYNC_MAX_PRODUCTS
+  );
+  // Exact-name mode imports every identical match, regardless of the general
+  // development cap.
+  const cap = itemName ? Infinity : configuredCap;
   const startPage = parseJubelioStartPage(process.env.JUBELIO_SYNC_START_PAGE);
   console.log(
     `🔧 concurrency=${concurrency} | maxProducts=${
       cap === Infinity ? "ALL" : cap
-    } | startPage=${startPage}`
+    } | startPage=${startPage}${
+      itemName ? ` | exactItemName="${itemName}"` : ""
+    }`
   );
 
   const pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -80,10 +88,7 @@ async function main() {
     const locations = await fetchLocationsList();
     const branchCount = await upsertJubelioBranches(db, locations, {
       onProgress: log,
-      // "Dago 123" is not a customer-facing outlet — skip it.
-      excludeNames: ["dago 123"],
-      // All pulled branches are active with fixed operating hours (Mon–Sun 07:00–22:00).
-      status: "aktif",
+      // All locations are imported; status mirrors Jubelio is_active.
       operatingHours: {
         monday: { open: "07:00", close: "22:00" },
         tuesday: { open: "07:00", close: "22:00" },
@@ -106,18 +111,30 @@ async function main() {
     );
 
     // 3. Paginate masters, enrich per product, upsert page-by-page.
-  let page = startPage;
+    let page = startPage;
     while (totalProducts < cap) {
-      const masters = await fetchMastersPage(page, PAGE_SIZE);
+      const masters = await fetchMastersPage(page, PAGE_SIZE, itemName);
       if (!masters.data.length) break;
+      const exactMatches = itemName
+        ? filterExactItemNameMatches(masters.data, itemName)
+        : masters.data;
       const remaining = cap - totalProducts;
       const slice =
-        remaining < masters.data.length ? masters.data.slice(0, remaining) : masters.data;
+        remaining < exactMatches.length
+          ? exactMatches.slice(0, remaining)
+          : exactMatches;
       const lastPage = masters.data.length < PAGE_SIZE;
 
       console.log(
-        `\n📄 masters page ${page}: ${slice.length} products (total in Jubelio: ${masters.totalCount})`
+        `\n📄 masters page ${page}: ${slice.length} products ` +
+          `(search results in Jubelio: ${masters.totalCount})`
       );
+
+      if (!slice.length) {
+        if (lastPage) break;
+        page++;
+        continue;
+      }
 
       // Enrich: fetch catalog per product (brand + description + images + variants).
       const inputs = await mapWithConcurrency(
@@ -173,6 +190,12 @@ async function main() {
 
       if (lastPage || totalProducts >= cap) break;
       page++;
+    }
+
+    if (itemName && totalProducts === 0) {
+      throw new Error(
+        `No Jubelio product found with exact item_name "${itemName}"`
+      );
     }
 
     console.log(

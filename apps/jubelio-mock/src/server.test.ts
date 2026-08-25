@@ -52,7 +52,75 @@ async function observedStock(): Promise<number> {
   return body.data[0].location_stocks[0].on_hand;
 }
 
+describe("local Midtrans status boundary", () => {
+  it("returns a configured authoritative settlement for E2E webhooks", async () => {
+    resetMockState();
+    const configured = await fetch(`${baseUrl}/__control/midtrans-status`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        orderId: "order-late-1",
+        transactionStatus: "settlement",
+        grossAmount: "100000.00",
+      }),
+    });
+    expect(configured.status).toBe(200);
+
+    const status = await fetch(`${baseUrl}/v2/order-late-1/status`, {
+      headers: { authorization: "Basic test" },
+    });
+    expect(status.status).toBe(200);
+    await expect(status.json()).resolves.toMatchObject({
+      order_id: "order-late-1",
+      transaction_status: "settlement",
+      gross_amount: "100000.00",
+    });
+  });
+});
+
 describe("Jubelio-compatible stock adjustment API", () => {
+  it("returns the Jubelio plus/minus adjustment account mapping", async () => {
+    resetMockState();
+    const response = await fetch(`${baseUrl}/systemsetting/account-mapping`, {
+      headers: { authorization: "mock-token" },
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      adjp_acct_id: 75,
+      adjm_acct_id: 72,
+      adjp_account_name: "7-7004 - Penyesuaian Persediaan Barang",
+      adjm_account_name: "8-8004 - Penyesuaian Persediaan Barang",
+    });
+  });
+
+  it("returns adjustment metadata for requested item IDs in one batch", async () => {
+    resetMockState();
+    await ensureStock(10);
+
+    const response = await fetch(`${baseUrl}/inventory/items/to-adjust/`, {
+      method: "POST",
+      headers: { authorization: "mock-token", "content-type": "application/json" },
+      body: JSON.stringify({ ids: [10384], location_id: 61 }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual([
+      {
+        item_id: 10384,
+        item_name: "Item 10384",
+        item_full_name: "10384 - Item 10384",
+        unit: "Buah",
+        account_id: 4,
+        account_code: "1-1200",
+        account_name: "1-1200 - Persediaan Barang",
+        cost: 100_000,
+        end_qty: 10,
+        resulting_qty: 10,
+      },
+    ]);
+  });
+
   it("reduces and restores stateful on-hand stock", async () => {
     resetMockState();
     await ensureStock(10);

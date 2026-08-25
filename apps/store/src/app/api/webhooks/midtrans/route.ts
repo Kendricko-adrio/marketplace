@@ -13,6 +13,7 @@ import {
   describeFailureReason,
 } from "@/lib/order-finalize";
 import { requestLogger, serializeError } from "@/lib/logger";
+import { processLateSettlementStock } from "@/lib/jubelio-stock-saga";
 
 export async function POST(request: NextRequest) {
   const log = requestLogger(request, { module: "midtrans-webhook" });
@@ -75,13 +76,9 @@ export async function POST(request: NextRequest) {
         message: "Order already processed",
       });
     }
-    if (order.status === "failed_payment") {
-      orderLog.info("already failed — skipping");
-      return NextResponse.json({
-        success: true,
-        message: "Order already marked as failed",
-      });
-    }
+    // A failed_payment order is not skipped before authoritative re-verification:
+    // Midtrans can settle after TTL compensation. That path must re-acquire
+    // stock or enter manual review instead of discarding a valid payment.
 
     // ===== Re-verify with Midtrans (best practice) =====
     // Fetch authoritative status directly from Midtrans to defend against
@@ -140,7 +137,16 @@ export async function POST(request: NextRequest) {
       orderLog.info("settlement → finalize dispatched", {
         authoritativeStatus,
       });
-      await claimAndFinalizePaidOrder(order.id, order, orderLog);
+      if (order.status === "failed_payment") {
+        const lateSettlement = await processLateSettlementStock(
+          order.id,
+          undefined,
+          orderLog
+        );
+        orderLog.info("late settlement processed", lateSettlement);
+      } else {
+        await claimAndFinalizePaidOrder(order.id, order, orderLog);
+      }
     } else if (isFailure) {
       const reason =
         describeFailureReason(authoritativeStatus, authoritativeStatusMessage) ??

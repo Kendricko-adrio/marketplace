@@ -1,0 +1,2 @@
+ALTER TABLE "jubelio_stock_operation" DROP CONSTRAINT "jubelio_stock_operation_type_valid";--> statement-breakpoint
+ALTER TABLE "jubelio_stock_operation" ADD CONSTRAINT "jubelio_stock_operation_type_valid" CHECK ("jubelio_stock_operation"."type" in ('reserve', 'release', 'reacquire'));

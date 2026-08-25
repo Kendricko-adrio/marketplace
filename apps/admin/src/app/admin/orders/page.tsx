@@ -1,7 +1,16 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Eye, Search, MoreHorizontal, Loader2, MapPin, Phone, X } from "lucide-react";
+import {
+  Eye,
+  Search,
+  MoreHorizontal,
+  Loader2,
+  MapPin,
+  Phone,
+  X,
+  TriangleAlert,
+} from "lucide-react";
 import { useAuth } from "@/providers/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,6 +57,7 @@ interface Order {
   customer: { name: string; email: string };
   branch: { id: string; name: string; city: string } | null;
   itemCount: number;
+  stockNeedsReview: boolean;
 }
 
 interface Branch {
@@ -487,11 +497,17 @@ export default function AdminOrdersPage() {
                             Rp {parseFloat(order.total).toLocaleString("id-ID")}
                           </TableCell>
                           <TableCell>
-                            <Badge
-                              className={STATUS_BADGES[order.status]}
-                            >
-                              {STATUS_LABELS[order.status] || order.status}
-                            </Badge>
+                            <div className="flex flex-col items-start gap-1.5">
+                              <Badge className={STATUS_BADGES[order.status]}>
+                                {STATUS_LABELS[order.status] || order.status}
+                              </Badge>
+                              {order.stockNeedsReview && (
+                                <Badge className="border-red-300 bg-red-50 text-red-800 hover:bg-red-50">
+                                  <TriangleAlert className="mr-1 h-3 w-3" />
+                                  Stock review
+                                </Badge>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell>
                             <Badge

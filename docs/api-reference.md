@@ -118,7 +118,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | POST | `/api/admin/upload` | admin-session | Upload a file |
 | DELETE | `/api/admin/upload` | admin-session | Delete an uploaded file |
 | GET | `/api/admin/orders` | admin-session (orders view) | List orders (RBAC branch-scoped) |
-| GET | `/api/admin/orders/{id}` | admin-session (orders view) | Order detail |
+| GET | `/api/admin/orders/{id}` | admin-session (orders view) | Order detail including durable Jubelio stock operations |
+| POST | `/api/admin/orders/{id}/stock-review` | admin-session (orders edit) | Queue a manual-review stock operation for safe note reconciliation |
 | POST | `/api/admin/orders/{id}/verify-pickup` | admin-session (orders edit, branch admin only) | Verify pickup code → complete order |
 | GET | `/api/admin/analytics` | admin-session | Dashboard aggregates |
 | GET | `/api/admin/audit-log` | admin-session | List audit log (newest first) |
@@ -336,7 +337,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: —
 - **Body**: `{ order_id, transaction_status, status_code, gross_amount, signature_key, fraud_status }` (raw JSON body; signature verified)
 - **Response**: 400 for missing required signed fields or amount/order mismatch; 401 for invalid signature; 404 for unknown order; 503 when authoritative provider verification is unavailable; 500 on processing failure; 200 on success/idempotent skip.
-- **Notes**: `signature_key`, `order_id`, `transaction_status`, `status_code`, and `gross_amount` are mandatory. Signature comparison is constant-time. Both callback and authoritative provider amounts/order IDs must match the local order. There is no unverified payload fallback; non-2xx responses intentionally allow Midtrans retry. Claim guards keep success/failure finalization idempotent against webhook/sweep races.
+- **Notes**: `signature_key`, `order_id`, `transaction_status`, `status_code`, and `gross_amount` are mandatory. Signature comparison is constant-time. Both callback and authoritative provider amounts/order IDs must match the local order. There is no unverified payload fallback; non-2xx responses intentionally allow Midtrans retry. Claim guards keep success/failure finalization idempotent against webhook/sweep races. A verified settlement for an already failed order is treated as a late settlement: the original deduction is committed when compensation has not started, or a durable `reacquire` operation is applied after confirmed compensation; unsafe states enter `manual_review`.
 
 #### `POST` `/api/webhooks/jubelio`
 - **Auth**: signature — `HMAC-SHA256(rawBodyString + JUBELIO_WEBHOOK_SECRET, JUBELIO_WEBHOOK_SECRET)` (hex), sent by Jubelio in the `Sign` header; legacy `webhook-signature` and `x-jubelio-signature` aliases remain supported; recomputed from the raw request body — **503** if env unset, **401** on mismatch
@@ -548,16 +549,23 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Purpose**: List orders with customer/branch summary and per-order item count, scoped by RBAC branch visibility.
 - **Params**: `status` (exact match), `branchId` (HQ-only filter), `from` / `to` (date range on `createdAt`; `to` inclusive by +1 day), `pickupFrom` / `pickupTo` (date range on `pickupDate`; `to` inclusive by +1 day; orders with NULL `pickupDate` are excluded when either is set), `search` (ilike on `orders.id`, `clients.name`, or `orders.contactPhone`), `page` (default 1), `limit` (default 20)
 - **Body**: none
-- **Response**: 200 `{ success: true, data: [{ ...orders, customer: {id,name,email}, branch: {id,name,city}, itemCount }], pagination: { page, limit, total, totalPages } }`; 500 `{ success: false, error: "Failed to fetch orders" }`
+- **Response**: 200 `{ success: true, data: [{ ...orders, customer: {id,name,email}, branch: {id,name,city}, itemCount, stockNeedsReview }], pagination: { page, limit, total, totalPages } }`; 500 `{ success: false, error: "Failed to fetch orders" }`
 - **Notes**: Branch scope via `getBranchScope` — `scope.mode === "own"` forces `orders.branchId = scope.branchId` (branch admins); HQ only filters by `branchId` when supplied. N+1 item-count query per order.
 
 #### `GET` `/api/admin/orders/{id}`
 - **Auth**: admin-session (permission: orders `view`)
-- **Purpose**: Fetch a single order's full detail including items (with variant + first display image) and customer/branch.
+- **Purpose**: Fetch a single order's full detail including items (with variant + first display image), customer/branch, and its durable Jubelio stock-operation lifecycle.
 - **Params**: path `id` (order id)
 - **Body**: none
-- **Response**: 200 `{ success: true, data: { ...order fields, customer: {id,name,email}, branch, items: [{ id, orderId, variantId, productName, variantInfo, price, quantity, createdAt, productId, imageUrl }] } }`; 404 `"Order not found"`; 403 `"Forbidden — order belongs to a different branch"`; 500 `"Failed to fetch order"`
+- **Response**: 200 `{ success: true, data: { ...order fields, customer, branch, items, stockOperations: [{ id, type, status, remoteAdjustmentId, attemptCount, lastError, createdAt, updatedAt }] } }`; 404 `"Order not found"`; 403 `"Forbidden — order belongs to a different branch"`; 500 `"Failed to fetch order"`
 - **Notes**: RBAC enforced — a branch admin whose `order.branchId !== scope.branchId` gets 403. Read-only.
+
+#### `POST` `/api/admin/orders/{id}/stock-review`
+- **Auth**: admin-session (permission: orders `edit`; branch-scoped)
+- **Purpose**: Move one operation from `manual_review` to `reconciling` so the store cron safely searches Jubelio by its unique note.
+- **Body**: `{ operationId: string }`
+- **Response**: 200 on queueing; 400 invalid input; 403 branch mismatch; 404 unknown order; 409 operation no longer in manual review; 500 error.
+- **Notes**: This endpoint never submits an inventory adjustment. It writes a `RECHECK_JUBELIO_STOCK` audit entry and only enables note-based reconciliation, preventing blind duplicate writes.
 
 #### `POST` `/api/admin/orders/{id}/verify-pickup`
 - **Auth**: admin-session (permission: orders `edit`; **branch admins only — HQ is rejected**)

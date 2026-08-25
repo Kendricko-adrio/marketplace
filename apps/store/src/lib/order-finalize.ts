@@ -16,18 +16,10 @@ import {
   paymentFailedEmailText,
 } from "@/lib/email-templates-order";
 import { createLogger, serializeError, type Logger } from "@/lib/logger";
-import { randomInt } from "node:crypto";
 import { releaseJubelioStockForOrder } from "@/lib/jubelio-stock-saga";
+import { generatePickupCode } from "@/lib/pickup-code";
 
-// 6-char pickup code alphabet (no ambiguous chars: O, I, 0, 1)
-const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-
-export function generatePickupCode(): string {
-  return Array.from(
-    { length: 6 },
-    () => CODE_CHARS[randomInt(CODE_CHARS.length)]
-  ).join("");
-}
+export { generatePickupCode } from "@/lib/pickup-code";
 
 export function canFinalizeReservedStock(
   reservedStock: number,

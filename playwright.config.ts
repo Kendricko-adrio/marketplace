@@ -19,7 +19,10 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: IS_CI,
   retries: IS_CI ? 2 : 0,
-  workers: IS_CI ? 1 : undefined,
+  // Turbopack on Windows can contend on .next manifest renames with the host's
+  // default 8 workers. Four still exercises parallel browser behavior without
+  // turning compiler file locks into application failures.
+  workers: IS_CI ? 1 : 4,
   reporter: IS_CI
     ? [["dot"], ["html", { open: "never" }]]
     : [["list"], ["html", { open: "on-failure" }]],
@@ -70,6 +73,9 @@ export default defineConfig({
     {
       command: "npm run dev:store:app",
       url: "http://localhost:3000",
+      env: {
+        MIDTRANS_MOCK_API_BASE_URL: "http://127.0.0.1:3002",
+      },
       reuseExistingServer: !IS_CI,
       timeout: 120_000,
     },

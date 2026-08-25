@@ -92,8 +92,11 @@ packages/db/vitest.config.ts
   `PUT /__control/scenario` with one of `success`, `insufficient-stock`,
   `server-error`, `rate-limit-once`, `unauthorized-once`,
   `timeout-before-apply`, `timeout-after-apply`, or `malformed-success`.
-- `checkout.spec.ts` asserts both the successful reserve-before-Midtrans flow
-  and that a Jubelio rejection keeps the customer on checkout.
+- `checkout.spec.ts` asserts successful reserve-before-Midtrans, provider
+  snapshot persistence, rejection, and late-settlement re-acquisition.
+- For late settlement, Playwright sets the non-production-only
+  `MIDTRANS_MOCK_API_BASE_URL` to the local mock. Configure an authoritative
+  status with `PUT /__control/midtrans-status`; production ignores this URL.
 
 - The store Playwright project sends `x-e2e-payment-mock: true`. The route
   accepts it only outside production and redirects to the local
@@ -106,6 +109,8 @@ packages/db/vitest.config.ts
 - **React hydration race**: filling a controlled input right after navigation
   gets reverted when hydration takes over. Wait for a client-side signal first
   (submit button `toBeEnabled()`, or `waitForResponse` on a useEffect fetch).
+- **Windows/Turbopack**: local runs use four workers. Higher parallelism can
+  produce transient `EPERM` manifest-renames; CI remains serialized.
 - **Shared state**: specs that share a user's cart or mutate DB rows must use
   `test.describe.configure({ mode: "serial" })` — `fullyParallel: true` is on.
 - **Heavy pages**: `waitForURL` with `{ waitUntil: "commit" }` when the target

@@ -31,7 +31,9 @@ test.describe("admin notifications", () => {
     expect(body.success).toBe(true);
     // Initial poll (no `since`) returns the unread count + watermark at the
     // top level, with an empty data list.
-    expect(Number(body.unreadCount)).toBe(2);
+    // Other parallel lifecycle specs may legitimately create an order-paid
+    // notification; the two seeded rows are the deterministic lower bound.
+    expect(Number(body.unreadCount)).toBeGreaterThanOrEqual(2);
     expect(typeof body.serverNow).toBe("string");
   });
 

@@ -38,13 +38,15 @@ test.describe("storefront static pages & footer", () => {
     await page.goto("/");
     const footer = page.locator("footer");
     // The footer's "Tentang" column links to the about page.
-    const aboutLink = footer.getByRole("link", { name: "Tentang Kami" });
-    if ((await aboutLink.count()) > 0) {
-      await aboutLink.first().click();
-      await expect(page).toHaveURL(/\/pages\/about/);
-      await expect(
-        page.getByRole("heading", { name: "Tentang Kami" }).first()
-      ).toBeVisible();
-    }
+    const aboutLink = footer.getByRole("link", { name: "Tentang Kami" }).first();
+    await expect(aboutLink).toBeVisible();
+    // Wait until hydration has stopped replacing the header/footer tree so the
+    // click is not dispatched to a stale anchor under parallel dev-server load.
+    await page.waitForLoadState("networkidle");
+    await aboutLink.click();
+    await expect(page).toHaveURL(/\/pages\/about/, { timeout: 15_000 });
+    await expect(
+      page.getByRole("heading", { name: "Tentang Kami" }).first()
+    ).toBeVisible();
   });
 });

@@ -31,7 +31,7 @@
     "db:seed": "cd packages/db && npm run db:seed",
     "db:check": "cd packages/db && npm run db:check",
     "db:reset": "cd packages/db && npm run db:reset",
-    "db:import-jubelio": "cd packages/db && npm run db:import-jubelio",
+    "db:import-jubelio": "cd packages/db && npm run db:import-jubelio --",
     "lint": "cd apps/store && npm run lint && cd ../admin && npm run lint",
     "lint:store": "cd apps/store && npm run lint",
     "lint:admin": "cd apps/admin && npm run lint",

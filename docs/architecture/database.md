@@ -69,8 +69,13 @@ also update `packages/db/src/seed.ts` so `npm run db:reset && npm run db:seed`
 produces a fully populated, testable DB without manual data entry:
 
 - Add a `DELETE` for any new table at the top of `seed()` (respecting FK order).
-- Add realistic sample rows for the new table/columns.
+- Add realistic sample rows for the new table/columns in `SEED_MODE=demo`.
+- Keep `SEED_MODE=jubelio` free of dummy catalog, branch, stock, and dependent
+  transactional fixtures; Jubelio import owns those rows in that mode.
 - The seeder refuses to run when `NODE_ENV=production`.
+
+See [../features/seeding.md](../features/seeding.md) for mode behavior and the
+required seed-before-import order.
 
 ## See Also
 

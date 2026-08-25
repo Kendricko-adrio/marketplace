@@ -8,8 +8,10 @@ import { keyId, slugify } from "./ids";
 import bcrypt from "bcryptjs";
 import { assertSeedEnvironmentSafe } from "./seed-safety";
 import { seedCleanupEntries } from "./seed-cleanup";
+import { resolveSeedPlan } from "./seed-mode";
 
 assertSeedEnvironmentSafe({ NODE_ENV: process.env.NODE_ENV });
+const seedPlan = resolveSeedPlan(process.env.SEED_MODE);
 
 // Helper to generate random ID
 function generateId(): string {
@@ -205,7 +207,7 @@ async function seed() {
 
   const db = drizzle(pool, { schema });
 
-  console.log("🌱 Seeding database...");
+  console.log(`🌱 Seeding database in ${seedPlan.mode} mode...`);
 
   try {
     // Clear existing data
@@ -403,6 +405,11 @@ async function seed() {
       },
     ]);
 
+    const allVariantIds: string[] = [];
+    const allProductIds: string[] = [];
+    const branchIds: string[] = [];
+
+    if (seedPlan.seedCatalog) {
     // =====================
     // CATEGORIES
     // =====================
@@ -471,9 +478,6 @@ async function seed() {
     // PRODUCTS WITH VARIANTS
     // =====================
     console.log("📦 Creating products...");
-
-    const allVariantIds: string[] = [];
-    const allProductIds: string[] = [];
 
     // Available product images in /public/images/products
     const productImages = [
@@ -955,7 +959,7 @@ async function seed() {
       sunday: null,
     };
 
-    const branchIds = [generateId(), generateId(), generateId()];
+    branchIds.push(generateId(), generateId(), generateId());
 
     await db.insert(schema.branches).values([
       {
@@ -1039,6 +1043,9 @@ async function seed() {
             .where(eq(schema.productVariants.productId, noStockProductId))
         )
       );
+    } else {
+      console.log("📦 Skipping catalog, branches, and stock (managed by Jubelio import)...");
+    }
 
     // =====================
     // VOUCHERS
@@ -1186,6 +1193,7 @@ async function seed() {
       });
     }
 
+    if (seedPlan.seedCatalogDependentFixtures) {
     // =====================
     // SAMPLE ORDERS (Phase 1 — pickup-in-store model)
     // =====================
@@ -1199,6 +1207,7 @@ async function seed() {
         color: schema.productVariants.color,
         size: schema.productVariants.size,
         price: schema.productVariants.price,
+        jubelioItemId: schema.productVariants.jubelioItemId,
         productName: schema.products.name,
       })
       .from(schema.productVariants)
@@ -1221,6 +1230,15 @@ async function seed() {
     const pickupBranchId = branchIds[0]; // Jakarta Pusat
     const pickupDate = new Date(Date.now() + 24 * 60 * 60 * 1000); // tomorrow
     const pickupTime = "14:00";
+    let failedPaymentStockFixture:
+      | {
+          orderId: string;
+          variantId: string;
+          itemId: number;
+          quantity: number;
+          description: string;
+        }
+      | undefined;
 
     for (let i = 0; i < orderStatuses.length; i++) {
       const status = orderStatuses[i];
@@ -1296,6 +1314,61 @@ async function seed() {
         price: variant.price,
         quantity: qty,
       });
+      if (isFailedPayment) {
+        failedPaymentStockFixture = {
+          orderId,
+          variantId: variant.id,
+          itemId: variant.jubelioItemId ?? 10_005,
+          quantity: qty,
+          description: variant.productName,
+        };
+      }
+    }
+
+    if (failedPaymentStockFixture) {
+      const reserveId = generateId();
+      const releaseId = generateId();
+      const payload = {
+        locationId: 61,
+        items: [
+          {
+            variantId: failedPaymentStockFixture.variantId,
+            itemId: failedPaymentStockFixture.itemId,
+            quantity: failedPaymentStockFixture.quantity,
+            description: failedPaymentStockFixture.description,
+            snapshot: {
+              description: failedPaymentStockFixture.description,
+              unit: "Buah",
+              cost: 125000,
+              binId: 611,
+              reserveAccountId: 75,
+              releaseAccountId: 72,
+            },
+          },
+        ],
+      };
+      await db.insert(schema.jubelioStockOperations).values([
+        {
+          id: reserveId,
+          orderId: failedPaymentStockFixture.orderId,
+          type: "reserve",
+          status: "applied",
+          note: `OKCIR_RESERVE:${failedPaymentStockFixture.orderId}:${reserveId}`,
+          payload,
+          remoteAdjustmentId: 7001,
+          attemptCount: 1,
+        },
+        {
+          id: releaseId,
+          orderId: failedPaymentStockFixture.orderId,
+          type: "release",
+          status: "manual_review",
+          note: `OKCIR_RELEASE:${failedPaymentStockFixture.orderId}:${releaseId}`,
+          payload,
+          attemptCount: 5,
+          lastError: "Seeded release requires operator reconciliation",
+        },
+      ]);
     }
 
     // =====================
@@ -1353,6 +1426,9 @@ async function seed() {
         quantity: 2,
       },
     ]);
+    } else {
+      console.log("🛒 Skipping catalog-dependent orders, notifications, and cart...");
+    }
 
     // =====================
     // STATIC PAGES (CMS)
@@ -1624,35 +1700,37 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
     // AUDIT LOGS
     // =====================
     console.log("📝 Creating audit logs...");
-    await db.insert(schema.auditLogs).values([
-      {
-        id: generateId(),
-        userId: adminId,
-        action: "UPDATE_STOCK",
-        entityType: "product_variant",
-        entityId: variants[0]?.id,
-        changes: { stock: { from: 30, to: 50 } },
-        ipAddress: "127.0.0.1",
-      },
-      {
-        id: generateId(),
-        userId: null,
-        action: "BACKUP_DATABASE",
-        entityType: "system",
-        entityId: null,
-        changes: { status: "success" },
-        ipAddress: null,
-      },
-      {
-        id: generateId(),
-        userId: hqId,
-        action: "UPDATE_ORDER_STATUS",
-        entityType: "order",
-        entityId: "sample-order-id",
-        changes: { status: { from: "processing", to: "completed" } },
-        ipAddress: "192.168.1.100",
-      },
-    ]);
+    if (seedPlan.seedCatalogDependentFixtures) {
+      await db.insert(schema.auditLogs).values([
+        {
+          id: generateId(),
+          userId: adminId,
+          action: "UPDATE_STOCK",
+          entityType: "product_variant",
+          entityId: allVariantIds[0] ?? null,
+          changes: { stock: { from: 30, to: 50 } },
+          ipAddress: "127.0.0.1",
+        },
+        {
+          id: generateId(),
+          userId: hqId,
+          action: "UPDATE_ORDER_STATUS",
+          entityType: "order",
+          entityId: "sample-order-id",
+          changes: { status: { from: "processing", to: "completed" } },
+          ipAddress: "192.168.1.100",
+        },
+      ]);
+    }
+    await db.insert(schema.auditLogs).values({
+      id: generateId(),
+      userId: null,
+      action: "BACKUP_DATABASE",
+      entityType: "system",
+      entityId: null,
+      changes: { status: "success" },
+      ipAddress: null,
+    });
 
     // =====================
     // SYSTEM CONFIG

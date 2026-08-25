@@ -78,8 +78,12 @@ docker compose -p staging --env-file .env logs -f
 # Staging: migration saja
 docker compose -p staging --env-file .env --profile tools run --rm migrate
 
-# Seed staging hanya jika database memang disposable (command eksplisit)
+# Seed staging hanya jika database memang disposable (command eksplisit).
+# SEED_MODE dibaca dari deployment/staging/.env (demo atau jubelio).
 docker compose -p staging --env-file .env --profile tools run --rm migrate npx tsx src/seed.ts
+
+# Jika SEED_MODE=jubelio, import wajib dilakukan SETELAH seed.
+docker compose -p staging --env-file .env --profile tools run --rm migrate npx tsx src/import-jubelio.ts
 ```
 
 Default container hanya menjalankan `npx drizzle-kit migrate`. Seed tidak lagi
@@ -87,15 +91,16 @@ digabungkan ke migration; production juga memiliki guard di dalam seeder.
 
 Output yang diharapkan (staging):
 ```
-🌱 Seeding database...
+🌱 Seeding database in <demo|jubelio> mode...
 🗑️  Clearing existing data...
 👤 Creating admin users...
 ...
 ✅ Seeding complete!
 ```
 
-> **Catatan:** Seed akan **menghapus data lama** dulu (lihat `packages/db/src/seed.ts`).
-> Untuk staging aman (data dummy boleh hilang). **JANGAN run seed di production.**
+> **Catatan:** Seed akan **menghapus data lama**, termasuk data hasil import Jubelio
+> (lihat `packages/db/src/seed.ts`). Untuk `SEED_MODE=jubelio`, urutannya selalu
+> seed lalu import. Gunakan hanya pada staging disposable. **JANGAN run seed di production.**
 
 ### Troubleshooting migration
 

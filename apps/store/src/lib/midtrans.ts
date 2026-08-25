@@ -26,10 +26,21 @@ function getSnapClient(): Snap {
   return snapClient;
 }
 
-function getMidtransBaseUrl(): string {
-  return process.env.MIDTRANS_IS_PRODUCTION === "true"
+export function resolveMidtransBaseUrl(env: {
+  NODE_ENV?: string;
+  MIDTRANS_IS_PRODUCTION?: string;
+  MIDTRANS_MOCK_API_BASE_URL?: string;
+}): string {
+  if (env.NODE_ENV !== "production" && env.MIDTRANS_MOCK_API_BASE_URL) {
+    return env.MIDTRANS_MOCK_API_BASE_URL.replace(/\/$/, "");
+  }
+  return env.MIDTRANS_IS_PRODUCTION === "true"
     ? "https://api.midtrans.com"
     : "https://api.sandbox.midtrans.com";
+}
+
+function getMidtransBaseUrl(): string {
+  return resolveMidtransBaseUrl(process.env);
 }
 
 export interface QrisCustomerDetails {

@@ -10,9 +10,40 @@ import {
   createJubelioStockGateway,
   JubelioStockGatewayError,
   type JubelioAdjustmentRequest,
+  type JubelioPreparedAdjustmentItem,
   type JubelioStockGateway,
 } from "./jubelio-stock-client";
 import { createLogger, serializeError, type Logger } from "./logger";
+import { generatePickupCode } from "./pickup-code";
+import { deliverLatePaidOrderSideEffects } from "./paid-order-side-effects";
+
+let defaultStockGateway: JubelioStockGateway | null = null;
+
+function getDefaultStockGateway(): JubelioStockGateway {
+  if (!defaultStockGateway) {
+    defaultStockGateway = createJubelioStockGateway();
+  }
+  return defaultStockGateway;
+}
+
+export type LateSettlementStockAction =
+  | "commit_reserve"
+  | "reacquire"
+  | "manual_review";
+
+export function decideLateSettlementStockAction(
+  reserveStatus: string | null,
+  releaseStatus: string | null
+): LateSettlementStockAction {
+  if (reserveStatus !== "applied" && reserveStatus !== "committed") {
+    return "manual_review";
+  }
+  if (releaseStatus == null || releaseStatus === "pending") {
+    return "commit_reserve";
+  }
+  if (releaseStatus === "applied") return "reacquire";
+  return "manual_review";
+}
 
 export type StockAdjustmentOutcome =
   | {
@@ -21,6 +52,7 @@ export type StockAdjustmentOutcome =
       stocks: Array<{ itemId: number; onHand: number }>;
     }
   | { status: "rejected"; code?: string; message: string }
+  | { status: "backpressure"; code: string; message: string }
   | { status: "reconciling"; message: string };
 
 export async function runStockAdjustment(
@@ -52,11 +84,26 @@ export async function runStockAdjustment(
         });
         return { status: "reconciling", message: error.message };
       }
-      log.warn("Jubelio stock adjustment rejected", {
-        code: error.options.code,
-        httpStatus: error.options.httpStatus,
-        error: serializeError(error),
-      });
+      const isBackpressure =
+        error.options.code === "QUEUE_FULL" ||
+        error.options.code === "QUEUE_TIMEOUT";
+      log.warn(
+        isBackpressure
+          ? "Jubelio stock adjustment rejected by local backpressure"
+          : "Jubelio stock adjustment rejected",
+        {
+          code: error.options.code,
+          httpStatus: error.options.httpStatus,
+          error: serializeError(error),
+        }
+      );
+      if (isBackpressure) {
+        return {
+          status: "backpressure",
+          code: error.options.code!,
+          message: error.message,
+        };
+      }
       return {
         status: "rejected",
         code: error.options.code,
@@ -71,6 +118,25 @@ export async function runStockAdjustment(
       message: error instanceof Error ? error.message : "Unexpected Jubelio error",
     };
   }
+}
+
+export function mergePreparedAdjustmentSnapshots(
+  payload: JubelioStockOperationPayload,
+  preparedItems: JubelioPreparedAdjustmentItem[]
+): JubelioStockOperationPayload {
+  const snapshotByItem = new Map(
+    preparedItems.map((item) => [item.itemId, item.snapshot])
+  );
+  return {
+    ...payload,
+    items: payload.items.map((item) => {
+      const snapshot = snapshotByItem.get(item.itemId);
+      if (!snapshot) {
+        throw new Error(`Prepared Jubelio snapshot missing item ${item.itemId}`);
+      }
+      return { ...item, snapshot };
+    }),
+  };
 }
 
 function retryAt(attemptCount: number): Date {
@@ -134,6 +200,276 @@ export async function releaseJubelioStockForOrder(
   return applyJubelioStockOperation(rows[0].id, gateway, logger);
 }
 
+class LateSettlementStockError extends Error {}
+
+export type LateSettlementResult = {
+  status: "committed" | "reacquired" | "manual_review" | "skipped";
+  message?: string;
+};
+
+async function markLateSettlementManualReview(
+  orderId: string,
+  message: string,
+  operationId?: string
+): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx
+      .update(orders)
+      .set({
+        paymentStatus: "paid",
+        paymentFailureReason: message,
+        midtransFailureStatus: "late_settlement_manual_review",
+        updatedAt: new Date(),
+      })
+      .where(eq(orders.id, orderId));
+    if (operationId) {
+      await tx
+        .update(jubelioStockOperations)
+        .set({ status: "manual_review", lastError: message, updatedAt: new Date() })
+        .where(eq(jubelioStockOperations.id, operationId));
+    }
+  });
+}
+
+export async function processLateSettlementStock(
+  orderId: string,
+  gateway?: JubelioStockGateway,
+  logger?: Logger
+): Promise<LateSettlementResult> {
+  const log = (logger ?? createLogger({ module: "late-settlement-stock" })).child({
+    orderId,
+  });
+  const [orderRows, operationRows] = await Promise.all([
+    db.select().from(orders).where(eq(orders.id, orderId)).limit(1),
+    db
+      .select()
+      .from(jubelioStockOperations)
+      .where(eq(jubelioStockOperations.orderId, orderId)),
+  ]);
+  const order = orderRows[0];
+  if (!order || order.paymentStatus === "paid") return { status: "skipped" };
+  if (order.status !== "failed_payment" || !order.branchId) {
+    return { status: "skipped" };
+  }
+
+  const reserve = operationRows.find((operation) => operation.type === "reserve");
+  const release = operationRows.find((operation) => operation.type === "release");
+  const action = decideLateSettlementStockAction(
+    reserve?.status ?? null,
+    release?.status ?? null
+  );
+  log.info("late settlement stock action selected", {
+    action,
+    reserveStatus: reserve?.status,
+    releaseStatus: release?.status,
+  });
+
+  if (!reserve || action === "manual_review") {
+    const message = "Late settlement requires manual stock review";
+    await markLateSettlementManualReview(
+      orderId,
+      message,
+      release?.id ?? reserve?.id
+    );
+    return { status: "manual_review", message };
+  }
+
+  if (action === "commit_reserve") {
+    try {
+      const committed = await db.transaction(async (tx) => {
+        const claimed = await tx
+          .update(orders)
+          .set({ status: "processing", paymentStatus: "paid", updatedAt: new Date() })
+          .where(
+            and(
+              eq(orders.id, orderId),
+              eq(orders.status, "failed_payment"),
+              eq(orders.paymentStatus, "failed")
+            )
+          )
+          .returning({ id: orders.id });
+        if (claimed.length === 0) return false;
+
+        if (release?.status === "pending") {
+          const cancelled = await tx
+            .update(jubelioStockOperations)
+            .set({
+              status: "failed",
+              lastError: "Cancelled because payment settled before release",
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(jubelioStockOperations.id, release.id),
+                eq(jubelioStockOperations.status, "pending")
+              )
+            )
+            .returning({ id: jubelioStockOperations.id });
+          if (cancelled.length === 0) {
+            throw new LateSettlementStockError(
+              "Release started while late settlement was being claimed"
+            );
+          }
+        }
+
+        for (const item of reserve.payload.items) {
+          const updated = await tx
+            .update(branchStocks)
+            .set({
+              reservedStock: sql`${branchStocks.reservedStock} - ${item.quantity}`,
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(branchStocks.branchId, order.branchId!),
+                eq(branchStocks.productVariantId, item.variantId),
+                sql`${branchStocks.reservedStock} >= ${item.quantity}`
+              )
+            )
+            .returning({ branchId: branchStocks.branchId });
+          if (updated.length === 0) {
+            throw new LateSettlementStockError(
+              `Reserved stock drift for variant ${item.variantId}`
+            );
+          }
+        }
+        await tx
+          .update(jubelioStockOperations)
+          .set({ status: "committed", updatedAt: new Date() })
+          .where(eq(jubelioStockOperations.id, reserve.id));
+
+        let pickupCode = generatePickupCode();
+        for (let attempts = 0; attempts < 10; attempts++) {
+          const existing = await tx
+            .select({ id: orders.id })
+            .from(orders)
+            .where(
+              and(
+                eq(orders.pickupCode, pickupCode),
+                inArray(orders.status, ["ready_for_pickup", "completed"])
+              )
+            )
+            .limit(1);
+          if (existing.length === 0) break;
+          pickupCode = generatePickupCode();
+        }
+        await tx
+          .update(orders)
+          .set({
+            status: "ready_for_pickup",
+            pickupCode,
+            paymentFailureReason: null,
+            midtransFailureStatus: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(orders.id, orderId));
+        return true;
+      });
+      if (!committed) return { status: "skipped" };
+      log.info("late settlement committed original stock deduction");
+      await deliverLatePaidOrderSideEffects(orderId, log);
+      return { status: "committed" };
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Late settlement claim failed";
+      await markLateSettlementManualReview(orderId, message, release?.id ?? reserve.id);
+      log.error("late settlement commit requires manual review", {
+        error: serializeError(error),
+      });
+      return { status: "manual_review", message };
+    }
+  }
+
+  if (reserve.payload.items.some((item) => !item.snapshot)) {
+    const message = "Late settlement cannot reacquire without reserve metadata snapshot";
+    await markLateSettlementManualReview(orderId, message, release?.id);
+    return { status: "manual_review", message };
+  }
+
+  const reacquireId = crypto.randomUUID();
+  try {
+    const created = await db.transaction(async (tx) => {
+      const claimed = await tx
+        .update(orders)
+        .set({ status: "processing", paymentStatus: "paid", updatedAt: new Date() })
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.status, "failed_payment"),
+            eq(orders.paymentStatus, "failed")
+          )
+        )
+        .returning({ id: orders.id });
+      if (claimed.length === 0) return false;
+
+      for (const item of reserve.payload.items) {
+        const held = await tx
+          .update(branchStocks)
+          .set({
+            pendingRemoteStock: sql`${branchStocks.pendingRemoteStock} + ${item.quantity}`,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(branchStocks.branchId, order.branchId!),
+              eq(branchStocks.productVariantId, item.variantId),
+              sql`${branchStocks.stock} - ${branchStocks.pendingRemoteStock} >= ${item.quantity}`
+            )
+          )
+          .returning({ branchId: branchStocks.branchId });
+        if (held.length === 0) {
+          throw new LateSettlementStockError(
+            `Insufficient stock to reacquire variant ${item.variantId}`
+          );
+        }
+      }
+      await tx.insert(jubelioStockOperations).values({
+        id: reacquireId,
+        orderId,
+        type: "reacquire",
+        status: "pending",
+        note: `OKCIR_REACQUIRE:${orderId}:${reacquireId}`,
+        payload: reserve.payload,
+      });
+      return true;
+    });
+    if (!created) return { status: "skipped" };
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Late settlement reacquire failed";
+    await db.insert(jubelioStockOperations).values({
+      id: reacquireId,
+      orderId,
+      type: "reacquire",
+      status: "manual_review",
+      note: `OKCIR_REACQUIRE:${orderId}:${reacquireId}`,
+      payload: reserve.payload,
+      lastError: message,
+    }).onConflictDoNothing();
+    await markLateSettlementManualReview(orderId, message, reacquireId);
+    log.error("late settlement could not acquire local stock hold", {
+      error: serializeError(error),
+    });
+    return { status: "manual_review", message };
+  }
+
+  const outcome = await applyJubelioStockOperation(
+    reacquireId,
+    gateway ?? getDefaultStockGateway(),
+    log
+  );
+  if (outcome.status === "applied") {
+    log.info("late settlement stock reacquired");
+    return { status: "reacquired" };
+  }
+  const message =
+    "message" in outcome
+      ? outcome.message
+      : "Late settlement reacquire was not applied";
+  await markLateSettlementManualReview(orderId, message, reacquireId);
+  return { status: "manual_review", message };
+}
+
 async function markApplied(
   operation: typeof jubelioStockOperations.$inferSelect,
   adjustmentId: number,
@@ -171,43 +507,77 @@ async function markApplied(
 
     for (const item of operation.payload.items) {
       const onHand = stockByItem.get(item.itemId)!;
-      if (operation.type === "reserve") {
-        const updated = await tx
-          .update(branchStocks)
-          .set({
-            stock: onHand,
-            pendingRemoteStock: sql`GREATEST(0, ${branchStocks.pendingRemoteStock} - ${item.quantity})`,
-            reservedStock: sql`${branchStocks.reservedStock} + ${item.quantity}`,
-            updatedAt: new Date(),
-          })
+      const stockChanges =
+        operation.type === "reserve"
+          ? {
+              stock: onHand,
+              pendingRemoteStock: sql`GREATEST(0, ${branchStocks.pendingRemoteStock} - ${item.quantity})`,
+              reservedStock: sql`${branchStocks.reservedStock} + ${item.quantity}`,
+              updatedAt: new Date(),
+            }
+          : operation.type === "release"
+            ? {
+                stock: onHand,
+                reservedStock: sql`GREATEST(0, ${branchStocks.reservedStock} - ${item.quantity})`,
+                updatedAt: new Date(),
+              }
+            : {
+                stock: onHand,
+                pendingRemoteStock: sql`GREATEST(0, ${branchStocks.pendingRemoteStock} - ${item.quantity})`,
+                updatedAt: new Date(),
+              };
+      const updated = await tx
+        .update(branchStocks)
+        .set(stockChanges)
+        .where(
+          and(
+            eq(branchStocks.branchId, branchId),
+            eq(branchStocks.productVariantId, item.variantId)
+          )
+        )
+        .returning({ branchId: branchStocks.branchId });
+      if (updated.length === 0) {
+        throw new Error(`Missing branch stock for variant ${item.variantId}`);
+      }
+    }
+
+    if (operation.type === "reacquire") {
+      let code = generatePickupCode();
+      for (let attempts = 0; attempts < 10; attempts++) {
+        const existing = await tx
+          .select({ id: orders.id })
+          .from(orders)
           .where(
             and(
-              eq(branchStocks.branchId, branchId),
-              eq(branchStocks.productVariantId, item.variantId)
+              eq(orders.pickupCode, code),
+              inArray(orders.status, ["ready_for_pickup", "completed"])
             )
           )
-          .returning({ branchId: branchStocks.branchId });
-        if (updated.length === 0) {
-          throw new Error(`Missing branch stock for variant ${item.variantId}`);
-        }
-      } else {
-        const updated = await tx
-          .update(branchStocks)
-          .set({
-            stock: onHand,
-            reservedStock: sql`GREATEST(0, ${branchStocks.reservedStock} - ${item.quantity})`,
-            updatedAt: new Date(),
-          })
-          .where(
-            and(
-              eq(branchStocks.branchId, branchId),
-              eq(branchStocks.productVariantId, item.variantId)
-            )
+          .limit(1);
+        if (existing.length === 0) break;
+        code = generatePickupCode();
+      }
+      const completed = await tx
+        .update(orders)
+        .set({
+          status: "ready_for_pickup",
+          pickupCode: code,
+          paymentFailureReason: null,
+          midtransFailureStatus: null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(orders.id, operation.orderId),
+            eq(orders.status, "processing"),
+            eq(orders.paymentStatus, "paid")
           )
-          .returning({ branchId: branchStocks.branchId });
-        if (updated.length === 0) {
-          throw new Error(`Missing branch stock for variant ${item.variantId}`);
-        }
+        )
+        .returning({ id: orders.id });
+      if (completed.length === 0) {
+        throw new Error(
+          `Late-settlement order ${operation.orderId} could not be completed`
+        );
       }
     }
     return true;
@@ -224,6 +594,8 @@ async function markApplied(
     if (orderRows[0]?.status === "failed_payment") {
       await enqueueJubelioRelease(operation.orderId);
     }
+  } else if (operation.type === "reacquire") {
+    await deliverLatePaidOrderSideEffects(operation.orderId);
   }
   return true;
 }
@@ -351,7 +723,7 @@ export async function applyJubelioStockOperation(
   try {
     outcome = await runStockAdjustment(
       {
-        kind: operation.type as "reserve" | "release",
+        kind: operation.type as "reserve" | "release" | "reacquire",
         orderId: operation.orderId,
         operationId: operation.id,
         locationId: operation.payload.locationId,
@@ -360,9 +732,32 @@ export async function applyJubelioStockOperation(
           quantity: item.quantity,
           description: item.description,
           observedStock: currentByVariant.get(item.variantId) ?? 0,
+          snapshot: item.snapshot,
         })),
+        onPrepared: async (preparedItems) => {
+          const payload = mergePreparedAdjustmentSnapshots(
+            operation.payload,
+            preparedItems
+          );
+          const saved = await db
+            .update(jubelioStockOperations)
+            .set({ payload, updatedAt: new Date() })
+            .where(
+              and(
+                eq(jubelioStockOperations.id, operation.id),
+                eq(jubelioStockOperations.status, "in_flight")
+              )
+            )
+            .returning({ id: jubelioStockOperations.id });
+          if (saved.length === 0) {
+            throw new Error("Jubelio adjustment snapshot claim was lost");
+          }
+          log.info("Jubelio adjustment snapshot persisted", {
+            itemCount: preparedItems.length,
+          });
+        },
       },
-      gateway ?? createJubelioStockGateway(),
+      gateway ?? getDefaultStockGateway(),
       log
     );
   } catch (error) {
@@ -381,16 +776,23 @@ export async function applyJubelioStockOperation(
       adjustmentId: outcome.adjustmentId,
       localStateUpdated: applied,
     });
-  } else if (outcome.status === "rejected" && operation.type === "reserve") {
+  } else if (
+    (outcome.status === "rejected" || outcome.status === "backpressure") &&
+    operation.type === "reserve"
+  ) {
     await markReserveRejected(operation, outcome.message);
-    log.warn("Jubelio reserve rejected and local hold released", { message: outcome.message });
+    log.warn("Jubelio reserve rejected and local hold released", {
+      reason: outcome.status,
+      message: outcome.message,
+    });
   } else {
     await db
       .update(jubelioStockOperations)
       .set({
-        status: operation.type === "release" && outcome.status === "rejected"
-          ? "manual_review"
-          : "reconciling",
+        status:
+          operation.type !== "reserve" && outcome.status === "rejected"
+            ? "manual_review"
+            : "reconciling",
         lastError: outcome.message,
         nextAttemptAt: retryAt(operation.attemptCount + 1),
         updatedAt: new Date(),
@@ -425,9 +827,10 @@ export async function failOrderWithAmbiguousReserve(
 
 export async function reconcileJubelioStockOperations(
   limit = 50,
-  gateway: JubelioStockGateway = createJubelioStockGateway(),
+  gateway?: JubelioStockGateway,
   logger: Logger = createLogger({ module: "jubelio-stock-reconcile" })
 ): Promise<{ scanned: number; applied: number; failed: number; pending: number }> {
+  const stockGateway = gateway ?? getDefaultStockGateway();
   const pendingRows = await db
     .select()
     .from(jubelioStockOperations)
@@ -456,16 +859,20 @@ export async function reconcileJubelioStockOperations(
     });
     log.info("Jubelio stock operation reconciliation started");
     if (operation.status === "pending") {
-      const outcome = await applyJubelioStockOperation(operation.id, gateway, log);
+      const outcome = await applyJubelioStockOperation(
+        operation.id,
+        stockGateway,
+        log
+      );
       if (outcome.status === "applied") applied++;
       else if (outcome.status === "rejected") failed++;
       else pending++;
       continue;
     }
 
-    const adjustmentId = await gateway.findAdjustmentByNote(operation.note);
+    const adjustmentId = await stockGateway.findAdjustmentByNote(operation.note);
     if (adjustmentId != null) {
-      const stocks = await gateway.getStocks(
+      const stocks = await stockGateway.getStocks(
         operation.payload.locationId,
         operation.payload.items.map((item) => item.itemId)
       );
@@ -482,12 +889,15 @@ export async function reconcileJubelioStockOperations(
         "Jubelio stock adjustment could not be confirmed"
       );
       failed++;
-    } else if (operation.attemptCount >= 5 && operation.type === "release") {
+    } else if (
+      operation.attemptCount >= 5 &&
+      (operation.type === "release" || operation.type === "reacquire")
+    ) {
       await db
         .update(jubelioStockOperations)
         .set({
           status: "manual_review",
-          lastError: "Jubelio stock release could not be confirmed",
+          lastError: `Jubelio stock ${operation.type} could not be confirmed`,
           updatedAt: new Date(),
         })
         .where(eq(jubelioStockOperations.id, operation.id));

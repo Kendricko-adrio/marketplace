@@ -20,9 +20,7 @@
  * Invariants (mirror the former SOH sync; do NOT violate):
  *   - branch_stock.reservedStock is NEVER written here (runtime-managed by
  *     checkout — see [[stock-reservation-design]]). Only `stock` is written.
- *   - New branches upsert as status="nonaktif"; existing branches keep status
- *     (unless the caller opts in via `upsertJubelioBranches` options — the
- *     import script forces status="aktif" + fixed operating hours).
+ *   - Branch status mirrors Jubelio location `is_active` on every upsert.
  *   - Upserts keyed on Jubelio natural keys (jubelioItemGroupId / jubelioItemId /
  *     jubelioLocationId / jubelioCategoryId) → idempotent re-runs.
  *   - Brand/category linked by slug (upsert on slug) so Jubelio rows coexist
@@ -58,14 +56,6 @@ export type Db = NodePgDatabase<typeof schema>;
 const API_BASE =
   process.env.JUBELIO_API_BASE_URL?.replace(/\/$/, "") ||
   "https://api2.jubelio.com";
-
-const NON_OUTLET_LOCATIONS = new Set(
-  (process.env.JUBELIO_SKIP_LOCATIONS ||
-    "Transit,WEBSITE ADF,MONO DPK ADF OUTLET PUMA,MONO SMB ADF OUTLET PUMA,MULTI DPK ADF OUTLET,MULTI RAWA ADF OUTLET,MULTI SMB ADF OUTLET")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-);
 
 let cachedToken: string | null = null;
 let tokenExpiresAt = 0;
@@ -297,11 +287,6 @@ export type UpsertOptions = { onProgress?: (msg: string) => void };
 
 /** Options for upsertJubelioBranches. */
 export type UpsertBranchesOptions = UpsertOptions & {
-  /** Extra location names to skip (case-insensitive), on top of NON_OUTLET_LOCATIONS. */
-  excludeNames?: string[];
-  /** Status applied to every upserted branch (insert + update). When omitted,
-   *  new branches get "nonaktif" and existing branches keep their status. */
-  status?: "aktif" | "nonaktif";
   /** Operating hours applied to every upserted branch (insert + update).
    *  When omitted, operating hours are left untouched. */
   operatingHours?: OperatingHours;
@@ -349,10 +334,17 @@ export type MastersPage = {
 
 export async function fetchMastersPage(
   page: number,
-  pageSize = 200
+  pageSize = 200,
+  query?: string
 ): Promise<MastersPage> {
+  const params = new URLSearchParams({
+    page: String(page),
+    pageSize: String(pageSize),
+  });
+  if (query?.trim()) params.set("q", query.trim());
+
   return jubelioGet<MastersPage>(
-    `/inventory/items/masters?page=${page}&pageSize=${pageSize}`
+    `/inventory/items/masters?${params.toString()}`
   );
 }
 
@@ -490,11 +482,9 @@ export async function mapWithConcurrency<T, R>(
 // ---------------------------------------------------------------------------
 
 /**
- * Upsert branches (locations). Skips non-outlet staging locations plus any
- * `excludeNames`. By default new branches → status "nonaktif" (disabled) until
- * an admin enables, and existing branches keep their status; pass `status` /
- * `operatingHours` to force those on every upserted branch (the import script
- * does — see import-jubelio.ts). Returns the count of upserted outlets.
+ * Upsert every named Jubelio location as a branch. Branch status mirrors
+ * `is_active` (`false` → "nonaktif", otherwise "aktif") on inserts and updates.
+ * Returns the count of upserted locations.
  */
 export async function upsertJubelioBranches(
   db: Db,
@@ -503,18 +493,8 @@ export async function upsertJubelioBranches(
 ): Promise<number> {
   const log = options.onProgress ?? (() => {});
   const now = new Date();
-  const extraExcluded = new Set(
-    (options.excludeNames ?? [])
-      .map((s) => s.trim().toLowerCase())
-      .filter(Boolean)
-  );
-  const outlets = locations.filter(
-    (l) =>
-      l.location_name &&
-      !NON_OUTLET_LOCATIONS.has(l.location_name.trim()) &&
-      !extraExcluded.has(l.location_name.trim().toLowerCase())
-  );
-  log(`upserting ${outlets.length} outlet branches (of ${locations.length} locations)...`);
+  const outlets = locations.filter((l) => l.location_name?.trim());
+  log(`upserting ${outlets.length} branches (of ${locations.length} locations)...`);
   for (const chunk of chunked(outlets, BATCH_SIZE)) {
     await db
       .insert(branches)
@@ -540,7 +520,7 @@ export async function upsertJubelioBranches(
             latitude: m?.[1] ?? null,
             longitude: m?.[2] ?? null,
             jubelioLocationId: l.location_id,
-            status: options.status ?? "nonaktif",
+            status: l.is_active === false ? "nonaktif" : "aktif",
             ...(options.operatingHours
               ? { operatingHours: options.operatingHours }
               : {}),
@@ -556,9 +536,7 @@ export async function upsertJubelioBranches(
           latitude: sql`excluded.latitude`,
           longitude: sql`excluded.longitude`,
           updatedAt: now,
-          // status/operatingHours only when the caller opts in — default
-          // preserves admin/enabled state.
-          ...(options.status ? { status: sql`excluded.status` } : {}),
+          status: sql`excluded.status`,
           ...(options.operatingHours
             ? { operatingHours: sql`excluded.operating_hours` }
             : {}),
@@ -908,20 +886,15 @@ export async function upsertJubelioStock(
 
 /**
  * Flatten a /inventory/items/all-stocks/ response into per (item,location)
- * rows. Only outlet locations are included — staging locations (Transit, MONO,
- * MULTI, WEBSITE) are skipped (they're not customer-facing branches and aren't
- * upserted into `branch`), and unknown location_ids are skipped too (avoids FK
- * violations). Uses the response's own `locations[]` to decide what's an outlet.
+ * rows. Every named location is included because every named Jubelio location
+ * is imported as a branch. Unknown location ids are skipped to avoid FK errors.
  */
 export function flattenStock(
   resp: JubelioStockResponse
 ): { itemId: number; locationId: number; onHand: number }[] {
   const outletIds = new Set(
     (resp.locations ?? [])
-      .filter(
-        (l) =>
-          l.location_name && !NON_OUTLET_LOCATIONS.has(l.location_name.trim())
-      )
+      .filter((l) => l.location_name?.trim())
       .map((l) => l.location_id)
   );
   const out: { itemId: number; locationId: number; onHand: number }[] = [];

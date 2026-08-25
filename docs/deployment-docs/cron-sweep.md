@@ -8,7 +8,8 @@ webhook `expire` dari Midtrans. **Safety-net**: cron `sweep-reservations` yang
 men-scan order `pending_payment` yang sudah lewat `expires_at`, re-verify
 status ke Midtrans, lalu finalize (kalau ternyata sudah bayar) atau fail +
 restore stok lewat adjustment positif (kalau belum). Endpoint yang sama juga
-mereconcile write Jubelio yang timeout atau terputus setelah request dikirim.
+mereconcile write Jubelio yang timeout atau terputus setelah request dikirim,
+termasuk compensation dan re-acquisition untuk late settlement.
 
 Endpoint: `POST /api/cron/sweep-reservations`, auth via header `X-Cron-Secret`
 (nilai = `CRON_SECRET` di `.env`). Endpoint **idempoten** — aman dijalankan
@@ -90,6 +91,9 @@ curl -fsS -X POST -H "X-Cron-Secret: $CRON_SECRET" https://dev-store.adfsport.cl
   memastikan webhook dan cron tidak double-process order yang sama.
 - **Kalau `CRON_SECRET` kosong** di server, endpoint return 503 (cron tidak
   akan jalan — cek env: `docker compose -p staging --env-file .env exec store env | grep CRON_SECRET`).
+- Operasi `manual_review` tidak otomatis mengirim write ulang. Dari detail
+  order admin, **Recheck safely** hanya memindahkannya ke `reconciling`; sweep
+  kemudian mencari adjustment berdasarkan note unik sebelum mengubah stok.
 - **Kalau cron tidak terpasang**: order yang expired tanpa webhook `expire`
   dari Midtrans akan tetap `pending_payment` + reservasi bocor sampai ada
   yang trigger sweep manual. Cron adalah safety-net wajib untuk produksi.

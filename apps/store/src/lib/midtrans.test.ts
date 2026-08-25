@@ -3,6 +3,7 @@ import crypto from "crypto";
 import {
   amountsMatch,
   getMockPaymentResult,
+  resolveMidtransBaseUrl,
   validateMidtransWebhookPayload,
   verifyMidtransSignature,
 } from "./midtrans";
@@ -104,6 +105,24 @@ describe("amountsMatch", () => {
     expect(amountsMatch("100000", "100000.00")).toBe(true);
     expect(amountsMatch("100000.01", "100000.00")).toBe(false);
     expect(amountsMatch("not-a-number", "100000.00")).toBe(false);
+  });
+});
+
+describe("resolveMidtransBaseUrl", () => {
+  it("allows the local status boundary only outside production", () => {
+    expect(
+      resolveMidtransBaseUrl({
+        NODE_ENV: "development",
+        MIDTRANS_MOCK_API_BASE_URL: "http://127.0.0.1:3002/",
+      })
+    ).toBe("http://127.0.0.1:3002");
+    expect(
+      resolveMidtransBaseUrl({
+        NODE_ENV: "production",
+        MIDTRANS_MOCK_API_BASE_URL: "http://127.0.0.1:3002",
+        MIDTRANS_IS_PRODUCTION: "true",
+      })
+    ).toBe("https://api.midtrans.com");
   });
 });
 

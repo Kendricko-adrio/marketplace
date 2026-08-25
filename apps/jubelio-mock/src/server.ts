@@ -31,6 +31,10 @@ type Adjustment = {
 
 const stocks = new Map<string, MockStock>();
 const adjustments = new Map<number, Adjustment>();
+const midtransStatuses = new Map<
+  string,
+  { transactionStatus: string; grossAmount: string; fraudStatus?: string }
+>();
 const requests: Array<{ method: string; path: string; body: unknown }> = [];
 let nextAdjustmentId = 1;
 let scenario: Scenario = "success";
@@ -55,6 +59,7 @@ async function readJson(request: IncomingMessage): Promise<Record<string, unknow
 export function resetMockState(): void {
   stocks.clear();
   adjustments.clear();
+  midtransStatuses.clear();
   requests.length = 0;
   nextAdjustmentId = 1;
   scenario = "success";
@@ -87,6 +92,31 @@ export const jubelioMockServer = createServer(async (request, response) => {
   if (method === "GET" && url.pathname === "/__control/requests") {
     return json(response, 200, { data: requests });
   }
+  if (method === "PUT" && url.pathname === "/__control/midtrans-status") {
+    const orderId = String(body.orderId || "");
+    if (!orderId) return json(response, 400, { error: "orderId is required" });
+    midtransStatuses.set(orderId, {
+      transactionStatus: String(body.transactionStatus || "pending"),
+      grossAmount: String(body.grossAmount || "0.00"),
+      fraudStatus:
+        typeof body.fraudStatus === "string" ? body.fraudStatus : undefined,
+    });
+    return json(response, 200, { status: "ok" });
+  }
+  const midtransStatus = url.pathname.match(/^\/v2\/([^/]+)\/status$/);
+  if (method === "GET" && midtransStatus) {
+    const orderId = decodeURIComponent(midtransStatus[1]);
+    const configured = midtransStatuses.get(orderId);
+    if (!configured) return json(response, 404, { status_code: "404" });
+    return json(response, 200, {
+      order_id: orderId,
+      transaction_status: configured.transactionStatus,
+      gross_amount: configured.grossAmount,
+      fraud_status: configured.fraudStatus,
+      status_code: "200",
+      status_message: "Success, transaction found",
+    });
+  }
   if (method === "POST" && url.pathname === "/__control/stocks/ensure") {
     const locationId = Number(body.locationId);
     const itemId = Number(body.itemId);
@@ -112,6 +142,15 @@ export const jubelioMockServer = createServer(async (request, response) => {
     return json(response, 401, { statusCode: "401", error: "Unauthorized" });
   }
 
+  if (method === "GET" && url.pathname === "/systemsetting/account-mapping") {
+    return json(response, 200, {
+      adjp_acct_id: 75,
+      adjm_acct_id: 72,
+      adjp_account_name: "7-7004 - Penyesuaian Persediaan Barang",
+      adjm_account_name: "8-8004 - Penyesuaian Persediaan Barang",
+    });
+  }
+
   const defaultBin = url.pathname.match(/^\/wms\/default-bin\/(\d+)$/);
   if (method === "GET" && defaultBin) {
     const locationId = Number(defaultBin[1]);
@@ -121,6 +160,26 @@ export const jubelioMockServer = createServer(async (request, response) => {
       bin_final_code: `MOCK-${locationId}`,
       acknowledge_stock: true,
     });
+  }
+
+  if (method === "POST" && url.pathname === "/inventory/items/to-adjust/") {
+    const locationId = Number(body.location_id);
+    const ids = Array.isArray(body.ids) ? new Set(body.ids.map(Number)) : new Set<number>();
+    const data = [...stocks.values()]
+      .filter((stock) => stock.locationId === locationId && ids.has(stock.itemId))
+      .map((stock) => ({
+        item_id: stock.itemId,
+        item_name: stock.description,
+        item_full_name: `${stock.itemId} - ${stock.description}`,
+        unit: stock.unit,
+        account_id: 4,
+        account_code: "1-1200",
+        account_name: "1-1200 - Persediaan Barang",
+        cost: stock.cost,
+        end_qty: stock.onHand,
+        resulting_qty: stock.onHand,
+      }));
+    return json(response, 200, data);
   }
 
   const toStock = url.pathname.match(/^\/inventory\/items\/to-stock\/(\d+)$/);

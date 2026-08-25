@@ -14,9 +14,18 @@ const READY_ORDER_ID = "90681d15-fc1a-4377-bdb7-1060da208ed6";
 const PICKUP_CODE = "G4XUNM";
 
 let pool: Pool;
+let manualReviewOrderId = "";
+let manualReviewOperationId = "";
 
 test.beforeAll(async () => {
   pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const manualReview = await pool.query<{ order_id: string; id: string }>(
+    `SELECT order_id, id FROM jubelio_stock_operation
+     WHERE status = 'manual_review'
+     ORDER BY created_at ASC LIMIT 1`
+  );
+  manualReviewOrderId = manualReview.rows[0]?.order_id ?? "";
+  manualReviewOperationId = manualReview.rows[0]?.id ?? "";
 });
 
 test.afterAll(async () => {
@@ -26,6 +35,18 @@ test.afterAll(async () => {
      WHERE id = $1`,
     [READY_ORDER_ID]
   );
+  if (manualReviewOperationId) {
+    await pool.query(
+      `UPDATE jubelio_stock_operation SET status = 'manual_review'
+       WHERE id = $1`,
+      [manualReviewOperationId]
+    );
+    await pool.query(
+      `DELETE FROM audit_log
+       WHERE action = 'RECHECK_JUBELIO_STOCK' AND entity_id = $1`,
+      [manualReviewOrderId]
+    );
+  }
   await pool.end();
 });
 
@@ -42,6 +63,26 @@ test.describe("admin orders", () => {
     // The seeded ready_for_pickup order is visible with its status badge.
     await expect(page.getByText("Ready for Pickup").first()).toBeVisible();
     await expect(page.getByText("Payment Failed").first()).toBeVisible();
+    await expect(page.getByText("Stock review").first()).toBeVisible();
+  });
+
+  test("shows the durable Jubelio lifecycle and manual-review reason", async ({
+    page,
+  }) => {
+    expect(manualReviewOrderId).toBeTruthy();
+    await page.goto(`/admin/orders/${manualReviewOrderId}`);
+
+    await expect(page.getByText("Jubelio stock lifecycle")).toBeVisible();
+    await expect(page.getByText("manual review")).toBeVisible();
+    await expect(
+      page.getByText("Seeded release requires operator reconciliation")
+    ).toBeVisible();
+
+    await page.getByRole("button", { name: "Recheck safely" }).click();
+    await expect(page.getByText("Safe Jubelio reconciliation queued")).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByText("reconciling")).toBeVisible({ timeout: 15_000 });
   });
 
   test("order detail opens the verify dialog for a ready_for_pickup order", async ({

@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { clients, orders, orderItems, branches } from "@/db";
+import {
+  clients,
+  orders,
+  orderItems,
+  branches,
+  jubelioStockOperations,
+} from "@/db";
 import { eq, and, desc, sql, ilike, or, gte, lte } from "drizzle-orm";
 import { withPermission, getBranchScope } from "@/lib/auth-guard";
 import { requestLogger, serializeError } from "@/lib/logger";
@@ -100,6 +106,11 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
           select count(*) from ${orderItems}
           where ${orderItems.orderId} = ${orders.id}
         )`,
+        stockNeedsReview: sql<boolean>`exists (
+          select 1 from ${jubelioStockOperations}
+          where ${jubelioStockOperations.orderId} = ${orders.id}
+            and ${jubelioStockOperations.status} = 'manual_review'
+        )`,
       })
       .from(orders)
       .innerJoin(clients, eq(orders.userId, clients.id))
@@ -119,6 +130,7 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
       customer: row.customer,
       branch: row.branch,
       itemCount: Number(row.itemCount),
+      stockNeedsReview: Boolean(row.stockNeedsReview),
     }));
 
     // ===== Total count (with the same filters) =====

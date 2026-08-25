@@ -12,27 +12,27 @@ how the marketplace syncs from Jubelio, replacing the older CSV-based SOH sync
 |---|---|---|---|
 | `item_group` (`item_group_id`, `item_group_name`, `sell_price`, `description`, `selected_brand_name`, `thumbnail`, `images[]`) | `product` | `jubelio_item_group_id` (unique) | `base_price` = group `sell_price`; `thumbnail` = card image; `images` JSONB = gallery from `/inventory/catalog/{id}` |
 | `item` / sku (`item_id`, `item_code`, `sell_price`, `barcode`, `variation_values`) | `product_variant` | `jubelio_item_id` (unique) | `sku` = `item_code` (GTIN); `price` = variant `sell_price`; `size`/`color` from `variation_values` (`Ukuran`→size, `Warna`→color) |
-| `location` (`location_id`, `location_code`, `location_name`) | `branch` | `jubelio_location_id` (unique) | Source: `GET /locations/list` (NOT `/locations/`, which returns only the webstore). `code` = `location_code`. **This is the branch** — not the channel. |
+| `location` (`location_id`, `location_code`, `location_name`, `is_active`) | `branch` | `jubelio_location_id` (unique) | Source: `GET /locations/list` (NOT `/locations/`, which returns only the webstore). `code` = `location_code`; `status` mirrors `is_active`. **This is the branch** — not the channel. |
 | stock: `(item_id, location_id)` `on_hand`/`available` | `branch_stock` | composite `(branchId, productVariantId)` | `stock` = `on_hand`. Catalog sync never writes checkout counters (`reservedStock`, `pendingRemoteStock`). |
 | `category` (`category_id`, `category_name`) | `category` | `jubelio_category_id` (unique) | Created **on demand** — only categories used by synced products (see decision 8). Upserted by slug (merges with CSV-SOH categories). |
 | `selected_brand_name` | `brand` | `slug` | Upserted by slug per product (create if new, link if existing). |
 
 **Branches are locations, not channels.** Jubelio `channel_id` (64 = Shopee,
 128 = Tokopedia, 32 = Blibli, 4 = Lazada) is a sales channel, not a branch.
-Stock is tracked per location (physical outlet). `GET /locations/` returns only
-the webstore ("WEBSITE ADF"); use `GET /locations/list` to get all ~25 outlets.
-Non-outlet staging locations (Transit, MONO/MULTI *, WEBSITE ADF) are skipped —
-see `JUBELIO_SKIP_LOCATIONS` env.
+Stock is tracked per location. `GET /locations/` returns only the webstore
+("WEBSITE ADF"); use `GET /locations/list` to get every location. All named
+locations are imported, including staging and webstore locations.
 
 ## Architecture (mirrors SOH sync)
 
 Three entry points share `packages/db/src/jubelio-sync.ts`:
 
-1. **One-shot full pull** — `npm run db:import-jubelio`
+1. **One-shot pull** — `npm run db:import-jubelio`
    (`packages/db/src/import-jubelio.ts`). Paginates `/inventory/items/masters`,
    enriches each product via `/inventory/catalog/{item_group_id}`, fetches
    per-branch stock via `POST /inventory/items/all-stocks/`, upserts
-   page-by-page. Re-runnable (idempotent upserts).
+   page-by-page. Re-runnable (idempotent upserts). During development, pass
+   `--item-name="Exact Jubelio item name"` to import only exact matches.
 2. **Webhook (recurring deltas)** — `POST /api/webhooks/jubelio`
    (`apps/store/src/app/api/webhooks/jubelio/route.ts`). Jubelio pushes
    `update-product` / `update-price` / `update-qty` events; the handler
@@ -41,6 +41,27 @@ Three entry points share `packages/db/src/jubelio-sync.ts`:
    (`apps/admin/src/app/api/admin/products/[id]/sync/route.ts`), triggered by
    the "Sync dari Jubelio" button on the admin product detail page. Calls
    `syncOneProduct(db, item_group_id)`.
+
+## Importing one product by exact name
+
+From the repository root:
+
+```bash
+npm run db:import-jubelio -- --item-name="Wild Glide 38"
+```
+
+The importer sends the name through Jubelio's `/inventory/items/masters?q=...`
+search, then applies a trimmed, case-insensitive exact match to `item_name`.
+Fuzzy results such as `Wild Glide 38 Kids` are not imported. If multiple
+products have the same exact name, all of them are imported. If none match, the
+command exits with an error. Exact-name mode ignores
+`JUBELIO_SYNC_MAX_PRODUCTS`, because that cap must not drop duplicate exact
+matches; it still respects `JUBELIO_SYNC_START_PAGE`.
+
+The product's catalog details, variants, categories, branches, and per-branch
+stock are imported in the same way as a full pull. This mode reads from the
+configured `JUBELIO_API_BASE_URL`; it does not perform checkout stock
+adjustments.
 
 ## Checkout stock adjustments
 
@@ -70,10 +91,10 @@ the token and auto re-logins on 401. Env: `JUBELIO_EMAIL`, `JUBELIO_PASSWORD`,
 
 - `branch_stock.reservedStock` and `pendingRemoteStock` are **never** written by
   catalog sync (checkout-managed only).
-- New branches upsert as `status:"nonaktif"`; existing branches keep status.
-  Exception: the **import script** (`db:import-jubelio`) forces `status:"aktif"`
-  + fixed operating hours (Mon–Sun 07:00–22:00) on every pulled branch, and
-  skips the "Dago 123" location (see `upsertJubelioBranches` options).
+- Every named Jubelio location is imported. On each upsert, branch `status`
+  mirrors Jubelio `is_active`: `false` becomes `"nonaktif"`; `true` (or an
+  omitted value) becomes `"aktif"`. The import script also applies fixed
+  operating hours (Mon–Sun 07:00–22:00).
 - Upserts keyed on Jubelio natural keys → idempotent re-runs.
 - Brand/category linked by **slug lookup** (not a computed prefixed id) so
   Jubelio rows coexist with pre-existing CSV-SOH rows.
@@ -116,12 +137,15 @@ the token and auto re-logins on 401. Env: `JUBELIO_EMAIL`, `JUBELIO_PASSWORD`,
 | `JUBELIO_SYNC_CONCURRENCY` | parallel catalog fetches during import | `5` |
 | `JUBELIO_SYNC_MAX_PRODUCTS` | cap products synced (empty = all) | empty |
 | `JUBELIO_SYNC_START_PAGE` | masters page to start/resume from | `1` |
-| `JUBELIO_SKIP_LOCATIONS` | comma-sep non-outlet location names to skip as branches | `Transit,WEBSITE ADF,MONO *,MULTI *` |
 | `APP_ENV` | safety boundary for stock writes (`production` is the only live value) | `NODE_ENV` |
 | `JUBELIO_MOCK_API_BASE_URL` | stateful mock used by every non-production environment | `http://127.0.0.1:3002` |
 | `JUBELIO_STOCK_WRITES_ENABLED` | explicit production live-write kill switch | `false` |
-| `JUBELIO_ADJUSTMENT_ACCOUNT_ID` | Jubelio account id in adjustment line items | `75` |
+| `JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID` / `JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID` | Optional emergency overrides; normally resolved from Jubelio account mapping | empty |
 | `JUBELIO_STOCK_TIMEOUT_MS` | HTTP timeout; a POST timeout is treated as ambiguous | `8000` |
+| `JUBELIO_STOCK_MAX_REQUESTS_PER_MINUTE` | Process-wide paced request-start limit; defaults to 450 and is hard-capped at Jubelio's 600/minute limit | `450` |
+| `JUBELIO_STOCK_CONCURRENCY` | Maximum simultaneous Jubelio stock HTTP requests per process | `10` |
+| `JUBELIO_STOCK_MAX_QUEUED` | Maximum provider requests waiting in the process queue before new work fails fast | `1000` |
+| `JUBELIO_STOCK_QUEUE_TIMEOUT_MS` | Maximum queue wait before an unsent request is rejected as local backpressure; capped below HTTP timeout | `5000` |
 
 ## Webhook setup (operational)
 
@@ -148,7 +172,10 @@ sample products.
 Migration `0013_absurd_vampiro.sql` adds
 `branch_stock.pending_remote_stock` and `jubelio_stock_operation`. The latter
 stores the reserve/release type, unique note, item mapping, remote adjustment
-id, retry state, and diagnostic error.
+id, retry state, and diagnostic error. Migration `0015_fixed_hiroim.sql` adds
+the `reacquire` type used for late settlement after confirmed compensation.
+Production must apply both before enabling stock writes; see the
+[stock-adjustment rollout runbook](../deployment-docs/stock-adjustment-rollout.md).
 
 ## Verification
 
@@ -156,6 +183,9 @@ id, retry state, and diagnostic error.
 - `JUBELIO_SYNC_MAX_PRODUCTS=20 npm run db:import-jubelio` → check
   `product`/`product_variant`/`branch`/`branch_stock` rows + `product.thumbnail`
   + `product.images`.
+- `npm run db:import-jubelio -- --item-name="Exact Jubelio item name"` → only
+  case-insensitive exact `item_name` matches are upserted; fuzzy matches are
+  excluded and a missing exact match returns a non-zero exit code.
 - `npm run dev:store` → `/products` cards + product detail gallery show Jubelio
   images.
 - `npm run dev:admin` → product list (read-only) + detail page Sync button.

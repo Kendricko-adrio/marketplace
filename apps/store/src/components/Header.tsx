@@ -34,6 +34,11 @@ export default function Header() {
   const { itemCount } = useCart();
   const [searchQuery, setSearchQuery] = useState("");
   const [scrolled, setScrolled] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -135,7 +140,7 @@ export default function Header() {
             </Button>
           </Link>
 
-          {isLoading ? (
+          {!mounted || isLoading ? (
             <Button variant="ghost" size="icon" disabled>
               <User className="h-6 w-6 animate-pulse text-white" />
             </Button>

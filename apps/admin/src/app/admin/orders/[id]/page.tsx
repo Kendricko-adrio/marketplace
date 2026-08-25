@@ -14,6 +14,8 @@ import {
   Check,
   AlertCircle,
   PackageCheck,
+  DatabaseZap,
+  TriangleAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +44,17 @@ interface OrderItem {
   productId: string;
 }
 
+interface StockOperation {
+  id: string;
+  type: "reserve" | "release" | "reacquire";
+  status: string;
+  remoteAdjustmentId: number | null;
+  attemptCount: number;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface OrderDetail {
   id: string;
   status: string;
@@ -68,6 +81,7 @@ interface OrderDetail {
     operatingHours: Record<string, unknown>;
   } | null;
   items: OrderItem[];
+  stockOperations: StockOperation[];
 }
 
 const STATUS_STEPS = [
@@ -119,6 +133,7 @@ export default function AdminOrderDetailPage() {
   const [verifying, setVerifying] = useState(false);
   const [verifyError, setVerifyError] = useState("");
   const [pickupModalOpen, setPickupModalOpen] = useState(false);
+  const [recheckingOperationId, setRecheckingOperationId] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchMe() {
@@ -158,6 +173,27 @@ export default function AdminOrderDetailPage() {
 
   const canVerifyPickup =
     order?.status === "ready_for_pickup" && isBranchAdmin && hasPermission("orders", "edit");
+
+  const handleStockRecheck = async (operationId: string) => {
+    setRecheckingOperationId(operationId);
+    try {
+      const response = await fetch(`/api/admin/orders/${orderId}/stock-review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ operationId }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Recheck failed");
+      const refreshed = await fetch(`/api/admin/orders/${orderId}`);
+      const refreshedData = await refreshed.json();
+      if (refreshedData.success) setOrder(refreshedData.data);
+      toast.success("Safe Jubelio reconciliation queued");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Recheck failed");
+    } finally {
+      setRecheckingOperationId(null);
+    }
+  };
 
   const handleVerify = async () => {
     if (!codeInput.trim()) return;
@@ -353,6 +389,78 @@ export default function AdminOrderDetailPage() {
                 </code>
               </p>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {order.stockOperations.length > 0 && (
+        <Card className={
+          order.stockOperations.some((operation) => operation.status === "manual_review")
+            ? "overflow-hidden border-red-300 bg-red-50/40"
+            : "overflow-hidden"
+        }>
+          <CardContent className="p-0">
+            <div className="flex items-center justify-between border-b bg-slate-950 px-5 py-3 text-slate-50">
+              <div className="flex items-center gap-2">
+                <DatabaseZap className="h-4 w-4 text-amber-400" />
+                <span className="text-sm font-semibold tracking-wide">
+                  Jubelio stock lifecycle
+                </span>
+              </div>
+              <span className="font-mono text-[11px] text-slate-400">
+                {order.stockOperations.length} operation{order.stockOperations.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <div className="divide-y">
+              {order.stockOperations.map((operation) => {
+                const needsReview = operation.status === "manual_review";
+                return (
+                  <div key={operation.id} className="grid gap-3 px-5 py-4 md:grid-cols-[1fr_auto]">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-xs font-bold uppercase tracking-wider">
+                          {operation.type}
+                        </span>
+                        <Badge
+                          className={needsReview
+                            ? "border-red-300 bg-red-100 text-red-800 hover:bg-red-100"
+                            : "border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-100"}
+                        >
+                          {needsReview && <TriangleAlert className="mr-1 h-3 w-3" />}
+                          {operation.status.replaceAll("_", " ")}
+                        </Badge>
+                      </div>
+                      {operation.lastError && (
+                        <p className="mt-2 text-sm text-red-800">{operation.lastError}</p>
+                      )}
+                      <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
+                        {operation.id}
+                      </p>
+                    </div>
+                    <div className="text-left text-xs text-muted-foreground md:text-right">
+                      <p>Attempts: {operation.attemptCount}</p>
+                      <p>
+                        Adjustment: {operation.remoteAdjustmentId ?? "not confirmed"}
+                      </p>
+                      {needsReview && hasPermission("orders", "edit") && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="mt-2 h-8 border-red-300 bg-white text-red-800 hover:bg-red-100"
+                          disabled={recheckingOperationId === operation.id}
+                          onClick={() => handleStockRecheck(operation.id)}
+                        >
+                          {recheckingOperationId === operation.id && (
+                            <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                          )}
+                          Recheck safely
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </CardContent>
         </Card>
       )}

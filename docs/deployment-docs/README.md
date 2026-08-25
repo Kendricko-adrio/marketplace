@@ -53,6 +53,7 @@ deployment/
 | 15 | [environments.md](environments.md) | Memisahkan staging & production |
 | 16 | [reference.md](reference.md) | Cheat-sheet command, port, domain |
 | 17 | [jubelio-webhook-simulator.md](jubelio-webhook-simulator.md) | Test signed Jubelio webhook calls with live read-only data |
+| 18 | [stock-adjustment-rollout.md](stock-adjustment-rollout.md) | Production preflight, operator canary, monitoring, and kill-switch recovery |
 
 ## Quick start (staging)
 

@@ -18,6 +18,14 @@ export type JubelioStockOperationPayload = {
     itemId: number;
     quantity: number;
     description: string;
+    snapshot?: {
+      description: string;
+      unit: string;
+      cost: number;
+      binId: number;
+      reserveAccountId: number;
+      releaseAccountId: number;
+    };
   }>;
 };
 
@@ -28,7 +36,7 @@ export const jubelioStockOperations = pgTable(
     orderId: text("order_id")
       .notNull()
       .references(() => orders.id, { onDelete: "cascade" }),
-    type: text("type").notNull(), // reserve | release
+    type: text("type").notNull(), // reserve | release | reacquire
     status: text("status").notNull().default("pending"),
     note: text("note").notNull().unique(),
     payload: jsonb("payload").$type<JubelioStockOperationPayload>().notNull(),
@@ -53,7 +61,7 @@ export const jubelioStockOperations = pgTable(
     index("idx_jubelio_stock_operation_retry").on(t.status, t.nextAttemptAt),
     check(
       "jubelio_stock_operation_type_valid",
-      sql`${t.type} in ('reserve', 'release')`
+      sql`${t.type} in ('reserve', 'release', 'reacquire')`
     ),
     check(
       "jubelio_stock_operation_status_valid",

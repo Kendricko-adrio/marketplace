@@ -1,3 +1,11 @@
+import {
+  JubelioRequestQueueError,
+  getSharedJubelioRequestScheduler,
+  type JubelioRequestScheduler,
+} from "./jubelio-request-scheduler";
+
+export type JubelioAdjustmentKind = "reserve" | "release" | "reacquire";
+
 export type JubelioStockRuntime = {
   mode: "mock" | "live";
   baseUrl: string;
@@ -84,15 +92,20 @@ export type StockAdjustmentPayload = {
 };
 
 export function buildStockAdjustmentPayload(input: {
-  kind: "reserve" | "release";
+  kind: JubelioAdjustmentKind;
   orderId: string;
   operationId: string;
   locationId: number;
   transactionDate: Date;
   items: StockAdjustmentItemInput[];
 }): StockAdjustmentPayload {
-  const direction = input.kind === "reserve" ? -1 : 1;
-  const label = input.kind === "reserve" ? "RESERVE" : "RELEASE";
+  const direction = input.kind === "release" ? 1 : -1;
+  const label =
+    input.kind === "reserve"
+      ? "RESERVE"
+      : input.kind === "release"
+        ? "RELEASE"
+        : "REACQUIRE";
   return {
     item_adj_id: 0,
     item_adj_no: "[auto]",
@@ -122,8 +135,22 @@ export function buildStockAdjustmentPayload(input: {
   };
 }
 
+export type JubelioAdjustmentSnapshot = {
+  description: string;
+  unit: string;
+  cost: number;
+  binId: number;
+  reserveAccountId: number;
+  releaseAccountId: number;
+};
+
+export type JubelioPreparedAdjustmentItem = {
+  itemId: number;
+  snapshot: JubelioAdjustmentSnapshot;
+};
+
 export type JubelioAdjustmentRequest = {
-  kind: "reserve" | "release";
+  kind: JubelioAdjustmentKind;
   orderId: string;
   operationId: string;
   locationId: number;
@@ -132,7 +159,9 @@ export type JubelioAdjustmentRequest = {
     quantity: number;
     description: string;
     observedStock: number;
+    snapshot?: JubelioAdjustmentSnapshot;
   }>;
+  onPrepared?: (items: JubelioPreparedAdjustmentItem[]) => Promise<void>;
 };
 
 export type JubelioAdjustmentResult = {
@@ -166,8 +195,13 @@ type GatewayEnvironment = JubelioStockEnvironment &
     Record<
       | "JUBELIO_EMAIL"
       | "JUBELIO_PASSWORD"
-      | "JUBELIO_ADJUSTMENT_ACCOUNT_ID"
-      | "JUBELIO_STOCK_TIMEOUT_MS",
+      | "JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID"
+      | "JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID"
+      | "JUBELIO_STOCK_TIMEOUT_MS"
+      | "JUBELIO_STOCK_MAX_REQUESTS_PER_MINUTE"
+      | "JUBELIO_STOCK_CONCURRENCY"
+      | "JUBELIO_STOCK_MAX_QUEUED"
+      | "JUBELIO_STOCK_QUEUE_TIMEOUT_MS",
       string
     >
   >;
@@ -185,16 +219,61 @@ export function createJubelioStockGateway(options: {
   env?: GatewayEnvironment;
   fetchImpl?: typeof fetch;
   logger?: Logger;
+  scheduler?: JubelioRequestScheduler;
 } = {}): JubelioStockGateway {
   const env = options.env ?? process.env;
   const runtime = resolveJubelioStockRuntime(env);
   const fetchImpl = options.fetchImpl ?? fetch;
-  const timeoutMs = Math.max(100, Number(env.JUBELIO_STOCK_TIMEOUT_MS || 8_000));
+  const positiveNumber = (value: string | undefined, fallback: number) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  };
+  const timeoutMs = Math.max(
+    100,
+    positiveNumber(env.JUBELIO_STOCK_TIMEOUT_MS, 8_000)
+  );
+  const maxRequestsPerMinute = Math.min(
+    600,
+    positiveNumber(env.JUBELIO_STOCK_MAX_REQUESTS_PER_MINUTE, 450)
+  );
+  const maxConcurrent = positiveNumber(env.JUBELIO_STOCK_CONCURRENCY, 10);
+  const maxQueued = positiveNumber(env.JUBELIO_STOCK_MAX_QUEUED, 1_000);
+  const configuredQueueTimeoutMs = Math.max(
+    1,
+    positiveNumber(env.JUBELIO_STOCK_QUEUE_TIMEOUT_MS, 5_000)
+  );
+  // Queue expiry must happen before the HTTP timeout starts classifying a
+  // potentially-sent adjustment as ambiguous.
+  const queueTimeoutMs = Math.min(
+    configuredQueueTimeoutMs,
+    Math.max(1, timeoutMs - 100)
+  );
+  const scheduler =
+    options.scheduler ??
+    (options.fetchImpl
+      ? {
+          schedule: <T>(task: () => Promise<T>) => task(),
+          activeCount: 0,
+          queuedCount: 0,
+        }
+      : getSharedJubelioRequestScheduler({
+          key: runtime.baseUrl,
+          maxConcurrent,
+          maxRequestsPerMinute,
+          maxQueued,
+          queueTimeoutMs,
+        }));
   const log = (options.logger ?? createLogger({ module: "jubelio-http" })).child({
     service: "jubelio",
     runtime: runtime.mode,
   });
   let token: string | null = null;
+  let loginPromise: Promise<string> | null = null;
+  let accountMappingPromise: Promise<{
+    adjp_acct_id?: number | string;
+    adjm_acct_id?: number | string;
+  }> | null = null;
+  const defaultBinPromises = new Map<number, Promise<number>>();
 
   function sanitizeForLog(value: unknown, key?: string, depth = 0): unknown {
     if (key && /token|password|authorization|cookie|secret/i.test(key)) {
@@ -259,7 +338,7 @@ export function createJubelioStockGateway(options: {
     }
   }
 
-  async function login(): Promise<string> {
+  async function login(priority = 0): Promise<string> {
     const email = runtime.mode === "mock" ? "mock@jubelio.local" : env.JUBELIO_EMAIL;
     const password = runtime.mode === "mock" ? "mock" : env.JUBELIO_PASSWORD;
     if (!email || !password) {
@@ -281,7 +360,10 @@ export function createJubelioStockGateway(options: {
     const startedAt = Date.now();
     let response: Response;
     try {
-      response = await fetchImpl(`${runtime.baseUrl}${path}`, init);
+      response = await scheduler.schedule(
+        () => fetchImpl(`${runtime.baseUrl}${path}`, init),
+        { priority }
+      );
     } catch (error) {
       log.error("Jubelio HTTP request failed", {
         method: "POST",
@@ -307,12 +389,23 @@ export function createJubelioStockGateway(options: {
     return token;
   }
 
+  async function getAuthToken(priority = 0): Promise<string> {
+    if (token) return token;
+    if (!loginPromise) {
+      loginPromise = login(priority).finally(() => {
+        loginPromise = null;
+      });
+    }
+    return loginPromise;
+  }
+
   async function authenticatedFetch(
     path: string,
     init: RequestInit = {},
-    relogin = true
+    relogin = true,
+    priority = 0
   ): Promise<Response> {
-    const authToken = token ?? (await login());
+    const authToken = await getAuthToken(priority);
     const requestInit: RequestInit = {
       ...init,
       headers: {
@@ -326,7 +419,10 @@ export function createJubelioStockGateway(options: {
     const startedAt = Date.now();
     let response: Response;
     try {
-      response = await fetchImpl(`${runtime.baseUrl}${path}`, requestInit);
+      response = await scheduler.schedule(
+        () => fetchImpl(`${runtime.baseUrl}${path}`, requestInit),
+        { priority }
+      );
     } catch (error) {
       log.error("Jubelio HTTP request failed", {
         method: requestInit.method ?? "GET",
@@ -342,17 +438,21 @@ export function createJubelioStockGateway(options: {
       outputPending: true,
     });
     if (response.status === 401 && relogin) {
-      token = null;
-      await login();
-      return authenticatedFetch(path, init, false);
+      if (token === authToken) token = null;
+      await getAuthToken(priority);
+      return authenticatedFetch(path, init, false, priority);
     }
     return response;
   }
 
-  async function readJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+  async function readJson<T>(
+    path: string,
+    init: RequestInit = {},
+    priority = 0
+  ): Promise<T> {
     let response: Response;
     try {
-      response = await authenticatedFetch(path, init);
+      response = await authenticatedFetch(path, init, true, priority);
     } catch (error) {
       throw new JubelioStockGatewayError(
         error instanceof Error ? error.message : "Jubelio request failed",
@@ -426,20 +526,72 @@ export function createJubelioStockGateway(options: {
     }
   }
 
+  async function getDefaultBinId(locationId: number, priority: number): Promise<number> {
+    const cached = defaultBinPromises.get(locationId);
+    if (cached) return cached;
+    const pending = readJson<{ bin_id: number | string }>(
+      `/wms/default-bin/${locationId}`,
+      {},
+      priority
+    )
+      .then((result) => {
+        const binId = Number(result.bin_id);
+        if (!Number.isFinite(binId)) {
+          throw new JubelioStockGatewayError("Jubelio default bin is invalid", {
+            ambiguous: false,
+            retryable: false,
+          });
+        }
+        return binId;
+      })
+      .catch((error) => {
+        defaultBinPromises.delete(locationId);
+        throw error;
+      });
+    defaultBinPromises.set(locationId, pending);
+    return pending;
+  }
+
   async function getItemMetadata(
     locationId: number,
-    itemIds: number[]
+    itemIds: number[],
+    priority: number
   ): Promise<Map<number, ItemMetadata>> {
     const wanted = new Set(itemIds);
-    const found = new Map<number, ItemMetadata>();
-    const pageSize = 500;
-    for (let page = 1; page <= 100 && found.size < wanted.size; page++) {
-      const result = await readJson<{ data?: ItemMetadata[]; totalCount?: number }>(
-        `/inventory/items/to-stock/${locationId}?page=${page}&pageSize=${pageSize}`
+    const rows = await readJson<
+      Array<{
+        item_id: number;
+        item_name?: string;
+        item_full_name?: string;
+        unit?: string;
+        cost?: string | number;
+      }>
+    >(
+      "/inventory/items/to-adjust/",
+      {
+        method: "POST",
+        body: JSON.stringify({ ids: [...wanted], location_id: locationId }),
+      },
+      priority
+    );
+    if (!Array.isArray(rows)) {
+      throw new JubelioStockGatewayError(
+        "Jubelio adjustment metadata response is invalid",
+        { ambiguous: false, retryable: false }
       );
-      const rows = result.data ?? [];
-      for (const row of rows) if (wanted.has(row.item_id)) found.set(row.item_id, row);
-      if (rows.length === 0 || page * pageSize >= Number(result.totalCount ?? rows.length)) break;
+    }
+
+    const found = new Map<number, ItemMetadata>();
+    for (const row of rows) {
+      const itemId = Number(row.item_id);
+      if (!wanted.has(itemId)) continue;
+      found.set(itemId, {
+        item_id: itemId,
+        item_name: row.item_name,
+        item_full_name: row.item_full_name,
+        average_cost: row.cost,
+        buy_unit: row.unit,
+      });
     }
     const missing = itemIds.filter((itemId) => !found.has(itemId));
     if (missing.length > 0) {
@@ -451,19 +603,59 @@ export function createJubelioStockGateway(options: {
     return found;
   }
 
+  async function getAdjustmentAccountIds(priority: number): Promise<{
+    reserveAccountId: number;
+    releaseAccountId: number;
+  }> {
+    if (!accountMappingPromise) {
+      accountMappingPromise = readJson<{
+        adjp_acct_id?: number | string;
+        adjm_acct_id?: number | string;
+      }>("/systemsetting/account-mapping", {}, priority).catch((error) => {
+        accountMappingPromise = null;
+        throw error;
+      });
+    }
+    const mapping = await accountMappingPromise;
+    const reserveAccountId = Number(
+      env.JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID || mapping.adjp_acct_id
+    );
+    const releaseAccountId = Number(
+      env.JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID || mapping.adjm_acct_id
+    );
+    if (!Number.isInteger(reserveAccountId) || reserveAccountId <= 0) {
+      throw new JubelioStockGatewayError(
+        "Jubelio reserve adjustment account mapping is invalid",
+        { ambiguous: false, retryable: false }
+      );
+    }
+    if (!Number.isInteger(releaseAccountId) || releaseAccountId <= 0) {
+      throw new JubelioStockGatewayError(
+        "Jubelio release adjustment account mapping is invalid",
+        { ambiguous: false, retryable: false }
+      );
+    }
+    return { reserveAccountId, releaseAccountId };
+  }
+
   async function getStocks(
     locationId: number,
-    itemIds: number[]
+    itemIds: number[],
+    priority = 5
   ): Promise<Array<{ itemId: number; onHand: number }>> {
     const result = await readJson<{
       data?: Array<{
         item_id: number;
         location_stocks?: Array<{ location_id: number; on_hand?: number }>;
       }>;
-    }>("/inventory/items/all-stocks/", {
-      method: "POST",
-      body: JSON.stringify({ ids: itemIds }),
-    });
+    }>(
+      "/inventory/items/all-stocks/",
+      {
+        method: "POST",
+        body: JSON.stringify({ ids: itemIds }),
+      },
+      priority
+    );
     return itemIds.map((itemId) => {
       const item = (result.data ?? []).find((row) => row.item_id === itemId);
       const location = item?.location_stocks?.find(
@@ -483,18 +675,92 @@ export function createJubelioStockGateway(options: {
     input: JubelioAdjustmentRequest
   ): Promise<JubelioAdjustmentResult> {
     await ensureMockStocks(input);
-    const [bin, metadata] = await Promise.all([
-      readJson<{ bin_id: number | string }>(`/wms/default-bin/${input.locationId}`),
-      getItemMetadata(input.locationId, input.items.map((item) => item.itemId)),
-    ]);
-    const binId = Number(bin.bin_id);
-    if (!Number.isFinite(binId)) {
-      throw new JubelioStockGatewayError("Jubelio default bin is invalid", {
-        ambiguous: false,
-        retryable: false,
+    const priority =
+      input.kind === "reacquire" ? 20 : input.kind === "release" ? 10 : 0;
+    let preparedItems: JubelioPreparedAdjustmentItem[];
+    if (input.items.every((item) => item.snapshot != null)) {
+      preparedItems = input.items.map((item) => ({
+        itemId: item.itemId,
+        snapshot: item.snapshot!,
+      }));
+    } else {
+      const [binId, metadata, accountIds] = await Promise.all([
+        getDefaultBinId(input.locationId, priority),
+        getItemMetadata(
+          input.locationId,
+          input.items.map((item) => item.itemId),
+          priority
+        ),
+        getAdjustmentAccountIds(priority),
+      ]);
+      preparedItems = input.items.map((item) => {
+        const detail = metadata.get(item.itemId)!;
+        const cost = Number(detail.average_cost ?? detail.buy_price);
+        const unit = detail.buy_unit?.trim();
+        if (!Number.isFinite(cost) || cost < 0) {
+          throw new JubelioStockGatewayError(
+            `Jubelio adjustment cost is invalid for item ${item.itemId}`,
+            { ambiguous: false, retryable: false }
+          );
+        }
+        if (!unit) {
+          throw new JubelioStockGatewayError(
+            `Jubelio adjustment unit is missing for item ${item.itemId}`,
+            { ambiguous: false, retryable: false }
+          );
+        }
+        return {
+          itemId: item.itemId,
+          snapshot: {
+            description:
+              detail.item_full_name || detail.item_name || item.description,
+            unit,
+            cost,
+            binId,
+            ...accountIds,
+          },
+        };
       });
     }
-    const accountId = Number(env.JUBELIO_ADJUSTMENT_ACCOUNT_ID || 75);
+
+    for (const prepared of preparedItems) {
+      const snapshot = prepared.snapshot;
+      if (
+        !snapshot.description ||
+        !snapshot.unit ||
+        !Number.isFinite(snapshot.cost) ||
+        snapshot.cost < 0 ||
+        !Number.isInteger(snapshot.binId) ||
+        snapshot.binId <= 0 ||
+        !Number.isInteger(snapshot.reserveAccountId) ||
+        snapshot.reserveAccountId <= 0 ||
+        !Number.isInteger(snapshot.releaseAccountId) ||
+        snapshot.releaseAccountId <= 0
+      ) {
+        throw new JubelioStockGatewayError(
+          `Jubelio adjustment snapshot is invalid for item ${prepared.itemId}`,
+          { ambiguous: false, retryable: false }
+        );
+      }
+    }
+    try {
+      await input.onPrepared?.(preparedItems);
+    } catch (error) {
+      throw new JubelioStockGatewayError(
+        error instanceof Error
+          ? error.message
+          : "Jubelio adjustment snapshot could not be persisted",
+        {
+          code: "SNAPSHOT_PERSIST_FAILED",
+          ambiguous: false,
+          retryable: true,
+        }
+      );
+    }
+
+    const preparedByItem = new Map(
+      preparedItems.map((item) => [item.itemId, item.snapshot])
+    );
     const payload = buildStockAdjustmentPayload({
       kind: input.kind,
       orderId: input.orderId,
@@ -502,16 +768,18 @@ export function createJubelioStockGateway(options: {
       locationId: input.locationId,
       transactionDate: new Date(),
       items: input.items.map((item) => {
-        const detail = metadata.get(item.itemId)!;
-        const cost = Number(detail.average_cost ?? detail.buy_price ?? 0);
+        const snapshot = preparedByItem.get(item.itemId)!;
         return {
           itemId: item.itemId,
           quantity: item.quantity,
-          description: detail.item_full_name || detail.item_name || item.description,
-          unit: detail.buy_unit || "Buah",
-          cost: Number.isFinite(cost) ? cost : 0,
-          accountId,
-          binId,
+          description: snapshot.description,
+          unit: snapshot.unit,
+          cost: snapshot.cost,
+          accountId:
+            input.kind === "release"
+              ? snapshot.releaseAccountId
+              : snapshot.reserveAccountId,
+          binId: snapshot.binId,
         };
       }),
     });
@@ -529,8 +797,20 @@ export function createJubelioStockGateway(options: {
     const adjustmentStartedAt = Date.now();
     let response: Response;
     try {
-      response = await authenticatedFetch(adjustmentPath, adjustmentInit);
+      response = await authenticatedFetch(
+        adjustmentPath,
+        adjustmentInit,
+        true,
+        priority
+      );
     } catch (error) {
+      if (error instanceof JubelioRequestQueueError) {
+        throw new JubelioStockGatewayError(error.message, {
+          code: error.code,
+          ambiguous: false,
+          retryable: true,
+        });
+      }
       throw new JubelioStockGatewayError(
         error instanceof Error ? error.message : "Jubelio adjustment timed out",
         { ambiguous: true, retryable: true }
@@ -570,7 +850,11 @@ export function createJubelioStockGateway(options: {
     }
     return {
       adjustmentId,
-      stocks: await getStocks(input.locationId, input.items.map((item) => item.itemId)),
+      stocks: await getStocks(
+        input.locationId,
+        input.items.map((item) => item.itemId),
+        priority
+      ),
     };
   }
 
@@ -581,7 +865,9 @@ export function createJubelioStockGateway(options: {
         data?: Array<{ item_adj_id: number; note?: string }>;
         totalCount?: number;
       }>(
-        `/inventory/adjustments/?page=${page}&pageSize=${pageSize}&sortBy=transaction_date&sortDirection=desc`
+        `/inventory/adjustments/?page=${page}&pageSize=${pageSize}&sortBy=transaction_date&sortDirection=desc`,
+        {},
+        5
       );
       const match = (result.data ?? []).find((row) => row.note === note);
       if (match) return Number(match.item_adj_id);

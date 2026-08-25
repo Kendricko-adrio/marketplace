@@ -30,8 +30,13 @@ Staging runs `jubelio-mock` as a private Compose service and sets:
 APP_ENV=staging
 JUBELIO_MOCK_API_BASE_URL=http://jubelio-mock:3002
 JUBELIO_STOCK_WRITES_ENABLED=false
-JUBELIO_ADJUSTMENT_ACCOUNT_ID=75
+JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID=
+JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID=
 JUBELIO_STOCK_TIMEOUT_MS=8000
+JUBELIO_STOCK_MAX_REQUESTS_PER_MINUTE=450
+JUBELIO_STOCK_CONCURRENCY=10
+JUBELIO_STOCK_MAX_QUEUED=1000
+JUBELIO_STOCK_QUEUE_TIMEOUT_MS=5000
 ```
 
 Production sets `APP_ENV=production`, but live writes remain disabled until
@@ -41,11 +46,33 @@ this explicit value is changed and the store container is restarted:
 JUBELIO_STOCK_WRITES_ENABLED=true
 ```
 
-The gateway also requires `NODE_ENV=production` and the exact HTTPS host
-`https://api2.jubelio.com`. If any check fails, checkout stops before Midtrans.
-Before enabling production, apply migration `0013_absurd_vampiro.sql`, verify
-all sellable variants have `jubelio_item_id`, verify active branches have
-`jubelio_location_id`, and create a database backup.
+The gateway resolves `adjp_acct_id` and `adjm_acct_id` from
+`GET /systemsetting/account-mapping`. The plus/minus env values are optional
+emergency overrides and should normally remain empty. The gateway also requires
+`NODE_ENV=production` and the exact HTTPS host `https://api2.jubelio.com`. If
+any check fails, checkout stops before Midtrans.
+
+The stock HTTP scheduler is process-wide. It spaces request starts to stay at
+or below `JUBELIO_STOCK_MAX_REQUESTS_PER_MINUTE`, caps simultaneous requests at
+`JUBELIO_STOCK_CONCURRENCY`, and gives release work priority over new checkout
+reserve work. The default 450/minute intentionally leaves headroom below
+Jubelio's documented 600/minute account limit for reconciliation and unrelated
+API traffic. The default gateway is also shared per store process, so login,
+account mapping, and default-bin single-flight caches are reused across
+concurrent checkout, release, and reconciliation work.
+
+When `JUBELIO_STOCK_MAX_QUEUED` is reached, or a request waits longer than
+`JUBELIO_STOCK_QUEUE_TIMEOUT_MS`, the scheduler rejects it before invoking
+`fetch`. The configured queue timeout is capped below the HTTP timeout.
+Therefore an adjustment queue rejection is definitive—not an ambiguous write.
+Reserve operations release their local hold and checkout
+returns `503`; release operations remain reconciling for a later retry.
+Before enabling production, apply all migrations through
+`0015_fixed_hiroim.sql`, verify all sellable variants have `jubelio_item_id`,
+verify active branches have `jubelio_location_id`, and create a database
+backup. Follow the complete operator procedure in
+[stock-adjustment-rollout.md](stock-adjustment-rollout.md); do not enable the
+switch from an ad-hoc shell session.
 
 The stateful mock supports `success`, `insufficient-stock`, `server-error`,
 `rate-limit-once`, `unauthorized-once`, `timeout-before-apply`,

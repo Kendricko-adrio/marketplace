@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { Pool } from "pg";
 import dotenv from "dotenv";
+import crypto from "node:crypto";
 
 dotenv.config({ path: ".env" });
 const createdOrderIds: string[] = [];
@@ -230,6 +231,129 @@ test.describe("storefront cart & checkout", () => {
     const createdOrderId = new URL(page.url()).searchParams.get("orderId");
     expect(createdOrderId).toBeTruthy();
     createdOrderIds.push(createdOrderId!);
+
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const snapshot = await pool.query(
+      `SELECT payload->'items'->0->'snapshot' AS snapshot
+       FROM jubelio_stock_operation
+       WHERE order_id = $1 AND type = 'reserve'`,
+      [createdOrderId]
+    );
+    await pool.end();
+    expect(snapshot.rows[0]?.snapshot).toMatchObject({
+      unit: "Buah",
+      reserveAccountId: 75,
+      releaseAccountId: 72,
+    });
+    expect(snapshot.rows[0]?.snapshot.cost).toEqual(expect.any(Number));
+    expect(snapshot.rows[0]?.snapshot.binId).toEqual(expect.any(Number));
+  });
+
+  test("re-acquires stock when settlement arrives after confirmed compensation", async ({
+    page,
+  }) => {
+    const orderId = createdOrderIds[0];
+    expect(orderId).toBeTruthy();
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const client = await pool.connect();
+    let grossAmount = "";
+    try {
+      await client.query("BEGIN");
+      const order = await client.query(
+        "SELECT branch_id, total FROM orders WHERE id = $1 FOR UPDATE",
+        [orderId]
+      );
+      const reserve = await client.query(
+        `SELECT payload FROM jubelio_stock_operation
+         WHERE order_id = $1 AND type = 'reserve'`,
+        [orderId]
+      );
+      const payload = reserve.rows[0].payload;
+      const releaseId = crypto.randomUUID();
+      for (const item of payload.items) {
+        await client.query(
+          `UPDATE branch_stock
+           SET stock = stock + $1,
+               reserved_stock = GREATEST(0, reserved_stock - $1),
+               updated_at = NOW()
+           WHERE branch_id = $2 AND product_variant_id = $3`,
+          [item.quantity, order.rows[0].branch_id, item.variantId]
+        );
+      }
+      await client.query(
+        `INSERT INTO jubelio_stock_operation
+          (id, order_id, type, status, note, payload, remote_adjustment_id,
+           attempt_count, next_attempt_at, created_at, updated_at)
+         VALUES ($1, $2, 'release', 'applied', $3, $4, 8001, 1, NOW(), NOW(), NOW())`,
+        [releaseId, orderId, `OKCIR_RELEASE:${orderId}:${releaseId}`, payload]
+      );
+      await client.query(
+        `UPDATE orders
+         SET status = 'failed_payment', payment_status = 'failed',
+             payment_failure_reason = 'Payment expired',
+             midtrans_failure_status = 'expire', updated_at = NOW()
+         WHERE id = $1`,
+        [orderId]
+      );
+      grossAmount = order.rows[0].total;
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const configured = await page.request.put(
+      "http://127.0.0.1:3002/__control/midtrans-status",
+      {
+        data: {
+          orderId,
+          transactionStatus: "settlement",
+          grossAmount,
+        },
+      }
+    );
+    expect(configured.ok()).toBe(true);
+    const statusCode = "200";
+    const signature = crypto
+      .createHash("sha512")
+      .update(
+        `${orderId}${statusCode}${grossAmount}${process.env.MIDTRANS_SERVER_KEY}`
+      )
+      .digest("hex");
+    const webhook = await page.request.post("/api/webhooks/midtrans", {
+      data: {
+        order_id: orderId,
+        transaction_status: "settlement",
+        status_code: statusCode,
+        gross_amount: grossAmount,
+        signature_key: signature,
+      },
+    });
+    expect(webhook.status()).toBe(200);
+
+    const state = await pool.query(
+      `SELECT o.status, o.payment_status,
+              j.status AS operation_status, j.remote_adjustment_id,
+              bs.pending_remote_stock
+       FROM orders o
+       JOIN jubelio_stock_operation j
+         ON j.order_id = o.id AND j.type = 'reacquire'
+       JOIN order_item oi ON oi.order_id = o.id
+       JOIN branch_stock bs
+         ON bs.branch_id = o.branch_id AND bs.product_variant_id = oi.variant_id
+       WHERE o.id = $1`,
+      [orderId]
+    );
+    await pool.end();
+    expect(state.rows[0]).toMatchObject({
+      status: "ready_for_pickup",
+      payment_status: "paid",
+      operation_status: "applied",
+      pending_remote_stock: 0,
+    });
+    expect(state.rows[0].remote_adjustment_id).toEqual(expect.any(Number));
   });
 
   test("does not continue to Midtrans when Jubelio rejects the reservation", async ({
@@ -248,7 +372,7 @@ test.describe("storefront cart & checkout", () => {
       page.getByText(
         "Stock produk berubah atau tidak mencukupi. Silakan periksa keranjang Anda."
       )
-    ).toBeVisible();
+    ).toBeVisible({ timeout: 15_000 });
     await expect(page).toHaveURL(/\/checkout$/);
 
     const pool = new Pool({ connectionString: process.env.DATABASE_URL });

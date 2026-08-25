@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { orders, orderItems, branches, clients, productVariants, products } from "@/db";
-import { eq } from "drizzle-orm";
+import {
+  orders,
+  orderItems,
+  branches,
+  clients,
+  productVariants,
+  products,
+  jubelioStockOperations,
+} from "@/db";
+import { asc, eq } from "drizzle-orm";
 import { withPermission, getBranchScope } from "@/lib/auth-guard";
 import { requestLogger, serializeError } from "@/lib/logger";
 
@@ -105,8 +113,22 @@ export const GET = withPermission(async (
       ...item,
       imageUrl: item.thumbnail ?? null,
     }));
+    const stockOperations = await db
+      .select({
+        id: jubelioStockOperations.id,
+        type: jubelioStockOperations.type,
+        status: jubelioStockOperations.status,
+        remoteAdjustmentId: jubelioStockOperations.remoteAdjustmentId,
+        attemptCount: jubelioStockOperations.attemptCount,
+        lastError: jubelioStockOperations.lastError,
+        createdAt: jubelioStockOperations.createdAt,
+        updatedAt: jubelioStockOperations.updatedAt,
+      })
+      .from(jubelioStockOperations)
+      .where(eq(jubelioStockOperations.orderId, id))
+      .orderBy(asc(jubelioStockOperations.createdAt));
 
-    log.info("order detail served");
+    log.info("order detail served", { stockOperationCount: stockOperations.length });
     return NextResponse.json({
       success: true,
       data: {
@@ -114,6 +136,7 @@ export const GET = withPermission(async (
         customer: order[0].customer,
         branch: order[0].branch,
         items: itemsWithImages,
+        stockOperations,
       },
     });
   } catch (error) {

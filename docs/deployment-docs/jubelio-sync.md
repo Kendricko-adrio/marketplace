@@ -72,8 +72,9 @@ lalu upsert per halaman. Idempoten — aman dijalankan ulang.
 2. Di Jubelio UI: **Pengaturan → Developer → Webhook**. Daftarkan callback URL
    `https://<store-domain>/api/webhooks/jubelio` untuk action `update-product`,
    `update-price`, `update-qty`.
-3. Jubelio menandatangani `SHA256(rawBody + secret)` (hex) di header
-   `webhook-signature`. Handler verify dari raw body — 503 jika secret unset,
+3. Jubelio menandatangani `HMAC-SHA256(rawBody + secret, secret)` (hex) di header `Sign`.
+   Handler juga menerima alias lama `webhook-signature` dan
+   `x-jubelio-signature`, lalu memverifikasi raw body — 503 jika secret unset,
    401 jika signature salah, 500 jika upsert gagal (Jubelio retry sampai 3×).
 
 Payload minimal (cuma `item_group_id` + action) → handler re-fetch state

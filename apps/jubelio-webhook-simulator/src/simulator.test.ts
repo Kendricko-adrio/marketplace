@@ -24,6 +24,16 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
+describe("createWebhookSignature", () => {
+  it("matches the documented Jubelio HMAC signature format", () => {
+    const body = JSON.stringify({ action: "update-product", item_group_id: 42 });
+
+    expect(createWebhookSignature(body, "webhook-secret-abc")).toBe(
+      "ac44fe5b6e745afaa9536a405e17046e0e99e22a05b09f80f5dc908536e7b6be"
+    );
+  });
+});
+
 describe("simulateJubelioWebhook", () => {
   it("fetches a random real record and posts a correctly signed webhook", async () => {
     const fetchImpl = vi.fn<typeof fetch>()
@@ -60,7 +70,7 @@ describe("simulateJubelioWebhook", () => {
     expect(webhookRequest[0]).toBe(config.webhookUrl);
     expect(webhookRequest[1]?.headers).toMatchObject({
       "content-type": "application/json",
-      "webhook-signature": createWebhookSignature(rawBody, config.webhookSecret),
+      Sign: createWebhookSignature(rawBody, config.webhookSecret),
     });
     expect(result.webhookStatus).toBe(200);
   });

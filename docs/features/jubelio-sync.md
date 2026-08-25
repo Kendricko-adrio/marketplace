@@ -130,9 +130,11 @@ the token and auto re-logins on 401. Env: `JUBELIO_EMAIL`, `JUBELIO_PASSWORD`,
 2. In Jubelio UI: **Pengaturan → Developer → Webhook**. Add the callback URL
    `https://<store-domain>/api/webhooks/jubelio` for actions `update-product`,
    `update-price`, `update-qty`.
-3. Jubelio retries up to 3× if the endpoint returns non-200. The handler
-   returns 500 on upsert failure (so Jubelio retries), 401 on bad signature,
-   503 if the secret is unset.
+3. Jubelio sends `HMAC-SHA256(rawBody + secret, secret)` in the `Sign` header. The handler
+   also accepts the legacy `webhook-signature` and `x-jubelio-signature`
+   aliases. Jubelio retries up to 3× if the endpoint returns non-200. The
+   handler returns 500 on upsert failure (so Jubelio retries), 401 on bad
+   signature, and 503 if the secret is unset.
 
 ## Schema
 

@@ -42,7 +42,7 @@ Without `--action`, the simulator randomly chooses one of the three supported
 actions. It first reads the total number of master products, selects a random
 page and product, then builds the minimal payload expected by
 `POST /api/webhooks/jubelio`. The request body is signed using the same
-`SHA256(rawBody + JUBELIO_WEBHOOK_SECRET)` rule as the route.
+`HMAC-SHA256(rawBody + JUBELIO_WEBHOOK_SECRET, JUBELIO_WEBHOOK_SECRET)` rule as the route.
 
 `update-qty` also reads the selected product's stock locations so that its
 `item_ids` and `location_id` are real values. The simulator never calls

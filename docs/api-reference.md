@@ -47,7 +47,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | Secret / env | Used by | Header / mechanism |
 |---|---|---|
 | `CRON_SECRET` | `POST /api/cron/sweep-reservations` | `X-Cron-Secret` |
-| `JUBELIO_WEBHOOK_SECRET` | `POST /api/webhooks/jubelio` | `webhook-signature` (`SHA256(body+secret)`) |
+| `JUBELIO_WEBHOOK_SECRET` | `POST /api/webhooks/jubelio` | `Sign` (`HMAC-SHA256(body+secret, secret)`; legacy aliases supported) |
 | `MIDTRANS_SERVER_KEY` | `POST /api/webhooks/midtrans`, payment creation | `signature_key` verification |
 | `BETTER_AUTH_SECRET` | `POST /api/internal/order-complete` | HMAC body secret (shared store↔admin) |
 
@@ -85,7 +85,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | PATCH | `/api/account/profile` | client-session | Update client name/phone |
 | POST | `/api/payments/midtrans/create` | client-session | Re-payment for a pending_payment order |
 | POST | `/api/webhooks/midtrans` | signature-verification | Midtrans payment notification → finalize/fail order |
-| POST | `/api/webhooks/jubelio` | signature `SHA256(body+JUBELIO_WEBHOOK_SECRET)` | **Jubelio master-data sync (product/price/stock push)** |
+| POST | `/api/webhooks/jubelio` | signature `HMAC-SHA256(body+secret, secret)` | **Jubelio master-data sync (product/price/stock push)** |
 | POST | `/api/internal/order-complete` | internal (HMAC) | Admin→store: mark order completed + email |
 | POST | `/api/cron/sweep-reservations` | secret-header `X-Cron-Secret` | Release stale reservation safety-net |
 | GET | `/api/onboarding/sync` | client-session | Sync onboarding cookie, redirect |
@@ -339,7 +339,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: `signature_key`, `order_id`, `transaction_status`, `status_code`, and `gross_amount` are mandatory. Signature comparison is constant-time. Both callback and authoritative provider amounts/order IDs must match the local order. There is no unverified payload fallback; non-2xx responses intentionally allow Midtrans retry. Claim guards keep success/failure finalization idempotent against webhook/sweep races.
 
 #### `POST` `/api/webhooks/jubelio`
-- **Auth**: signature — `SHA256(rawBodyString + JUBELIO_WEBHOOK_SECRET)` (hex), sent in the `webhook-signature` (or `x-jubelio-signature`) header; recomputed from the raw request body — **503** if env unset, **401** on mismatch
+- **Auth**: signature — `HMAC-SHA256(rawBodyString + JUBELIO_WEBHOOK_SECRET, JUBELIO_WEBHOOK_SECRET)` (hex), sent by Jubelio in the `Sign` header; legacy `webhook-signature` and `x-jubelio-signature` aliases remain supported; recomputed from the raw request body — **503** if env unset, **401** on mismatch
 - **Purpose**: Receive Jubelio push events when a product/price/stock changes and re-sync the affected entity from Jubelio (source of truth). Setup: Jubelio UI → Pengaturan → Developer → Webhook, register this URL for `update-product` / `update-price` / `update-qty` + set the Webhook Secret Key. See `docs/features/jubelio-sync.md` + `docs/deployment-docs/jubelio-sync.md`.
 - **Params**: —
 - **Body**: `update-product`/`update-price`: `{ action, item_group_id, item_group_name }`; `update-qty`: `{ action, item_group_id, item_group_name, item_ids: number[], location_id }`

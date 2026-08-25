@@ -6,7 +6,11 @@ import {
   flattenStock,
   upsertJubelioStock,
 } from "@marketplace/db/src/jubelio-sync";
-import { verifyJubelioSignature } from "@/lib/jubelio-webhook";
+import {
+  getJubelioSignature,
+  inspectJubelioSignature,
+} from "@/lib/jubelio-webhook";
+import { requestLogger, serializeError } from "@/lib/logger";
 
 /**
  * Jubelio webhook — receives push events from Jubelio (source of truth) when a
@@ -17,7 +21,7 @@ import { verifyJubelioSignature } from "@/lib/jubelio-webhook";
  * callback for `update-product`, `update-price`, `update-qty` and fill in the
  * Webhook Secret Key (must equal JUBELIO_WEBHOOK_SECRET). See docs/features/jubelio-sync.md.
  *
- * Auth: Jubelio signs `SHA256(rawBodyString + secret)`; we recompute from the
+ * Auth: Jubelio signs `HMAC-SHA256(rawBodyString + secret, secret)`; we recompute from the
  * raw request body and compare. 503 if the secret is not configured, 401 on
  * mismatch (same pattern as the sweep cron's X-Cron-Secret).
  *
@@ -30,9 +34,10 @@ import { verifyJubelioSignature } from "@/lib/jubelio-webhook";
  * accepted call's outcome.
  */
 export async function POST(request: NextRequest) {
+  const log = requestLogger(request, { module: "jubelio-webhook" });
   const secret = process.env.JUBELIO_WEBHOOK_SECRET;
   if (!secret) {
-    console.error("jubelio-webhook: JUBELIO_WEBHOOK_SECRET is not set on the server");
+    log.error("Jubelio webhook is not configured");
     return NextResponse.json(
       { success: false, error: "Webhook not configured" },
       { status: 503 }
@@ -41,12 +46,23 @@ export async function POST(request: NextRequest) {
 
   const rawBody = await request.text();
 
-  // Signature: SHA256(rawBody + secret), hex. Jubelio sends it in a header
-  // (accept either common name since the spec shows it only in a screenshot).
-  const provided =
-    request.headers.get("webhook-signature") ||
-    request.headers.get("x-jubelio-signature");
-  if (!verifyJubelioSignature(rawBody, secret, provided)) {
+  // Signature: HMAC-SHA256(rawBody + secret, secret), hex, sent in `Sign`.
+  // Keep the historical aliases for compatibility with existing integrations.
+  const provided = getJubelioSignature(request.headers);
+  const { valid: signatureValid, ...signatureDiagnostics } =
+    inspectJubelioSignature(rawBody, secret, provided);
+  if (!signatureValid) {
+    log.error("Jubelio webhook signature rejected", {
+      ...signatureDiagnostics,
+      signatureHeader: request.headers.has("sign")
+        ? "sign"
+        : request.headers.has("webhook-signature")
+          ? "webhook-signature"
+          : request.headers.has("x-jubelio-signature")
+            ? "x-jubelio-signature"
+            : null,
+      contentLength: request.headers.get("content-length"),
+    });
     return NextResponse.json(
       { success: false, error: "Unauthorized" },
       { status: 401 }
@@ -57,6 +73,7 @@ export async function POST(request: NextRequest) {
   try {
     body = JSON.parse(rawBody);
   } catch {
+    log.error("Jubelio webhook body is invalid JSON");
     return NextResponse.json(
       { success: false, error: "Invalid JSON body" },
       { status: 400 }
@@ -76,6 +93,7 @@ export async function POST(request: NextRequest) {
 
     if (action === "update-product" || action === "update-price") {
       if (!itemGroupId) {
+        log.error("Jubelio webhook is missing item_group_id", { action });
         return NextResponse.json(
           { success: false, error: "Missing item_group_id" },
           { status: 400 }
@@ -86,6 +104,7 @@ export async function POST(request: NextRequest) {
     } else if (action === "update-qty") {
       const itemIds = payload.item_ids ?? [];
       if (itemIds.length === 0) {
+        log.error("Jubelio webhook is missing item_ids", { action });
         return NextResponse.json(
           { success: false, error: "Missing item_ids" },
           { status: 400 }
@@ -97,7 +116,7 @@ export async function POST(request: NextRequest) {
       summary = { action, itemIds, stockRows: upserted };
     } else {
       // Unknown action — acknowledge so Jubelio doesn't retry, but log it.
-      console.warn("jubelio-webhook: unknown action:", action);
+      log.warn("Jubelio webhook action ignored", { action });
       summary = { action, ignored: true };
     }
 
@@ -111,9 +130,14 @@ export async function POST(request: NextRequest) {
       ipAddress: request.headers.get("x-forwarded-for") ?? null,
     });
 
+    log.info("Jubelio webhook processed", summary);
     return NextResponse.json({ success: true, ...summary });
   } catch (error) {
-    console.error("jubelio-webhook: sync failed:", error);
+    log.error("Jubelio webhook sync failed", {
+      action,
+      itemGroupId,
+      error: serializeError(error),
+    });
     // 500 → Jubelio will retry (up to 3×).
     return NextResponse.json(
       { success: false, error: "Sync failed" },

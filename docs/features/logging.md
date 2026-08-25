@@ -72,6 +72,7 @@ export const POST = async (request: NextRequest) => {
 | `app/api/checkout/place-order/route.ts` | Request start, validation warnings, order creation, success (with `total`/`ttlMinutes`), stock rollback, Midtrans failure, catch-all errors |
 | `app/api/cart/validate-checkout/route.ts` | Validation requested/passed, unauthorized, invalid body, branch-inactive and insufficient-stock cart adjustments |
 | `app/api/webhooks/midtrans/route.ts` | Webhook received (`order_id`, `transaction_status`, `status_code`), missing fields, invalid signature, handler failure |
+| `app/api/webhooks/jubelio/route.ts` | Signature/configuration failures (reason, header, body/hash/signature prefixes, secret fingerprint), invalid payloads, ignored actions, sync success/failure |
 | `app/api/internal/order-complete/route.ts` | Missing `orderId`, completion email failure, catch-all errors |
 
 **Admin (`apps/admin/src`):**

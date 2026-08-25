@@ -1,4 +1,4 @@
-import { createHash, randomInt } from "node:crypto";
+import { createHmac, randomInt } from "node:crypto";
 import { pathToFileURL } from "node:url";
 
 export type WebhookAction = "update-product" | "update-price" | "update-qty";
@@ -42,7 +42,9 @@ export type SimulatorResult = {
 type FetchImpl = typeof fetch;
 
 export function createWebhookSignature(rawBody: string, secret: string): string {
-  return createHash("sha256").update(rawBody + secret).digest("hex");
+  return createHmac("sha256", secret)
+    .update(rawBody + secret)
+    .digest("hex");
 }
 
 async function readJson<T>(response: Response, context: string): Promise<T> {
@@ -128,7 +130,7 @@ export async function simulateJubelioWebhook(
     method: "POST",
     headers: {
       "content-type": "application/json",
-      "webhook-signature": createWebhookSignature(rawBody, config.webhookSecret),
+      Sign: createWebhookSignature(rawBody, config.webhookSecret),
     },
     body: rawBody,
   });

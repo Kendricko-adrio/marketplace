@@ -43,6 +43,22 @@ docker compose -p production --env-file .env up -d --build store
 
 ## B. Setup crontab di VPS
 
+Cron memanggil wrapper script
+`deployment/common/cron/sweep-reservations.sh` (bukan `curl` langsung). Script
+ini yang:
+- POST ke `/api/cron/sweep-reservations` dengan header `X-Cron-Secret` — secret
+  dibaca dari file `.env`, jadi crontab **tidak berisi secret**;
+- menulis hasil tiap run ke file log harian di sebuah folder log:
+  `<log-dir>/marketplace-sweep-YYYY-MM-DD.log`;
+- housekeeping otomatis: file log lebih tua dari **7 hari** dihapus setiap run
+  supaya log tidak menumpuk di server (retensi bisa diubah via
+  `--retention-days`).
+
+Pastikan script executable (sekali saja, sesudah clone/pull repo):
+```bash
+chmod +x /home/ops/marketplace/deployment/common/cron/sweep-reservations.sh
+```
+
 Jalankan sebagai user `ops` (bukan root):
 ```bash
 crontab -e
@@ -51,28 +67,49 @@ crontab -e
 Tambahkan baris (jalankan tiap 1 menit agar operasi Jubelio ambigu cepat
 direconcile):
 ```cron
-* * * * * curl -fsS -X POST -H "X-Cron-Secret: GANTI_DENGAN_CRON_SECRET_ANDA" https://dev-store.adfsport.cloud/api/cron/sweep-reservations >> /var/log/marketplace-sweep.log 2>&1
+# Staging
+* * * * * /home/ops/marketplace/deployment/common/cron/sweep-reservations.sh --url https://dev-store.adfsport.cloud --env-file /home/ops/marketplace/deployment/staging/.env --log-dir /home/ops/logs/marketplace-sweep/staging
+
+# Production (aktifkan saat go-live)
+# * * * * * /home/ops/marketplace/deployment/common/cron/sweep-reservations.sh --url https://store.adfsport.cloud --env-file /home/ops/marketplace/deployment/production/.env --log-dir /home/ops/logs/marketplace-sweep/production
 ```
 
 Ganti:
-- `GANTI_DENGAN_CRON_SECRET_ANDA` → nilai `CRON_SECRET` dari `.env`.
+- `/home/ops/marketplace` → lokasi clone repo di VPS (default deploy:
+  `~/marketplace`, lihat [deploy.md](deploy.md)).
 - `https://dev-store.adfsport.cloud` → URL store (staging: `dev-store.adfsport.cloud`,
   production: `store.adfsport.cloud`).
+
+Opsi script lainnya: `--retention-days N` (default 7), `--timeout DETIK`
+(default 55, `curl --max-time`), atau via env var `SWEEP_URL`, `SWEEP_ENV_FILE`,
+`SWEEP_LOG_DIR`, `SWEEP_RETENTION_DAYS`, `SWEEP_CURL_TIMEOUT`. Env
+`CRON_SECRET` (kalau di-set) menimpa nilai dari `--env-file`. Kalau
+`CRON_SECRET` di-rotate, cukup update `.env` + restart store — crontab tidak
+perlu diubah.
 
 Simpan + keluar editor. Cron otomatis aktif.
 
 ## C. Verifikasi cron jalan
 
-Tunggu ~1 menit, lalu cek log:
+Tunggu ~1 menit, lalu cek log hari ini:
 ```bash
-tail -f /var/log/marketplace-sweep.log
-# Expected (tiap 1 menit):
-# {"success":true,"scanned":0,"finalized":0,"failed":0,"jubelioSync":{"scanned":0,"applied":0,"failed":0,"pending":0}}
+tail -f /home/ops/logs/marketplace-sweep/staging/marketplace-sweep-$(date +%F).log
+# Expected (tiap 1 menit, satu file per hari):
+# [2026-01-01T10:00:00+0700] OK {"success":true,"scanned":0,"finalized":0,"failed":0,"jubelioSync":{"scanned":0,"applied":0,"failed":0,"pending":0}}
 ```
 
-Test manual sekali (tanpa tunggu cron):
+Kalau request gagal (mis. endpoint 503, jaringan putus), barisnya berbentuk:
+```
+# [2026-01-01T10:05:00+0700] FAIL rc=22 curl: (22) The requested URL returned error: 503
+```
+
+Test manual sekali (tanpa tunggu cron — keluaran juga tercatat ke file log
+harian):
 ```bash
-curl -fsS -X POST -H "X-Cron-Secret: $CRON_SECRET" https://dev-store.adfsport.cloud/api/cron/sweep-reservations
+/home/ops/marketplace/deployment/common/cron/sweep-reservations.sh \
+  --url https://dev-store.adfsport.cloud \
+  --env-file /home/ops/marketplace/deployment/staging/.env \
+  --log-dir /home/ops/logs/marketplace-sweep/staging
 ```
 
 > - `scanned` = jumlah order `pending_payment` yang sudah lewat TTL (batch 100).
@@ -91,6 +128,12 @@ curl -fsS -X POST -H "X-Cron-Secret: $CRON_SECRET" https://dev-store.adfsport.cl
   memastikan webhook dan cron tidak double-process order yang sama.
 - **Kalau `CRON_SECRET` kosong** di server, endpoint return 503 (cron tidak
   akan jalan — cek env: `docker compose -p staging --env-file .env exec store env | grep CRON_SECRET`).
+  Di sisi cron, kondisi ini terlihat sebagai baris `FAIL rc=22 ... 503` di log
+  harian.
+- **Log & retensi**: satu file log per hari di `<log-dir>`
+  (`marketplace-sweep-YYYY-MM-DD.log`); housekeeping script menghapus file
+  lebih tua dari 7 hari (default) setiap kali cron jalan. Cek ukuran:
+  `du -sh /home/ops/logs/marketplace-sweep/*`.
 - Operasi `manual_review` tidak otomatis mengirim write ulang. Dari detail
   order admin, **Recheck safely** hanya memindahkannya ke `reconciling`; sweep
   kemudian mencari adjustment berdasarkan note unik sebelum mengubah stok.

@@ -120,12 +120,16 @@ log() {
 LOG_FILE="${SWEEP_LOG_DIR}/${SWEEP_LOG_PREFIX}-$(date +%F).log"
 
 # ------------------------------------------------------------- panggil endpoint
+# --url adalah base URL store; normalisasi trailing slash sebelum menambahkan
+# path endpoint agar bentuk dengan/tanpa slash menghasilkan URL yang sama.
+endpoint_url="${SWEEP_URL%/}/api/cron/sweep-reservations"
+
 # --max-time menjaga agar satu run tidak menggantung >1 menit dan bertumpuk
 # dengan run cron berikutnya. Endpoint sweep idempoten, tetapi tetap dijaga.
 err_file="$(mktemp)"
 rc=0
 body="$(curl -fsS --max-time "$SWEEP_CURL_TIMEOUT" \
-  -X POST -H "X-Cron-Secret: ${secret}" "$SWEEP_URL" 2>"$err_file")" || rc=$?
+  -X POST -H "X-Cron-Secret: ${secret}" "$endpoint_url" 2>"$err_file")" || rc=$?
 
 if [ "$rc" -eq 0 ]; then
   log "OK ${body}"

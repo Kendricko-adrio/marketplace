@@ -83,7 +83,7 @@ docker compose -p staging --env-file .env --profile tools run --rm migrate
 docker compose -p staging --env-file .env --profile tools run --rm migrate npx tsx src/seed.ts
 
 # Jika SEED_MODE=jubelio, import wajib dilakukan SETELAH seed.
-docker compose -p staging --env-file .env --profile tools run --rm migrate npx tsx src/import-jubelio.ts
+docker compose -p staging --env-file .env --profile tools run --rm --env-from-file .env migrate npx tsx src/import-jubelio.ts
 ```
 
 Default container hanya menjalankan `npx drizzle-kit migrate`. Seed tidak lagi

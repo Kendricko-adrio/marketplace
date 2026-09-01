@@ -935,7 +935,7 @@ export function createReserveOperationValues(input: {
     orderId: input.orderId,
     type: "reserve",
     status: "pending",
-    note: `OKCIR_RESERVE:${input.orderId}:${input.operationId}`,
+    note: `${input.orderId}:${input.operationId}`,
     payload: { locationId: input.locationId, items: input.items },
   } as const;
 }

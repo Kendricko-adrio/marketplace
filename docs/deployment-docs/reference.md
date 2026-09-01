@@ -51,7 +51,8 @@ cd ~/marketplace/deployment/staging
 cp .env.example .env
 nano .env                       # isi secret
 
-docker compose -p staging --env-file .env up -d --build
+docker compose -p staging --env-file .env up -d          # terapkan perubahan runtime .env tanpa rebuild
+docker compose -p staging --env-file .env up -d --build  # code, Dockerfile, dependency, atau NEXT_PUBLIC_* berubah
 docker compose -p staging --env-file .env --profile tools run --rm migrate            # migration saja
 docker compose -p staging --env-file .env --profile tools run --rm migrate npx drizzle-kit migrate   # migration saja
 docker compose -p staging --env-file .env --profile tools run --rm migrate npx tsx src/seed.ts       # seed saja (hapus data!)
@@ -68,7 +69,8 @@ nano .env                       # isi secret
 # SELALU backup DB sebelum migrate production!
 pg_dump -U marketplace_production -h localhost storefront_production > backup-$(date +%Y%m%d).sql
 
-docker compose -p production --env-file .env up -d --build
+docker compose -p production --env-file .env up -d          # terapkan perubahan runtime .env tanpa rebuild
+docker compose -p production --env-file .env up -d --build  # code, Dockerfile, dependency, atau NEXT_PUBLIC_* berubah
 docker compose -p production --env-file .env --profile tools run --rm migrate npx drizzle-kit migrate   # migration SAJA
 docker compose -p production --env-file .env logs -f
 docker compose -p production --env-file .env ps

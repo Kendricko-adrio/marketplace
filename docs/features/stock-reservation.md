@@ -28,7 +28,7 @@ reconciled by their unique note instead of being submitted blindly again.
 
 The intended provider notes are:
 
-- initial deduction: `OKCIR_RESERVE:<orderId>:<operationId>`;
+- initial deduction: `<orderId>:<operationId>`;
 - failed-payment compensation: `OKCIR_RELEASE:<orderId>:<operationId>`;
 - late-settlement re-deduction:
   `OKCIR_REACQUIRE:<orderId>:<operationId>`.
@@ -117,8 +117,8 @@ reserve work priority 0. A queue-full or queue-wait timeout happens before
 for durable reconciliation. Such a rejection is never treated as an ambiguous
 Jubelio write.
 
-The adjustment note is the idempotency/reconciliation key:
-`OKCIR_RESERVE:<orderId>:<operationId>`.
+The reserve adjustment note is the idempotency/reconciliation key:
+`<orderId>:<operationId>` (without an `OKCIR_RESERVE` prefix).
 
 ## Terminal flows
 

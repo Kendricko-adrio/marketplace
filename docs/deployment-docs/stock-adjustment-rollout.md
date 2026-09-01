@@ -152,7 +152,7 @@ the Jubelio adjustment endpoint manually.
 
 Acceptance checks for the initial canary:
 
-1. Exactly one `OKCIR_RESERVE:<orderId>:<operationId>` adjustment exists.
+1. Exactly one `<orderId>:<operationId>` reserve adjustment exists.
 2. On-hand decreases by exactly one.
 3. The durable reserve operation is `applied` before Midtrans is created.
 4. Its payload contains description, unit, cost, bin, and both account IDs.

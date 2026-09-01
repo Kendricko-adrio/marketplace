@@ -110,7 +110,10 @@ export function buildStockAdjustmentPayload(input: {
     item_adj_id: 0,
     item_adj_no: "[auto]",
     transaction_date: input.transactionDate.toISOString(),
-    note: `OKCIR_${label}:${input.orderId}:${input.operationId}`,
+    note:
+      input.kind === "reserve"
+        ? `${input.orderId}:${input.operationId}`
+        : `OKCIR_${label}:${input.orderId}:${input.operationId}`,
     location_id: input.locationId,
     is_opening_balance: false,
     items: input.items.map((item) => {

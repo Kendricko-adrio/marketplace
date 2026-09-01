@@ -1353,7 +1353,7 @@ async function seed() {
           orderId: failedPaymentStockFixture.orderId,
           type: "reserve",
           status: "applied",
-          note: `OKCIR_RESERVE:${failedPaymentStockFixture.orderId}:${reserveId}`,
+          note: `${failedPaymentStockFixture.orderId}:${reserveId}`,
           payload,
           remoteAdjustmentId: 7001,
           attemptCount: 1,

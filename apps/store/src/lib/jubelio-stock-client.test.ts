@@ -78,7 +78,7 @@ describe("buildStockAdjustmentPayload", () => {
       item_adj_id: 0,
       item_adj_no: "[auto]",
       transaction_date: "2026-08-17T10:00:00.000Z",
-      note: "OKCIR_RESERVE:order-abc-123:operation-1",
+      note: "order-abc-123:operation-1",
       location_id: 61,
       is_opening_balance: false,
       items: [

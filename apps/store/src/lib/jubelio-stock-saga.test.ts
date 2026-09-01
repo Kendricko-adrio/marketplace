@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { JubelioStockGatewayError, type JubelioStockGateway } from "./jubelio-stock-client";
 import {
+  createReserveOperationValues,
   decideLateSettlementStockAction,
   mergePreparedAdjustmentSnapshots,
   runStockAdjustment,
@@ -21,6 +22,19 @@ const operation = {
     },
   ],
 };
+
+describe("createReserveOperationValues", () => {
+  it("uses the order and operation IDs as the reserve adjustment note", () => {
+    expect(
+      createReserveOperationValues({
+        operationId: "operation-1",
+        orderId: "order-1",
+        locationId: 61,
+        items: [],
+      }).note
+    ).toBe("order-1:operation-1");
+  });
+});
 
 describe("decideLateSettlementStockAction", () => {
   it("commits the original deduction when compensation has not started", () => {

@@ -39,6 +39,13 @@
 x-pg: &pg-conn
   DATABASE_URL: "${DATABASE_URL}"
 
+# Persist container stdout/stderr in the VPS systemd journal. Retention follows
+# the existing host journald policy; Compose does not modify host configuration.
+x-logging: &journald-logging
+  driver: journald
+  options:
+    tag: "{{.Name}}"
+
 services:
   # ---------------------------------------------------------------------------
   # STOREFRONT
@@ -53,6 +60,7 @@ services:
         NEXT_PUBLIC_APP_NAME: "${NEXT_PUBLIC_APP_NAME:-Marketplace}"
         NEXT_PUBLIC_STORE_URL: "https://store.adfsport.cloud"
     restart: unless-stopped
+    logging: *journald-logging
     environment:
       <<: *pg-conn
       NODE_ENV: production
@@ -125,6 +133,7 @@ services:
         NEXT_PUBLIC_STORE_URL: "https://store.adfsport.cloud"
         NEXT_PUBLIC_ADMIN_URL: "https://admin.adfsport.cloud"
     restart: unless-stopped
+    logging: *journald-logging
     environment:
       <<: *pg-conn
       NODE_ENV: production
@@ -172,6 +181,7 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging: *journald-logging
     ports:
       - "80:80"
       - "443:443"
@@ -190,6 +200,7 @@ services:
   # ---------------------------------------------------------------------------
   migrate:
     profiles: ["tools"]
+    logging: *journald-logging
     build:
       context: ../..
       dockerfile: deployment/common/migrate/Dockerfile

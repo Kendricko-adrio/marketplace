@@ -15,6 +15,30 @@ docker compose -p staging --env-file .env up -d --build
 
 Layer cache Docker membuat rebuild cepat (hanya yang berubah).
 
+## Terapkan perubahan `.env`
+
+Setelah mengubah nilai runtime di `.env` seperti `DATABASE_URL`, secret,
+kredensial SMTP, Midtrans, atau Jubelio, jalankan:
+
+```bash
+docker compose -p staging --env-file .env up -d
+```
+
+Compose akan membuat ulang container yang konfigurasi environment-nya berubah.
+Jangan hanya menjalankan `docker compose restart`, karena perintah tersebut tidak
+memasukkan nilai `.env` baru ke container.
+
+Jika yang berubah adalah `NEXT_PUBLIC_*` (misalnya `NEXT_PUBLIC_APP_NAME`),
+domain/build args, source code, Dockerfile, atau dependency, image harus dibangun
+ulang:
+
+```bash
+docker compose -p staging --env-file .env up -d --build
+```
+
+Untuk production, jalankan command yang sama dari `deployment/production` dengan
+mengganti project menjadi `-p production`.
+
 ## Run migration baru saja (tanpa seed)
 
 Kalau ada migration baru (file SQL baru di `packages/db/drizzle/` yang sudah
@@ -62,6 +86,27 @@ docker compose -p staging --env-file .env down -v
 docker compose -p staging --env-file .env ps
 docker stats staging-store-1 staging-admin-1 staging-caddy-1
 ```
+
+## Lihat log container
+
+Container menggunakan logging driver `journald`. Log mengikuti konfigurasi
+journald VPS yang sudah ada (saat ini retensi maksimum 7 hari); deployment tidak
+mengubah konfigurasi host.
+
+```bash
+# Tetap tersedia melalui Docker Compose
+docker compose -p staging --env-file .env logs -f store admin
+
+# Query langsung dari systemd journal
+journalctl -f -t staging-store-1
+journalctl -t staging-admin-1 --since today
+
+# Cek pemakaian disk log
+journalctl --disk-usage
+```
+
+Verifikasi logging driver, query, dan export log dijelaskan di
+[logging.md](logging.md).
 
 ## Backup database (Postgres bare-metal)
 

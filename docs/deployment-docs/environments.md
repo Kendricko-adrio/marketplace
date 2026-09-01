@@ -103,8 +103,8 @@ Saat kedua env berjalan, pastikan **semua** ini berbeda (tidak share):
 
 | Item | Staging | Production | Cara isolasi |
 |------|---------|------------|--------------|
-| Database | DB `storefront_staging` | DB `storefront_production` | Buat dua database di Postgres, set di `.env` masing-masing |
-| DB user (opsional) | `marketplace_staging` | `marketplace_production` | Buat dua user di Postgres |
+| Database | DB `qadfstore` (aktif) | DB `qadfstore_production` (**belum dibuat**) | Saat go-live: buat dua database di Postgres, set di `.env` masing-masing |
+| DB user | `qmarketplace` (aktif) | `qmarketplace_production` (**belum dibuat**) | Saat go-live: buat dua user di Postgres |
 | `DATABASE_URL` | beda DB name/user | beda DB name/user | `deployment/staging/.env` vs `deployment/production/.env` |
 | `BETTER_AUTH_SECRET` | secret A | secret B (beda) | Generate terpisah: `openssl rand -base64 32` |
 | Google OAuth redirect | `dev-store.adfsport.cloud` | `store.adfsport.cloud` | Daftar dua client ID di Google Console |
@@ -115,10 +115,10 @@ Saat kedua env berjalan, pastikan **semua** ini berbeda (tidak share):
 | SMTP | Bisa pakai Gmail App Password | Pertimbangkan provider khusus | `.env` masing-masing |
 
 > **PENTING:** dua env di **satu VPS yang sama** membagi Postgres bare-metal.
-> Wajib buat dua database terpisah (`storefront_staging` +
-> `storefront_production`) + dua user di Postgres (lihat
+> Wajib dua database terpisah + dua user di Postgres (lihat
 > [postgresql.md](postgresql.md)). Jangan pakai satu DB yang sama — data
-> staging akan menimpa data production.
+> staging akan menimpa data production. Saat ini di VPS hanya ada DB staging
+> (`qadfstore`); DB production baru dibuat saat go-live.
 
 ## F. Workflow deploy staging dulu, production nanti
 
@@ -154,7 +154,7 @@ nano .env                        # isi secret production
 docker compose -p production --env-file .env up -d --build
 
 # SELALU backup DB production sebelum migrate
-pg_dump -U marketplace_production -h localhost storefront_production > backup-$(date +%Y%m%d).sql
+pg_dump -U qmarketplace_production -h localhost qadfstore_production > backup-$(date +%Y%m%d).sql
 
 # Migration production SAJA (JANGAN run seed di production!)
 docker compose -p production --env-file .env --profile tools run --rm migrate npx drizzle-kit migrate

@@ -24,7 +24,9 @@ JUBELIO_SYNC_MAX_PRODUCTS=      # kosong = fetch semua; integer = cap untuk test
 Stock writes used by checkout have stricter environment controls than catalog
 reads.
 
-Staging runs `jubelio-mock` as a private Compose service and sets:
+Staging runs `jubelio-mock` as a private Compose service
+(`JUBELIO_MOCK_API_BASE_URL=http://jubelio-mock:3002`). Repo default untuk
+staging:
 
 ```env
 APP_ENV=staging
@@ -38,6 +40,17 @@ JUBELIO_STOCK_CONCURRENCY=10
 JUBELIO_STOCK_MAX_QUEUED=1000
 JUBELIO_STOCK_QUEUE_TIMEOUT_MS=5000
 ```
+
+> **KONFIGURASI VPS STAGING SAAT INI (sengaja menyimpang dari default
+> repo):** di server, `deployment/staging/docker-compose.yml` di-set
+> `APP_ENV=production` + `JUBELIO_STOCK_WRITES_ENABLED=true` — keputusan
+> operasional karena operator **diizinkan memotong stok langsung ke
+> Jubelio live** dari environment ini. Konsekuensinya: checkout di staging
+> mengurangi stok Jubelio **nyata**; perlakukan staging seperti production
+> untuk alur stok (uji data disposable jangan menyentuh alur checkout
+> stok). Gateway live tetap menuntut `NODE_ENV=production` + host HTTPS
+> `https://api2.jubelio.com` — keduanya terpenuhi. Mock tetap jalan sebagai
+> service untuk keperluan lain.
 
 Production sets `APP_ENV=production`, but live writes remain disabled until
 this explicit value is changed and the store container is restarted:

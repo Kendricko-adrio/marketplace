@@ -59,7 +59,9 @@ Pastikan script executable (sekali saja, sesudah clone/pull repo):
 chmod +x /home/ops/marketplace/deployment/common/cron/sweep-reservations.sh
 ```
 
-Jalankan sebagai user `ops` (bukan root):
+Jalankan sebagai user `deploy` (bukan root) — di server, crontab sweep
+memang milik user `deploy` (bukan `ops`; `deploy` punya akses repo via grup
+`ops` dan akses Docker via grup `docker`):
 ```bash
 crontab -e
 ```
@@ -67,11 +69,11 @@ crontab -e
 Tambahkan baris (jalankan tiap 1 menit agar operasi Jubelio ambigu cepat
 direconcile):
 ```cron
-# Staging
-* * * * * /home/ops/marketplace/deployment/common/cron/sweep-reservations.sh --url https://dev-store.adfsport.cloud --env-file /home/ops/marketplace/deployment/staging/.env --log-dir /home/ops/logs/marketplace-sweep/staging
+# Staging (aktif di server)
+* * * * * /home/ops/marketplace/deployment/common/cron/sweep-reservations.sh --url https://dev-store.adfsport.cloud --env-file /home/ops/marketplace/deployment/staging/.env --log-dir /home/ops/log/marketplace-sweep/staging
 
 # Production (aktifkan saat go-live)
-# * * * * * /home/ops/marketplace/deployment/common/cron/sweep-reservations.sh --url https://store.adfsport.cloud --env-file /home/ops/marketplace/deployment/production/.env --log-dir /home/ops/logs/marketplace-sweep/production
+# * * * * * /home/ops/marketplace/deployment/common/cron/sweep-reservations.sh --url https://store.adfsport.cloud --env-file /home/ops/marketplace/deployment/production/.env --log-dir /home/ops/log/marketplace-sweep/production
 ```
 
 Ganti:
@@ -93,7 +95,7 @@ Simpan + keluar editor. Cron otomatis aktif.
 
 Tunggu ~1 menit, lalu cek log hari ini:
 ```bash
-tail -f /home/ops/logs/marketplace-sweep/staging/marketplace-sweep-$(date +%F).log
+tail -f /home/ops/log/marketplace-sweep/staging/marketplace-sweep-$(date +%F).log
 # Expected (tiap 1 menit, satu file per hari):
 # [2026-01-01T10:00:00+0700] OK {"success":true,"scanned":0,"finalized":0,"failed":0,"jubelioSync":{"scanned":0,"applied":0,"failed":0,"pending":0}}
 ```
@@ -109,7 +111,7 @@ harian):
 /home/ops/marketplace/deployment/common/cron/sweep-reservations.sh \
   --url https://dev-store.adfsport.cloud \
   --env-file /home/ops/marketplace/deployment/staging/.env \
-  --log-dir /home/ops/logs/marketplace-sweep/staging
+  --log-dir /home/ops/log/marketplace-sweep/staging
 ```
 
 > - `scanned` = jumlah order `pending_payment` yang sudah lewat TTL (batch 100).
@@ -133,7 +135,7 @@ harian):
 - **Log & retensi**: satu file log per hari di `<log-dir>`
   (`marketplace-sweep-YYYY-MM-DD.log`); housekeeping script menghapus file
   lebih tua dari 7 hari (default) setiap kali cron jalan. Cek ukuran:
-  `du -sh /home/ops/logs/marketplace-sweep/*`.
+  `du -sh /home/ops/log/marketplace-sweep/*`.
 - Operasi `manual_review` tidak otomatis mengirim write ulang. Dari detail
   order admin, **Recheck safely** hanya memindahkannya ke `reconciling`; sweep
   kemudian mencari adjustment berdasarkan note unik sebelum mengubah stok.

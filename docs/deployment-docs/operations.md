@@ -49,7 +49,7 @@ di-commit + di-pull di VPS):
 docker compose -p staging --env-file .env --profile tools run --rm migrate npx drizzle-kit migrate
 
 # Production (SELALU backup dulu — lihat deploy.md)
-pg_dump -U marketplace_production -h localhost storefront_production > backup-$(date +%Y%m%d).sql
+pg_dump -U qmarketplace_production -h localhost qadfstore_production > backup-$(date +%Y%m%d).sql
 docker compose -p production --env-file .env --profile tools run --rm migrate npx drizzle-kit migrate
 ```
 
@@ -111,11 +111,12 @@ Verifikasi logging driver, query, dan export log dijelaskan di
 ## Backup database (Postgres bare-metal)
 
 ```bash
-pg_dump -U marketplace -h localhost storefront > storefront-backup-$(date +%Y%m%d).sql
+# Staging (aktif):
+pg_dump -U qmarketplace -h localhost qadfstore > storefront-staging-backup-$(date +%Y%m%d).sql
 ```
 (jalankan via SSH di VPS, bukan dari dalam container)
 
-Untuk production:
+Saat production go-live (DB `qadfstore_production` belum dibuat di VPS):
 ```bash
-pg_dump -U marketplace_production -h localhost storefront_production > storefront_production-backup-$(date +%Y%m%d).sql
+pg_dump -U qmarketplace_production -h localhost qadfstore_production > qadfstore_production-backup-$(date +%Y%m%d).sql
 ```

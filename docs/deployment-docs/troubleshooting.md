@@ -97,20 +97,25 @@ production.
 - **Skenario 1: lupa password user `ops`** — recovery: pakai **web
   console** vendor VPS (DigitalOcean/Vultr/AWS/GCP punya console akses
   langsung ke VM tanpa SSH) → login sebagai root di console (console
-  vendor tidak terkena `PermitRootLogin no` karena bukan via SSH) →
+  vendor tidak melalui SSH, jadi tidak terpengaruh konfigurasi sshd) →
   `passwd ops` untuk reset password → SSH lagi.
-- **Skenario 2: terkunci karena enable `PasswordAuthentication no`
-  tanpa setup SSH key** (kalau di masa depan Anda enable itu):
-  - Recovery via web console vendor → login root → kembalikan
-    `PasswordAuthentication yes` di `/etc/ssh/sshd_config` →
-    `systemctl restart ssh` → SSH lagi, setup key dengan benar (lihat
-    [server-hardening.md](server-hardening.md)), baru hardening ulang.
+- **Skenario 2: kehilangan SSH key** — server memakai
+  `PasswordAuthentication no` (login key-only), jadi tanpa key tidak bisa
+  masuk:
+  - Recovery via web console vendor → login root → tambahkan key baru ke
+    `/home/deploy/.ssh/authorized_keys` (atau sementara set
+    `PasswordAuthentication yes` di `/etc/ssh/sshd_config.d/`) →
+    `systemctl restart ssh` → SSH lagi, lalu matikan password auth
+    setelah key baru berfungsi (lihat
+    [server-hardening.md](server-hardening.md)).
 - **Skenario 3: kena ban fail2ban** (gagal login 3x):
   - Dari IP berbeda yang masih bisa SSH, atau via web console:
     `sudo fail2ban-client set sshd unbanip IP-ANDA`.
   - Atau tunggu 1 jam (ban expiry).
-- **Skenario 4: `PermitRootLogin no` + root tidak punya password/key**:
+- **Skenario 4: jika suatu saat `PermitRootLogin no` diterapkan** dan root
+  tidak punya password/key:
   pakai single-user mode / recovery mode vendor untuk masuk.
+  (Saat ini `PermitRootLogin` masih `yes` — default cloud image.)
 
 ## `docker: permission denied while trying to connect to the Docker daemon`
 - User Anda tidak masuk grup `docker`.

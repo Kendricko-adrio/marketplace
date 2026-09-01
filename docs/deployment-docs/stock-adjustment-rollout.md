@@ -44,8 +44,8 @@ will read `adjp_acct_id` and `adjm_acct_id` from Jubelio.
 Create a timestamped backup and verify that it is non-empty before migrating:
 
 ```bash
-backup="storefront_production-before-stock-$(date +%Y%m%d-%H%M%S).sql"
-pg_dump -U marketplace_production -h localhost storefront_production > "$backup"
+backup="qadfstore_production-before-stock-$(date +%Y%m%d-%H%M%S).sql"
+pg_dump -U qmarketplace_production -h localhost qadfstore_production > "$backup"
 test -s "$backup"
 docker compose -p production --env-file .env --profile tools run --rm migrate npx drizzle-kit migrate
 ```
@@ -70,7 +70,7 @@ reserve, release, reacquire
 
 ## 3. Database preflight
 
-Run these queries against `storefront_production`. Every missing-ID count must
+Run these queries against `qadfstore_production`. Every missing-ID count must
 be zero before enablement.
 
 ```sql

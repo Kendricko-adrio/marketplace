@@ -92,6 +92,6 @@ struktur folder sudah disiapkan. Perbedaan utama:
 | Domain | `dev-store` / `dev-admin` | `store` / `admin` |
 | Midtrans | Sandbox (`IS_PRODUCTION=false`) | Live (`true`) |
 | Seed | Jalankan eksplisit hanya untuk data disposable | **Diblokir oleh seeder** |
-| DB | `storefront_staging` | `storefront_production` |
+| DB | `qadfstore` (user `qmarketplace`) | `qadfstore_production` — belum dibuat |
 
 Lihat [environments.md](environments.md) untuk detail pemisahan environment.

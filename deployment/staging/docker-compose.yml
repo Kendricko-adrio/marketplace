@@ -72,7 +72,10 @@ services:
     environment:
       <<: *pg-conn
       NODE_ENV: production
-      APP_ENV: staging
+      # NOTE (VPS staging): sengaja diset `production` + stock writes enabled —
+      # operator diizinkan memotong stok langsung ke Jubelio live dari env ini.
+      # Lihat docs/deployment-docs/jubelio-sync.md (A.1).
+      APP_ENV: production
       # Better Auth (store)
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
       BETTER_AUTH_URL: "https://dev-store.adfsport.cloud"
@@ -98,9 +101,11 @@ services:
       JUBELIO_WEBHOOK_SECRET: ${JUBELIO_WEBHOOK_SECRET}
       JUBELIO_SYNC_CONCURRENCY: ${JUBELIO_SYNC_CONCURRENCY:-5}
       JUBELIO_SYNC_MAX_PRODUCTS: ${JUBELIO_SYNC_MAX_PRODUCTS:-}
-      # Stock writes never reach live Jubelio outside APP_ENV=production.
+      # Stock writes — live Jubelio: operator mengizinkan write langsung dari
+      # environment ini (APP_ENV=production + JUBELIO_API_BASE_URL live).
+      # Gateway production menuntut NODE_ENV=production + host api2.jubelio.com.
       JUBELIO_MOCK_API_BASE_URL: "http://jubelio-mock:3002"
-      JUBELIO_STOCK_WRITES_ENABLED: "false"
+      JUBELIO_STOCK_WRITES_ENABLED: "true"
       JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID: ${JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID:-}
       JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID: ${JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID:-}
       JUBELIO_STOCK_TIMEOUT_MS: ${JUBELIO_STOCK_TIMEOUT_MS:-8000}
@@ -126,7 +131,9 @@ services:
       jubelio-mock:
         condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      # 127.0.0.1 (bukan `localhost`): `localhost` di container resolve ke
+      # IPv6 ::1 di mana server tidak listen → healthcheck false-unhealthy.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -181,7 +188,7 @@ services:
       store:
         condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3001/login"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/login"]
       interval: 30s
       timeout: 5s
       retries: 3

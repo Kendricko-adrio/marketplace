@@ -7,7 +7,7 @@ mudah di-maintain, backup, dan tune.
 >
 > | Nama | Siapa | Peran di panduan ini |
 > |------|-------|----------------------|
-> | **`ops`** | User Linux Anda (login SSH) | Menjalankan semua perintah `sudo` di bawah. Dibuat di [server-hardening.md](server-hardening.md). |
+> | **`ops`** | User Linux dengan sudo (owner repo) | Menjalankan semua perintah `sudo` di bawah. Lihat [server-hardening.md](server-hardening.md). |
 > | **`postgres`** | Superuser bawaan Postgres (system account, BUKAN user login SSH) | Dipakai hanya untuk menjalankan `psql` saat setup awal: `sudo -u postgres psql`. Tidak untuk aplikasi. |
 > | **`marketplace`** | User database untuk aplikasi (dibuat di bawah) | Yang dipakai aplikasi di `DATABASE_URL`. Bukan superuser. |
 >
@@ -38,20 +38,22 @@ sudo apt install -y postgresql-16
 
 ## 2. Buat database + user untuk aplikasi
 
+**Status di VPS saat ini** — database dan user sudah dibuat:
+
 ```bash
 sudo -u postgres psql
 ```
 
-Di dalam psql prompt:
 ```sql
-CREATE USER marketplace WITH PASSWORD 'ubah-password-kuat-di-sini';
-CREATE DATABASE storefront OWNER marketplace;
+-- Sudah dibuat di VPS (nama aktual):
+--   user  : qmarketplace  (bukan superuser)
+--   db    : qadfstore     (owner qmarketplace)
 \q
 ```
 
 > **Penting:** Jangan pakai user `postgres` (superuser) untuk aplikasi.
-> Buat user khusus `marketplace` seperti di atas. Ganti password dengan
-> password kuat (acak 20+ karakter).
+> Aplikasi memakai user `qmarketplace` (bukan superuser) — sesuai prinsip
+> least privilege. Nama ini dipakai di `DATABASE_URL` (lihat bawah).
 
 ## 3. Konfigurasi Postgres untuk menerima koneksi dari Docker
 
@@ -66,90 +68,74 @@ ip addr show docker0
 
 Catat subnetnya, misal `172.17.0.0/16`.
 
-Edit `postgresql.conf`:
-```bash
-sudo nano /etc/postgresql/16/main/postgresql.conf
-```
-Cari `listen_addresses` dan ubah:
-```
-listen_addresses = 'localhost,172.17.0.1'
-```
-(atau `'localhost,172.18.0.1'` sesuai gateway Docker Anda). Ini membuat
-Postgres mendengarkan koneksi dari interface Docker bridge.
+Konfigurasi **aktif di VPS** saat ini:
 
-Edit `pg_hba.conf`:
+```
+listen_addresses = '*'
+```
+
+Postgres mendengarkan di semua interface; container Docker menjangkau host
+via `host.docker.internal` (di-map ke host-gateway oleh compose).
+
+> **Tidak terekspos ke internet.** Meskipun listen di semua interface,
+> UFW memblok port 5432 dari luar — hanya 22/80/443 yang di-allow
+> (terverifikasi dari luar server). Lihat [server-hardening.md](server-hardening.md).
+
+Edit `pg_hba.conf` (butuh sudo dari user `ops` untuk membaca/mengubah):
+
 ```bash
 sudo nano /etc/postgresql/16/main/pg_hba.conf
 ```
-Tambahkan baris di akhir file (ganti subnet sesuai output langkah di atas):
-```
-# Allow Docker containers to connect to storefront DB
-host    storefront    marketplace    172.16.0.0/12    scram-sha-256
-```
-(`172.16.0.0/12` mencakup 172.16.x–172.31.x, aman untuk berbagai subnet Docker).
 
-Restart Postgres:
+Baris untuk subnet Docker (pola, `172.16.0.0/12` mencakup 172.16.x–172.31.x,
+aman untuk berbagai subnet Docker):
+
+```
+host    qadfstore    qmarketplace    172.16.0.0/12    scram-sha-256
+```
+
+Restart Postgres (jika mengubah konfigurasi):
 ```bash
 sudo systemctl restart postgresql
 sudo systemctl enable postgresql
 ```
 
-Verifikasi Postgres listen di interface yang benar:
+Verifikasi Postgres listen (read-only, tanpa sudo):
 ```bash
-sudo ss -tlnp | grep 5432
-# harus ada 127.0.0.1:5432 dan 172.17.0.1:5432 (atau gateway Docker Anda)
+ss -tln | grep 5432
+# listen di 0.0.0.0:5432 dan [::]:5432 — akses publik diblok UFW
 ```
 
-## 4. Setup dua database (staging + production)
+## 4. Database staging & production
 
-> **PENTING:** dua env di **satu VPS yang sama** membagi Postgres bare-metal.
-> Wajib buat dua database terpisah (`storefront_staging` +
-> `storefront_production`) + dua user (atau satu user dengan akses ke dua
-> DB) di Postgres. Jangan pakai satu DB yang sama — data staging akan
-> menimpa data production.
+**Status di VPS saat ini:** hanya database staging yang ada —
+`qadfstore` (user `qmarketplace`). Database production **belum dibuat**
+(production belum go-live).
 
-Jalankan sekali di VPS:
-```bash
-sudo -u postgres psql
-```
+Saat production go-live, wajib buat database + user **terpisah** di Postgres
+yang sama (jangan share DB dengan staging — data staging bisa menimpa data
+production):
 
 ```sql
--- Staging
-CREATE USER marketplace_staging WITH PASSWORD 'password-kuat-staging';
-CREATE DATABASE storefront_staging OWNER marketplace_staging;
-
--- Production
-CREATE USER marketplace_production WITH PASSWORD 'password-kuat-production';
-CREATE DATABASE storefront_production OWNER marketplace_production;
-\q
+-- Production (saat go-live, nama mengikuti pola staging):
+CREATE USER qmarketplace_production WITH PASSWORD 'password-kuat-production';
+CREATE DATABASE qadfstore_production OWNER qmarketplace_production;
 ```
 
-Update `pg_hba.conf` (sudah ada baris untuk subnet Docker — berlaku untuk
-kedua DB):
+Plus baris `pg_hba.conf` untuk DB production (subnet Docker sama).
+
+Lalu di `deployment/staging/.env` (aktif):
 ```
-host    storefront_staging     marketplace_staging     172.16.0.0/12    scram-sha-256
-host    storefront_production  marketplace_production  172.16.0.0/12    scram-sha-256
+PGDB=qadfstore
+PGUSER=qmarketplace
+DATABASE_URL=postgresql://qmarketplace:<password>@host.docker.internal:5432/qadfstore
 ```
 
-Restart Postgres:
-```bash
-sudo systemctl restart postgresql
+Di `deployment/production/.env` (saat go-live):
 ```
-
-Lalu di `deployment/staging/.env`:
-```
-PGDB=storefront_staging
-PGUSER=marketplace_staging
-PGPASS=password-kuat-staging
-DATABASE_URL=postgresql://marketplace_staging:password-kuat-staging@host.docker.internal:5432/storefront_staging
-```
-
-Di `deployment/production/.env`:
-```
-PGDB=storefront_production
-PGUSER=marketplace_production
-PGPASS=password-kuat-production
-DATABASE_URL=postgresql://marketplace_production:password-kuat-production@host.docker.internal:5432/storefront_production
+PGDB=qadfstore_production
+PGUSER=qmarketplace_production
+DATABASE_URL=postgresql://qmarketplace_production:<password>@host.docker.internal:5432/qadfstore_production
 ```
 
 > `DATABASE_URL` adalah **satu-satunya** sumber koneksi yang dipakai compose

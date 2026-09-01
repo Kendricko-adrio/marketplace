@@ -70,7 +70,9 @@ docker compose -p staging --env-file .env logs -f
 > - **JANGAN PERNAH** `drizzle-kit push` ke DB staging/production. Tidak ada migration file, tidak bisa rollback, tidak reproducible. Lihat: https://orm.drizzle.team/docs/migrations
 > - Migration files di `packages/db/drizzle/*.sql` **wajib di-commit ke git** — supaya CI/CD dan VPS sinkron. Cek: `git ls-files packages/db/drizzle/` harus menampilkan file `.sql`.
 > - **JANGAN edit migration file yang sudah di-generate**. Kalau skema salah, hapus file migration terakhir (kalau belum di-apply) atau buat migration baru yang memperbaiki.
-> - **Sebelum migrate production**, SELALU backup DB: `pg_dump -U marketplace_production -h localhost storefront_production > backup-$(date +%Y%m%d).sql`.
+> - **Sebelum migrate production**, SELALU backup DB dulu:
+>   `pg_dump -U <db-user> -h localhost <db-name> > backup-$(date +%Y%m%d).sql`
+>   (staging saat ini: `pg_dump -U qmarketplace -h localhost qadfstore`).
 
 **Sekali saja** saat deploy pertama (atau ulang kalau ada migration baru):
 

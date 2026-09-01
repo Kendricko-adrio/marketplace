@@ -67,7 +67,10 @@ cp .env.example .env
 nano .env                       # isi secret
 
 # SELALU backup DB sebelum migrate production!
-pg_dump -U marketplace_production -h localhost storefront_production > backup-$(date +%Y%m%d).sql
+# (DB production belum dibuat di VPS — nama mengikuti pola staging:
+#  user qmarketplace_production, db qadfstore_production. Saat ini backup
+#  yang aktif adalah staging:)
+pg_dump -U qmarketplace -h localhost qadfstore > backup-$(date +%Y%m%d).sql
 
 docker compose -p production --env-file .env up -d          # terapkan perubahan runtime .env tanpa rebuild
 docker compose -p production --env-file .env up -d --build  # code, Dockerfile, dependency, atau NEXT_PUBLIC_* berubah

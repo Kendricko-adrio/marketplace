@@ -114,7 +114,9 @@ services:
     expose:
       - "3000"
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      # 127.0.0.1 (bukan `localhost`): `localhost` di container resolve ke
+      # IPv6 ::1 di mana server tidak listen → healthcheck false-unhealthy.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -169,7 +171,7 @@ services:
       store:
         condition: service_started
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3001/login"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3001/login"]
       interval: 30s
       timeout: 5s
       retries: 3

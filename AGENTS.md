@@ -127,6 +127,13 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   See [`docs/deployment-docs/README.md`](docs/deployment-docs/README.md).
 - **Documentation is part of the task, not a follow-up.** See
   [`docs/README.md`](docs/README.md) for where each doc belongs.
+- **Remote access is request-only.** The agent may use an explicitly configured
+  SSH connection to access a remote server, but only when the user explicitly
+  requests the remote action. Never initiate SSH access, file transfer, remote
+  commands, Docker operations, service restarts, or deployment proactively.
+- **Never push proactively.** Run `git push` (including pushes from or affecting
+  a remote server) only when the user explicitly requests it. Preparing a local
+  commit does not imply permission to push or deploy it.
 - **Use `systematic-debugging` before guessing fixes** on any bug, test
   failure, or unexpected behavior.
 

@@ -46,7 +46,11 @@ sets. They must never be treated as interchangeable.
 - Admin `mustResetPassword` is enforced by the server layout and API guard;
   client cookies cannot clear or bypass it.
 - Better Auth clears the flag only after a successful reset/change-password
-  hook and revokes sessions on password reset.
+  hook. HQ reset uses `POST /api/admin/users/{id}/reset-password`, revokes all
+  target sessions, and returns the generated/manual plaintext only once.
+- Reset request bodies are mode-specific: `{ passwordMode: "generate" }` has
+  no password field; `{ passwordMode: "manual", password: string }` requires
+  at least eight characters. Plaintext passwords are never logged.
 - Login callback URLs are restricted to safe same-app paths, preventing open
   redirects.
 

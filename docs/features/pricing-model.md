@@ -95,9 +95,11 @@ end-to-end:
 
 - **Cart** line items show `variant.price` (net), with `product.base_price`
   shown as a strikethrough RRP when `base_price > variant.price`.
-- **Checkout / place-order** charges `variant.price` and snapshots it into
-  `order_item.price` at order time, so the charged amount is frozen regardless
-  of later price changes.
+- **Checkout / place-order** snapshots `variant.price` into `order_item.price`,
+  then applies configured PPN after discounts with upward whole-Rupiah rounding.
+  `orders.ppn_rate`, `orders.ppn_amount`, and `orders.total` freeze the complete
+  charged price regardless of later product or tax-rate changes. See
+  [ppn.md](./ppn.md).
 - **Stock reservation** and the rest of the order flow are unaffected by
   pricing — pricing only changes which number is shown/charged, and that number
   was already `variant.price`.

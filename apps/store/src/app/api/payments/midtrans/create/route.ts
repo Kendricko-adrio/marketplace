@@ -5,6 +5,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { createPayment } from "@/lib/midtrans";
 import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
+import { buildPaymentItemDetails } from "@/lib/payment-item-details";
 
 export async function POST(request: NextRequest) {
   let log = requestLogger(request, { module: "midtrans-create" });
@@ -103,20 +104,20 @@ export async function POST(request: NextRequest) {
         email: order.contactEmail,
         phone: order.contactPhone,
       },
-      [
-        ...items.map((item) => ({
+      buildPaymentItemDetails({
+        items: items.map((item) => ({
           id: item.variantId,
           name: item.productName,
-          price: parseFloat(item.price),
+          price: item.price,
           quantity: item.quantity,
         })),
-        {
-          id: "SERVICE_FEE",
-          name: "Service Fee",
-          price: parseFloat(order.serviceFee),
-          quantity: 1,
-        },
-      ]
+        discount: order.discount,
+        shippingCost: order.shippingCost,
+        serviceFee: order.serviceFee,
+        ppnRatePercent: order.ppnRate,
+        ppnAmount: order.ppnAmount,
+        total: order.total,
+      })
     );
 
     // Persist Snap redirect URL

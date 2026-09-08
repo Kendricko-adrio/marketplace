@@ -83,6 +83,8 @@ export async function deliverLatePaidOrderSideEffects(
       total: order.total,
       subtotal: order.subtotal,
       serviceFee: order.serviceFee,
+      ppnRate: order.ppnRate,
+      ppnAmount: order.ppnAmount,
       pickupDate: order.pickupDate,
       pickupTime: order.pickupTime,
     };

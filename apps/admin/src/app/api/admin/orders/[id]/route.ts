@@ -50,6 +50,8 @@ export const GET = withPermission(async (
           shippingCost: orders.shippingCost,
           discount: orders.discount,
           serviceFee: orders.serviceFee,
+          ppnRate: orders.ppnRate,
+          ppnAmount: orders.ppnAmount,
           total: orders.total,
           midtransTransactionId: orders.midtransTransactionId,
           shippingCarrier: orders.shippingCarrier,

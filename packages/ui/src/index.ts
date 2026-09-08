@@ -42,6 +42,8 @@ export {
   SOCIAL_PLATFORM_LABELS,
 } from "./components/footer/SocialIcons";
 export type { SocialPlatform } from "./components/footer/SocialIcons";
+export { default as FloatingWhatsappButton } from "./components/footer/FloatingWhatsappButton";
+export type { FloatingWhatsappButtonProps } from "./components/footer/FloatingWhatsappButton";
 
 export { default as HomepageSectionRenderer } from "./components/homepage/HomepageSectionRenderer";
 export { default as BannerSection } from "./components/homepage/BannerSection";

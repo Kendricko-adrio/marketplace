@@ -79,6 +79,8 @@ type OrderView = {
   total: string;
   subtotal: string;
   serviceFee: string;
+  ppnRate: string;
+  ppnAmount: string;
   pickupDate: Date | null;
   pickupTime: string | null;
 };
@@ -275,6 +277,8 @@ export async function claimAndFinalizePaidOrder(
         total: order.total,
         subtotal: order.subtotal,
         serviceFee: order.serviceFee,
+        ppnRate: order.ppnRate,
+        ppnAmount: order.ppnAmount,
         pickupDate: order.pickupDate,
         pickupTime: order.pickupTime,
       };
@@ -421,6 +425,8 @@ export async function claimAndFailOrder(
       total: order.total,
       subtotal: order.subtotal,
       serviceFee: order.serviceFee,
+      ppnRate: order.ppnRate,
+      ppnAmount: order.ppnAmount,
       pickupDate: order.pickupDate,
       pickupTime: order.pickupTime,
     };

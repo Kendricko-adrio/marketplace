@@ -18,6 +18,13 @@ function generateId(): string {
   return crypto.randomUUID();
 }
 
+function calculateSeedPpn(subtotal: number, ratePercent = 11): number {
+  const subtotalCents = BigInt(Math.round(subtotal * 100));
+  const rateScaled = BigInt(ratePercent * 1_000_000);
+  const denominator = BigInt(100) * BigInt(1000000) * BigInt(100);
+  return Number((subtotalCents * rateScaled + denominator - BigInt(1)) / denominator);
+}
+
 // Generates 40 additional products so the storefront /products page has
 // enough data (50 total) to exercise its infinite-scroll UI. Produces the
 // same shape as the hand-authored `productsData` entries below; the existing
@@ -1249,8 +1256,11 @@ async function seed() {
       const variant = variants[i % variants.length];
       const qty = (i % 3) + 1;
       const subtotal = parseFloat(variant.price) * qty;
-      // Phase 1 = pickup, no shipping cost, no service fee
-      const total = subtotal;
+      // Phase 1 = pickup, no shipping cost or service fee. PPN is an
+      // immutable order snapshot calculated after discount (zero in fixtures).
+      const ppnRate = 11;
+      const ppnAmount = calculateSeedPpn(subtotal, ppnRate);
+      const total = subtotal + ppnAmount;
 
       const isPaid =
         status !== "cancelled" &&
@@ -1291,6 +1301,8 @@ async function seed() {
         shippingCost: "0",
         discount: "0",
         serviceFee: "0",
+        ppnRate: ppnRate.toString(),
+        ppnAmount: ppnAmount.toString(),
         total: total.toString(),
         midtransTransactionId: isPaid
           ? `midtrans-${orderId.slice(0, 12)}`
@@ -1691,6 +1703,11 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
             url: "https://tiktok.com/@storefront",
             enabled: true,
           },
+          {
+            platform: "whatsapp",
+            url: "https://wa.me/6281234567890",
+            enabled: true,
+          },
         ],
       },
       updatedBy: hqId,
@@ -1743,6 +1760,13 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
         type: "number",
         description:
           "Menit TTL reservasi stok saat customer menunggu pembayaran QRIS di Midtrans Snap. Setelah TTL, order dianggap expired dan reservasi dilepas (oleh webhook expire Midtrans / cron sweep).",
+      },
+      {
+        key: "tax.ppnRatePercent",
+        value: "11",
+        type: "number",
+        description:
+          "Customer PPN percentage. Applied after discounts and rounded upward to a whole Rupiah. Restart the store application after changing this value.",
       },
     ]);
 

@@ -43,8 +43,10 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
    required. Validates body (`phone`, `email`, `pickupDate`, `pickupTime`,
    `selectedItemIds`), loads the user's cart, filters the selected items,
    enforces **single-branch checkout**, checks branch `status = "aktif"` +
-   pickup slot (`validatePickupSlot`), soft stock pre-check, totals
-   (`serviceFee = 0`, `total = subtotal`). A short transaction then:
+   pickup slot (`validatePickupSlot`), soft stock pre-check, and authoritative
+   pricing. PPN comes from `tax.ppnRatePercent` (11% fallback), is applied after
+   discount, and is rounded upward to whole Rupiah. The rate and amount are
+   snapshotted on the order. A short transaction then:
    insert order (`pending_payment`/`pending`/`qris`, `expiresAt`), insert
    `order_item` rows, an atomic `pending_remote_stock` hold, and a durable
    Jubelio reserve operation. After commit, a negative Jubelio adjustment is
@@ -52,7 +54,9 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
    confirms the deduction. A second short transaction
    persists `snapRedirectUrl` and deletes only the checked-out cart items.
    A Jubelio rejection/ambiguous result blocks Midtrans and preserves the cart;
-   Midtrans creation failure triggers a compensating positive Jubelio
+   Midtrans item details include the PPN snapshot and sum exactly to the order
+   gross total. Re-payment uses the same stored snapshot rather than current
+   config. Midtrans creation failure triggers a compensating positive Jubelio
    adjustment. Returns
    `{ success, orderId, redirectUrl,
    token }`; customer is redirected to the Snap page.

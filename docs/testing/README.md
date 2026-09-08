@@ -67,18 +67,19 @@ e2e/
     account.spec.ts       # authenticated smoke (reuses saved session)
     products.spec.ts      # infinite scroll, sidebar filters, pricing, grey-out
     product-detail.spec.ts# metadata (brand/gender/category/price/discount/stock)
-    checkout.spec.ts      # cart → checkout → local payment boundary; vouchers
+    checkout.spec.ts      # cart → checkout → PPN snapshot → local payment boundary; vouchers
     onboarding.spec.ts   # fresh user → /onboarding → cookie (isolated user via pg)
     static-pages.spec.ts  # CMS pages + footer rendering
   admin/                  # admin specs (baseURL http://localhost:3001)
     login.spec.ts         # login flow (valid / invalid / redirect)
     dashboard.spec.ts     # authenticated smoke (reuses saved session)
     products.spec.ts      # list/search/detail, sync + upload APIs
-    orders.spec.ts        # list/detail, verify-pickup, audit-log entry
+    orders.spec.ts        # list/detail + PPN snapshot, verify-pickup, audit-log entry
+    users.spec.ts         # generated reset password → forced-reset login
     rbac.spec.ts          # roles page guard, permissions API, branch scope
     analytics.spec.ts     # metrics endpoint invariants
     notifications.spec.ts # long-poll, mark-all-read
-    cms.spec.ts           # homepage/pages/footer editor + storefront render
+    cms.spec.ts           # homepage/pages/footer + floating WhatsApp render
 apps/*/vitest.config.ts   # per-app unit config (aliases, include)
 packages/db/vitest.config.ts
 ```
@@ -92,8 +93,11 @@ packages/db/vitest.config.ts
   `PUT /__control/scenario` with one of `success`, `insufficient-stock`,
   `server-error`, `rate-limit-once`, `unauthorized-once`,
   `timeout-before-apply`, `timeout-after-apply`, or `malformed-success`.
-- `checkout.spec.ts` asserts successful reserve-before-Midtrans, provider
-  snapshot persistence, rejection, and late-settlement re-acquisition.
+- `checkout.spec.ts` asserts successful reserve-before-Midtrans, PPN display
+  and persisted pricing snapshot, provider snapshot persistence, rejection,
+  and late-settlement re-acquisition.
+- `cms.spec.ts` saves/enables/disables WhatsApp and restores the complete footer
+  JSON. `users.spec.ts` verifies generated-password reset through login.
 - For late settlement, Playwright sets the non-production-only
   `MIDTRANS_MOCK_API_BASE_URL` to the local mock. Configure an authoritative
   status with `PUT /__control/midtrans-status`; production ignores this URL.

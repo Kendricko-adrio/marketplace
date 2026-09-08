@@ -62,6 +62,13 @@ Rules:
 - Ensure the Postgres session `timezone` is `UTC` (default in dev env; verify
   with `SHOW timezone;`).
 
+## Order PPN snapshots
+
+`orders.ppn_rate numeric(9,6)` and `orders.ppn_amount numeric(15,2)` preserve
+the tax policy applied at checkout. Both are non-negative, the rate is checked
+between 0 and 100, and re-payment reads these columns rather than mutable
+`system_config`. See [../features/ppn.md](../features/ppn.md).
+
 ## Seeder Must Stay in Sync
 
 Whenever a table/column is added or removed in `packages/db/src/schema/`,

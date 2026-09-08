@@ -29,6 +29,8 @@ export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
 // Known keys (see seed.ts):
 //   reservation.ttlMinutes (number) — minutes stock is reserved while a customer
 //   is on the Midtrans Snap payment page before the order expires.
+//   tax.ppnRatePercent (number) — PPN applied after discount; restart the store
+//   process after changing it.
 export const systemConfig = pgTable("system_config", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),

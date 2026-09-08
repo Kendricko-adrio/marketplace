@@ -14,6 +14,7 @@ const PAGE_TITLE = `E2E Test Page ${PAGE_SLUG}`;
 
 let pool: Pool;
 let originalBrandName: string;
+let originalFooterConfig: unknown;
 
 test.beforeAll(async () => {
   pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -25,17 +26,19 @@ test.beforeAll(async () => {
   await pool.query(`DELETE FROM static_page WHERE slug LIKE 'e2e-page-%'`);
   // Remember the footer brand so the footer test can restore it exactly.
   const row = await pool.query(
-    `SELECT data->>'brandName' AS brand FROM footer_config LIMIT 1`
+    `SELECT data, data->>'brandName' AS brand FROM footer_config LIMIT 1`
   );
   originalBrandName = row.rows[0]?.brand ?? "StoreFront";
+  originalFooterConfig = row.rows[0]?.data;
 });
 
 test.afterAll(async () => {
-  // Restore the footer brand the footer test edited.
-  await pool.query(
-    `UPDATE footer_config SET data = jsonb_set(data, '{brandName}', $1)`,
-    [JSON.stringify(originalBrandName)]
-  );
+  // Restore the complete footer document, including social switches and URLs.
+  if (originalFooterConfig) {
+    await pool.query(`UPDATE footer_config SET data = $1::jsonb`, [
+      JSON.stringify(originalFooterConfig),
+    ]);
+  }
   await pool.end();
 });
 
@@ -151,5 +154,35 @@ test.describe("admin CMS", () => {
     // Storefront footer reflects the change (force-dynamic fetch).
     await page.goto("http://localhost:3000/products");
     await expect(page.locator("footer").getByText(newBrand)).toBeVisible();
+  });
+
+  test("footer: WhatsApp switch controls the footer icon and floating button", async ({ page }) => {
+    const hydrated = page.waitForResponse((r) =>
+      r.url().includes("/api/admin/linkable-destinations")
+    );
+    await page.goto("http://localhost:3001/admin/footer");
+    await hydrated;
+
+    const whatsappRow = page.locator("div.rounded-md.border", { hasText: "WhatsApp" });
+    const toggle = whatsappRow.getByRole("switch", { name: "Aktifkan WhatsApp" });
+    if ((await toggle.getAttribute("data-state")) !== "checked") await toggle.click();
+    await whatsappRow.getByPlaceholder("https://...").fill("https://wa.me/628111111111");
+    await page.getByRole("button", { name: "Simpan" }).click();
+    await expect(page.getByText("Konfigurasi footer tersimpan")).toBeVisible();
+
+    await page.goto("http://localhost:3000/products");
+    const floating = page.getByRole("link", { name: "Hubungi ADF Sports melalui WhatsApp" });
+    await expect(floating).toHaveAttribute("href", "https://wa.me/628111111111");
+
+    await page.goto("http://localhost:3001/admin/footer");
+    const disabledRow = page.locator("div.rounded-md.border", { hasText: "WhatsApp" });
+    const disabledToggle = disabledRow.getByRole("switch", { name: "Aktifkan WhatsApp" });
+    if ((await disabledToggle.getAttribute("data-state")) === "checked") await disabledToggle.click();
+    await page.getByRole("button", { name: "Simpan" }).click();
+    await expect(page.getByText("Konfigurasi footer tersimpan")).toBeVisible();
+
+    await page.goto("http://localhost:3000/products");
+    await expect(page.getByRole("link", { name: "Hubungi ADF Sports melalui WhatsApp" })).toHaveCount(0);
+    await expect(page.locator("footer").getByRole("link", { name: "WhatsApp" })).toHaveCount(0);
   });
 });

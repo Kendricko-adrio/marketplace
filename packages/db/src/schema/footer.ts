@@ -70,7 +70,13 @@ export const DEFAULT_FOOTER_CONFIG: FooterConfigData = {
     },
   ],
   copyrightText: "Â© 2026 StoreFront. All rights reserved.",
-  socialMedia: [],
+  socialMedia: [
+    {
+      platform: "whatsapp",
+      url: "https://wa.me/6281234567890",
+      enabled: true,
+    },
+  ],
 };
 
 // Footer config singleton table.

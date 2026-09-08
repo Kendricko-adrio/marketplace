@@ -85,6 +85,18 @@ test.describe("admin orders", () => {
     await expect(page.getByText("reconciling")).toBeVisible({ timeout: 15_000 });
   });
 
+  test("order detail shows the immutable PPN snapshot", async ({ page }) => {
+    await page.goto(`/admin/orders/${READY_ORDER_ID}`);
+    await expect(page.getByText("PPN (11%)")).toBeVisible();
+    const stored = await pool.query(
+      `SELECT ppn_amount FROM orders WHERE id = $1`,
+      [READY_ORDER_ID]
+    );
+    await expect(
+      page.getByText(`Rp ${Number(stored.rows[0].ppn_amount).toLocaleString("id-ID")}`).first()
+    ).toBeVisible();
+  });
+
   test("order detail opens the verify dialog for a ready_for_pickup order", async ({
     page,
   }) => {

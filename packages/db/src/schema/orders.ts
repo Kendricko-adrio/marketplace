@@ -77,6 +77,14 @@ export const orders = pgTable("orders", {
   serviceFee: numeric("service_fee", { precision: 15, scale: 2 })
     .notNull()
     .default("0"),
+  // Immutable PPN pricing snapshot. Re-payment must use these values rather
+  // than the current system configuration.
+  ppnRate: numeric("ppn_rate", { precision: 9, scale: 6 })
+    .notNull()
+    .default("0"),
+  ppnAmount: numeric("ppn_amount", { precision: 15, scale: 2 })
+    .notNull()
+    .default("0"),
   total: numeric("total", { precision: 15, scale: 2 }).notNull(),
   // Midtrans transaction id (from Core API charge response), nullable until charge succeeds
   midtransTransactionId: text("midtrans_transaction_id"),
@@ -107,7 +115,11 @@ export const orders = pgTable("orders", {
   ),
   amountCheck: check(
     "orders_amounts_nonnegative",
-    sql`${t.subtotal} >= 0 and ${t.shippingCost} >= 0 and ${t.discount} >= 0 and ${t.serviceFee} >= 0 and ${t.total} >= 0`
+    sql`${t.subtotal} >= 0 and ${t.shippingCost} >= 0 and ${t.discount} >= 0 and ${t.serviceFee} >= 0 and ${t.ppnAmount} >= 0 and ${t.total} >= 0`
+  ),
+  ppnRateCheck: check(
+    "orders_ppn_rate_valid",
+    sql`${t.ppnRate} >= 0 and ${t.ppnRate} <= 100`
   ),
   pickupAttemptsCheck: check(
     "orders_pickup_attempts_nonnegative",

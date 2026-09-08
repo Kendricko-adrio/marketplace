@@ -69,7 +69,8 @@ export const POST = async (request: NextRequest) => {
 | File | What is logged |
 |---|---|
 | `lib/order-finalize.ts` | `order paid → ready_for_pickup` (with `pickupCode`), `order failed_payment` (with `midtransStatus`/`reason`), notification-insert and email failures |
-| `app/api/checkout/place-order/route.ts` | Request start, validation warnings, order creation, success (with `total`/`ttlMinutes`), stock rollback, Midtrans failure, catch-all errors |
+| `app/api/checkout/place-order/route.ts` | Request start, validation warnings, order creation, success (with PPN rate/amount, `total`/`ttlMinutes`), stock rollback, Midtrans failure, catch-all errors |
+| `app/api/cart/route.ts` | Cart served/cleared with user, item count, subtotal, and effective PPN rate; failures |
 | `app/api/cart/validate-checkout/route.ts` | Validation requested/passed, unauthorized, invalid body, branch-inactive and insufficient-stock cart adjustments |
 | `app/api/webhooks/midtrans/route.ts` | Webhook received (`order_id`, `transaction_status`, `status_code`), missing fields, invalid signature, handler failure |
 | `app/api/webhooks/jubelio/route.ts` | Signature/configuration failures (reason, header, body/hash/signature prefixes, secret fingerprint), invalid payloads, ignored actions, sync success/failure |
@@ -80,6 +81,7 @@ export const POST = async (request: NextRequest) => {
 | File | What is logged |
 |---|---|
 | `app/api/admin/orders/route.ts` | List requested (with `status`/`branchIdParam`/`page`/`limit`) and served (`total`/`page`) |
+| `app/api/admin/users/[id]/reset-password/route.ts` | Invalid/not-found warnings, successful reset actor/target/mode, and failures; never plaintext passwords |
 | `app/api/admin/orders/[id]/route.ts` | Not found, forbidden (different branch), detail served |
 | `app/api/admin/orders/[id]/verify-pickup/route.ts` | Verify-pickup failures |
 | `app/api/admin/notifications/route.ts` | List requested/served |

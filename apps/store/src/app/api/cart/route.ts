@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import {
   carts,
@@ -10,6 +10,8 @@ import {
 } from "@/db";
 import { eq, asc } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
+import { getPpnRatePercent } from "@/lib/config";
+import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
 
 // Helper to get or create cart
 async function getOrCreateCart(userId: string) {
@@ -27,10 +29,11 @@ async function getOrCreateCart(userId: string) {
   return cart;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const log = requestLogger(request, { module: "cart" });
   try {
     const access = await requireOnboardedApiSession();
-    if (!access.ok) return access.response;
+    if (!access.ok) return withRequestId(access.response, log);
     const { session } = access;
 
     const cart = await getOrCreateCart(session.user.id);
@@ -95,28 +98,37 @@ export async function GET() {
       return sum + parseFloat(item.variant.price) * item.quantity;
     }, 0);
 
-    return NextResponse.json({
+    const ppnRatePercent = await getPpnRatePercent();
+    log.info("cart served", {
+      userId: session.user.id,
+      itemCount: itemsWithImages.length,
+      subtotal,
+      ppnRatePercent,
+    });
+    return withRequestId(NextResponse.json({
       success: true,
       data: {
         id: cart.id,
         items: itemsWithImages,
         itemCount: itemsWithImages.length,
         subtotal,
+        ppnRatePercent: Number(ppnRatePercent),
       },
-    });
+    }), log);
   } catch (error) {
-    console.error("Error fetching cart:", error);
-    return NextResponse.json(
+    log.error("cart fetch failed", { error: serializeError(error) });
+    return withRequestId(NextResponse.json(
       { success: false, error: "Failed to fetch cart" },
       { status: 500 }
-    );
+    ), log);
   }
 }
 
-export async function DELETE() {
+export async function DELETE(request: NextRequest) {
+  const log = requestLogger(request, { module: "cart" });
   try {
     const access = await requireOnboardedApiSession();
-    if (!access.ok) return access.response;
+    if (!access.ok) return withRequestId(access.response, log);
     const { session } = access;
 
     const cart = await db
@@ -133,15 +145,16 @@ export async function DELETE() {
         .where(eq(carts.id, cart[0].id));
     }
 
-    return NextResponse.json({
+    log.info("cart cleared", { userId: session.user.id });
+    return withRequestId(NextResponse.json({
       success: true,
       message: "Cart cleared",
-    });
+    }), log);
   } catch (error) {
-    console.error("Error clearing cart:", error);
-    return NextResponse.json(
+    log.error("cart clear failed", { error: serializeError(error) });
+    return withRequestId(NextResponse.json(
       { success: false, error: "Failed to clear cart" },
       { status: 500 }
-    );
+    ), log);
   }
 }

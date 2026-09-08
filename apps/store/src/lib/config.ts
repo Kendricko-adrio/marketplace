@@ -1,5 +1,9 @@
 import { db } from "@/db";
 import { systemConfig } from "@/db";
+import { createLogger, serializeError } from "@/lib/logger";
+import { DEFAULT_PPN_RATE_PERCENT, resolvePpnRate } from "@/lib/order-pricing";
+
+const log = createLogger({ module: "system-config" });
 
 /**
  * General-purpose system config reader backed by the `system_config` table.
@@ -18,6 +22,8 @@ import { systemConfig } from "@/db";
  *   reservation.ttlMinutes (number, default 15) — minutes a customer has to pay
  *   on the Midtrans Snap page before the order expires and its stock reservation
  *   is released.
+ *   tax.ppnRatePercent (number, default 11) — PPN applied after discounts and
+ *   rounded upward to a whole Rupiah.
  */
 
 type ConfigEntry = { value: string; type: string };
@@ -40,7 +46,9 @@ async function loadConfig(): Promise<Map<string, ConfigEntry>> {
       } catch (error) {
         // Don't cache a failure — allow the next call to retry. Callers fall
         // back to their provided default until the DB is reachable.
-        console.error("system_config load failed; using fallback values:", error);
+        log.error("system config load failed; using fallback values", {
+          error: serializeError(error),
+        });
         loadPromise = null;
         throw error;
       }
@@ -74,6 +82,23 @@ export async function getConfigNumber(
   } catch {
     return fallback;
   }
+}
+
+export async function getPpnRatePercent(): Promise<string> {
+  const configured = await getConfigString(
+    "tax.ppnRatePercent",
+    DEFAULT_PPN_RATE_PERCENT
+  );
+  const resolved = resolvePpnRate(configured);
+  const isValid = /^\d+(?:\.\d{1,6})?$/.test(configured.trim()) &&
+    Number(configured) >= 0 && Number(configured) <= 100;
+  if (!isValid) {
+    log.warn("invalid PPN rate; using fallback", {
+      configKey: "tax.ppnRatePercent",
+      fallback: DEFAULT_PPN_RATE_PERCENT,
+    });
+  }
+  return resolved;
 }
 
 export async function getConfigJson<T>(key: string, fallback: T): Promise<T> {

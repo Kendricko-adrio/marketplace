@@ -2,9 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { users, adminAccounts, adminSessions } from "@/db";
 import { eq, and } from "drizzle-orm";
-import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { withPermission } from "@/lib/auth-guard";
+import { resetPasswordSchema } from "@/lib/reset-password-contract";
+import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
 
 const PASSWORD_CHARS =
   "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
@@ -19,17 +20,20 @@ function generatePassword(length = 16): string {
   return out;
 }
 
-const resetPasswordSchema = z.object({
-  passwordMode: z.enum(["manual", "generate"]),
-  password: z.string().min(8, "Password minimal 8 karakter").optional(),
-});
-
 // POST /api/admin/users/:id/reset-password
 // HQ resets a user's password. Returns the new plaintext password ONCE.
 export const POST = withPermission(
-  async (_ctx, request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
+  async (ctx, request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
+    const { id } = await params;
+    const log = requestLogger(request, {
+      module: "admin-reset-password",
+      actorId: ctx.user.id,
+      targetUserId: id,
+    });
+    const respond = (body: unknown, status = 200) =>
+      withRequestId(NextResponse.json(body, { status }), log);
+
     try {
-      const { id } = await params;
 
       const target = await db
         .select({ id: users.id, name: users.name, role: users.role })
@@ -37,33 +41,34 @@ export const POST = withPermission(
         .where(eq(users.id, id))
         .limit(1);
       if (!target.length) {
-        return NextResponse.json(
-          { success: false, error: "User not found" },
-          { status: 404 }
-        );
+        log.warn("password reset target not found");
+        return respond({ success: false, error: "User not found" }, 404);
       }
 
-      const body = await request.json();
+      const body = await request.json().catch(() => undefined);
       const parsed = resetPasswordSchema.safeParse(body);
       if (!parsed.success) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "Invalid request body",
-            details: parsed.error.flatten().fieldErrors,
-          },
-          { status: 400 }
+        const details = parsed.error.flatten().fieldErrors;
+        log.warn("invalid password reset request", {
+          validationFields: Object.keys(details),
+        });
+        return respond(
+          { success: false, error: "Invalid request body", details },
+          400
         );
       }
 
-      const { passwordMode, password } = parsed.data;
+      const { passwordMode } = parsed.data;
       const finalPassword =
-        passwordMode === "manual" ? password : generatePassword(16);
+        passwordMode === "manual" ? parsed.data.password : generatePassword(16);
 
       if (!finalPassword || finalPassword.length < 8) {
-        return NextResponse.json(
+        log.warn("invalid password reset request", {
+          validationFields: ["password"],
+        });
+        return respond(
           { success: false, error: "Password minimal 8 karakter." },
-          { status: 400 }
+          400
         );
       }
 
@@ -107,7 +112,8 @@ export const POST = withPermission(
       // can no longer be used on any device.
       await db.delete(adminSessions).where(eq(adminSessions.userId, id));
 
-      return NextResponse.json({
+      log.info("admin user password reset successfully", { passwordMode });
+      return respond({
         success: true,
         data: {
           // Plaintext returned ONCE. Only the bcrypt hash is persisted.
@@ -116,10 +122,12 @@ export const POST = withPermission(
         },
       });
     } catch (error) {
-      console.error("Error resetting admin user password:", error);
-      return NextResponse.json(
+      log.error("admin user password reset failed", {
+        error: serializeError(error),
+      });
+      return respond(
         { success: false, error: "Failed to reset password" },
-        { status: 500 }
+        500
       );
     }
   },

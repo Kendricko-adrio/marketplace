@@ -14,7 +14,9 @@ This is the default when `SEED_MODE` is unset. `npm run db:seed` creates the
 complete deterministic demo dataset, including categories, brands, genders,
 products, variants, legacy product images, branches, branch stock, sample
 orders, notifications, cart items, homepage product links, and related audit
-entries. Use this mode for normal local development and E2E tests.
+entries. Sample orders include an immutable 11% PPN snapshot and gross total.
+The footer includes an enabled dummy WhatsApp URL. Use this mode for normal
+local development and E2E tests.
 
 ## Jubelio mode
 
@@ -31,7 +33,8 @@ npm run db:import-jubelio
 
 The seed step creates only application-owned baseline data such as admin/client
 accounts, permissions, addresses, vouchers, homepage section configuration,
-static pages, footer configuration, and system configuration. It deliberately
+static pages, footer configuration (including the dummy WhatsApp destination),
+and system configuration (including `tax.ppnRatePercent = 11`). It deliberately
 leaves the following catalog-managed tables empty for the import:
 
 - `category`, `brand`, and `gender`

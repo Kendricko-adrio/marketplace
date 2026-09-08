@@ -221,6 +221,7 @@ test.describe("storefront cart & checkout", () => {
     page,
   }) => {
     await reachCheckoutReview(page, "john@example.com");
+    await expect(page.getByText("PPN (11%)").first()).toBeVisible();
     await page.getByRole("button", { name: "Bayar Sekarang" }).click();
 
     // The default E2E suite uses a local payment boundary. Sandbox contract
@@ -239,6 +240,11 @@ test.describe("storefront cart & checkout", () => {
        WHERE order_id = $1 AND type = 'reserve'`,
       [createdOrderId]
     );
+    const pricing = await pool.query(
+      `SELECT subtotal, discount, ppn_rate, ppn_amount, total
+       FROM orders WHERE id = $1`,
+      [createdOrderId]
+    );
     await pool.end();
     expect(snapshot.rows[0]?.snapshot).toMatchObject({
       unit: "Buah",
@@ -247,6 +253,12 @@ test.describe("storefront cart & checkout", () => {
     });
     expect(snapshot.rows[0]?.snapshot.cost).toEqual(expect.any(Number));
     expect(snapshot.rows[0]?.snapshot.binId).toEqual(expect.any(Number));
+    expect(Number(pricing.rows[0].ppn_rate)).toBe(11);
+    expect(Number(pricing.rows[0].ppn_amount)).toBeGreaterThan(0);
+    expect(Number(pricing.rows[0].total)).toBe(
+      Number(pricing.rows[0].subtotal) - Number(pricing.rows[0].discount) +
+        Number(pricing.rows[0].ppn_amount)
+    );
   });
 
   test("re-acquires stock when settlement arrives after confirmed compensation", async ({

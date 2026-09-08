@@ -68,7 +68,11 @@ interface OrderDetail {
   contactPhone: string;
   contactEmail: string;
   subtotal: string;
+  shippingCost: string;
+  discount: string;
   serviceFee: string;
+  ppnRate: string;
+  ppnAmount: string;
   total: string;
   createdAt: string;
   updatedAt: string;
@@ -581,8 +585,24 @@ export default function AdminOrderDetailPage() {
               <span className="text-muted-foreground">Subtotal</span>
               <span>Rp {parseFloat(order.subtotal).toLocaleString("id-ID")}</span>
             </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Diskon</span>
+              <span>-Rp {parseFloat(order.discount).toLocaleString("id-ID")}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">PPN ({parseFloat(order.ppnRate)}%)</span>
+              <span>Rp {parseFloat(order.ppnAmount).toLocaleString("id-ID")}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Ongkos Kirim</span>
+              <span>Rp {parseFloat(order.shippingCost).toLocaleString("id-ID")}</span>
+            </div>
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Biaya Layanan</span>
+              <span>Rp {parseFloat(order.serviceFee).toLocaleString("id-ID")}</span>
+            </div>
             <div className="flex justify-between font-bold pt-2 border-t">
-              <span>Total</span>
+              <span>Total Pembayaran</span>
               <span className="text-primary">
                 Rp {parseFloat(order.total).toLocaleString("id-ID")}
               </span>

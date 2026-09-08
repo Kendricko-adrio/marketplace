@@ -35,6 +35,7 @@ import {
   formatDateLabel,
 } from "@/lib/pickup-validation";
 import type { OperatingHours } from "@/db";
+import { calculateOrderPricing } from "@/lib/order-pricing";
 
 // ===== Types =====
 interface CartItem {
@@ -62,6 +63,7 @@ interface CartData {
   items: CartItem[];
   itemCount: number;
   subtotal: number;
+  ppnRatePercent: number;
 }
 
 interface BranchWithHours {
@@ -244,7 +246,14 @@ export default function CheckoutPage() {
       ),
     [selectedItems]
   );
-  const total = subtotal;
+  const pricing = useMemo(
+    () => calculateOrderPricing({
+      subtotal,
+      ppnRatePercent: cart?.ppnRatePercent ?? 11,
+    }),
+    [subtotal, cart?.ppnRatePercent]
+  );
+  const total = Number(pricing.total);
 
   // ===== Step 2 validation (pickup — client-side; server re-validates on place-order) =====
   const validateStep2 = (): boolean => {
@@ -722,8 +731,20 @@ export default function CheckoutPage() {
                     <span>Rp {subtotal.toLocaleString("id-ID")}</span>
                   </div>
                   <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Diskon</span>
+                    <span>Rp 0</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">PPN ({pricing.ppnRatePercent}%)</span>
+                    <span>Rp {Number(pricing.ppnAmount).toLocaleString("id-ID")}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Ongkos Kirim</span>
                     <span className="text-green-600">Gratis (Pickup)</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Biaya Layanan</span>
+                    <span>Rp 0</span>
                   </div>
                   <hr className="border-t border-dashed border-muted-foreground/30 my-2" />
                   <div className="flex justify-between font-bold">
@@ -814,8 +835,20 @@ export default function CheckoutPage() {
                   <span>Rp {subtotal.toLocaleString("id-ID")}</span>
                 </div>
                 <div className="flex justify-between">
+                  <span className="text-muted-foreground">Diskon</span>
+                  <span>Rp 0</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">PPN ({pricing.ppnRatePercent}%)</span>
+                  <span>Rp {Number(pricing.ppnAmount).toLocaleString("id-ID")}</span>
+                </div>
+                <div className="flex justify-between">
                   <span className="text-muted-foreground">Ongkos Kirim</span>
                   <span className="text-green-600">Gratis</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Biaya Layanan</span>
+                  <span>Rp 0</span>
                 </div>
               </div>
 

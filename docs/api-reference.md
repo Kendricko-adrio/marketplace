@@ -71,7 +71,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | GET | `/api/products/{id}` | none | Product detail + variants + per-branch stock |
 | GET | `/api/homepage` | none | Assemble active homepage sections (hydrated) |
 | POST | `/api/vouchers/validate` | none | Validate voucher code + preview discount |
-| GET | `/api/cart` | client-session | Get (auto-create) cart with items + subtotal |
+| GET | `/api/cart` | client-session | Get (auto-create) cart with items, subtotal, and effective PPN rate |
 | DELETE | `/api/cart` | client-session | Clear all cart items |
 | POST | `/api/cart/items` | client-session | Add variant@branch to cart (merge) |
 | PUT | `/api/cart/items/{id}` | client-session | Update cart item quantity |
@@ -230,7 +230,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Purpose**: Get (or auto-create) the user's cart with items, variant/branch/product details, first image, and subtotal.
 - **Params**: —
 - **Body**: none
-- **Response**: 200 `{ success, data: { id, items[], itemCount, subtotal } }`; 401 if unauth; 500 on error
+- **Response**: 200 `{ success, data: { id, items[], itemCount, subtotal, ppnRatePercent } }`; `ppnRatePercent` is the validated effective rate (11 fallback); 401 if unauth; 500 on error
 - **Notes**: Auto-creates a `carts` row if none exists for the user. Each item carries its own `branchId`. Subtotal sums `parseFloat(variant.price) * quantity`.
 
 #### `DELETE` `/api/cart`
@@ -295,7 +295,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: —
 - **Body**: `{ phone: string (8-20), email: string (email), pickupDate: string (YYYY-MM-DD), pickupTime: string (HH:mm), selectedItemIds: string[] (min 1) }`
 - **Response**: 200 `{ success, orderId, redirectUrl, token }`; 400 invalid body/local stock failure; 401 if unauth; 409 definitive Jubelio rejection; 503 ambiguous Jubelio confirmation; 500 on error; 502 on Midtrans failure (cart preserved)
-- **Notes**: Enforces single-branch checkout and a Jakarta-time pickup slot. A short transaction creates the order/items, increments `pending_remote_stock`, and creates a durable reserve operation. Midtrans is called only after Jubelio confirms the negative adjustment. A Jubelio failure never creates a Midtrans transaction. Midtrans failure queues a positive compensation. `serviceFee = 0`, `total = subtotal`, `shippingCost`/`discount` = `"0"`.
+- **Notes**: Enforces single-branch checkout and a Jakarta-time pickup slot. Server prices are authoritative. PPN uses `tax.ppnRatePercent` (11 fallback), applies after discount, rounds upward to whole Rupiah, and persists `ppnRate`/`ppnAmount` with the gross `total`. A short transaction creates the order/items, increments `pending_remote_stock`, and creates a durable reserve operation. Midtrans is called only after Jubelio confirms the negative adjustment; item details include PPN and sum to the gross total. A Jubelio failure never creates a Midtrans transaction. Midtrans failure queues a positive compensation.
 
 #### `GET` `/api/orders`
 - **Auth**: client-session
@@ -522,9 +522,9 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Auth**: admin-session (permission: users/edit) — comment indicates HQ-only intent
 - **Purpose**: Reset a user's password.
 - **Params**: `{id}`
-- **Body**: `{ passwordMode: "manual"|"generate", password?: string (min 8, required when manual) }`
+- **Body**: `{ passwordMode: "generate" }` (no password field) or `{ passwordMode: "manual", password: string }` (minimum 8 characters)
 - **Response**: 200 `{ success, data: { password: string, mustResetPassword: true } }`; 400 invalid / password-too-short; 404 not found; 500 error
-- **Notes**: Updates the user's `credential` `adminAccounts` row password (bcrypt, cost 10), or creates one if absent. Sets `users.mustResetPassword=true`. Deletes all `adminSessions` for the user (revokes old password on all devices). Plaintext password returned once in response.
+- **Notes**: Updates the user's `credential` `adminAccounts` row password (bcrypt, cost 10), or creates one if absent. Sets `users.mustResetPassword=true`. Deletes all `adminSessions` for the user (revokes old password on all devices). Plaintext password is returned once and never logged; structured logs contain actor/target IDs, mode, and validation field names only.
 
 #### `POST` `/api/admin/upload`
 - **Auth**: admin-session (role: admin | hq)
@@ -557,7 +557,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Purpose**: Fetch a single order's full detail including items (with variant + first display image), customer/branch, and its durable Jubelio stock-operation lifecycle.
 - **Params**: path `id` (order id)
 - **Body**: none
-- **Response**: 200 `{ success: true, data: { ...order fields, customer, branch, items, stockOperations: [{ id, type, status, remoteAdjustmentId, attemptCount, lastError, createdAt, updatedAt }] } }`; 404 `"Order not found"`; 403 `"Forbidden — order belongs to a different branch"`; 500 `"Failed to fetch order"`
+- **Response**: 200 `{ success: true, data: { ...order fields, ppnRate, ppnAmount, customer, branch, items, stockOperations: [{ id, type, status, remoteAdjustmentId, attemptCount, lastError, createdAt, updatedAt }] } }`; 404 `"Order not found"`; 403 `"Forbidden — order belongs to a different branch"`; 500 `"Failed to fetch order"`
 - **Notes**: RBAC enforced — a branch admin whose `order.branchId !== scope.branchId` gets 403. Read-only.
 
 #### `POST` `/api/admin/orders/{id}/stock-review`

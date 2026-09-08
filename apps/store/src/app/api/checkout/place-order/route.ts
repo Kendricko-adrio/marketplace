@@ -16,7 +16,12 @@ import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
 import { pickupDateToInstant, validatePickupSlot } from "@/lib/pickup-validation";
 import { createPayment, getMockPaymentResult } from "@/lib/midtrans";
-import { getConfigNumber } from "@/lib/config";
+import { getConfigNumber, getPpnRatePercent } from "@/lib/config";
+import {
+  calculateLineItemSubtotal,
+  calculateOrderPricing,
+} from "@/lib/order-pricing";
+import { buildPaymentItemDetails } from "@/lib/payment-item-details";
 import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
 import { claimAndFailOrder } from "@/lib/order-finalize";
 import { initializeReservedOrderPayment } from "@/lib/payment-initialization";
@@ -250,12 +255,30 @@ export async function POST(request: NextRequest) {
     }
 
     // ===== Calculate totals =====
-    let subtotal = 0;
-    for (const item of selectedItems) {
-      subtotal += parseFloat(item.variantPrice) * item.quantity;
-    }
-    const serviceFee = 0;
-    const total = subtotal;
+    const subtotal = calculateLineItemSubtotal(
+      selectedItems.map((item) => ({
+        price: item.variantPrice,
+        quantity: item.quantity,
+      }))
+    );
+    const ppnRatePercent = await getPpnRatePercent();
+    const pricing = calculateOrderPricing({
+      subtotal,
+      discount: 0,
+      shippingCost: 0,
+      serviceFee: 0,
+      ppnRatePercent,
+    });
+    const total = Number(pricing.total);
+    const paymentItemDetails = buildPaymentItemDetails({
+      items: selectedItems.map((item) => ({
+        id: item.variantId,
+        name: item.productName,
+        price: item.variantPrice,
+        quantity: item.quantity,
+      })),
+      ...pricing,
+    });
 
     // ===== Reservation TTL (minutes) from system_config (cached at boot) =====
     const ttlMinutes = await getConfigNumber("reservation.ttlMinutes", 15);
@@ -264,7 +287,12 @@ export async function POST(request: NextRequest) {
     const orderId = crypto.randomUUID();
     const stockOperationId = crypto.randomUUID();
     log = log.child({ orderId });
-    log.info("creating order", { total, ttlMinutes });
+    log.info("creating order", {
+      ppnRatePercent: pricing.ppnRatePercent,
+      ppnAmount: pricing.ppnAmount,
+      total: pricing.total,
+      ttlMinutes,
+    });
 
     try {
       await db.transaction(async (tx) => {
@@ -282,11 +310,13 @@ export async function POST(request: NextRequest) {
           pickupTime,
           contactPhone: phone,
           contactEmail: email,
-          subtotal: subtotal.toString(),
-          shippingCost: "0",
-          discount: "0",
-          serviceFee: serviceFee.toString(),
-          total: total.toString(),
+          subtotal: pricing.subtotal,
+          shippingCost: pricing.shippingCost,
+          discount: pricing.discount,
+          serviceFee: pricing.serviceFee,
+          ppnRate: pricing.ppnRatePercent,
+          ppnAmount: pricing.ppnAmount,
+          total: pricing.total,
           expiresAt: new Date(Date.now() + ttlMinutes * 60_000),
         });
 
@@ -398,12 +428,7 @@ export async function POST(request: NextRequest) {
               email,
               phone,
             },
-            selectedItems.map((item) => ({
-              id: item.variantId,
-              name: item.productName,
-              price: parseFloat(item.variantPrice),
-              quantity: item.quantity,
-            })),
+            paymentItemDetails,
             ttlMinutes
           );
         },
@@ -448,6 +473,9 @@ export async function POST(request: NextRequest) {
 
       log.info("order placed successfully", {
         redirectUrl: !!midtransResult.redirectUrl,
+        ppnRatePercent: pricing.ppnRatePercent,
+        ppnAmount: pricing.ppnAmount,
+        total: pricing.total,
       });
       return withRequestId(
         NextResponse.json({

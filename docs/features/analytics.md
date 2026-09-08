@@ -43,7 +43,9 @@ single read-only endpoint; the admin page itself is still a placeholder.
 | `recentOrders` | 5 newest orders by `createdAt` desc, inner-joined with `clients` for `customer` name | none |
 
 Revenue sums use `COALESCE(SUM(CAST(total AS DECIMAL)), 0)` and are returned as
-floats; counts as numbers.
+floats; counts as numbers. `orders.total` is the gross customer payment, so
+revenue includes the order's PPN snapshot. Net-revenue and tax-only metrics are
+not provided.
 
 ## Scope
 

@@ -18,6 +18,8 @@ export interface OrderForEmail {
   total: string;
   subtotal: string;
   serviceFee: string;
+  ppnRate: string;
+  ppnAmount: string;
   contactName?: string;
   pickupDate: Date | null;
   pickupTime: string | null;
@@ -127,6 +129,10 @@ ${itemsRows}
                     <td style="padding:4px 0;font-size:14px;color:#3f3f46;text-align:right;">Rp ${formatRupiah(parseFloat(order.subtotal))}</td>
                   </tr>
                   <tr>
+                    <td style="padding:4px 0;font-size:14px;color:#71717a;">PPN (${formatPpnRate(order.ppnRate)}%)</td>
+                    <td style="padding:4px 0;font-size:14px;color:#3f3f46;text-align:right;">Rp ${formatRupiah(parseFloat(order.ppnAmount))}</td>
+                  </tr>
+                  <tr>
                     <td style="padding:4px 0;font-size:14px;color:#71717a;">Biaya Layanan</td>
                     <td style="padding:4px 0;font-size:14px;color:#3f3f46;text-align:right;">Rp ${formatRupiah(parseFloat(order.serviceFee))}</td>
                   </tr>
@@ -198,6 +204,7 @@ Pesanan:
 ${itemsText}
 
 Subtotal: Rp ${formatRupiah(parseFloat(order.subtotal))}
+PPN (${formatPpnRate(order.ppnRate)}%): Rp ${formatRupiah(parseFloat(order.ppnAmount))}
 Biaya Layanan: Rp ${formatRupiah(parseFloat(order.serviceFee))}
 Total: Rp ${formatRupiah(parseFloat(order.total))}
 
@@ -281,6 +288,10 @@ ${itemsRows}
 
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px 0;">
                   <tr>
+                    <td style="padding:4px 0;font-size:14px;color:#71717a;">PPN (${formatPpnRate(order.ppnRate)}%)</td>
+                    <td style="padding:4px 0;font-size:14px;color:#3f3f46;text-align:right;">Rp ${formatRupiah(parseFloat(order.ppnAmount))}</td>
+                  </tr>
+                  <tr>
                     <td style="padding:12px 0 0 0;font-size:16px;font-weight:700;color:#18181b;border-top:1px solid #e4e4e7;">Total</td>
                     <td style="padding:12px 0 0 0;font-size:16px;font-weight:700;color:${BRAND_PRIMARY};text-align:right;border-top:1px solid #e4e4e7;">Rp ${formatRupiah(parseFloat(order.total))}</td>
                   </tr>
@@ -329,6 +340,7 @@ Diselesaikan pada: ${completedAt}
 Pesanan:
 ${itemsText}
 
+PPN (${formatPpnRate(order.ppnRate)}%): Rp ${formatRupiah(parseFloat(order.ppnAmount))}
 Total: Rp ${formatRupiah(parseFloat(order.total))}
 
 Sampai jumpa di pesanan berikutnya!
@@ -415,6 +427,10 @@ ${itemsRows}
                 <!-- Total -->
                 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 28px 0;">
                   <tr>
+                    <td style="padding:4px 0;font-size:14px;color:#71717a;">PPN (${formatPpnRate(order.ppnRate)}%)</td>
+                    <td style="padding:4px 0;font-size:14px;color:#3f3f46;text-align:right;">Rp ${formatRupiah(parseFloat(order.ppnAmount))}</td>
+                  </tr>
+                  <tr>
                     <td style="padding:12px 0 0 0;font-size:16px;font-weight:700;color:#18181b;border-top:1px solid #e4e4e7;">Total</td>
                     <td style="padding:12px 0 0 0;font-size:16px;font-weight:700;color:${BRAND_PRIMARY};text-align:right;border-top:1px solid #e4e4e7;">Rp ${formatRupiah(parseFloat(order.total))}</td>
                   </tr>
@@ -464,6 +480,7 @@ Alasan: ${reason}
 Pesanan:
 ${itemsText}
 
+PPN (${formatPpnRate(order.ppnRate)}%): Rp ${formatRupiah(parseFloat(order.ppnAmount))}
 Total: Rp ${formatRupiah(parseFloat(order.total))}
 
 Silakan buat pesanan baru untuk mencoba pembayaran kembali. Pesanan ini tidak dapat dilanjutkan.
@@ -472,6 +489,10 @@ ${BRAND_NAME} · ${BRAND_SUPPORT_EMAIL}`;
 }
 
 // ===== Helpers =====
+
+function formatPpnRate(rate: string): string {
+  return String(parseFloat(rate));
+}
 
 function formatRupiah(amount: number): string {
   return amount.toLocaleString("id-ID");

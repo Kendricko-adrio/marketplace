@@ -48,6 +48,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { ResetPasswordDialog } from "@/components/admin/ResetPasswordDialog";
+import { buildResetPasswordPayload } from "@/lib/reset-password-contract";
 import { useAuth } from "@/providers/auth-provider";
 import {
   Select,
@@ -124,7 +125,7 @@ export default function AdminUsersPage() {
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ passwordMode, password }),
+        body: JSON.stringify(buildResetPasswordPayload(passwordMode, password)),
       }
     );
     const json = await res.json();

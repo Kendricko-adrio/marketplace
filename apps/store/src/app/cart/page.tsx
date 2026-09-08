@@ -26,6 +26,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useCart } from "@/providers/cart-provider";
+import { calculateOrderPricing } from "@/lib/order-pricing";
 
 interface CartItem {
   id: string;
@@ -58,6 +59,7 @@ interface CartData {
   items: CartItem[];
   itemCount: number;
   subtotal: number;
+  ppnRatePercent: number;
 }
 
 export default function CartPage() {
@@ -192,6 +194,13 @@ export default function CartPage() {
         0
       ),
     [selectedItems]
+  );
+  const selectedPricing = useMemo(
+    () => calculateOrderPricing({
+      subtotal: selectedSubtotal,
+      ppnRatePercent: cart?.ppnRatePercent ?? 11,
+    }),
+    [selectedSubtotal, cart?.ppnRatePercent]
   );
 
   // ===== Toggle item selection with single-branch enforcement =====
@@ -633,17 +642,25 @@ export default function CartPage() {
                     ))}
                   </div>
                   <hr className="border-t border-dashed border-muted-foreground/30 my-4" />
-                  <div className="flex justify-between mb-3 text-muted-foreground">
-                    <span>Total Harga ({selectedItems.length} barang)</span>
-                    <span className="text-foreground">
-                      Rp {selectedSubtotal.toLocaleString("id-ID")}
-                    </span>
+                  <div className="space-y-2 mb-3 text-muted-foreground">
+                    <div className="flex justify-between">
+                      <span>Subtotal ({selectedItems.length} barang)</span>
+                      <span className="text-foreground">
+                        Rp {selectedSubtotal.toLocaleString("id-ID")}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>PPN ({selectedPricing.ppnRatePercent}%)</span>
+                      <span className="text-foreground">
+                        Rp {Number(selectedPricing.ppnAmount).toLocaleString("id-ID")}
+                      </span>
+                    </div>
                   </div>
                   <hr className="border-t border-dashed border-muted-foreground/30 my-4" />
                   <div className="flex justify-between mb-8">
                     <span className="text-lg font-bold">Total Bayar</span>
                     <span className="text-lg font-bold text-primary">
-                      Rp {selectedSubtotal.toLocaleString("id-ID")}
+                      Rp {Number(selectedPricing.total).toLocaleString("id-ID")}
                     </span>
                   </div>
                 </>

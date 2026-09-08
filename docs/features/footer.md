@@ -36,7 +36,10 @@ the admin API and the storefront fetch `.limit(1)`), not by a DB constraint.
 `instagram | facebook | twitter | tiktok | youtube | linkedin | whatsapp` —
 each renders with a dedicated icon (`SocialIcon` in
 `packages/ui/src/components/footer/SocialIcons.tsx`). Only entries with
-`enabled: true` **and** a non-empty `url` are rendered.
+`enabled: true` **and** a non-empty `url` are rendered. The WhatsApp switch
+controls both the footer icon and the floating storefront button. The floating
+button accepts only safe `http:`/`https:` URLs, opens in a new tab, and never
+adds a prefilled message.
 
 ## Endpoints
 
@@ -87,15 +90,12 @@ rel="noopener noreferrer">` and internal ones as `<Link>`.
   Server Component with `export const dynamic = "force-dynamic"` — it fetches
   the row fresh on every request so admin edits appear immediately (without
   this, Next.js could statically render the footer once at build time).
-- It passes `config` to the shared `<Footer />`
-  (`packages/ui/src/components/footer/Footer.tsx`), which falls back to an
-  empty object (`config ?? ({} as FooterConfigData)`) when the row is missing
-  or the query fails — the footer renders empty (no brand, columns, or
-  copyright) until a `footer_config` row exists.
-- `DEFAULT_FOOTER_CONFIG` is defined in `packages/db/src/schema/footer.ts` but
-  is currently **dead code** — nothing imports it. The seeder
-  (`packages/db/src/seed.ts`) hardcodes the same default values inline (a
-  mirror of the constant).
+- It uses `DEFAULT_FOOTER_CONFIG` when the row is missing or cannot be loaded,
+  then passes the effective config to the shared `<Footer />`.
+- It selects a safe enabled WhatsApp URL and renders
+  `FloatingWhatsappButton` beside (not inside) the footer. Keeping it outside
+  prevents the fixed button from appearing in the admin preview dialog.
+- The default and seed config include `https://wa.me/6281234567890` enabled.
 
 ## Admin UI
 
@@ -121,10 +121,8 @@ rel="noopener noreferrer">` and internal ones as `<Link>`.
 - **HQ-only**: footer is global storefront chrome; branch admins cannot edit.
 - **`force-dynamic` on the storefront wrapper**: guarantees admin edits are
   picked up without a redeploy/rebuild.
-- **No runtime default**: the storefront's actual fallback is an empty object,
-  so a fresh DB (before seeding) renders an empty footer. The pre-CMS default
-  values survive only as `DEFAULT_FOOTER_CONFIG` (dead code) and the seeder's
-  inline copy.
+- **Runtime default**: a fresh/unavailable DB uses `DEFAULT_FOOTER_CONFIG`,
+  aligned with seeded content including WhatsApp.
 - **Fixed platform enum**: social icons are per-platform SVGs, so platforms
   are a closed set rather than free-form labels.
 - **Link catalog instead of free text**: footer links are picked from
@@ -138,9 +136,8 @@ rel="noopener noreferrer">` and internal ones as `<Link>`.
   platform with a URL, save → toast "Konfigurasi footer tersimpan".
 - Storefront: reload any store page → footer shows the new brand, columns,
   social icons (external links open in a new tab), and copyright.
-- Fallback: with no `footer_config` row (fresh DB before seed), the storefront
-  renders an empty footer (no brand, columns, or copyright) — run the seeder
-  to get the default content.
+- Fallback: with no `footer_config` row, the storefront renders the default
+  footer and enabled dummy WhatsApp destination.
 - RBAC: a branch admin session gets redirected from `/admin/footer` and gets
   403 from `GET /api/admin/footer`.
 - Limits: the API rejects >3 columns, >5 links per column, empty brandName /

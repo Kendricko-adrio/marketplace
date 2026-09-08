@@ -58,6 +58,8 @@ interface OrderDetail {
   shippingCost: string;
   discount: string;
   serviceFee: string;
+  ppnRate: string;
+  ppnAmount: string;
   total: string;
   createdAt: string;
   snapRedirectUrl: string | null;
@@ -430,8 +432,20 @@ export default function OrderDetailPage() {
                 <span>{formatRupiah(order.subtotal)}</span>
               </div>
               <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Diskon</span>
+                <span>-{formatRupiah(order.discount)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">PPN ({parseFloat(order.ppnRate)}%)</span>
+                <span>{formatRupiah(order.ppnAmount)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Ongkos Kirim</span>
-                <span className="text-green-600">Gratis (Pickup)</span>
+                <span>{formatRupiah(order.shippingCost)}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Biaya Layanan</span>
+                <span>{formatRupiah(order.serviceFee)}</span>
               </div>
               <Separator />
               <div className="flex justify-between font-bold text-lg">

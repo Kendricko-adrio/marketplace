@@ -1,6 +1,10 @@
-import { db } from "@/db";
-import { footerConfig } from "@/db";
-import { Footer, type FooterConfigData } from "@marketplace/ui";
+import { db, footerConfig, DEFAULT_FOOTER_CONFIG } from "@/db";
+import {
+  FloatingWhatsappButton,
+  Footer,
+  type FooterConfigData,
+} from "@marketplace/ui";
+import { getEnabledWhatsappUrl } from "@/lib/footer-whatsapp";
 
 // Force dynamic so the footer is always fetched fresh on every request.
 // Without this, Next.js might statically render the footer once at build time
@@ -25,5 +29,13 @@ export default async function FooterWrapper() {
     console.error("Error fetching footer config:", error);
   }
 
-  return <Footer config={config} />;
+  const effectiveConfig = config ?? DEFAULT_FOOTER_CONFIG;
+  const whatsappUrl = getEnabledWhatsappUrl(effectiveConfig.socialMedia);
+
+  return (
+    <>
+      <Footer config={effectiveConfig} />
+      {whatsappUrl && <FloatingWhatsappButton href={whatsappUrl} />}
+    </>
+  );
 }

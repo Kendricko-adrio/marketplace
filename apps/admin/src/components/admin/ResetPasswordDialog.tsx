@@ -79,7 +79,10 @@ export function ResetPasswordDialog({
 
     setSubmitting(true);
     try {
-      const result = await onConfirm(passwordMode, password);
+      const result = await onConfirm(
+        passwordMode,
+        passwordMode === "manual" ? password : undefined
+      );
       setCreds({
         name: user.name,
         username: user.username ?? "",

@@ -108,29 +108,18 @@ export async function POST(request: NextRequest) {
         .from(orderItems)
         .where(eq(orderItems.orderId, completedOrderId));
 
-        const html = orderCompletedEmailHTML({
-          order: {
-            id: order.id,
-            total: order.total,
-            subtotal: order.subtotal,
-            serviceFee: order.serviceFee,
-            pickupDate: order.pickupDate,
-            pickupTime: order.pickupTime,
-          },
-          items,
-        });
-
-        const text = orderCompletedEmailText({
-          order: {
-            id: order.id,
-            total: order.total,
-            subtotal: order.subtotal,
-            serviceFee: order.serviceFee,
-            pickupDate: order.pickupDate,
-            pickupTime: order.pickupTime,
-          },
-          items,
-        });
+        const emailOrder = {
+          id: order.id,
+          total: order.total,
+          subtotal: order.subtotal,
+          serviceFee: order.serviceFee,
+          ppnRate: order.ppnRate,
+          ppnAmount: order.ppnAmount,
+          pickupDate: order.pickupDate,
+          pickupTime: order.pickupTime,
+        };
+        const html = orderCompletedEmailHTML({ order: emailOrder, items });
+        const text = orderCompletedEmailText({ order: emailOrder, items });
 
         await sendEmail({
           to: order.contactEmail,

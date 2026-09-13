@@ -20,11 +20,12 @@ import {
   ArrowLeft,
   ArrowRight,
   Check,
+  Clock,
+  CreditCard,
   Loader2,
   MapPin,
   Calendar,
-  Clock,
-  CreditCard,
+  TriangleAlert,
   User,
 } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
@@ -180,15 +181,33 @@ export default function CheckoutPage() {
   }, [selectedBranchId]);
 
   // ===== Step 1 validation (contact) =====
+  // Phone and email are both required at pickup — the store asks for them
+  // when the customer collects the order — so we validate them strictly:
+  // phone must contain 8–15 digits (E.164 max), email must be a well-formed
+  // address. Values are trimmed so what gets submitted is what was validated.
   const validateStep1 = (): boolean => {
-    if (!phone || phone.length < 8) {
-      setContactError("Please enter a valid phone number.");
+    const trimmedPhone = phone.trim();
+    const phoneDigits = trimmedPhone.replace(/\D/g, "");
+    if (
+      !trimmedPhone ||
+      phoneDigits.length < 8 ||
+      phoneDigits.length > 15 ||
+      trimmedPhone.length > 20
+    ) {
+      setContactError(
+        "Masukkan nomor telepon yang valid (8–15 angka). Nomor ini wajib Anda sebutkan saat pengambilan pesanan di toko."
+      );
       return false;
     }
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      setContactError("Please enter a valid email address.");
+    const trimmedEmail = email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setContactError(
+        "Masukkan alamat email yang valid. Kode pickup akan dikirim ke email ini dan wajib Anda sebutkan saat pengambilan pesanan."
+      );
       return false;
     }
+    setPhone(trimmedPhone);
+    setEmail(trimmedEmail);
     setContactError("");
     return true;
   };
@@ -429,10 +448,25 @@ export default function CheckoutPage() {
             <Card>
               <CardContent className="p-6">
                 <h2 className="text-xl font-bold mb-1">Informasi Kontak</h2>
-                <p className="text-sm text-muted-foreground mb-6">
-                  Kami akan mengirimkan kode pickup dan konfirmasi pesanan ke
-                  email Anda.
+                <p className="text-sm text-muted-foreground mb-4">
+                  Kode pickup dan konfirmasi pesanan akan dikirim ke email
+                  Anda.
                 </p>
+
+                {/* Pickup requirement warning */}
+                <div className="mb-6 flex items-start gap-3 rounded-lg border border-amber-200 border-l-4 border-l-amber-500 bg-amber-50 p-4 dark:border-amber-800 dark:border-l-amber-500 dark:bg-amber-950/50">
+                  <TriangleAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+                  <div className="text-sm leading-relaxed text-amber-900 dark:text-amber-100">
+                    <span className="font-semibold">Penting!</span>{" "}
+                    Saat mengambil pesanan di toko, Anda{" "}
+                    <span className="font-semibold">
+                      wajib menyebutkan email dan nomor telepon
+                    </span>{" "}
+                    yang terdaftar. Pastikan keduanya{" "}
+                    <span className="font-semibold">benar dan aktif</span>{" "}
+                    agar pesanan Anda dapat diterima.
+                  </div>
+                </div>
 
                 {/* Selected items summary (read-only) */}
                 <div className="mb-6 rounded-lg border bg-muted/30 p-4">
@@ -483,6 +517,11 @@ export default function CheckoutPage() {
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
                     />
+                    <p className="mt-1.5 flex items-start gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-300">
+                      <TriangleAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                      Nomor ini wajib Anda sebutkan saat pengambilan pesanan di
+                      toko.
+                    </p>
                   </div>
                   <div>
                     <Label htmlFor="email" className="mb-1.5 block">
@@ -495,6 +534,11 @@ export default function CheckoutPage() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                     />
+                    <p className="mt-1.5 flex items-start gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-300">
+                      <TriangleAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+                      Kode pickup dikirim ke email ini. Email juga wajib Anda
+                      sebutkan saat pengambilan pesanan di toko.
+                    </p>
                   </div>
                 </div>
 
@@ -534,7 +578,8 @@ export default function CheckoutPage() {
               <CardContent className="p-6">
                 <h2 className="text-xl font-bold mb-1">Ambil di Toko</h2>
                 <p className="text-sm text-muted-foreground mb-6">
-                  Pilih tanggal dan waktu untuk pengambilan pesanan Anda.
+                  Pilih perkiraan tanggal dan waktu kedatangan Anda untuk
+                  mengambil pesanan.
                 </p>
 
                 {/* Branch info (read-only — derived from selected items) */}
@@ -622,6 +667,21 @@ export default function CheckoutPage() {
                       </span>
                     </div>
                   )}
+
+                  {/* Pickup estimate disclaimer (warning-styled) */}
+                  <div className="flex items-start gap-3 rounded-lg border border-amber-200 border-l-4 border-l-amber-500 bg-amber-50 p-4 dark:border-amber-800 dark:border-l-amber-500 dark:bg-amber-950/50">
+                    <TriangleAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+                    <p className="text-sm leading-relaxed text-amber-900 dark:text-amber-100">
+                      <span className="font-semibold">
+                        Tanggal dan waktu pickup hanya estimasi
+                      </span>{" "}
+                      — bukan janji temu yang mengikat. Tujuannya agar tim
+                      toko mengetahui perkiraan kedatangan Anda dan dapat
+                      menyiapkan pesanan lebih awal. Pastikan email dan nomor
+                      telepon Anda aktif agar toko dapat menghubungi Anda bila
+                      diperlukan.
+                    </p>
+                  </div>
                 </div>
 
                 {pickupError && (
@@ -707,7 +767,7 @@ export default function CheckoutPage() {
                     <span className="font-medium">{branch?.name ?? "-"}</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-muted-foreground">Pickup</span>
+                    <span className="text-muted-foreground">Estimasi Pickup</span>
                     <span className="font-medium">
                       {formatDateLabel(pickupDate)} · {pickupTime}
                     </span>
@@ -719,6 +779,24 @@ export default function CheckoutPage() {
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Email</span>
                     <span className="font-medium">{email}</span>
+                  </div>
+                </div>
+
+                {/* Pickup reminders (warning-styled) */}
+                <div className="mb-6 rounded-lg border border-amber-200 border-l-4 border-l-amber-500 bg-amber-50 p-4 dark:border-amber-800 dark:border-l-amber-500 dark:bg-amber-950/50">
+                  <div className="flex items-start gap-2.5">
+                    <TriangleAlert className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+                    <p className="text-sm font-medium leading-relaxed text-amber-900 dark:text-amber-100">
+                      Sebutkan email dan nomor telepon di atas kepada staf toko
+                      saat Anda datang mengambil pesanan.
+                    </p>
+                  </div>
+                  <div className="mt-2.5 flex items-start gap-2.5 border-t border-amber-200 pt-2.5 dark:border-amber-800">
+                    <Clock className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+                    <p className="text-sm font-medium leading-relaxed text-amber-900 dark:text-amber-100">
+                      Tanggal dan waktu pickup bersifat estimasi — hanya untuk
+                      memberi tahu toko kapan Anda berencana datang.
+                    </p>
                   </div>
                 </div>
 
@@ -764,8 +842,11 @@ export default function CheckoutPage() {
                     className="mt-1 h-4 w-4 rounded border-input"
                   />
                   <span className="text-sm text-muted-foreground">
-                    Saya telah memeriksa pesanan dan menyetujui syarat & ketentuan.
-                    Saya akan mengambil pesanan di cabang dan waktu yang dipilih.
+                    Saya telah memeriksa pesanan dan menyetujui syarat &
+                    ketentuan. Saya akan mengambil pesanan di cabang terpilih
+                    sesuai estimasi waktu yang saya tentukan, dan saya bersedia
+                    menyebutkan email serta nomor telepon saya saat pengambilan
+                    pesanan di toko.
                   </span>
                 </label>
 
@@ -862,7 +943,11 @@ export default function CheckoutPage() {
               </div>
 
               {branch && (
-                <div className="mt-4 flex items-start gap-2 rounded-lg bg-primary/5 p-3 text-xs">
+                <div
+                  role="group"
+                  aria-label="Cabang pengambilan"
+                  className="mt-4 flex items-start gap-2 rounded-lg border border-border/80 bg-card p-3 text-xs shadow-sm"
+                >
                   <MapPin className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />
                   <div>
                     <div className="font-medium">{branch.name}</div>

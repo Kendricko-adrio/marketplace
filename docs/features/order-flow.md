@@ -36,6 +36,13 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
 - Index `idx_orders_status_expires` on `(status, expiresAt)` supports the sweep
   batch lookup.
 
+## Checkout UI
+
+The desktop order summary keeps the selected pickup branch in a distinct,
+accessible `Cabang pengambilan` region. Its card uses the surface background,
+a subtle border, and a light shadow so it remains visually separate from the
+tinted summary panel while retaining the branch name and city at a glance.
+
 ## Happy path
 
 1. **Place order** — `POST /api/checkout/place-order`

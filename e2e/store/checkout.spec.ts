@@ -217,6 +217,23 @@ test.describe("storefront cart & checkout", () => {
     await expect(page.locator(".line-through").first()).toBeVisible();
   });
 
+  test("checkout summary distinguishes the selected pickup branch", async ({
+    page,
+  }) => {
+    const item = await addItemToCart(page);
+    await page.goto("/cart");
+    await page.getByRole("checkbox").first().check();
+    await page.getByRole("button", { name: "Checkout" }).click();
+    await page.waitForURL("**/checkout");
+
+    const pickupBranch = page.getByRole("group", {
+      name: "Cabang pengambilan",
+    });
+    await expect(pickupBranch).toBeVisible();
+    await expect(pickupBranch).toContainText(item.branch.name);
+    await expect(pickupBranch).toContainText(item.branch.city);
+  });
+
   test("full checkout: cart → place-order → Midtrans redirect", async ({
     page,
   }) => {

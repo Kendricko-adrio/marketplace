@@ -6,7 +6,6 @@ import {
   ShoppingCart,
   User,
   Search,
-  Menu,
   LogOut,
   Package,
   Settings,
@@ -81,14 +80,6 @@ export default function Header() {
     >
       <div className="container mx-auto flex h-16 items-center justify-between px-4">
         <div className="flex items-center gap-4">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="md:hidden text-white hover:bg-white/10"
-            aria-label="Menu"
-          >
-            <Menu className="h-6 w-6" />
-          </Button>
           <Link href="/" className="flex items-center">
             <Image
               src="/adf-logo.png"

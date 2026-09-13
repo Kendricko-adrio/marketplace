@@ -56,7 +56,6 @@ next-env.d.ts
 dist/
 
 .playwright-mcp
-.agents
 
 .pi
 .tmp

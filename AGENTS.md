@@ -114,7 +114,7 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 - **Use Context7** for current library/framework documentation before writing
   code — don't rely on memory for library APIs.
 - **Every task requires unit tests** — follow the `tdd` skill
-  (`.claude/skills/tdd/SKILL.md`): red → green loop, one vertical slice at a
+  (`.agents/skills/tdd/SKILL.md`): red → green loop, one vertical slice at a
   time, tests at public seams only (never internals), expected values from an
   independent source of truth (no tautological assertions). Write the failing
   test first for features and bug fixes.
@@ -151,7 +151,7 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   `e2e/admin/` and assert the user-visible behavior (e.g., form submission,
   redirect, rendered content). The canonical way to verify a UI feature works is
   to run its Playwright spec and see it pass.
-- **Use the `tdd` skill** (`.claude/skills/tdd/SKILL.md`) for all test work:
+- **Use the `tdd` skill** (`.agents/skills/tdd/SKILL.md`) for all test work:
   red → green loop, one vertical slice at a time, tests at public seams only,
   expected values from an independent source of truth. Load the skill before
   writing any test code.

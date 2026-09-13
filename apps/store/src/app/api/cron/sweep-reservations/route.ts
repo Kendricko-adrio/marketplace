@@ -85,11 +85,21 @@ export async function POST(request: NextRequest) {
         // Re-verify with Midtrans OUTSIDE any tx (don't hold locks across HTTP).
         let status: string = "unknown";
         let fraud: string | undefined;
+        let paymentType: string | undefined;
+        let transactionId: string | undefined;
         try {
           const res = await getMidtransTransactionStatus(order.id);
           if (res) {
             status = res.transaction_status;
             fraud = res.fraud_status;
+            paymentType =
+              typeof res.payment_type === "string" && res.payment_type
+                ? res.payment_type
+                : undefined;
+            transactionId =
+              typeof res.transaction_id === "string" && res.transaction_id
+                ? res.transaction_id
+                : undefined;
           } else {
             // 404 — transaction never registered at Midtrans.
             status = "not_found";
@@ -111,7 +121,10 @@ export async function POST(request: NextRequest) {
 
         if (isSettled) {
           // A success webhook was likely missed — finalize as paid.
-          const result = await claimAndFinalizePaidOrder(order.id, order);
+          const result = await claimAndFinalizePaidOrder(order.id, order, undefined, {
+            paymentType,
+            transactionId,
+          });
           if (result.claimed) finalized++;
         } else {
           // pending / expire / deny / cancel / not_found — release reservation.
@@ -123,7 +136,10 @@ export async function POST(request: NextRequest) {
             status === "not_found"
               ? "Payment expired — order timed out (sweep; not found at Midtrans)"
               : "Payment expired — order timed out (sweep)";
-          const result = await claimAndFailOrder(order.id, reason, status);
+          const result = await claimAndFailOrder(order.id, reason, status, undefined, {
+            paymentType,
+            transactionId,
+          });
           if (result.claimed) failed++;
         }
       } catch (err) {

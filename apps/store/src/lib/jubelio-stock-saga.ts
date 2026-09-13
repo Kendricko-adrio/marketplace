@@ -234,7 +234,8 @@ async function markLateSettlementManualReview(
 export async function processLateSettlementStock(
   orderId: string,
   gateway?: JubelioStockGateway,
-  logger?: Logger
+  logger?: Logger,
+  paymentAttributes?: { paymentType?: string; transactionId?: string }
 ): Promise<LateSettlementResult> {
   const log = (logger ?? createLogger({ module: "late-settlement-stock" })).child({
     orderId,
@@ -279,7 +280,17 @@ export async function processLateSettlementStock(
       const committed = await db.transaction(async (tx) => {
         const claimed = await tx
           .update(orders)
-          .set({ status: "processing", paymentStatus: "paid", updatedAt: new Date() })
+          .set({
+            status: "processing",
+            paymentStatus: "paid",
+            ...(paymentAttributes?.paymentType
+              ? { paymentMethod: paymentAttributes.paymentType }
+              : {}),
+            ...(paymentAttributes?.transactionId
+              ? { midtransTransactionId: paymentAttributes.transactionId }
+              : {}),
+            updatedAt: new Date(),
+          })
           .where(
             and(
               eq(orders.id, orderId),
@@ -391,7 +402,17 @@ export async function processLateSettlementStock(
     const created = await db.transaction(async (tx) => {
       const claimed = await tx
         .update(orders)
-        .set({ status: "processing", paymentStatus: "paid", updatedAt: new Date() })
+        .set({
+          status: "processing",
+          paymentStatus: "paid",
+          ...(paymentAttributes?.paymentType
+            ? { paymentMethod: paymentAttributes.paymentType }
+            : {}),
+          ...(paymentAttributes?.transactionId
+            ? { midtransTransactionId: paymentAttributes.transactionId }
+            : {}),
+          updatedAt: new Date(),
+        })
         .where(
           and(
             eq(orders.id, orderId),

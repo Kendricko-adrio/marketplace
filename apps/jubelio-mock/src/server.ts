@@ -33,7 +33,13 @@ const stocks = new Map<string, MockStock>();
 const adjustments = new Map<number, Adjustment>();
 const midtransStatuses = new Map<
   string,
-  { transactionStatus: string; grossAmount: string; fraudStatus?: string }
+  {
+    transactionStatus: string;
+    grossAmount: string;
+    fraudStatus?: string;
+    paymentType?: string;
+    transactionId?: string;
+  }
 >();
 const requests: Array<{ method: string; path: string; body: unknown }> = [];
 let nextAdjustmentId = 1;
@@ -100,6 +106,10 @@ export const jubelioMockServer = createServer(async (request, response) => {
       grossAmount: String(body.grossAmount || "0.00"),
       fraudStatus:
         typeof body.fraudStatus === "string" ? body.fraudStatus : undefined,
+      paymentType:
+        typeof body.paymentType === "string" ? body.paymentType : undefined,
+      transactionId:
+        typeof body.transactionId === "string" ? body.transactionId : undefined,
     });
     return json(response, 200, { status: "ok" });
   }
@@ -113,6 +123,8 @@ export const jubelioMockServer = createServer(async (request, response) => {
       transaction_status: configured.transactionStatus,
       gross_amount: configured.grossAmount,
       fraud_status: configured.fraudStatus,
+      payment_type: configured.paymentType,
+      transaction_id: configured.transactionId,
       status_code: "200",
       status_message: "Success, transaction found",
     });

@@ -4,7 +4,35 @@ import {
   describeFailureReason,
   generatePickupCode,
   getStockFinalizationDeltas,
+  resolvePaymentOutcome,
 } from "./order-finalize";
+
+// Backs the Midtrans webhook status dispatch (multi-method Snap flow).
+describe("resolvePaymentOutcome", () => {
+  it("finalizes on settlement", () => {
+    expect(resolvePaymentOutcome("settlement")).toBe("finalize");
+  });
+
+  it("finalizes on capture with accepted fraud", () => {
+    expect(resolvePaymentOutcome("capture", "accept")).toBe("finalize");
+  });
+
+  it("defers on capture without an accepted fraud status", () => {
+    expect(resolvePaymentOutcome("capture", "challenge")).toBe("defer");
+    expect(resolvePaymentOutcome("capture")).toBe("defer");
+  });
+
+  it("fails only on expire", () => {
+    expect(resolvePaymentOutcome("expire")).toBe("fail");
+  });
+
+  it("defers non-terminal attempt statuses (Snap allows method retries)", () => {
+    expect(resolvePaymentOutcome("pending")).toBe("defer");
+    expect(resolvePaymentOutcome("deny")).toBe("defer");
+    expect(resolvePaymentOutcome("cancel")).toBe("defer");
+    expect(resolvePaymentOutcome("failure")).toBe("defer");
+  });
+});
 
 // Backs the Midtrans webhook failure path (claimAndFailOrder) and the sweep
 // cron's failure reason mapping.

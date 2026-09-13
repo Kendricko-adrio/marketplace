@@ -100,7 +100,10 @@ packages/db/vitest.config.ts
   JSON. `users.spec.ts` verifies generated-password reset through login.
 - For late settlement, Playwright sets the non-production-only
   `MIDTRANS_MOCK_API_BASE_URL` to the local mock. Configure an authoritative
-  status with `PUT /__control/midtrans-status`; production ignores this URL.
+  status with `PUT /__control/midtrans-status` (supports `transactionStatus`,
+  `grossAmount`, `fraudStatus`, plus `paymentType` and `transactionId` echoed
+  by the mock's `GET /v2/{orderId}/status` exactly like the real Midtrans GET
+  status); production ignores this URL.
 
 - The store Playwright project sends `x-e2e-payment-mock: true`. The route
   accepts it only outside production and redirects to the local

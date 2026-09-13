@@ -46,9 +46,15 @@ export const orders = pgTable("orders", {
   voucherId: text("voucher_id"),
   // pending_payment | processing | ready_for_pickup | completed | cancelled | failed_payment
   // - cancelled: manual cancellation (by user or admin)
-  // - failed_payment: Midtrans gateway reported failure (expire/deny/cancel from callback)
+  // - failed_payment: Midtrans gateway reported failure (terminal `expire`
+  //   callback or the TTL sweep). deny/cancel are non-terminal attempts and do
+  //   not fail the order — the customer may retry with another method on Snap.
   status: text("status").notNull().default("pending_payment"),
-  paymentMethod: text("payment_method"), // qris | va
+  // Authoritative Midtrans payment_type (e.g. qris | gopay | credit_card |
+  // bank_transfer | echannel | bca_va), persisted at finalization from the
+  // GET /v2/{order_id}/status response. NULL until the customer picks a method
+  // on the hosted Snap page.
+  paymentMethod: text("payment_method"),
   paymentStatus: text("payment_status")
     .notNull()
     .default("pending"), // pending | paid | failed
@@ -86,7 +92,9 @@ export const orders = pgTable("orders", {
     .notNull()
     .default("0"),
   total: numeric("total", { precision: 15, scale: 2 }).notNull(),
-  // Midtrans transaction id (from Core API charge response), nullable until charge succeeds
+  // Midtrans transaction_id from the authoritative GET status response
+  // (repurposed legacy column from the Core API era; never written from the
+  // raw webhook body), nullable until finalization.
   midtransTransactionId: text("midtrans_transaction_id"),
   // Midtrans Snap redirect URL, saved so user can resume payment if they navigate away
   snapRedirectUrl: text("snap_redirect_url"),

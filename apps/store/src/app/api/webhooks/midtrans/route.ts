@@ -11,6 +11,8 @@ import {
   claimAndFinalizePaidOrder,
   claimAndFailOrder,
   describeFailureReason,
+  resolvePaymentOutcome,
+  type PaymentAttributes,
 } from "@/lib/order-finalize";
 import { requestLogger, serializeError } from "@/lib/logger";
 import { processLateSettlementStock } from "@/lib/jubelio-stock-saga";
@@ -86,6 +88,8 @@ export async function POST(request: NextRequest) {
     let authoritativeStatus: string;
     let authoritativeFraud: string | undefined;
     let authoritativeStatusMessage: string | undefined;
+    let authoritativePaymentType: string | undefined;
+    let authoritativeTransactionId: string | undefined;
     try {
       const statusRes = await getMidtransTransactionStatus(String(order_id));
       if (!statusRes) {
@@ -110,6 +114,14 @@ export async function POST(request: NextRequest) {
       authoritativeStatus = statusRes.transaction_status;
       authoritativeFraud = statusRes.fraud_status;
       authoritativeStatusMessage = statusRes.status_message;
+      authoritativePaymentType =
+        typeof statusRes.payment_type === "string" && statusRes.payment_type
+          ? statusRes.payment_type
+          : undefined;
+      authoritativeTransactionId =
+        typeof statusRes.transaction_id === "string" && statusRes.transaction_id
+          ? statusRes.transaction_id
+          : undefined;
     } catch (verifyError) {
       orderLog.error("status re-verify failed", {
         error: serializeError(verifyError),
@@ -121,33 +133,43 @@ export async function POST(request: NextRequest) {
     }
 
     // ===== Handle transaction status =====
-    const isSuccess =
-      authoritativeStatus === "settlement" ||
-      (authoritativeStatus === "capture" && authoritativeFraud === "accept");
+    // Authoritative payment attributes (method + transaction id) are taken
+    // ONLY from the GET status response — never from the raw webhook body.
+    const paymentAttributes: PaymentAttributes = {
+      paymentType: authoritativePaymentType,
+      transactionId: authoritativeTransactionId,
+    };
 
-    const isFailure =
-      authoritativeStatus === "deny" ||
-      authoritativeStatus === "cancel" ||
-      authoritativeStatus === "expire";
+    const outcome = resolvePaymentOutcome(
+      authoritativeStatus,
+      authoritativeFraud
+    );
 
-    if (isSuccess) {
+    if (outcome === "finalize") {
       // Payment success: convert reservation → real deduction, generate pickup
       // code, move to ready_for_pickup, send email. Claim-guard makes this
       // idempotent against the sweep cron racing this webhook.
       orderLog.info("settlement → finalize dispatched", {
         authoritativeStatus,
+        paymentType: paymentAttributes.paymentType,
       });
       if (order.status === "failed_payment") {
         const lateSettlement = await processLateSettlementStock(
           order.id,
           undefined,
-          orderLog
+          orderLog,
+          paymentAttributes
         );
         orderLog.info("late settlement processed", lateSettlement);
       } else {
-        await claimAndFinalizePaidOrder(order.id, order, orderLog);
+        await claimAndFinalizePaidOrder(
+          order.id,
+          order,
+          orderLog,
+          paymentAttributes
+        );
       }
-    } else if (isFailure) {
+    } else if (outcome === "fail") {
       const reason =
         describeFailureReason(authoritativeStatus, authoritativeStatusMessage) ??
         "Payment failed";
@@ -155,11 +177,21 @@ export async function POST(request: NextRequest) {
         authoritativeStatus,
         reason,
       });
-      await claimAndFailOrder(order.id, reason, authoritativeStatus, orderLog);
+      await claimAndFailOrder(
+        order.id,
+        reason,
+        authoritativeStatus,
+        orderLog,
+        paymentAttributes
+      );
     }
-    // transaction_status === "pending" → do nothing, order stays pending_payment
-    if (!isSuccess && !isFailure) {
-      orderLog.info("non-terminal status — no action", { authoritativeStatus });
+    // defer (pending/deny/cancel/failure) → no DB write: Snap allows the
+    // customer to retry with another method on the same order, so the order
+    // stays pending_payment until a settlement/expire webhook or the TTL sweep.
+    if (outcome === "defer") {
+      orderLog.info("non-terminal status — order stays pending_payment", {
+        authoritativeStatus,
+      });
     }
 
     return NextResponse.json({ success: true });

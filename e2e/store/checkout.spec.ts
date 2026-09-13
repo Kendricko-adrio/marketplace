@@ -162,9 +162,35 @@ async function reachCheckoutReview(
   await page.getByRole("option", { name: "10:00" }).click();
   await page.getByRole("button", { name: "Lanjut" }).click();
   await expect(
-    page.getByRole("heading", { name: "Pembayaran QRIS" })
+    page.getByRole("heading", { name: "Pembayaran" })
   ).toBeVisible();
   await page.getByText(/Saya telah memeriksa pesanan/).click();
+}
+
+async function postSignedWebhook(
+  page: import("@playwright/test").Page,
+  orderId: string,
+  transactionStatus: string,
+  grossAmount: string,
+  extra: Record<string, unknown> = {}
+): Promise<import("@playwright/test").APIResponse> {
+  const statusCode = "200";
+  const signature = crypto
+    .createHash("sha512")
+    .update(
+      `${orderId}${statusCode}${grossAmount}${process.env.MIDTRANS_SERVER_KEY}`
+    )
+    .digest("hex");
+  return page.request.post("/api/webhooks/midtrans", {
+    data: {
+      order_id: orderId,
+      transaction_status: transactionStatus,
+      status_code: statusCode,
+      gross_amount: grossAmount,
+      signature_key: signature,
+      ...extra,
+    },
+  });
 }
 
 test.describe("storefront cart & checkout", () => {
@@ -340,6 +366,8 @@ test.describe("storefront cart & checkout", () => {
           orderId,
           transactionStatus: "settlement",
           grossAmount,
+          paymentType: "credit_card",
+          transactionId: "57d5293c-e65f-4a29-95e4-5959c3fa335b",
         },
       }
     );
@@ -363,7 +391,8 @@ test.describe("storefront cart & checkout", () => {
     expect(webhook.status()).toBe(200);
 
     const state = await pool.query(
-      `SELECT o.status, o.payment_status,
+      `SELECT o.status, o.payment_status, o.payment_method,
+              o.midtrans_transaction_id,
               j.status AS operation_status, j.remote_adjustment_id,
               bs.pending_remote_stock
        FROM orders o
@@ -379,6 +408,8 @@ test.describe("storefront cart & checkout", () => {
     expect(state.rows[0]).toMatchObject({
       status: "ready_for_pickup",
       payment_status: "paid",
+      payment_method: "credit_card",
+      midtrans_transaction_id: "57d5293c-e65f-4a29-95e4-5959c3fa335b",
       operation_status: "applied",
       pending_remote_stock: 0,
     });
@@ -414,6 +445,141 @@ test.describe("storefront cart & checkout", () => {
     await pool.end();
     expect(failed.rows[0]?.id).toBeTruthy();
     createdOrderIds.push(failed.rows[0].id);
+  });
+
+  test("settlement persists authoritative payment attributes; replay stays idempotent", async ({
+    page,
+  }) => {
+    await reachCheckoutReview(page, "gopay-e2e@example.com");
+    await page.getByRole("button", { name: "Bayar Sekarang" }).click();
+    await expect(page).toHaveURL(/\/checkout\/payment-test\?orderId=/, {
+      timeout: 30_000,
+    });
+    const orderId = new URL(page.url()).searchParams.get("orderId");
+    expect(orderId).toBeTruthy();
+
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const order = await pool.query("SELECT total FROM orders WHERE id = $1", [
+      orderId,
+    ]);
+    const grossAmount = order.rows[0].total as string;
+
+    // Mock the authoritative GET status: paid via GoPay.
+    const configured = await page.request.put(
+      "http://127.0.0.1:3002/__control/midtrans-status",
+      {
+        data: {
+          orderId,
+          transactionStatus: "settlement",
+          grossAmount,
+          paymentType: "gopay",
+          transactionId: "513f1f01-c9da-474c-9fc9-d5c64364b709",
+        },
+      }
+    );
+    expect(configured.ok()).toBe(true);
+
+    // The raw webhook body deliberately claims a different method/id —
+    // the persistence must come from the GET status, not the webhook body.
+    const webhook = await postSignedWebhook(page, orderId!, "settlement", grossAmount, {
+      payment_type: "credit_card",
+      transaction_id: "spoofed-from-body",
+    });
+    expect(webhook.status()).toBe(200);
+
+    const state = await pool.query(
+      `SELECT status, payment_status, payment_method, midtrans_transaction_id
+       FROM orders WHERE id = $1`,
+      [orderId]
+    );
+    expect(state.rows[0]).toMatchObject({
+      status: "ready_for_pickup",
+      payment_status: "paid",
+      payment_method: "gopay",
+      midtrans_transaction_id: "513f1f01-c9da-474c-9fc9-d5c64364b709",
+    });
+
+    // Replay the identical settlement → idempotent 200, state unchanged.
+    const replay = await postSignedWebhook(page, orderId!, "settlement", grossAmount);
+    expect(replay.status()).toBe(200);
+    const after = await pool.query(
+      "SELECT status, payment_status FROM orders WHERE id = $1",
+      [orderId]
+    );
+    await pool.end();
+    expect(after.rows[0]).toMatchObject({
+      status: "ready_for_pickup",
+      payment_status: "paid",
+    });
+  });
+
+  test("deny is a non-terminal attempt — a later settlement still finalizes", async ({
+    page,
+  }) => {
+    await reachCheckoutReview(page, "deny-retry-e2e@example.com");
+    await page.getByRole("button", { name: "Bayar Sekarang" }).click();
+    await expect(page).toHaveURL(/\/checkout\/payment-test\?orderId=/, {
+      timeout: 30_000,
+    });
+    const orderId = new URL(page.url()).searchParams.get("orderId");
+    expect(orderId).toBeTruthy();
+
+    const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+    const order = await pool.query("SELECT total FROM orders WHERE id = $1", [
+      orderId,
+    ]);
+    const grossAmount = order.rows[0].total as string;
+
+    // Card denied via credit card attempt.
+    await page.request.put("http://127.0.0.1:3002/__control/midtrans-status", {
+      data: {
+        orderId,
+        transactionStatus: "deny",
+        grossAmount,
+        paymentType: "credit_card",
+      },
+    });
+    const deny = await postSignedWebhook(page, orderId!, "deny", grossAmount, {
+      payment_type: "credit_card",
+    });
+    expect(deny.status()).toBe(200);
+
+    const afterDeny = await pool.query(
+      `SELECT status, payment_status, payment_failure_reason
+       FROM orders WHERE id = $1`,
+      [orderId]
+    );
+    expect(afterDeny.rows[0]).toMatchObject({
+      status: "pending_payment",
+      payment_status: "pending",
+      payment_failure_reason: null,
+    });
+
+    // The customer retries with GoPay and succeeds.
+    await page.request.put("http://127.0.0.1:3002/__control/midtrans-status", {
+      data: {
+        orderId,
+        transactionStatus: "settlement",
+        grossAmount,
+        paymentType: "gopay",
+        transactionId: "attempt-2-txn-id",
+      },
+    });
+    const settle = await postSignedWebhook(page, orderId!, "settlement", grossAmount);
+    expect(settle.status()).toBe(200);
+
+    const afterSettle = await pool.query(
+      `SELECT status, payment_status, payment_method, midtrans_transaction_id
+       FROM orders WHERE id = $1`,
+      [orderId]
+    );
+    await pool.end();
+    expect(afterSettle.rows[0]).toMatchObject({
+      status: "ready_for_pickup",
+      payment_status: "paid",
+      payment_method: "gopay",
+      midtrans_transaction_id: "attempt-2-txn-id",
+    });
   });
 
   test("voucher validation API: valid, minimum-purchase, and unknown codes", async ({

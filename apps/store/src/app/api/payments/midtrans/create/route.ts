@@ -6,6 +6,7 @@ import { requireOnboardedApiSession } from "@/lib/route-access";
 import { createPayment } from "@/lib/midtrans";
 import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
 import { buildPaymentItemDetails } from "@/lib/payment-item-details";
+import { getConfigNumber } from "@/lib/config";
 
 export async function POST(request: NextRequest) {
   let log = requestLogger(request, { module: "midtrans-create" });
@@ -63,6 +64,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Reject orders past their reservation TTL — the sweep cron has likely
+    // already released the stock, and extending the reservation here would
+    // contradict `orders.expiresAt`.
+    if (order.expiresAt && order.expiresAt.getTime() <= Date.now()) {
+      log.warn("repayment rejected — order expired", {
+        expiresAt: order.expiresAt,
+      });
+      return NextResponse.json(
+        { success: false, error: "Order has expired. Please create a new order." },
+        { status: 400 }
+      );
+    }
+
+    // Reuse the existing Snap redirect URL when present: the customer may have
+    // already chosen a payment method (Midtrans marks the order_id as used and
+    // refuses to re-create a token for it), so a new token would fail.
+    if (order.snapRedirectUrl) {
+      log.info("repayment reusing existing Snap redirect URL");
+      return withRequestId(NextResponse.json({
+        success: true,
+        redirectUrl: order.snapRedirectUrl,
+        token: null,
+      }), log);
+    }
+
     const reserveRows = await db
       .select({ status: jubelioStockOperations.status })
       .from(jubelioStockOperations)
@@ -96,6 +122,15 @@ export async function POST(request: NextRequest) {
       .from(orderItems)
       .where(eq(orderItems.orderId, orderId));
 
+    // Align the Midtrans expiry countdown with the remaining reservation TTL
+    // (anchored at `expiresAt`), so re-created tokens cannot outlive the
+    // reservation clock.
+    const ttlConfig = await getConfigNumber("reservation.ttlMinutes", 15);
+    const remainingMs = order.expiresAt
+      ? order.expiresAt.getTime() - Date.now()
+      : ttlConfig * 60_000;
+    const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
+
     const result = await createPayment(
       orderId,
       parseFloat(order.total),
@@ -117,7 +152,9 @@ export async function POST(request: NextRequest) {
         ppnRatePercent: order.ppnRate,
         ppnAmount: order.ppnAmount,
         total: order.total,
-      })
+      }),
+      remainingMinutes,
+      new Date()
     );
 
     // Persist Snap redirect URL

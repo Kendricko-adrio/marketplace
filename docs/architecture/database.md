@@ -69,6 +69,18 @@ the tax policy applied at checkout. Both are non-negative, the rate is checked
 between 0 and 100, and re-payment reads these columns rather than mutable
 `system_config`. See [../features/ppn.md](../features/ppn.md).
 
+## Order payment columns
+
+`orders.payment_method` and `orders.midtrans_transaction_id` are `NULL` until
+the customer picks a method on the hosted Snap page: both are persisted
+atomically with the finalization claim UPDATE, sourced only from the
+authoritative `GET /v2/{order_id}/status` (`payment_type` / `transaction_id`),
+never from the raw webhook body. `payment_method` stores the raw Midtrans
+payment_type verbatim (`qris`, `gopay`, `credit_card`, `bank_transfer`,
+`echannel`, `bca_va`, …). Both columns are legacy-era and nullable — no schema
+migration was required to repurpose them (comment-only change in
+`packages/db/src/schema/orders.ts`).
+
 ## Seeder Must Stay in Sync
 
 Whenever a table/column is added or removed in `packages/db/src/schema/`,

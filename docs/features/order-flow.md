@@ -15,7 +15,7 @@ notification), **`docs/api-reference.md`** (endpoint contracts).
 ```
 pending_payment ──(settlement webhook / sweep re-verify)──▶ processing ──▶ ready_for_pickup ──(admin verify-pickup)──▶ completed
       │
-      └──(deny / cancel / expire webhook / sweep)──▶ failed_payment   (terminal)
+      └──(expire webhook / sweep)──▶ failed_payment   (terminal)
 ```
 
 | From | To | Trigger | Code |
@@ -23,18 +23,30 @@ pending_payment ──(settlement webhook / sweep re-verify)──▶ processing
 | `pending_payment` / `pending` | `processing` / `paid` | settlement or capture+accept (webhook or sweep) | claim-guard in `claimAndFinalizePaidOrder` |
 | `processing` / `paid` | `ready_for_pickup` + `pickupCode` | same transaction | `claimAndFinalizePaidOrder` |
 | `ready_for_pickup` | `completed` | branch admin verifies pickup code | admin `verify-pickup` → store `/api/internal/order-complete` |
-| `pending_payment` / `pending` | `failed_payment` / `failed` | deny / cancel / expire (webhook or sweep) | claim-guard in `claimAndFailOrder` |
+| `pending_payment` / `pending` | `failed_payment` / `failed` | expire (webhook) or sweep TTL | claim-guard in `claimAndFailOrder` |
 
 - `paymentStatus`: `pending` → `paid` | `failed` (mirrors the terminal
   transitions above).
+- **deny / cancel / pending / failure are NON-terminal** (see “Multiple payment
+  attempts” below): the webhook returns 200 with no DB write and the order
+  stays `pending_payment`.
 - `cancelled` is declared in the schema comment (manual cancellation) but no
   current code path writes it.
-- `paymentFailureReason` + `midtransFailureStatus` are set on failure for
-  human-readable + raw debugging.
-- `expiresAt` = place-order time + `reservation.ttlMinutes` (default 15);
-  drives the sweep cron and pairs with the Midtrans expiry.
-- Index `idx_orders_status_expires` on `(status, expiresAt)` supports the sweep
-  batch lookup.
+- `paymentFailureReason` + `midtransFailureStatus` are set on terminal failure
+  (`expire`/sweep) for human-readable + raw debugging.
+- `paymentMethod` + `midtransTransactionId` are `NULL` at place-order and are
+  persisted atomically with the finalization claim from the **authoritative**
+  `GET /v2/{order_id}/status` response (`payment_type` / `transaction_id`),
+  never from the raw webhook body. `paymentMethod` stores the raw Midtrans
+  payment_type (`qris`, `gopay`, `credit_card`, `bank_transfer`, `echannel`,
+  `bca_va`, …) verbatim; UI labels are mapped by
+  `formatPaymentMethodLabel` (`apps/store/src/lib/payment-method-label.ts`).
+  Note: GoPay paid via QR-scan on desktop is reported by Midtrans as
+  `payment_type: "qris"`.
+- `expiresAt` = payment anchor time (place-order) + `reservation.ttlMinutes`
+  (default 15); drives the sweep cron and pairs with the Midtrans expiry —
+  `expiry.start_time` is sent so async methods (VA/GoPay) cannot start their
+  Midtrans countdown later than the reservation clock.
 
 ## Checkout UI
 
@@ -54,7 +66,8 @@ tinted summary panel while retaining the branch name and city at a glance.
    pricing. PPN comes from `tax.ppnRatePercent` (11% fallback), is applied after
    discount, and is rounded upward to whole Rupiah. The rate and amount are
    snapshotted on the order. A short transaction then:
-   insert order (`pending_payment`/`pending`/`qris`, `expiresAt`), insert
+   insert order (`pending_payment`/`pending`, `paymentMethod` NULL,
+   `expiresAt`), insert
    `order_item` rows, an atomic `pending_remote_stock` hold, and a durable
    Jubelio reserve operation. After commit, a negative Jubelio adjustment is
    sent outside the transaction. Midtrans Snap is created only after Jubelio
@@ -67,7 +80,10 @@ tinted summary panel while retaining the branch name and city at a glance.
    adjustment. Returns
    `{ success, orderId, redirectUrl,
    token }`; customer is redirected to the Snap page.
-2. **Pay** — customer completes QRIS payment on Midtrans Snap.
+2. **Pay** — the customer picks a method (QRIS, GoPay, transfer bank/VA, or
+   credit/debit card) on the hosted Midtrans Snap page and completes payment.
+   Snap allows multiple failed attempts per order — the method is only known
+   to us after the authoritative GET status.
 3. **Webhook** — `POST /api/webhooks/midtrans`
    (`apps/store/src/app/api/webhooks/midtrans/route.ts`):
    - Signature verification: `SHA512(order_id + status_code + gross_amount +
@@ -79,8 +95,13 @@ tinted summary panel while retaining the branch name and city at a glance.
      is no payload fallback; provider errors return retryable non-2xx without
      mutating the order.
    - `settlement` / `capture`+`fraud=accept` → `claimAndFinalizePaidOrder`;
-     `deny` / `cancel` / `expire` → `claimAndFailOrder` (reason via
-     `describeFailureReason`); `pending` → no action.
+     `expire` → `claimAndFailOrder` (reason via `describeFailureReason`);
+     `pending` / `deny` / `cancel` / `failure` → **no DB write** (non-terminal
+     attempt; the customer may retry with another method) — 200, order stays
+     `pending_payment`. Classification lives in `resolvePaymentOutcome`
+     (`apps/store/src/lib/order-finalize.ts`).
+   - The authoritative `payment_type` + `transaction_id` from the GET status
+     are passed into the finalizers and persisted in the claim-guard UPDATE.
    - Processing failures return non-2xx so Midtrans retries the notification.
 4. **Finalize** — `claimAndFinalizePaidOrder`
    (`apps/store/src/lib/order-finalize.ts`): claim-guard UPDATE
@@ -122,7 +143,12 @@ tinted summary panel while retaining the branch name and city at a glance.
 
 ## Failure path
 
-- **Webhook failure** — `deny` / `cancel` / `expire` →
+- **Multiple payment attempts** — Snap lets the customer retry one order with
+  different methods (denied card → GoPay → success). Every early
+  `deny`/`cancel`/`pending` notification is a no-op: reservations are held
+  until TTL (bounded by the 15-minute clock) so a later attempt can still
+  succeed on the same order.
+- **Webhook failure** — `expire` →
   `claimAndFailOrder`: claim-guard (`pending_payment` → `failed_payment`,
   `paymentStatus` → `failed`, reason + raw status stored), enqueue and attempt
   a positive Jubelio adjustment, and release local `reservedStock` only after
@@ -148,11 +174,16 @@ tinted summary panel while retaining the branch name and city at a glance.
 `POST /api/payments/midtrans/create`
 (`apps/store/src/app/api/payments/midtrans/create/route.ts`): client session,
 order ownership check, **only `pending_payment` orders with an `applied` or
-`committed` Jubelio reserve operation** (`failed_payment` is final). Re-creates
-a Snap payment from the stored order items (plus a
-`SERVICE_FEE` line item), persists the new `snapRedirectUrl`, returns
-`{ redirectUrl, token }`. The existing reservation stays in place — no new
-reservation is made.
+`committed` Jubelio reserve operation** (`failed_payment` is final), and
+**unexpired orders** (`expiresAt` in the past → 400; the sweep may have already
+released the stock). If a `snapRedirectUrl` is already stored, it is returned
+as-is — the customer may have already chosen a method on Snap (Midtrans marks
+the order_id as used and refuses to re-create a token), so a fresh token would
+fail. Otherwise a new Snap payment is created from the stored order items
+(plus a `SERVICE_FEE` line item), with the expiry anchored to the remaining
+reservation TTL; the new `snapRedirectUrl` is persisted and
+`{ redirectUrl, token }` returned. The existing reservation stays in place — no
+new reservation is made.
 
 ## Emails
 
@@ -216,8 +247,11 @@ sweep responses also expose the request id in `x-request-id`.
   `order-status` is a read-only reflection of the DB.
 - Only `pending_payment` orders can be claimed; the claim-guard UPDATE is the
   single arbiter of webhook-vs-sweep races — never bypass it with a plain
-  read-modify-write.
-- `failed_payment` is terminal — no re-payment, no re-claim.
+  read-modify-write. `paymentMethod`/`midtransTransactionId` ride the same
+  claim UPDATE, sourced only from the authoritative GET status.
+- `failed_payment` is terminal — no re-payment, no re-claim. Its trigger set is
+  `expire` webhooks and the TTL sweep; `deny`/`cancel` are non-terminal
+  attempts.
 - Paid orders are terminal — later failure callbacks are ignored (no refund
   reversal handling).
 - Emails and notifications are best-effort side effects, always outside the
@@ -229,9 +263,13 @@ sweep responses also expose the request id in `x-request-id`.
 
 ## Verification
 
-- **Sandbox happy path**: register → add to cart → checkout → pay sandbox QRIS
-  → webhook finalizes → order `ready_for_pickup` with pickup code → Email #1
-  arrives → admin verifies code → order `completed` + Email #2 + audit log row.
+- **Sandbox happy path**: register → add to cart → checkout → pay on the Snap
+  page (QRIS / GoPay / VA / card) → webhook finalizes → order
+  `ready_for_pickup` with `payment_method` + `midtrans_transaction_id`
+  populated → pickup code → Email #1 arrives → admin verifies code → order
+  `completed` + Email #2 + audit log row.
+- **Deny-then-retry**: deny a sandbox card, then pay with GoPay on the same
+  Snap order → the deny is a no-op and the order still finalizes exactly once.
 - **Failure path**: place order, don't pay, wait past TTL → order
   `failed_payment` with reason, `reservedStock` released, Email #3 arrives
   (via `expire` webhook or the sweep).

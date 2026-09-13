@@ -2,8 +2,11 @@ import { describe, it, expect, afterEach } from "vitest";
 import crypto from "crypto";
 import {
   amountsMatch,
+  buildSnapTransactionParameter,
+  formatSnapStartTime,
   getMockPaymentResult,
   resolveMidtransBaseUrl,
+  SNAP_ENABLED_PAYMENTS,
   validateMidtransWebhookPayload,
   verifyMidtransSignature,
 } from "./midtrans";
@@ -16,6 +19,93 @@ const SERVER_KEY = "test-server-key-123";
 
 afterEach(() => {
   delete process.env.MIDTRANS_SERVER_KEY;
+});
+
+describe("buildSnapTransactionParameter", () => {
+  const base = {
+    orderId: "order-123",
+    grossAmount: 100000,
+    customerDetails: {
+      first_name: "Budi",
+      email: "budi@example.com",
+      phone: "081234567890",
+    },
+    itemDetails: [{ id: "v1", name: "Shoe", price: 100000, quantity: 1 }],
+  };
+
+  it("offers all enabled payment methods and no legacy payment_methods key", () => {
+    const parameter = buildSnapTransactionParameter(base) as unknown as Record<
+      string,
+      unknown
+    >;
+    expect(parameter.enabled_payments).toEqual([
+      "other_qris",
+      "gopay",
+      "credit_card",
+      "permata_va",
+      "bca_va",
+      "bni_va",
+      "bri_va",
+      "cimb_va",
+      "echannel",
+      "other_va",
+    ]);
+    expect(parameter).not.toHaveProperty("payment_methods");
+  });
+
+  it("requires 3DS for card payments", () => {
+    const parameter = buildSnapTransactionParameter(base);
+    expect(parameter.credit_card).toEqual({ secure: true });
+  });
+
+  it("carries transaction, customer, and item details through unchanged", () => {
+    const parameter = buildSnapTransactionParameter(base);
+    expect(parameter.transaction_details).toEqual({
+      order_id: "order-123",
+      gross_amount: 100000,
+    });
+    expect(parameter.customer_details).toEqual(base.customerDetails);
+    expect(parameter.item_details).toEqual(base.itemDetails);
+  });
+
+  it("anchors the expiry countdown at the given start time", () => {
+    const startedAt = new Date("2025-06-01T03:30:45Z"); // 10:30:45 WIB
+    const parameter = buildSnapTransactionParameter({
+      ...base,
+      expiryMinutes: 15,
+      paymentStartedAt: startedAt,
+    });
+    expect(parameter.expiry).toEqual({
+      unit: "minute",
+      duration: 15,
+      start_time: "2025-06-01 10:30:45 +0700",
+    });
+  });
+
+  it("omits the expiry block when no duration is given", () => {
+    const parameter = buildSnapTransactionParameter(base);
+    expect(parameter.expiry).toBeUndefined();
+  });
+
+  it("omits the expiry block for non-positive durations", () => {
+    const parameter = buildSnapTransactionParameter({
+      ...base,
+      expiryMinutes: 0,
+    });
+    expect(parameter.expiry).toBeUndefined();
+  });
+
+  it("does not mutate the shared SNAP_ENABLED_PAYMENTS constant", () => {
+    const parameter = buildSnapTransactionParameter(base);
+    parameter.enabled_payments!.push("akulaku");
+    expect(SNAP_ENABLED_PAYMENTS).not.toContain("akulaku");
+  });
+
+  it("formats start_time in WIB with the +0700 suffix", () => {
+    expect(formatSnapStartTime(new Date("2025-01-15T17:05:09Z"))).toBe(
+      "2025-01-16 00:05:09 +0700"
+    );
+  });
 });
 
 describe("verifyMidtransSignature", () => {

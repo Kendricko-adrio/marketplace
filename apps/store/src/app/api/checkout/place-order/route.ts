@@ -286,6 +286,11 @@ export async function POST(request: NextRequest) {
     // ===== Persist order + reservation atomically, then call Midtrans outside the transaction =====
     const orderId = crypto.randomUUID();
     const stockOperationId = crypto.randomUUID();
+    // Single anchor for both the local reservation clock and the Midtrans expiry
+    // countdown (`expiry.start_time`) so async methods (VA/GoPay) cannot outlive
+    // the reservation TTL.
+    const paymentStartedAt = new Date();
+    const expiresAt = new Date(paymentStartedAt.getTime() + ttlMinutes * 60_000);
     log = log.child({ orderId });
     log.info("creating order", {
       ppnRatePercent: pricing.ppnRatePercent,
@@ -304,7 +309,9 @@ export async function POST(request: NextRequest) {
           userId: session.user.id,
           branchId,
           status: "pending_payment",
-          paymentMethod: "qris",
+          // Set later from the authoritative Midtrans GET status (the method is
+          // unknowable until the customer picks one on the hosted Snap page).
+          paymentMethod: null,
           paymentStatus: "pending",
           pickupDate: pickupDateToInstant(pickupDate),
           pickupTime,
@@ -317,7 +324,7 @@ export async function POST(request: NextRequest) {
           ppnRate: pricing.ppnRatePercent,
           ppnAmount: pricing.ppnAmount,
           total: pricing.total,
-          expiresAt: new Date(Date.now() + ttlMinutes * 60_000),
+          expiresAt,
         });
 
         // ===== Create order items (with real product names) =====
@@ -429,7 +436,8 @@ export async function POST(request: NextRequest) {
               phone,
             },
             paymentItemDetails,
-            ttlMinutes
+            ttlMinutes,
+            paymentStartedAt
           );
         },
         persist: async (paymentResult) => {

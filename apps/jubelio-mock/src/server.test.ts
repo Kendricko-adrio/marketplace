@@ -76,6 +76,30 @@ describe("local Midtrans status boundary", () => {
       gross_amount: "100000.00",
     });
   });
+
+  it("echoes payment_type and transaction_id like the real GET status", async () => {
+    resetMockState();
+    const configured = await fetch(`${baseUrl}/__control/midtrans-status`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        orderId: "order-gopay-1",
+        transactionStatus: "settlement",
+        grossAmount: "100000.00",
+        paymentType: "gopay",
+        transactionId: "57d5293c-e65f-4a29-95e4-5959c3fa335b",
+      }),
+    });
+    expect(configured.status).toBe(200);
+
+    const status = await fetch(`${baseUrl}/v2/order-gopay-1/status`, {
+      headers: { authorization: "Basic test" },
+    });
+    await expect(status.json()).resolves.toMatchObject({
+      payment_type: "gopay",
+      transaction_id: "57d5293c-e65f-4a29-95e4-5959c3fa335b",
+    });
+  });
 });
 
 describe("Jubelio-compatible stock adjustment API", () => {

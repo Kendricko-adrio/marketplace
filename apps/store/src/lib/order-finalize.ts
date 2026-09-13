@@ -41,7 +41,9 @@ export function getStockFinalizationDeltas(
 
 /**
  * Map a Midtrans transaction_status to a human-readable failure reason.
- * Returns null for non-failure statuses.
+ * Returns null for non-failure statuses. Only used for terminal failures
+ * (`expire`); deny/cancel are non-terminal attempt failures in the multi-method
+ * Snap flow (the customer may retry with another method on the same order).
  */
 export function describeFailureReason(
   transactionStatus: string,
@@ -61,9 +63,40 @@ export function describeFailureReason(
   }
 }
 
+/**
+ * Classify an authoritative Midtrans transaction status into a webhook action.
+ * Pure helper so the multi-attempt semantics are unit-testable.
+ *
+ * - "finalize" → payment succeeded (settlement, or capture with accepted fraud).
+ * - "fail"     → terminal failure (expire): release the reservation.
+ * - "defer"    → non-terminal (pending/deny/cancel/failure): Snap allows the
+ *   customer to retry with another method on the same order, so the order must
+ *   stay pending_payment until settlement or the TTL sweep.
+ */
+export function resolvePaymentOutcome(
+  transactionStatus: string,
+  fraudStatus?: string
+): "finalize" | "fail" | "defer" {
+  if (transactionStatus === "settlement") return "finalize";
+  if (transactionStatus === "capture") {
+    return fraudStatus === "accept" ? "finalize" : "defer";
+  }
+  if (transactionStatus === "expire") return "fail";
+  return "defer";
+}
+
 export type FinalizeResult = {
   claimed: boolean;
   pickupCode?: string | null;
+};
+
+/**
+ * Authoritative payment attributes (from Midtrans GET status, never the raw
+ * webhook body) persisted atomically with the finalization claim.
+ */
+export type PaymentAttributes = {
+  paymentType?: string;
+  transactionId?: string;
 };
 
 /**
@@ -101,7 +134,8 @@ type OrderView = {
 export async function claimAndFinalizePaidOrder(
   orderId: string,
   order: OrderView,
-  logger?: Logger
+  logger?: Logger,
+  paymentAttributes?: PaymentAttributes
 ): Promise<FinalizeResult> {
   const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
   if (!order.branchId) {
@@ -113,11 +147,19 @@ export async function claimAndFinalizePaidOrder(
 
   pickupCode = await db.transaction(async (tx) => {
     // 1. Claim guard: pending_payment + pending → processing + paid.
+    //    The authoritative payment method/transaction id ride the winning
+    //    UPDATE, so a paid order never exists without its payment metadata.
     const claimed = await tx
       .update(orders)
       .set({
         status: "processing",
         paymentStatus: "paid",
+        ...(paymentAttributes?.paymentType
+          ? { paymentMethod: paymentAttributes.paymentType }
+          : {}),
+        ...(paymentAttributes?.transactionId
+          ? { midtransTransactionId: paymentAttributes.transactionId }
+          : {}),
         updatedAt: new Date(),
       })
       .where(
@@ -332,7 +374,8 @@ export async function claimAndFailOrder(
   orderId: string,
   reason: string,
   midtransStatus: string,
-  logger?: Logger
+  logger?: Logger,
+  paymentAttributes?: PaymentAttributes
 ): Promise<FinalizeResult> {
   const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
   // Re-load the order (the caller's in-memory copy may be stale by the time a
@@ -353,6 +396,12 @@ export async function claimAndFailOrder(
         paymentStatus: "failed",
         paymentFailureReason: reason,
         midtransFailureStatus: midtransStatus,
+        ...(paymentAttributes?.paymentType
+          ? { paymentMethod: paymentAttributes.paymentType }
+          : {}),
+        ...(paymentAttributes?.transactionId
+          ? { midtransTransactionId: paymentAttributes.transactionId }
+          : {}),
         updatedAt: new Date(),
       })
       .where(

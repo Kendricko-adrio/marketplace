@@ -1270,6 +1270,18 @@ async function seed() {
         status === "ready_for_pickup" || status === "completed";
       const isFailedPayment = status === "failed_payment";
 
+      // Realistic payment metadata: paid fixtures were settled through a
+      // variety of Snap methods; unpaid/failed fixtures never recorded one.
+      const seedPaymentMethods = [
+        "qris",
+        "gopay",
+        "credit_card",
+        "bank_transfer",
+      ];
+      const paymentMethod = isPaid
+        ? seedPaymentMethods[i % seedPaymentMethods.length]
+        : null;
+
       // 6-char pickup code (uppercase alphanumeric, no ambiguous chars)
       const pickupCode = hasPickupCode
         ? status === "ready_for_pickup"
@@ -1282,7 +1294,7 @@ async function seed() {
         userId: customer1Id,
         branchId: pickupBranchId,
         status,
-        paymentMethod: "qris",
+        paymentMethod,
         paymentStatus: isPaid
           ? "paid"
           : status === "pending_payment"
@@ -1305,7 +1317,7 @@ async function seed() {
         ppnAmount: ppnAmount.toString(),
         total: total.toString(),
         midtransTransactionId: isPaid
-          ? `midtrans-${orderId.slice(0, 12)}`
+          ? `txn-seed-${orderId.slice(0, 12)}`
           : null,
         snapRedirectUrl:
           status === "pending_payment"

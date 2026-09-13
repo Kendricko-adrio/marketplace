@@ -43,13 +43,13 @@ function getMidtransBaseUrl(): string {
   return resolveMidtransBaseUrl(process.env);
 }
 
-export interface QrisCustomerDetails {
+export interface PaymentCustomerDetails {
   first_name: string;
   email: string;
   phone: string;
 }
 
-export interface QrisItemDetail {
+export interface PaymentItemDetail {
   id: string;
   name: string;
   price: number;
@@ -59,6 +59,89 @@ export interface QrisItemDetail {
 export interface CreateSnapPaymentResult {
   redirectUrl: string;
   token: string;
+}
+
+/**
+ * Payment methods offered on the hosted Snap page (redirect mode). The
+ * customer picks one there — we do not pre-select a method locally.
+ *
+ * - `other_qris`  → generic QRIS tab (works regardless of device size).
+ * - `gopay`       → e-wallet (deeplink on mobile, QRIS on desktop).
+ * - `credit_card` → Visa/Mastercard with 3DS (`credit_card.secure = true`).
+ * - VA channels   → Permata/BCA/BNI/BRI/CIMB/Mandiri(echannel)/other banks.
+ */
+export const SNAP_ENABLED_PAYMENTS = [
+  "other_qris",
+  "gopay",
+  "credit_card",
+  "permata_va",
+  "bca_va",
+  "bni_va",
+  "bri_va",
+  "cimb_va",
+  "echannel",
+  "other_va",
+] as const;
+
+/**
+ * Format a Date as Midtrans' `expiry.start_time` expects:
+ * "YYYY-MM-DD HH:mm:ss +0700" (WIB).
+ */
+export function formatSnapStartTime(date: Date): string {
+  const wib = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return (
+    `${wib.getUTCFullYear()}-${pad(wib.getUTCMonth() + 1)}-${pad(wib.getUTCDate())} ` +
+    `${pad(wib.getUTCHours())}:${pad(wib.getUTCMinutes())}:${pad(wib.getUTCSeconds())} +0700`
+  );
+}
+
+export interface BuildSnapParameterInput {
+  orderId: string;
+  grossAmount: number;
+  customerDetails: PaymentCustomerDetails;
+  itemDetails?: PaymentItemDetail[];
+  expiryMinutes?: number;
+  /** Anchor instant for the expiry countdown (defaults to now). */
+  paymentStartedAt?: Date;
+}
+
+/**
+ * Pure builder for the Snap createTransaction payload. Multi-method:
+ * every method in SNAP_ENABLED_PAYMENTS is offered on the hosted page.
+ */
+export function buildSnapTransactionParameter(
+  input: BuildSnapParameterInput
+): TransactionParameter {
+  const { orderId, grossAmount, customerDetails, itemDetails, expiryMinutes } =
+    input;
+
+  const expiry =
+    expiryMinutes && expiryMinutes > 0
+      ? {
+          unit: "minute" as const,
+          duration: Math.floor(expiryMinutes),
+          // Anchor the countdown now, not when the customer confirms a channel
+          // (async methods would otherwise start late and outlive the local TTL).
+          start_time: formatSnapStartTime(input.paymentStartedAt ?? new Date()),
+        }
+      : undefined;
+
+  return {
+    transaction_details: {
+      order_id: orderId,
+      gross_amount: grossAmount,
+    },
+    enabled_payments: [...SNAP_ENABLED_PAYMENTS],
+    customer_details: {
+      first_name: customerDetails.first_name,
+      email: customerDetails.email,
+      phone: customerDetails.phone,
+    },
+    item_details: itemDetails,
+    credit_card: { secure: true },
+    ...(expiry ? { expiry } : {}),
+  };
 }
 
 export function getMockPaymentResult(
@@ -78,48 +161,36 @@ export function getMockPaymentResult(
 }
 
 /**
- * Create a Snap transaction restricted to QRIS payment.
- * Returns the redirect_url (Snap payment page) and token.
- * The customer is redirected to Midtrans' hosted Snap page.
+ * Create a Snap transaction offering all enabled payment methods
+ * (QRIS, GoPay, cards, VA). Returns the redirect_url (Snap payment page)
+ * and token. The customer chooses the method on Midtrans' hosted page.
  *
  * @param expiryMinutes Optional order expiry in minutes. When set, Midtrans
  *   will auto-expire the transaction and send an `expire` webhook at this
  *   duration — the primary release path for the stock reservation. Should
  *   match `reservation.ttlMinutes` from system_config. Note: Midtrans
  *   recommends expiry >= 15 min (shorter durations may be delayed by their
- *   scheduler).
+ *   scheduler). `paymentStartedAt` anchors the countdown so async methods
+ *   (VA/GoPay) cannot outlive the local reservation clock.
  */
-export async function createSnapQrisPayment(
+export async function createSnapPayment(
   orderId: string,
   grossAmount: number,
-  customerDetails: QrisCustomerDetails,
-  itemDetails?: QrisItemDetail[],
-  expiryMinutes?: number
+  customerDetails: PaymentCustomerDetails,
+  itemDetails?: PaymentItemDetail[],
+  expiryMinutes?: number,
+  paymentStartedAt?: Date
 ): Promise<CreateSnapPaymentResult> {
   const snap = getSnapClient();
 
-  const parameter: TransactionParameter = {
-    transaction_details: {
-      order_id: orderId,
-      gross_amount: grossAmount,
-    },
-    payment_methods: ["qris"],
-    customer_details: {
-      first_name: customerDetails.first_name,
-      email: customerDetails.email,
-      phone: customerDetails.phone,
-    },
-    item_details: itemDetails,
-    credit_card: { secure: true },
-    ...(expiryMinutes && expiryMinutes > 0
-      ? {
-          expiry: {
-            unit: "minute" as const,
-            duration: Math.floor(expiryMinutes),
-          },
-        }
-      : {}),
-  };
+  const parameter = buildSnapTransactionParameter({
+    orderId,
+    grossAmount,
+    customerDetails,
+    itemDetails,
+    expiryMinutes,
+    paymentStartedAt,
+  });
 
   try {
     const transaction = await snap.createTransaction(parameter);
@@ -154,18 +225,20 @@ export async function createSnapQrisPayment(
 export async function createPayment(
   orderId: string,
   grossAmount: number,
-  customerDetails: QrisCustomerDetails,
-  itemDetails?: QrisItemDetail[],
-  expiryMinutes?: number
+  customerDetails: PaymentCustomerDetails,
+  itemDetails?: PaymentItemDetail[],
+  expiryMinutes?: number,
+  paymentStartedAt?: Date
 ): Promise<CreateSnapPaymentResult> {
   const mock = getMockPaymentResult(orderId);
   if (mock) return mock;
-  return createSnapQrisPayment(
+  return createSnapPayment(
     orderId,
     grossAmount,
     customerDetails,
     itemDetails,
-    expiryMinutes
+    expiryMinutes,
+    paymentStartedAt
   );
 }
 

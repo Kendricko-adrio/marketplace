@@ -74,8 +74,9 @@ function ResultContent() {
             </div>
             <h1 className="text-2xl font-bold mb-2">Menunggu Pembayaran</h1>
             <p className="text-muted-foreground mb-6">
-              Pembayaran Anda sedang diproses. Selesaikan pembayaran QRIS Anda
-              dan pesanan akan dikonfirmasi otomatis.
+              Pembayaran Anda sedang diproses. Selesaikan pembayaran sesuai
+              metode yang Anda pilih di halaman Midtrans dan pesanan akan
+              dikonfirmasi otomatis.
             </p>
             {orderId && (
               <Link href={`/account/orders/${orderId}`}>

@@ -28,14 +28,18 @@ declare module "midtrans-client" {
 
   // Order expiry sent to Snap so Midtrans auto-expires the transaction and
   // fires an `expire` webhook (primary release path for stock reservations).
+  // start_time anchors the countdown at place-order time — without it, async
+  // methods (VA/GoPay) only start counting when the customer confirms a channel,
+  // so Midtrans' clock would drift past the local reservation TTL.
   export interface ExpiryParameter {
     unit: "minute" | "hour" | "day";
     duration: number;
+    start_time?: string;
   }
 
   export interface TransactionParameter {
     transaction_details: TransactionDetails;
-    payment_methods?: string[];
+    enabled_payments?: string[];
     customer_details?: CustomerDetails;
     item_details?: ItemDetail[];
     credit_card?: { secure?: boolean };

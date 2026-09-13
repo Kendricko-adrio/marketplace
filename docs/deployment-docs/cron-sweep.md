@@ -142,3 +142,8 @@ harian):
 - **Kalau cron tidak terpasang**: order yang expired tanpa webhook `expire`
   dari Midtrans akan tetap `pending_payment` + reservasi bocor sampai ada
   yang trigger sweep manual. Cron adalah safety-net wajib untuk produksi.
+- **Webhook `deny`/`cancel` non-terminal**: sejak multi-payment, webhook
+  `deny`/`cancel`/`pending`/`failure` tidak mem-fail order (customer boleh
+  mencoba metode lain di Snap). Sweep tetap satu-satunya otoritas TTL: order
+  yang lewat `expiresAt` dengan status non-settled apa pun tetap di-fail dan
+  reservasinya dilepas.

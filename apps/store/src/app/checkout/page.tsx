@@ -704,19 +704,19 @@ export default function CheckoutPage() {
           {step === 3 && (
             <Card>
               <CardContent className="p-6">
-                <h2 className="text-xl font-bold mb-1">Pembayaran QRIS</h2>
+                <h2 className="text-xl font-bold mb-1">Pembayaran</h2>
                 <p className="text-sm text-muted-foreground mb-6">
                   Periksa pesanan Anda, lalu konfirmasi untuk melanjutkan ke
-                  pembayaran QRIS via Midtrans.
+                  pembayaran via Midtrans.
                 </p>
 
                 {/* Payment method badge */}
                 <div className="mb-6 flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
                   <CreditCard className="h-6 w-6 text-primary" />
                   <div>
-                    <div className="font-semibold">QRIS</div>
+                    <div className="font-semibold">Pilih metode di halaman Midtrans</div>
                     <div className="text-xs text-muted-foreground">
-                      Bayar dengan scan QR code via e-wallet atau m-banking
+                      QRIS, GoPay, transfer bank/VA, atau kartu kredit/debit
                     </div>
                   </div>
                 </div>

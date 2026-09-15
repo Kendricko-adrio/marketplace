@@ -10,15 +10,44 @@ import {
   genders,
 } from "@/db";
 import { eq, desc, sql, inArray, asc, ilike, or, and } from "drizzle-orm";
-import { withPermission, getBranchScope } from "@/lib/auth-guard";
+import { serializeError } from "@/lib/logger";
+import { guard } from "@/lib/rbac/guard";
+import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import {
   computeScopedTotals,
   type ScopedTotalsInputRow,
 } from "@/lib/branch-stock";
 import { parsePagination } from "@/lib/pagination";
 
-export const GET = withPermission(async (ctx, request: NextRequest) => {
+export const dynamic = "force-dynamic";
+
+// GET /api/admin/products   [products:view]
+//
+// Branch scope comes from the Current Policy (not the legacy Role):
+//   - own-branch view  → only products carried by the Home Branch, with stock
+//     summed across that branch only.
+//   - all-branch view  → all products, stock summed across branches.
+// The SQL `where` is the real access control; computeScopedTotals (pure) is
+// the tested filter+sum. See lib/branch-stock.ts.
+export async function GET(request: NextRequest) {
+  const guardResult = await guard("products", "view", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger, ctx } = guardResult;
+
   try {
+    const authorization = branchScopeFromAuthorization(ctx.authorization);
+    if (!authorization) {
+      logger.warn("products.list.scope_unresolvable", {
+        outcome: "denied",
+        reason: "missing_home_branch",
+        userId: ctx.user.id,
+      });
+      return NextResponse.json(
+        { success: false, error: "Forbidden", code: "DENIED" },
+        { status: 403 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const { page, limit } = parsePagination(
       searchParams.get("page"),
@@ -26,14 +55,6 @@ export const GET = withPermission(async (ctx, request: NextRequest) => {
     );
     const search = searchParams.get("search")?.trim() || "";
     const offset = (page - 1) * limit;
-
-    // Branch scope:
-    //   - HQ / branchless admin → all products, stock summed across branches.
-    //   - Branch admin          → only products their branch carries (i.e. has a
-    //     branch_stock row for their branchId), with stock scoped to that branch.
-    // The SQL `where` is the real access control; computeScopedTotals (pure) is
-    // the tested filter+sum. See lib/branch-stock.ts + lib/auth-guard.ts.
-    const scope = getBranchScope(ctx.user);
 
     // Server-side search: match against name or slug. Empty search returns all.
     const searchCondition = search
@@ -43,11 +64,12 @@ export const GET = withPermission(async (ctx, request: NextRequest) => {
         )
       : undefined;
 
-    // Branch admins are restricted to products their branch carries. Resolve the
-    // carried product ids once (bounded catalog) and combine with the search
-    // filter so both the list and the count query stay in sync for pagination.
+    // Own-branch scope is restricted to products their branch carries. Resolve
+    // the carried product ids once (bounded catalog) and combine with the
+    // search filter so both the list and the count query stay in sync for
+    // pagination.
     let visibilityCondition = undefined;
-    if (scope.mode === "own") {
+    if (authorization.mode === "own") {
       const carried = await db
         .selectDistinct({ pid: productVariants.productId })
         .from(productVariants)
@@ -55,7 +77,7 @@ export const GET = withPermission(async (ctx, request: NextRequest) => {
           branchStocks,
           eq(branchStocks.productVariantId, productVariants.id)
         )
-        .where(eq(branchStocks.branchId, scope.branchId));
+        .where(eq(branchStocks.branchId, authorization.branchId));
       const carriedIds = carried.map((r) => r.pid);
       // A branch with no stock rows carries nothing → empty result, not "all".
       visibilityCondition = inArray(
@@ -121,8 +143,8 @@ export const GET = withPermission(async (ctx, request: NextRequest) => {
         let totalAvailable = 0;
         if (variantIds.length > 0) {
           // Fetch the raw per-branch rows for this product's variants, scoped in
-          // SQL to the caller's branch when a branch admin, then sum through the
-          // pure helper (tested guarantee; SQL where is the real control).
+          // SQL to the caller's branch under own-branch scope, then sum through
+          // the pure helper (tested guarantee; SQL where is the real control).
           const stockRows = await db
             .select({
               branchId: branchStocks.branchId,
@@ -134,13 +156,13 @@ export const GET = withPermission(async (ctx, request: NextRequest) => {
             .where(
               and(
                 inArray(branchStocks.productVariantId, variantIds),
-                scope.mode === "own"
-                  ? eq(branchStocks.branchId, scope.branchId)
+                authorization.mode === "own"
+                  ? eq(branchStocks.branchId, authorization.branchId)
                   : undefined
               )
             );
           const totals = computeScopedTotals(
-            scope,
+            authorization,
             stockRows as ScopedTotalsInputRow[]
           );
           totalStock = totals.totalStock;
@@ -182,6 +204,14 @@ export const GET = withPermission(async (ctx, request: NextRequest) => {
       })
     );
 
+    logger.info("products.list", {
+      outcome: "success",
+      total,
+      page,
+      limit,
+      scope: authorization.mode,
+    });
+
     return NextResponse.json({
       success: true,
       data: productsWithDetails,
@@ -193,10 +223,13 @@ export const GET = withPermission(async (ctx, request: NextRequest) => {
       },
     });
   } catch (error) {
-    console.error("Error fetching admin products:", error);
+    logger.error("products.list.failure", {
+      outcome: "error",
+      error: serializeError(error),
+    });
     return NextResponse.json(
       { success: false, error: "Failed to fetch products" },
       { status: 500 }
     );
   }
-}, "products", "view");
+}

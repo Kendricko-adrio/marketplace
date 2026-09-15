@@ -55,6 +55,8 @@ deployment/
 | 17 | [jubelio-webhook-simulator.md](jubelio-webhook-simulator.md) | Test signed Jubelio webhook calls with live read-only data |
 | 18 | [stock-adjustment-rollout.md](stock-adjustment-rollout.md) | Production preflight, operator canary, monitoring, and kill-switch recovery |
 | 19 | [logging.md](logging.md) | Log container di journald dengan retensi host 7 hari |
+| 20 | [rbac-rollout.md](rbac-rollout.md) | RBAC cutover maintenance window: verified backup/restore, paired code+schema migration, Owner bootstrap, smoke tests, monitoring, paired rollback |
+| 21 | [rbac-owner-bootstrap.md](rbac-owner-bootstrap.md) | One-time System Owner bootstrap CLI (RBAC) |
 
 ## Quick start (staging)
 

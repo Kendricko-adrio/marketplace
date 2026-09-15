@@ -1,23 +1,32 @@
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
+import type { ReactNode } from "react";
 
-// HQ-only hardcoded gate for the RBAC management page (anti-lockout).
+import { pagePolicyGuard } from "@/lib/rbac/page-guard";
+
+// =========================================================
+// RBAC: /admin/roles/* layout — server-authoritative Roles gate
+// =========================================================
+// The old HQ-only hardcoded gate is replaced by the Current Policy: a page
+// requires the `roles:view` grant. Users without it are sent to the shared
+// No-Access page; System Owners and any Role with roles:view pass. The
+// server layout remains authoritative — client policy only drives
+// affordances.
+
 export default async function RolesLayout({
   children,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
+  const result = await pagePolicyGuard("roles", "view");
 
-  if (!session) {
-    redirect("/login?callbackUrl=/admin/roles");
-  }
-
-  if (session.user.role !== "hq") {
-    redirect("/admin?error=forbidden");
+  if (!result.ok) {
+    if (result.reason === "unauthenticated") {
+      redirect("/login?callbackUrl=/admin/roles");
+    }
+    if (result.reason === "must_reset_password") {
+      redirect("/reset-password?force=1");
+    }
+    redirect("/admin/no-access");
   }
 
   return <>{children}</>;

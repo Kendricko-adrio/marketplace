@@ -1,6 +1,7 @@
-﻿import { pgTable, text, timestamp, jsonb } from "drizzle-orm/pg-core";
+﻿import { pgTable, text, timestamp, jsonb, integer } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { users } from "./auth";
+import { branches } from "./branches";
 
 // Audit Log table - tracks admin activities (references admin users table)
 export const auditLogs = pgTable("audit_log", {
@@ -11,6 +12,22 @@ export const auditLogs = pgTable("audit_log", {
   entityId: text("entity_id"),
   changes: jsonb("changes"), // JSON diff of changes
   ipAddress: text("ip_address"),
+  // RBAC extensions: the Policy version in force when the event was written,
+  // and the Branch classification of the event. Branch references use SET NULL
+  // so Audit Events survive later Branch deletion (identity is retained in
+  // the changes JSON payload).
+  policyVersion: integer("policy_version"),
+  // 'global' | 'single_branch' | 'dual_branch' (e.g. old+new Home Branch on a
+  // reassignment) | null (legacy unclassified events).
+  branchScope: text("branch_scope"),
+  branchId: text("branch_id").references(() => branches.id, {
+    onDelete: "set null",
+  }),
+  // Second Branch for reassignment events (the new Home Branch when branchId
+  // carries the old one).
+  relatedBranchId: text("related_branch_id").references(() => branches.id, {
+    onDelete: "set null",
+  }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
@@ -19,6 +36,14 @@ export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
   user: one(users, {
     fields: [auditLogs.userId],
     references: [users.id],
+  }),
+  branch: one(branches, {
+    fields: [auditLogs.branchId],
+    references: [branches.id],
+  }),
+  relatedBranch: one(branches, {
+    fields: [auditLogs.relatedBranchId],
+    references: [branches.id],
   }),
 }));
 

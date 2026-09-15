@@ -36,25 +36,28 @@ with a heading (branch name, status badge, city/code) and a table of:
 - `Tersedia` = `max(0, stock - pendingRemoteStock)`. Confirmed reservations
   are already included in Jubelio's reduced `stock`.
 
-#### Role-based branch scoping
+#### Branch scoping (Current Policy)
 
-The stock view is **server-side filtered** by the caller's role via
-`getBranchScope` (`apps/admin/src/lib/auth-guard.ts`):
+The stock view is **server-side filtered** by the caller's Current Policy via
+the unified `guard` (`apps/admin/src/lib/rbac/guard.ts`, `products:view`)
+and `branchScopeFromAuthorization` (`apps/admin/src/lib/rbac/branch-scope.ts`):
 
-| Role | Branch scope | What they see |
+| Policy scope | Branch predicate | What they see |
 |---|---|---|
-| `hq` or branchless `admin` | `mode: "all"` | Every branch that has stock rows for this product |
-| `admin` with `branchId` | `mode: "own"` | Only their assigned branch |
+| all-branch grant (`all_branches`, incl. System Owner) | `{ mode: "all" }` | Every branch that has stock rows for this product |
+| own-branch grant (`own_branch`) | `{ mode: "own", branchId }` pinned to the server-trusted Home Branch | Only their Home Branch |
 
-The SQL `where` clause is the real access control; the pure helper
-`groupBranchStock` (`apps/admin/src/lib/branch-stock.ts`) groups and sorts
-the rows and computes `available`.
+An own-branch grant without a Home Branch fails closed (403) — never an
+all-branch widening. The SQL `where` clause is the real access control; the
+pure helper `groupBranchStock` (`apps/admin/src/lib/branch-stock.ts`) groups
+and sorts the rows and computes `available`.
 
-A branch admin who opens a product their branch does **not** carry (no
-`branch_stock` row for their `branchId`) gets 404 — the detail route checks
-for a carried row before rendering. This mirrors the products-list
-visibility filter so a non-carried product can't be reached by navigating
-to its detail URL directly. HQ / branchless admins are unaffected.
+An own-branch actor who opens a product their branch does **not** carry (no
+`branch_stock` row for one of the product's variants at their Home Branch)
+gets 404 — the detail route treats the id as a cross-branch reference so
+existence is not disclosed. This mirrors the products-list visibility filter
+so a non-carried product can't be reached by navigating to its detail URL
+directly. All-branch scope is unaffected.
 
 #### Empty states
 
@@ -72,5 +75,7 @@ products that have a `jubelioItemGroupId`.
 
 - `apps/admin/src/app/admin/products/[id]/page.tsx` — UI
 - `apps/admin/src/app/api/admin/products/[id]/route.ts` — detail API + stock scoping
+- `apps/admin/src/lib/rbac/guard.ts` — unified policy guard (`products:view`)
+- `apps/admin/src/lib/rbac/branch-scope.ts` — authorization → branch predicate (pure)
 - `apps/admin/src/lib/branch-stock.ts` — pure group/filter/available helper
 - `apps/admin/src/lib/branch-stock.test.ts` — unit tests for the helper

@@ -63,16 +63,30 @@ interface UserRow {
   name: string;
   username: string | null;
   email: string;
-  role: string;
-  branchId: string | null;
-  branchName: string | null;
-  branchCode: string | null;
+  /** Dynamic Role object — authorization/display never uses role names. */
+  role: {
+    id: string;
+    key: string | null;
+    name: string;
+    isSystem: boolean;
+  } | null;
+  branch: {
+    id: string;
+    name: string;
+    code: string;
+  } | null;
+  isActive: boolean;
   mustResetPassword: boolean;
   emailVerified: boolean;
-  image: string | null;
   createdAt: string;
   updatedAt: string;
-  lastLogin: string | null;
+}
+
+/** Active Role option for the filter select (GET /api/admin/roles). */
+interface RoleFilterOption {
+  id: string;
+  name: string;
+  archived: boolean;
 }
 
 export default function AdminUsersPage() {
@@ -81,6 +95,7 @@ export default function AdminUsersPage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<string>("all");
+  const [roles, setRoles] = useState<RoleFilterOption[]>([]);
 
   // Reset password dialog state
   const [resetOpen, setResetOpen] = useState(false);
@@ -92,13 +107,35 @@ export default function AdminUsersPage() {
   const [deleting, setDeleting] = useState(false);
   const { hasPermission } = useAuth();
 
+  // Dynamic Role list for the filter select; failures leave only the
+  // "all" option instead of blocking the directory.
+  useEffect(() => {
+    fetch("/api/admin/roles")
+      .then(async (res) => {
+        if (!res.ok) return;
+        const body = await res.json();
+        if (body.success) {
+          setRoles(
+            (body.data as Array<{
+              id: string;
+              name: string;
+              archived: boolean;
+            }>).filter((role) => !role.archived)
+          );
+        }
+      })
+      .catch(() => {
+        // Filter stays unavailable; the list itself still loads.
+      });
+  }, []);
+
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
       if (search) params.set("search", search);
-      if (roleFilter !== "all") params.set("role", roleFilter);
+      if (roleFilter !== "all") params.set("roleId", roleFilter);
       const res = await fetch(`/api/admin/users?${params.toString()}`);
       const json = await res.json();
       if (!json.success) throw new Error(json.error);
@@ -206,8 +243,11 @@ export default function AdminUsersPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Semua Peran</SelectItem>
-                <SelectItem value="hq">HQ</SelectItem>
-                <SelectItem value="admin">Admin Cabang</SelectItem>
+                {roles.map((role) => (
+                  <SelectItem key={role.id} value={role.id}>
+                    {role.name}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
@@ -220,20 +260,19 @@ export default function AdminUsersPage() {
                   <TableHead>Peran</TableHead>
                   <TableHead>Cabang</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Login Terakhir</TableHead>
                   <TableHead className="text-right">Aksi</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
                       Memuat...
                     </TableCell>
                   </TableRow>
                 ) : users.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
                       Tidak ada pengguna ditemukan.
                     </TableCell>
                   </TableRow>
@@ -268,20 +307,19 @@ export default function AdminUsersPage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        {user.role === "hq" ? (
-                          <Badge className="gap-1">
-                            <ShieldCheck className="h-3 w-3" /> HQ
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary">Admin Cabang</Badge>
-                        )}
+                        <Badge className="gap-1">
+                          {user.role?.isSystem && (
+                            <ShieldCheck className="h-3 w-3" />
+                          )}
+                          {user.role?.name ?? "—"}
+                        </Badge>
                       </TableCell>
                       <TableCell>
-                        {user.branchName ? (
+                        {user.branch ? (
                           <span className="text-sm">
-                            {user.branchName}
+                            {user.branch.name}
                             <span className="text-xs text-muted-foreground ml-1">
-                              ({user.branchCode})
+                              ({user.branch.code})
                             </span>
                           </span>
                         ) : (
@@ -297,11 +335,6 @@ export default function AdminUsersPage() {
                         >
                           Aktif
                         </Badge>
-                      </TableCell>
-                      <TableCell className="text-sm text-muted-foreground">
-                        {user.lastLogin
-                          ? formatRelative(user.lastLogin)
-                          : "Belum pernah"}
                       </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>
@@ -405,17 +438,4 @@ export default function AdminUsersPage() {
       </Dialog>
     </div>
   );
-}
-
-function formatRelative(iso: string): string {
-  const date = new Date(iso);
-  const diffMs = Date.now() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 1) return "Baru saja";
-  if (diffMin < 60) return `${diffMin} menit lalu`;
-  const diffHr = Math.floor(diffMin / 60);
-  if (diffHr < 24) return `${diffHr} jam lalu`;
-  const diffDay = Math.floor(diffHr / 24);
-  if (diffDay < 30) return `${diffDay} hari lalu`;
-  return date.toLocaleDateString("id-ID");
 }

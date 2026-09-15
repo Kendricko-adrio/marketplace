@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { SYSTEM_OWNER_KEY } from "@marketplace/db/src/rbac/catalog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,10 +30,20 @@ export interface BranchOption {
   city: string;
 }
 
+/** Dynamic Role option — ids come from the server, never role names. */
+export interface RoleOption {
+  id: string;
+  key: string | null;
+  name: string;
+  isSystem: boolean;
+}
+
 export interface UserFormData {
   name: string;
   email: string;
-  role: "admin" | "hq";
+  /** Assigned Role id — submitted as-is; the API validates the assignment. */
+  roleId: string;
+  /** Home Branch; required for every non-Owner Role. */
   branchId: string | null;
   passwordMode: "generate" | "manual";
   password: string;
@@ -41,6 +52,8 @@ export interface UserFormData {
 interface UserFormProps {
   mode: "create" | "edit";
   initialData?: Partial<UserFormData>;
+  /** Assignable Roles for the current actor (already ceiling-filtered). */
+  roles: RoleOption[];
   branches: BranchOption[];
   onSubmit: (data: UserFormData) => Promise<void>;
   submitting?: boolean;
@@ -50,6 +63,7 @@ interface UserFormProps {
 export default function UserForm({
   mode,
   initialData,
+  roles,
   branches,
   onSubmit,
   submitting = false,
@@ -58,7 +72,7 @@ export default function UserForm({
   const [formData, setFormData] = useState<UserFormData>({
     name: initialData?.name ?? "",
     email: initialData?.email ?? "",
-    role: initialData?.role ?? "admin",
+    roleId: initialData?.roleId ?? "",
     branchId: initialData?.branchId ?? null,
     passwordMode: "generate",
     password: "",
@@ -66,29 +80,29 @@ export default function UserForm({
   const [confirmPassword, setConfirmPassword] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
 
-  // When role switches to HQ, branchId is meaningless. Rather than sync via
-  // effect (which triggers cascading renders), we compute the effective
-  // branchId at submit time and disable the select when role === "hq".
+  const selectedRole =
+    roles.find((role) => role.id === formData.roleId) ?? null;
+  // The System Owner Role has no Home Branch; every other Role requires
+  // exactly one.
+  const isOwnerRole = selectedRole?.key === SYSTEM_OWNER_KEY;
+
   function updateField<K extends keyof UserFormData>(
     key: K,
     value: UserFormData[K]
   ) {
-    setFormData((prev) => {
-      const next = { ...prev, [key]: value };
-      // If switching to HQ, clear branchId in the same setState call.
-      if (key === "role" && value === "hq") {
-        next.branchId = null;
-      }
-      return next;
-    });
+    setFormData((prev) => ({ ...prev, [key]: value }));
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLocalError(null);
 
-    if (formData.role === "admin" && !formData.branchId) {
-      setLocalError("Admin (staf cabang) wajib memiliki cabang.");
+    if (!selectedRole) {
+      setLocalError("Pilih peran untuk pengguna ini.");
+      return;
+    }
+    if (!isOwnerRole && !formData.branchId) {
+      setLocalError("Peran ini wajib memiliki cabang utama (Home Branch).");
       return;
     }
 
@@ -112,7 +126,12 @@ export default function UserForm({
     }
 
     try {
-      await onSubmit(formData);
+      // The Owner Role accepts no Home Branch; the API re-validates the
+      // whole assignment server-side either way.
+      await onSubmit({
+        ...formData,
+        branchId: isOwnerRole ? null : formData.branchId,
+      });
       if (mode === "edit") {
         toast.success("Perubahan pengguna tersimpan");
       }
@@ -173,55 +192,40 @@ export default function UserForm({
         <CardHeader>
           <CardTitle className="text-lg">Peran & Cabang</CardTitle>
           <CardDescription>
-            HQ mengawasi semua cabang. Admin (staf cabang) hanya dapat
-            mengelola satu cabang.
+            Peran ditetapkan dari daftar Role yang tersedia. Setiap peran
+            non-Owner wajib memiliki satu cabang utama (Home Branch).
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label>Peran</Label>
-            <RadioGroup
-              value={formData.role}
-              onValueChange={(v) =>
-                updateField("role", v as "admin" | "hq")
-              }
+            <Label htmlFor="role">Peran</Label>
+            <Select
+              value={formData.roleId || undefined}
+              onValueChange={(v) => updateField("roleId", v)}
               disabled={submitting}
-              className="grid sm:grid-cols-2 gap-2"
             >
-              <div className="flex items-start space-x-2 rounded-md border p-3">
-                <RadioGroupItem id="role-admin" value="admin" className="mt-1" />
-                <div>
-                  <Label
-                    htmlFor="role-admin"
-                    className="font-medium cursor-pointer"
-                  >
-                    Admin (Staf Cabang)
-                  </Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Akses terbatas ke satu cabang.
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-start space-x-2 rounded-md border p-3">
-                <RadioGroupItem id="role-hq" value="hq" className="mt-1" />
-                <div>
-                  <Label
-                    htmlFor="role-hq"
-                    className="font-medium cursor-pointer"
-                  >
-                    HQ (Headquarters)
-                  </Label>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    Akses penuh ke semua cabang &amp; manajemen pengguna.
-                  </p>
-                </div>
-              </div>
-            </RadioGroup>
+              <SelectTrigger id="role">
+                <SelectValue placeholder="Pilih peran..." />
+              </SelectTrigger>
+              <SelectContent>
+                {roles.map((role) => (
+                  <SelectItem key={role.id} value={role.id}>
+                    {role.name}
+                    {role.isSystem ? " (peran sistem)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {roles.length === 0 && (
+              <p className="text-xs text-destructive">
+                Tidak ada Role yang dapat ditetapkan.
+              </p>
+            )}
           </div>
 
-          {formData.role === "admin" && (
+          {!isOwnerRole && (
             <div className="space-y-2">
-              <Label htmlFor="branch">Cabang</Label>
+              <Label htmlFor="branch">Cabang Utama (Home Branch)</Label>
               <Select
                 value={formData.branchId ?? undefined}
                 onValueChange={(v) => updateField("branchId", v)}
@@ -244,6 +248,11 @@ export default function UserForm({
                 </p>
               )}
             </div>
+          )}
+          {isOwnerRole && (
+            <p className="text-sm text-muted-foreground">
+              System Owner tidak memerlukan cabang utama.
+            </p>
           )}
         </CardContent>
       </Card>

@@ -10,13 +10,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { db } from "@/db";
-import { users, branches } from "@/db";
+import { branches } from "@/db";
 import { eq } from "drizzle-orm";
 import { EditUserClient } from "./edit-user-client";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
+import { pagePermissionOrRedirect } from "@/lib/rbac/page-guard";
+import { getUserDetail } from "@/lib/rbac/users-service";
 
 export const dynamic = "force-dynamic";
 
@@ -27,32 +25,14 @@ export default async function EditUserPage({
 }) {
   const { id } = await params;
 
-  const session = await auth.api.getSession({ headers: await headers() });
+  // Policy gate: editing users requires the `users:edit` grant from the
+  // Current Policy (server-authoritative on every navigation).
+  await pagePermissionOrRedirect("users", "edit", `/admin/users/${id}/edit`);
 
-  if (!session) {
-    redirect(`/login?callbackUrl=/admin/users/${id}/edit`);
-  }
-
-  const permissions = await getPermissionsForRole(session.user.role);
-  if (!checkPermission(permissions, "users", "edit")) {
-    redirect("/admin/users?error=forbidden");
-  }
-
-  const user = await db
-    .select({
-      id: users.id,
-      name: users.name,
-      username: users.username,
-      email: users.email,
-      role: users.role,
-      branchId: users.branchId,
-      mustResetPassword: users.mustResetPassword,
-    })
-    .from(users)
-    .where(eq(users.id, id))
-    .limit(1);
-
-  if (!user.length) notFound();
+  const user = await getUserDetail(id);
+  // `users.role_id` is NOT NULL with an FK to `admin_role`, so the current
+  // Role object always resolves for an existing user.
+  if (!user || !user.role) notFound();
 
   const activeBranches = await db
     .select({
@@ -63,8 +43,6 @@ export default async function EditUserPage({
     })
     .from(branches)
     .orderBy(branches.name);
-
-  const u = user[0];
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -78,7 +56,7 @@ export default async function EditUserPage({
         <h2 className="text-2xl font-bold tracking-tight">Edit Pengguna</h2>
         <p className="text-muted-foreground text-sm mt-1">
           Ubah informasi pengguna{" "}
-          <strong>{u.name}</strong> ({u.email}).
+          <strong>{user.name}</strong> ({user.email}).
         </p>
       </div>
 
@@ -86,8 +64,12 @@ export default async function EditUserPage({
         <CardHeader>
           <CardTitle>Detail Pengguna</CardTitle>
           <CardDescription>
-            Username: <code className="font-mono">{u.username}</code>
-            {u.mustResetPassword && (
+            {user.username && (
+              <>
+                Username: <code className="font-mono">{user.username}</code>
+              </>
+            )}
+            {user.mustResetPassword && (
               <span className="ml-2 text-xs text-amber-600">
                 (pengguna belum mengganti kata sandi)
               </span>
@@ -96,12 +78,14 @@ export default async function EditUserPage({
         </CardHeader>
         <CardContent>
           <EditUserClient
-            userId={u.id}
+            userId={user.id}
+            role={user.role}
             initialData={{
-              name: u.name,
-              email: u.email,
-              role: u.role as "admin" | "hq",
-              branchId: u.branchId,
+              name: user.name,
+              email: user.email,
+              roleId: user.role.id,
+              branchId: user.branch?.id ?? null,
+              username: user.username,
             }}
             branches={activeBranches}
           />

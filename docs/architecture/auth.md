@@ -17,7 +17,7 @@ sets. They must never be treated as interchangeable.
 | Email verification | Required (`sendOnSignUp: true`, 1h expiry) | not configured |
 | Username plugin | no | yes (`better-auth/plugins` `username`) |
 | Onboarding gate | yes (`onboardingCompleted` + server layouts/API guards) | no |
-| Extra user fields | phone, birthDate, gender, onboardingCompleted | role (`admin` \| `hq`, default `admin`, `input:false`) |
+| Extra user fields | phone, birthDate, gender, onboardingCompleted | role (`admin` \| `hq`, legacy — dropped in the RBAC slice-9 cutover), `roleId` (server-owned dynamic Role assignment), `isActive` (soft-deactivation flag), `mustResetPassword` |
 
 ## Shared Behavior
 
@@ -34,6 +34,20 @@ sets. They must never be treated as interchangeable.
 
 - **Admin roles** (column on `users` table): `admin` | `hq` (default `admin`).
   The role field is `input: false` — cannot be set by clients at signup.
+  This is the **legacy** representation; it remains authoritative for the old
+  permission-map runtime and is dropped in the RBAC slice-9 cutover.
+- **Dynamic Role assignment** (new RBAC): `users.roleId` references
+  `admin_role` (`ON DELETE RESTRICT`) and `users.isActive` controls
+  soft-deactivation. Both are `input: false` server-owned fields.
+- **Session admission** (new RBAC): the admin instance's
+  `session.create.before` hook admits only an active user whose legacy role is
+  `admin`/`hq` and whose assigned Role exists and is not archived. Inactive
+  users (`isActive = false`), archived-Role assignees, and users without a
+  valid assignment cannot create admin sessions (codes: `INACTIVE_USER`,
+  `INVALID_ROLE_ASSIGNMENT`).
+- **Current Policy resolution** is DB-backed per request (never cached in the
+  session) — see [../features/rbac.md](../features/rbac.md) and
+  `apps/admin/src/lib/rbac/resolver.ts`.
 - **Store users (`clients`)** have NO role column; access control is handled by
   separate tables/instances, not a unified role enum.
 

@@ -1,26 +1,12 @@
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
+import { pagePermissionOrRedirect } from "@/lib/rbac/page-guard";
 
-// Permission gate: all /admin/branches/* routes require canView on branches module.
+// Policy gate: all /admin/branches/* routes require the `branches:view`
+// grant from the Current Policy (server-authoritative per navigation).
 export default async function BranchesLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
-
-  if (!session) {
-    redirect("/login?callbackUrl=/admin/branches");
-  }
-
-  const permissions = await getPermissionsForRole(session.user.role);
-  if (!checkPermission(permissions, "branches", "view")) {
-    redirect("/admin?error=forbidden");
-  }
-
+  await pagePermissionOrRedirect("branches", "view", "/admin/branches");
   return <>{children}</>;
 }

@@ -1,15 +1,32 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 "use client";
-import { createContext, useContext, ReactNode, useEffect, useState, useCallback } from "react";
+import {
+  createContext,
+  useContext,
+  ReactNode,
+  useEffect,
+  useState,
+  useCallback,
+  useRef,
+} from "react";
+import { usePathname } from "next/navigation";
 import { useSession as useBetterAuthSession } from "@/lib/auth-client";
-import type { PermissionMap, ModuleName, PermissionAction } from "@/db";
+import {
+  derivePolicyState,
+  policyAuthorizes,
+  createPolicyAwareFetch,
+  POLICY_REVALIDATE_EVENT,
+  type ClientPolicy,
+  type ClientPolicyStatus,
+  type ClientPolicyResponseData,
+} from "@/lib/rbac/policy-client";
+import type { ActionKey, ModuleKey } from "@marketplace/db/src/rbac/catalog";
 
 interface User {
   id: string;
   name: string;
   email: string;
   image?: string | null;
-  role?: string;
   [key: string]: unknown;
 }
 
@@ -17,8 +34,6 @@ interface Session {
   user: User;
 }
 
-// The admin's placed branch (from /api/admin/permissions/me). HQ has no branch
-// → null. Used by the sidebar to show "Cabang …" / "Head Quarter".
 interface BranchInfo {
   id: string;
   name: string;
@@ -31,10 +46,16 @@ interface AuthContextType {
   session: Session | null;
   isLoading: boolean;
   isAuthenticated: boolean;
-  permissions: PermissionMap | null;
+  /** Client mirror of the server-resolved Current Policy. */
+  policy: ClientPolicy | null;
+  policyStatus: ClientPolicyStatus;
+  /** Revalidate the policy on demand (retry / 403 recovery). */
+  refreshPolicy: () => Promise<void>;
+  /** UI affordance check — the server stays authoritative per request. */
+  hasPermission: (moduleName: ModuleKey, action: ActionKey) => boolean;
+  /** Compatibility alias: true while the policy has not resolved yet. */
   permissionsLoading: boolean;
   branch: BranchInfo | null;
-  hasPermission: (moduleName: ModuleName, action: PermissionAction) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType>({
@@ -42,68 +63,106 @@ const AuthContext = createContext<AuthContextType>({
   session: null,
   isLoading: true,
   isAuthenticated: false,
-  permissions: null,
+  policy: null,
+  policyStatus: "loading",
+  refreshPolicy: async () => {},
+  hasPermission: () => false,
   permissionsLoading: true,
   branch: null,
-  hasPermission: () => false,
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const { data: session, isPending } = useBetterAuthSession();
   const user = (session?.user as User | undefined) ?? null;
   const userId = user?.id;
-  const userRole = user?.role;
-  const [permissions, setPermissions] = useState<PermissionMap | null>(null);
-  const [permissionsLoading, setPermissionsLoading] = useState(true);
-  const [branch, setBranch] = useState<BranchInfo | null>(null);
+  const pathname = usePathname();
 
+  const [policy, setPolicy] = useState<ClientPolicy | null>(null);
+  const [policyStatus, setPolicyStatus] =
+    useState<ClientPolicyStatus>("loading");
+
+  // Race guard: only the newest refresh may commit its result.
+  const requestIdRef = useRef(0);
+  const mountedRef = useRef(true);
   useEffect(() => {
-    if (!userId || !userRole) {
-      setPermissions(null);
-      setPermissionsLoading(false);
-      setBranch(null);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  const refreshPolicy = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
+    try {
+      // The policy-aware fetch triggers a centralized revalidate event after
+      // any 403 — a policy change is picked up without logging the user out.
+      const policyFetch = createPolicyAwareFetch();
+      const res = await policyFetch("/api/admin/policy/me");
+      let body: { success: boolean; data?: ClientPolicyResponseData } | null =
+        null;
+      try {
+        body = await res.json();
+      } catch {
+        body = null;
+      }
+      if (!mountedRef.current || requestId !== requestIdRef.current) return;
+      const next = derivePolicyState(
+        {
+          ok: res.ok,
+          status: res.status,
+          data: body?.data ?? null,
+        },
+        policy
+      );
+      setPolicy(next.policy);
+      setPolicyStatus(next.status);
+    } catch {
+      // Network failure: stale policy is cleared — nothing stale survives.
+      if (!mountedRef.current || requestId !== requestIdRef.current) return;
+      setPolicy(null);
+      setPolicyStatus("unavailable");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load the policy when the session identity changes; clear it on sign-out.
+  useEffect(() => {
+    if (!userId) {
+      requestIdRef.current += 1;
+      setPolicy(null);
+      setPolicyStatus("loading");
       return;
     }
+    void refreshPolicy();
+  }, [userId, refreshPolicy]);
 
-    let cancelled = false;
-    setPermissionsLoading(true);
+  // Centralized revalidation triggers — the policy is resolved from the
+  // database on every server request; this mirror only drives UI affordances:
+  // 1. App Router navigation (pathname change)
+  // 2. window focus / tab visibility
+  // 3. after any 403 (POLICY_REVALIDATE_EVENT via the policy-aware fetch)
+  useEffect(() => {
+    if (!userId) return;
+    void refreshPolicy();
+  }, [userId, pathname, refreshPolicy]);
 
-    fetch("/api/admin/permissions/me")
-      .then((res) => res.json())
-      .then((result) => {
-        if (cancelled) return;
-        if (result.success && result.data?.permissions) {
-          setPermissions(result.data.permissions);
-        } else {
-          setPermissions(null);
-        }
-        setBranch(result.data?.branch ?? null);
-      })
-      .catch((err) => {
-        console.error("Failed to load permissions:", err);
-        if (!cancelled) setPermissions(null);
-        if (!cancelled) setBranch(null);
-      })
-      .finally(() => {
-        if (!cancelled) setPermissionsLoading(false);
-      });
-
+  useEffect(() => {
+    if (!userId) return;
+    const onFocus = () => void refreshPolicy();
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    window.addEventListener(POLICY_REVALIDATE_EVENT, onFocus);
     return () => {
-      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener(POLICY_REVALIDATE_EVENT, onFocus);
     };
-  }, [userId, userRole]);
+  }, [userId, refreshPolicy]);
 
   const hasPermission = useCallback(
-    (moduleName: ModuleName, action: PermissionAction): boolean => {
-      if (!permissions) return false;
-      const p = permissions[moduleName];
-      if (!p) return false;
-      if (action === "view") return p.canView;
-      if (action === "edit") return p.canEdit;
-      if (action === "delete") return p.canDelete;
-      return false;
-    },
-    [permissions]
+    (moduleName: ModuleKey, action: ActionKey): boolean =>
+      policyAuthorizes(policy, moduleName, action),
+    [policy]
   );
 
   const value: AuthContextType = {
@@ -111,10 +170,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session: session || null,
     isLoading: isPending,
     isAuthenticated: !!user,
-    permissions,
-    permissionsLoading,
-    branch,
+    policy,
+    policyStatus,
+    refreshPolicy,
     hasPermission,
+    permissionsLoading: policyStatus === "loading",
+    branch: policy?.user.homeBranch ?? null,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

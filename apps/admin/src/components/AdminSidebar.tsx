@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/providers/auth-provider";
 import { signOut } from "@/lib/auth-client";
+import type { ModuleKey } from "@marketplace/db/src/rbac/catalog";
 
 // Returns false during SSR and the first client render, then true.
 // This is the React-recommended way to detect client-side mounting without
@@ -48,7 +49,7 @@ function useIsMounted(): boolean {
 export default function AdminSidebar() {
   const router = useRouter();
   const pathname = usePathname();
-  const { user, hasPermission, permissionsLoading, branch } = useAuth();
+  const { user, hasPermission, permissionsLoading, branch, policy } = useAuth();
   const [loggingOut, setLoggingOut] = useState(false);
   const mounted = useIsMounted();
 
@@ -56,16 +57,8 @@ export default function AdminSidebar() {
     href: string;
     label: string;
     icon: React.ComponentType<{ size?: number }>;
-    module?:
-      | "products"
-      | "orders"
-      | "customers"
-      | "notifications"
-      | "branches"
-      | "homepage"
-      | "pages"
-      | "users";
-    hqOnly?: boolean;
+    /** Gating grant: policy-driven UI affordance only (server stays authoritative). */
+    module?: ModuleKey;
   };
 
   const links: SidebarLink[] = [
@@ -77,13 +70,17 @@ export default function AdminSidebar() {
     { href: "/admin/homepage", label: "Homepage", icon: LayoutTemplate, module: "homepage" },
     { href: "/admin/pages", label: "Halaman", icon: FileText, module: "pages" },
     { href: "/admin/users", label: "Pengguna", icon: Users, module: "users" },
-    { href: "/admin/footer", label: "Footer", icon: PanelBottom, hqOnly: true },
-    { href: "/admin/roles", label: "Hak Akses", icon: Shield, hqOnly: true },
+    { href: "/admin/footer", label: "Footer", icon: PanelBottom, module: "footer" },
+    { href: "/admin/roles", label: "Hak Akses", icon: Shield, module: "roles" },
   ];
 
+  // Navigation is gated by the client policy mirror, never by Role names:
+  // global modules (footer, roles) use their global view grant like every
+  // other module. While the policy is loading, links render as a skeleton;
+  // when the policy is unavailable/no-access, protected links disappear
+  // (stale navigation never survives a failed refresh).
   const visibleLinks = links.filter((link) => {
-    if (link.hqOnly) return user?.role === "hq";
-    if (permissionsLoading) return true; // show skeleton until permissions load
+    if (permissionsLoading) return true; // show skeleton until policy loads
     if (!link.module) return false;
     return hasPermission(link.module, "view");
   });
@@ -124,15 +121,14 @@ export default function AdminSidebar() {
   // render produce identical markup (avoids hydration mismatch).
   const initial = mounted ? (user?.name?.charAt(0) || "A").toUpperCase() : "A";
   const displayName = mounted ? user?.name || "Admin" : "Admin";
-  const roleLabel = mounted ? (user?.role === "hq" ? "HQ" : "Admin Cabang") : "Admin Cabang";
+  // Role display comes from the Current Policy, not from legacy role strings.
+  const roleLabel = mounted
+    ? policy?.role.name ?? "Admin"
+    : "Admin";
   const displayEmail = mounted ? user?.email || displayName : "";
-  // Branch placement line: branch admins show their branch name; HQ (no branch)
-  // shows "Head Quarter". Empty until mounted/loaded so SSR markup is stable.
-  // `branch` arrives via /api/admin/permissions/me (async); for a branch admin it
-  // populates shortly after mount, so the line appears once — no wrong-label flash
-  // (HQ is null from the start and resolves to "Head Quarter" immediately).
+  // Branch placement line: the server-pinned Home Branch from the policy.
   const branchLabel = mounted
-    ? branch?.name ?? (user?.role === "hq" ? "Head Quarter" : "")
+    ? branch?.name ?? ""
     : "";
 
   return (

@@ -76,7 +76,11 @@ e2e/
     products.spec.ts      # list/search/detail, sync + upload APIs
     orders.spec.ts        # list/detail + PPN snapshot, verify-pickup, audit-log entry
     users.spec.ts         # generated reset password → forced-reset login
-    rbac.spec.ts          # roles page guard, permissions API, branch scope
+    rbac.spec.ts          # current-policy guards: HQ-only roles page (policy → No-Access), removed legacy /api/admin/permissions endpoints (404), /api/admin/policy/me resolution, branch-scoped orders
+    roles-api.spec.ts     # Roles API: denials without Roles grants, create/unique-name/coverage validation, stale-version 409, reduction reason + audit, archive/restore review
+    roles-ui.spec.ts      # Roles UI: list/search/archived filter, immutable System Owner, deny-all create, clone, editor, reduction impact dialog, stale-conflict retry, archive/restore, No-Access + Policy-Unavailable states
+    users-rbac.spec.ts    # Users APIs under current policy: strict payloads (legacy `role` rejected), valid roleId + Home Branch, ceiling/Owner-only/self-protection, deactivation + session revoke, last-active-Owner invariant
+    rbac-security.spec.ts # branch-aware security matrix: own-branch Admin vs cross-branch viewer vs all-branch HQ across Products/Orders/Notifications/Branches/Analytics/Audit Log, fail-closed pickup; plus a Homepage-only Marketing custom Role (Global Module access with a mandatory Home Branch, unrelated modules deny/hide, next-request grant-reduction enforcement without logout)
     analytics.spec.ts     # metrics endpoint invariants
     notifications.spec.ts # long-poll, mark-all-read
     cms.spec.ts           # homepage/pages/footer + floating WhatsApp render
@@ -122,7 +126,33 @@ packages/db/vitest.config.ts
 - **DB fixtures**: specs that need deterministic data (fresh users, order
   status, notifications, footer brand) create/reset rows via `pg` in
   `beforeAll`/`afterAll` (see `onboarding.spec.ts`, `orders.spec.ts`,
-  `notifications.spec.ts`, `cms.spec.ts`).
+  `notifications.spec.ts`, `cms.spec.ts`). The admin RBAC suite follows the
+  same pattern with run-unique fixture names (a `RUN` suffix from
+  `Date.now().toString(36)`, e.g. `E2E Roles UI <case> <RUN>`), so repeated
+  runs stay isolated even though archived Role Names stay reserved by design.
+- **Reserved identities live forever**: archived Role Names and deactivated
+  users' emails/usernames are reserved by design — also *within one spec
+  run*. Two tests in the same file that each archive/deactivate their own
+  fixture must give the fixture a per-test unique suffix (`${RUN}-${attempt}`),
+  or the second `beforeEach` hits `409 DUPLICATE_NAME` / a reserved email (see
+  the Marketing Role fixtures in `rbac-security.spec.ts`).
+- **FK-order cleanup**: rows inserted by direct `pg` access must be deleted in
+  foreign-key order in `afterAll` — sessions → accounts → audit trail →
+  users → grants → roles (the `user.role_id` FK is `RESTRICT`, so every user
+  holding a fixture Role goes before the `admin_role` rows). See the
+  `afterAll` blocks in `roles-ui.spec.ts`, `users-rbac.spec.ts`, and
+  `rbac-security.spec.ts`.
+- **Serial / one worker**: specs that share one fixture set or mutate shared
+  Owner state run with `test.describe.configure({ mode: "serial" })`
+  (`roles-ui.spec.ts`, `users-rbac.spec.ts`); `rbac-security.spec.ts` keeps
+  the file-level `default` mode precisely because each test would otherwise
+  re-run `beforeAll` in its own worker and collide on the fixed fixture keys
+  (unique `pickup_code`, inflated analytics counts). Do not raise worker
+  parallelism for these files.
+- **Playwright failure diagnosis**: when a run fails, diagnose from the
+  Markdown/text output only (error context, snapshot text, trace) — do not
+  open the screenshot/image attachments; reading them wastes a turn and is
+  forbidden in this repo (see `AGENTS.md`).
 
 ### Auth pattern (important)
 
@@ -146,6 +176,11 @@ Playwright's best practice is **"login once, reuse everywhere"**:
   `apps/admin/src/lib/login-utils.test.ts` tests the `isEmail` helper the login
   form uses. Keep tests to pure logic — no DB or browser. React component tests
   would need `jsdom` + Testing Library added on demand (see the Vitest configs).
+  Policy-matrix tests stay hand-independent: derive the attempted
+  module/action/scope set from `CATALOG` itself (see the
+  "deny-by-default catalog matrix" block in `packages/db/src/rbac/policy.test.ts`
+  — a deny-all Role must deny EVERY catalog attempt) so a catalog change
+  automatically extends the matrix.
 - **E2E specs**: drop a `*.spec.ts` into `e2e/store/` or `e2e/admin/`. Prefer
   role-based locators (`getByRole`, `getByLabel`) and web-first assertions
   (`expect(...).toBeVisible()`). For a flow that needs its own login, opt out
@@ -165,5 +200,14 @@ and `reuseExistingServer: false` (servers are freshly started). The same
   `/onboarding` until the `client.onboarding=1` cookie exists. The auth-setup
   completes onboarding for saved sessions; fresh logins in specs assert the
   `/onboarding` landing.
+- **RBAC specs bounce off `/login`** — the saved admin project session is the
+  branch-admin `admintoko` (Admin Role). Specs that need another identity
+  (HQ role manager `hqmanager`, fixture users) must start from an isolated
+  empty context — `test.use({ storageState: { cookies: [], origins: [] } })`
+  or a fresh `browser.newContext()` — and prove the identity switch via
+  `/api/admin/me` before asserting policy behavior; otherwise `/login`
+  redirects straight back to `/admin`.
+- **Playwright failures** — diagnose from the Markdown/text report only; never
+  open the `.png`/image attachments (see the pitfalls above).
 - **Stale auth state** — delete `e2e/.auth/` and re-run; Playwright regenerates
   it from the setup project.

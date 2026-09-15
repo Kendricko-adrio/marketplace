@@ -1,26 +1,12 @@
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
+import { pagePermissionOrRedirect } from "@/lib/rbac/page-guard";
 
-// Permission gate: all /admin/users/* routes require canView on users module.
+// Policy gate: all /admin/users/* routes require the `users:view` grant
+// from the Current Policy (server-authoritative per navigation).
 export default async function UsersLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
-
-  if (!session) {
-    redirect("/login?callbackUrl=/admin/users");
-  }
-
-  const permissions = await getPermissionsForRole(session.user.role);
-  if (!checkPermission(permissions, "users", "view")) {
-    redirect("/admin?error=forbidden");
-  }
-
+  await pagePermissionOrRedirect("users", "view", "/admin/users");
   return <>{children}</>;
 }

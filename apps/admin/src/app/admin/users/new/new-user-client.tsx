@@ -3,17 +3,23 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import UserForm, { type UserFormData, type BranchOption } from "@/components/admin/UserForm";
+import UserForm, {
+  type UserFormData,
+  type BranchOption,
+  type RoleOption,
+} from "@/components/admin/UserForm";
 import {
   CredentialsDialog,
   type CredentialsData,
 } from "@/components/admin/CredentialsDialog";
 
 interface NewUserClientProps {
+  /** Assignable Roles for the current actor (ceiling-filtered server-side). */
+  roles: RoleOption[];
   branches: BranchOption[];
 }
 
-export function NewUserClient({ branches }: NewUserClientProps) {
+export function NewUserClient({ roles, branches }: NewUserClientProps) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,8 +36,8 @@ export function NewUserClient({ branches }: NewUserClientProps) {
         body: JSON.stringify({
           name: data.name,
           email: data.email,
-          role: data.role,
-          branchId: data.role === "hq" ? null : data.branchId,
+          roleId: data.roleId,
+          branchId: data.branchId,
           passwordMode: data.passwordMode,
           password: data.passwordMode === "manual" ? data.password : undefined,
         }),
@@ -68,6 +74,7 @@ export function NewUserClient({ branches }: NewUserClientProps) {
     <>
       <UserForm
         mode="create"
+        roles={roles}
         branches={branches}
         onSubmit={handleSubmit}
         submitting={submitting}
@@ -79,7 +86,7 @@ export function NewUserClient({ branches }: NewUserClientProps) {
         onOpenChange={(v) => {
           setCredsOpen(v);
           if (!v) {
-            // After the HQ closes the credentials popup, go back to the list
+            // After the creator closes the credentials popup, go back to the list
             router.push("/admin/users");
             router.refresh();
           }

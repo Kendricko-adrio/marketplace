@@ -1,266 +1,141 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/db";
-import { users, branches, adminSessions, adminAccounts } from "@/db";
-import { eq, ilike, and, desc, sql, or } from "drizzle-orm";
 import { z } from "zod";
-import bcrypt from "bcryptjs";
-import { withPermission } from "@/lib/auth-guard";
 
-// -----------------------------
-// GET /api/admin/users — list users (HQ only)
-// -----------------------------
-export const GET = withPermission(async (_ctx, request: NextRequest) => {
-  try {
-    const { searchParams } = new URL(request.url);
-    const search = searchParams.get("search")?.trim() || "";
-    const role = searchParams.get("role")?.trim() || "";
+import { serializeError } from "@/lib/logger";
+import { guard } from "@/lib/rbac/guard";
+import {
+  buildActorContext,
+} from "@/lib/rbac/roles-service";
+import {
+  createUser,
+  listUsers,
+} from "@/lib/rbac/users-service";
+import {
+  internalErrorResponse,
+  mapServiceError,
+} from "@/lib/rbac/roles-http";
 
-    const conditions = [];
-    if (search) {
-      conditions.push(
-        or(
-          ilike(users.name, `%${search}%`),
-          ilike(users.email, `%${search}%`),
-          ilike(users.username, `%${search}%`)
-        )!
-      );
-    }
-    if (role === "admin" || role === "hq") {
-      conditions.push(eq(users.role, role));
-    }
+// =========================================================
+// /api/admin/users
+//   GET  — user directory (global) with role/activity filters [users:view]
+//   POST — transactional user creation with Role + Home Branch [users:edit]
+//
+// Payloads are STRICT: assignment uses the dynamic `roleId` field with a
+// mandatory Home Branch for every non-Owner Role. Assignment is validated
+// (valid active Role, mandatory Home Branch, Authorization Ceiling,
+// Owner-only promotion) in one transaction with the user/account insert.
+// =========================================================
 
-    const rows = await db
-      .select({
-        id: users.id,
-        name: users.name,
-        username: users.username,
-        email: users.email,
-        role: users.role,
-        branchId: users.branchId,
-        branchName: branches.name,
-        branchCode: branches.code,
-        mustResetPassword: users.mustResetPassword,
-        emailVerified: users.emailVerified,
-        image: users.image,
-        createdAt: users.createdAt,
-        updatedAt: users.updatedAt,
-      })
-      .from(users)
-      .leftJoin(branches, eq(users.branchId, branches.id))
-      .where(conditions.length ? and(...conditions) : undefined)
-      .orderBy(desc(users.createdAt));
+export const dynamic = "force-dynamic";
 
-    // Last-login = most recent session.createdAt per user
-    const sessionRows = await db
-      .select({
-        userId: adminSessions.userId,
-        lastLogin: sql<Date>`max(${adminSessions.createdAt})`.as("last_login"),
-      })
-      .from(adminSessions)
-      .groupBy(adminSessions.userId);
-
-    const lastLoginMap = new Map<string, Date>();
-    for (const r of sessionRows) {
-      if (r.lastLogin) lastLoginMap.set(r.userId, r.lastLogin);
-    }
-
-    const data = rows.map((r) => ({
-      ...r,
-      lastLogin: lastLoginMap.get(r.id) || null,
-    }));
-
-    return NextResponse.json({ success: true, data });
-  } catch (error) {
-    console.error("Error fetching admin users:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to fetch users" },
-      { status: 500 }
-    );
-  }
-}, "users", "view");
-
-// -----------------------------
-// POST /api/admin/users — create user (HQ only)
-// Body: { name, email, role, branchId?, passwordMode: "manual"|"generate", password? }
-// -----------------------------
-const createUserSchema = z.object({
+// z.strictObject rejects unknown keys — a role-name payload fails 400.
+const createUserSchema = z.strictObject({
   name: z.string().min(2, "Nama minimal 2 karakter").max(100),
   email: z.email("Format email tidak valid"),
-  role: z.enum(["admin", "hq"]),
-  branchId: z.string().nullable().optional(),
+  roleId: z.string().min(1),
+  branchId: z.string().min(1).nullable().optional(),
   passwordMode: z.enum(["manual", "generate"]),
   password: z.string().min(8, "Password minimal 8 karakter").optional(),
 });
 
-const PASSWORD_CHARS =
-  "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%^&*";
+export async function GET(request: NextRequest) {
+  const guardResult = await guard("users", "view", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger } = guardResult;
 
-function generatePassword(length = 16): string {
-  const arr = new Uint32Array(length);
-  crypto.getRandomValues(arr);
-  let out = "";
-  for (let i = 0; i < length; i++) {
-    out += PASSWORD_CHARS[arr[i] % PASSWORD_CHARS.length];
-  }
-  return out;
-}
-
-// Generate a unique username from a display name.
-// Strategy: lowercase, dots for spaces, strip non-alphanumeric.
-// On collision, append 2, 3, 4...
-async function generateUniqueUsername(
-  baseName: string,
-  excludeId?: string
-): Promise<string> {
-  const base = baseName
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "") // strip diacritics
-    .trim()
-    .replace(/[^a-z0-9\s._-]/g, "")
-    .replace(/[\s._-]+/g, ".")
-    .replace(/^[-.]+|[-.]+$/g, "")
-    .slice(0, 30);
-
-  const candidate = base || "user";
-  let username = candidate;
-  let suffix = 1;
-
-  while (true) {
-    const existing = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.username, username))
-      .limit(1);
-
-    const clash = existing.find((u) => u.id !== excludeId);
-    if (!clash) return username;
-
-    suffix += 1;
-    username = `${candidate}${suffix}`;
-  }
-}
-
-export const POST = withPermission(async (ctx, request: NextRequest) => {
   try {
-    const body = await request.json();
-    const parsed = createUserSchema.safeParse(body);
-    if (!parsed.success) {
+    const { searchParams } = new URL(request.url);
+    const q = searchParams.get("q") ?? searchParams.get("search") ?? "";
+    const roleId = searchParams.get("roleId") ?? undefined;
+    // Role-name filters are gone; clients must filter by Role id.
+    const legacyRole = searchParams.get("role");
+    if (legacyRole) {
+      logger.warn("users.list.legacy_role_filter", {
+        outcome: "denied",
+        reason: "legacy_role_filter_removed",
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Filter by roleId — the legacy role filter was removed",
+          code: "LEGACY_FILTER_REMOVED",
+        },
+        { status: 400 }
+      );
+    }
+    const activeParam = searchParams.get("active");
+    const active =
+      activeParam === "true" ? true : activeParam === "false" ? false : undefined;
+
+    const data = await listUsers({ q, roleId, active });
+    logger.info("users.list", {
+      outcome: "success",
+      count: data.length,
+      filters: { roleId, active },
+    });
+    return NextResponse.json({ success: true, data });
+  } catch (error) {
+    logger.error("users.list.failure", {
+      outcome: "error",
+      error: serializeError(error),
+    });
+    return internalErrorResponse();
+  }
+}
+
+export async function POST(request: NextRequest) {
+  const guardResult = await guard("users", "edit", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger, ctx } = guardResult;
+
+  try {
+    const body = createUserSchema.safeParse(await request.json());
+    if (!body.success) {
+      logger.warn("users.create.invalid_body", { outcome: "denied" });
       return NextResponse.json(
         {
           success: false,
           error: "Invalid request body",
-          details: parsed.error.flatten().fieldErrors,
+          code: "INVALID_BODY",
+          details: body.error.flatten().fieldErrors,
         },
         { status: 400 }
       );
     }
 
-    const { name, email, role, passwordMode, password } = parsed.data;
-    let branchId = parsed.data.branchId ?? null;
-
-    // Admin role must have a branch; HQ oversees all (null branch)
-    if (role === "admin") {
-      if (!branchId) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "Admin (branch staff) wajib memiliki cabang.",
-          },
-          { status: 400 }
-        );
-      }
-      // Validate branch exists
-      const branch = await db
-        .select({ id: branches.id })
-        .from(branches)
-        .where(eq(branches.id, branchId))
-        .limit(1);
-      if (!branch.length) {
-        return NextResponse.json(
-          { success: false, error: "Cabang tidak ditemukan." },
-          { status: 400 }
-        );
-      }
-    } else {
-      // HQ role — ignore any branch assignment
-      branchId = null;
-    }
-
-    // Check email uniqueness
-    const existingEmail = await db
-      .select({ id: users.id })
-      .from(users)
-      .where(eq(users.email, email.toLowerCase()))
-      .limit(1);
-    if (existingEmail.length) {
-      return NextResponse.json(
-        { success: false, error: "Email sudah digunakan." },
-        { status: 409 }
-      );
-    }
-
-    // Resolve password
-    const finalPassword =
-      passwordMode === "manual"
-        ? password
-        : generatePassword(16);
-
-    if (!finalPassword || finalPassword.length < 8) {
-      return NextResponse.json(
-        { success: false, error: "Password minimal 8 karakter." },
-        { status: 400 }
-      );
-    }
-
-    // Generate unique username
-    const username = await generateUniqueUsername(name);
-
-    const userId = crypto.randomUUID();
-    const hashedPassword = await bcrypt.hash(finalPassword, 10);
-
-    // Insert user
-    await db.insert(users).values({
-      id: userId,
-      name,
-      username,
-      displayUsername: username,
-      email: email.toLowerCase(),
-      emailVerified: true, // admins are created by HQ; no email verification flow
-      role,
-      branchId,
-      mustResetPassword: true, // force password change on first login
+    const actor = buildActorContext(ctx.user.id, ctx.policy);
+    const created = await createUser(actor, {
+      name: body.data.name,
+      email: body.data.email,
+      roleId: body.data.roleId,
+      branchId: body.data.branchId ?? null,
+      passwordMode: body.data.passwordMode,
+      password: body.data.password,
     });
 
-    // Insert credential account
-    await db.insert(adminAccounts).values({
-      id: crypto.randomUUID(),
-      userId,
-      accountId: userId,
-      providerId: "credential",
-      password: hashedPassword,
+    logger.info("users.create", {
+      outcome: "success",
+      actorId: actor.userId,
+      userId: created.id,
+      roleId: created.role?.id ?? null,
+      branchId: created.branch?.id ?? null,
+      policyVersion: actor.policyVersion,
     });
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        id: userId,
-        name,
-        username,
-        email: email.toLowerCase(),
-        role,
-        branchId,
-        mustResetPassword: true,
-        // Plaintext password returned ONCE to the HQ.
-        // It is never persisted — only the bcrypt hash is stored.
-        password: finalPassword,
-      },
-    });
+    return NextResponse.json({ success: true, data: created }, { status: 201 });
   } catch (error) {
-    console.error("Error creating admin user:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to create user" },
-      { status: 500 }
-    );
+    const mapped = mapServiceError(error);
+    if (mapped) {
+      logger.warn("users.create.denied", {
+        outcome: "denied",
+        code: (error as { code?: string }).code,
+      });
+      return mapped;
+    }
+    logger.error("users.create.failure", {
+      outcome: "error",
+      error: serializeError(error),
+    });
+    return internalErrorResponse();
   }
-}, "users", "edit");
+}

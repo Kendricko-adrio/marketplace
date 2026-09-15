@@ -2,7 +2,7 @@
 
 ## Status
 
-Research and the first 15 `grill-with-docs` rounds are complete. No RBAC production code or schema has been implemented yet, and the final implementation plan is intentionally still pending until the remaining design frontier is closed.
+Research and the full `grill-with-docs` design tree are complete. The user confirmed the final shared understanding. No RBAC production code or schema has been implemented yet, and the detailed implementation plan is still pending planner execution.
 
 Current branch: `feature/rbac-new`
 
@@ -134,21 +134,22 @@ Uploads are not a standalone module. Upload/delete authorization follows the val
 - The product is not live and has no production admin users, so a maintenance-window cutover is acceptable; a zero-downtime dual-read/write design is unnecessary.
 - Default grants: Owner full immutable; HQ starts full all-branch but editable; Admin starts with Product view-own, Orders view/edit-own, Notifications view/edit/delete-own, and no global product re-sync.
 
-## Remaining design frontier
+## Closed final design frontier
 
-Resume the grilling session rather than silently assuming these details:
+The user confirmed the final shared understanding with these decisions:
 
-1. **Admin User status semantics:** define whether inactive users retain role/home-branch assignments, whether their email/username remain reserved, and which action reactivates them.
-2. **Audit retention:** decide whether authorization/audit records are retained indefinitely, for a configured period, or exported before purge. Confirm that no admin-facing delete operation exists.
-3. **Role naming policy:** settle case-insensitive uniqueness, length/character rules, reserved system keys/names, and whether duplicate names may be reused after archive.
-4. **Role limits:** decide whether custom roles are unlimited or capped per deployment.
-5. **Archived-role UX:** decide default filtering and whether restore first opens a review draft before activation.
-6. **Policy refresh failure:** decide fail-closed browser behavior when `/permissions/me` cannot refresh (keep last UI snapshot versus hide protected navigation while server remains authoritative).
-7. **Analytics edge cases:** settle treatment of orders with null branch and whether distinct customer count includes only customers with at least one scoped order.
-8. **Audit branch classification:** settle branch context for assignment moves (old branch, new branch, both/global) and product sync/global events.
-9. **Final shared-understanding confirmation:** present a concise end-to-end scenario for Owner, editable HQ, Marketing-homepage-only, branch order operator, role reduction, and cross-branch ID attack. Ask the user to confirm before planning.
+1. Inactive Admin Users retain their Role and Home Branch; email and username remain reserved; reactivation is a validated `users:edit` operation within the actor's Authorization Ceiling.
+2. Audit Events and Authorization Changes are retained indefinitely and have no admin-facing delete operation.
+3. Role Names are normalized and case-insensitively unique across active and archived Roles, use 2–64 Unicode letters/numbers plus spaces, hyphens, and underscores, and cannot use protected system names. Archived names are not reusable.
+4. Custom Roles have no product-defined cap.
+5. Archived Roles are hidden from the ordinary list behind an explicit filter. Restore opens a review draft and activates only after current-policy validation.
+6. A failed browser policy refresh clears stale permission state and protected data/navigation, entering a Policy-Unavailable State with retry and account-recovery/logout actions.
+7. Orders with no Branch appear only in all-branch analytics. Distinct customer counts include only customers with at least one Order in the authorized scope.
+8. Home Branch reassignment Audit Events belong to both old and new Branches. Product synchronization and system-wide events are global.
+9. Branch deletion is blocked while the Branch remains assigned as the Home Branch of any active or inactive Admin User.
+10. The user confirmed the complete Owner, editable HQ, Marketing-homepage-only, branch order operator, permission reduction, deactivation, audit, policy-refresh, and cross-branch-ID scenarios.
 
-Facts such as existing route locations, Better Auth APIs, schema conventions, and test commands are the agent's responsibility; do not ask the user to rediscover them.
+The design frontier is empty. Do not ask more product questions unless planning uncovers a genuine contradiction. The next action is to invoke the `planner` subagent and save `.agents/rbac-new-plan.md`.
 
 ## Required plan structure after confirmation
 
@@ -169,4 +170,4 @@ For every slice, require a failing public-seam test first, smallest green implem
 
 ## Suggested prompt for the next session
 
-> Continue the `grill-with-docs` session for New RBAC on `feature/rbac-new`. Read `CONTEXT.md`, `docs/features/rbac-custom-roles-research.md`, `docs/adr/0001-application-owned-hybrid-rbac.md`, and `.agents/rbac-new-handoff.md`. Preserve the unrelated storefront working-tree changes listed in the handoff. Ask the remaining frontier through `ask_user_question`; update the glossary inline. Do not implement. Once the frontier is empty and I confirm shared understanding, invoke the planner agent and write the complete TDD implementation plan to `.agents/rbac-new-plan.md`.
+> Continue New RBAC planning on `feature/rbac-new`. The design frontier is closed and the user confirmed the shared understanding. Read `CONTEXT.md`, `docs/features/rbac-custom-roles-research.md`, `docs/adr/0001-application-owned-hybrid-rbac.md`, and `.agents/rbac-new-handoff.md`. Preserve unrelated working-tree changes. Do not implement. Invoke the `planner` subagent and write its complete TDD implementation plan to `.agents/rbac-new-plan.md`.

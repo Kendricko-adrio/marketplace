@@ -1,25 +1,13 @@
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
+import { pagePermissionOrRedirect } from "@/lib/rbac/page-guard";
 
+// Policy gate: all /admin/notifications/* routes require the
+// `notifications:view` grant from the Current Policy (server-authoritative
+// per navigation).
 export default async function NotificationsLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
-
-  if (!session) {
-    redirect("/login?callbackUrl=/admin/notifications");
-  }
-
-  const permissions = await getPermissionsForRole(session.user.role);
-  if (!checkPermission(permissions, "notifications", "view")) {
-    redirect("/admin?error=forbidden");
-  }
-
+  await pagePermissionOrRedirect("notifications", "view", "/admin/notifications");
   return <>{children}</>;
 }

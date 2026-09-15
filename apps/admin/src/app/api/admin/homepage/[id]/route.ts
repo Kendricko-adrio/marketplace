@@ -7,14 +7,25 @@ import {
 } from "@/db";
 import { eq, asc, inArray } from "drizzle-orm";
 import { z } from "zod";
-import { withPermission } from "@/lib/auth-guard";
+import { serializeError } from "@/lib/logger";
+import { guard } from "@/lib/rbac/guard";
 import { deleteFile } from "@/lib/uploads";
 import { validateContent } from "@/lib/homepage-content";
 
-export const GET = withPermission(
-  async (_ctx, _request: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
-    try {
-      const { id } = await ctx.params;
+// =========================================================
+// RBAC: global Homepage module — GET homepage:view, PATCH
+// homepage:edit, DELETE homepage:delete (Current Policy).
+// =========================================================
+export async function GET(
+  _request: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const guardResult = await guard("homepage", "view");
+  if (!guardResult.ok) return guardResult.response;
+  const { logger } = guardResult;
+
+  try {
+    const { id } = await ctx.params;
 
       const sectionRows = await db
         .select()
@@ -64,21 +75,25 @@ export const GET = withPermission(
         }
       }
 
+      logger.info("homepage.detail", {
+        outcome: "success",
+        sectionId: id,
+      });
       return NextResponse.json({
         success: true,
         data: { ...section, products: linkedProducts },
       });
     } catch (error) {
-      console.error("Error fetching homepage section:", error);
+      logger.error("homepage.detail.failure", {
+        outcome: "error",
+        error: serializeError(error),
+      });
       return NextResponse.json(
         { success: false, error: "Failed to fetch section" },
         { status: 500 }
       );
     }
-  },
-  "homepage",
-  "view"
-);
+}
 
 /**
  * Extracts all /uploads/ image URLs stored inside a section's JSONB content.
@@ -145,10 +160,16 @@ const updateSectionSchema = z.object({
   productIds: z.array(z.string()).optional(),
 });
 
-export const PATCH = withPermission(
-  async (_ctx, request: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
-    try {
-      const { id } = await ctx.params;
+export async function PATCH(
+  request: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const guardResult = await guard("homepage", "edit", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger, ctx: policyCtx } = guardResult;
+
+  try {
+    const { id } = await ctx.params;
 
       const existing = await db
         .select()
@@ -256,23 +277,34 @@ export const PATCH = withPermission(
         }
       }
 
+      logger.info("homepage.update", {
+        outcome: "success",
+        sectionId: id,
+        actorId: policyCtx.user.id,
+      });
       return NextResponse.json({ success: true });
     } catch (error) {
-      console.error("Error updating homepage section:", error);
+      logger.error("homepage.update.failure", {
+        outcome: "error",
+        error: serializeError(error),
+      });
       return NextResponse.json(
         { success: false, error: "Failed to update section" },
         { status: 500 }
       );
     }
-  },
-  "homepage",
-  "edit"
-);
+}
 
-export const DELETE = withPermission(
-  async (_ctx, _request: NextRequest, ctx: { params: Promise<{ id: string }> }) => {
-    try {
-      const { id } = await ctx.params;
+export async function DELETE(
+  _request: NextRequest,
+  ctx: { params: Promise<{ id: string }> }
+) {
+  const guardResult = await guard("homepage", "delete");
+  if (!guardResult.ok) return guardResult.response;
+  const { logger, ctx: policyCtx } = guardResult;
+
+  try {
+    const { id } = await ctx.params;
 
       const existing = await db
         .select()
@@ -296,15 +328,20 @@ export const DELETE = withPermission(
 
       await db.delete(homepageSections).where(eq(homepageSections.id, id));
 
+      logger.info("homepage.delete", {
+        outcome: "success",
+        sectionId: id,
+        actorId: policyCtx.user.id,
+      });
       return NextResponse.json({ success: true });
     } catch (error) {
-      console.error("Error deleting homepage section:", error);
+      logger.error("homepage.delete.failure", {
+        outcome: "error",
+        error: serializeError(error),
+      });
       return NextResponse.json(
         { success: false, error: "Failed to delete section" },
         { status: 500 }
       );
     }
-  },
-  "homepage",
-  "delete"
-);
+}

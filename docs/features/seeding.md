@@ -54,3 +54,24 @@ local/staging databases.
 
 Unsupported `SEED_MODE` values fail immediately rather than falling back to a
 mode that could populate the wrong data source.
+
+## Initial RBAC Roles
+
+The seeder creates the three Initial Roles from the code-owned defaults in
+`packages/db/src/rbac/seed-defaults.ts` (tested by
+`seed-defaults.test.ts`) **before** the admin users, so the user rows carry
+their `roleId` assignment:
+
+| Role key | Name | isSystem | Grants |
+|---|---|---|---|
+| `system_owner` | System Owner | yes | none — code-owned full/all bypass |
+| `hq` | HQ | yes | full catalog, all-branch/global scope (editable) |
+| `admin` | Admin | yes | Products view-own; Orders view/edit-own; Notifications view/edit/delete-own; no global product re-sync |
+
+Seeded admin users (`admin@store.com`, `hq@store.com`) are assigned through
+`roleId` while the legacy `role` column temporarily coexists (dropped in the
+RBAC slice-9 cutover). The System Owner has **no** grant rows — its
+full-access/all-branch bypass is owned by the policy code.
+
+Cleanup order respects the FKs: grants are deleted before Roles, and Roles
+after users (`users.role_id` is `ON DELETE RESTRICT`).

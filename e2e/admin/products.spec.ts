@@ -154,49 +154,41 @@ test.describe("admin products", () => {
     expect(headingCount).toBeLessThanOrEqual(1);
   });
 
-  test("sync API rejects a non-Jubelio product (deterministic)", async ({
+  test("sync API denies a branch admin without products:edit (deny-by-default)", async ({
     page,
   }) => {
-    // After import-jubelio the first product may be Jubelio-synced.
-    // Fetch enough products to find a seeded one with jubelioItemGroupId === null.
+    // Global Jubelio re-sync requires products:edit (all-branch). The seeded
+    // Admin Role carries products view-own only → 403, before any sync
+    // validation. The non-Jubelio-product validation case is covered in the
+    // HQ block below.
     const res = await page.request.get("/api/admin/products?limit=50");
     const { data } = await res.json();
-    const nonJubelio = data.find((p: any) => p.jubelioItemGroupId === null);
-    if (!nonJubelio) {
-      throw new Error("No non-Jubelio product found for sync-negative test");
+    const anyProduct = data[0];
+    if (!anyProduct) {
+      throw new Error("No product found for sync-denial test");
     }
-
     const sync = await page.request.post(
-      `/api/admin/products/${nonJubelio.id}/sync`
+      `/api/admin/products/${anyProduct.id}/sync`
     );
-    expect(sync.status()).toBe(400);
-    const body = await sync.json();
-    expect(body.error).toContain("not a Jubelio-synced product");
+    expect(sync.status()).toBe(403);
   });
 
-  test("upload API stores an image and deletes it", async ({ page }) => {
-    // Upload a tiny PNG to the products folder.
+  test("upload API denies a branch admin without products:edit (purpose-bound)", async ({
+    page,
+  }) => {
+    // Uploads are purpose-bound: the products folder follows the owning
+    // module's edit authority. admintoko has no products:edit grant → 403.
     const up = await page.request.post("/api/admin/upload?folder=products", {
       multipart: {
         file: { name: "e2e.png", mimeType: "image/png", buffer: TINY_PNG },
       },
     });
-    expect(up.status()).toBe(200);
-    const { url } = await up.json();
-    expect(url).toMatch(/^\/uploads\/products\/[0-9a-f-]+\.png$/);
-
-    // The store serves it.
-    const served = await page.request.get(`http://localhost:3000${url}`);
-    expect(served.status()).toBe(200);
-
-    // Delete it again.
-    const del = await page.request.delete(`/api/admin/upload?url=${url}`);
-    expect(del.status()).toBe(200);
-    const gone = await page.request.get(`http://localhost:3000${url}`);
-    expect(gone.status()).toBe(404);
+    expect(up.status()).toBe(403);
   });
 
-  test("upload API rejects an invalid folder", async ({ page }) => {
+  test("upload API rejects an invalid folder before authorization", async ({
+    page,
+  }) => {
     const res = await page.request.post("/api/admin/upload?folder=../../etc", {
       multipart: {
         file: { name: "e2e.png", mimeType: "image/png", buffer: TINY_PNG },
@@ -276,11 +268,59 @@ test.describe("HQ stock view", () => {
     ).toHaveCount(0);
   });
 
-  test("HQ sidebar shows Head Quarter", async ({ page }) => {
+  test("HQ sync API rejects a non-Jubelio product (deterministic)", async ({
+    page,
+  }) => {
+    await loginAsHq(page);
+    // After import-jubelio the first product may be Jubelio-synced.
+    // Fetch enough products to find a seeded one with jubelioItemGroupId === null.
+    const res = await page.request.get("/api/admin/products?limit=50");
+    const { data } = await res.json();
+    const nonJubelio = data.find((p: any) => p.jubelioItemGroupId === null);
+    if (!nonJubelio) {
+      throw new Error("No non-Jubelio product found for sync-negative test");
+    }
+
+    const sync = await page.request.post(
+      `/api/admin/products/${nonJubelio.id}/sync`
+    );
+    expect(sync.status()).toBe(400);
+    const body = await sync.json();
+    expect(body.error).toContain("not a Jubelio-synced product");
+  });
+
+  test("HQ upload API stores an image and deletes it", async ({ page }) => {
+    await loginAsHq(page);
+    // HQ's Role carries products edit-all → the purpose-bound upload to the
+    // products folder succeeds.
+    const up = await page.request.post("/api/admin/upload?folder=products", {
+      multipart: {
+        file: { name: "e2e.png", mimeType: "image/png", buffer: TINY_PNG },
+      },
+    });
+    expect(up.status()).toBe(200);
+    const { url } = await up.json();
+    expect(url).toMatch(/^\/uploads\/products\/[0-9a-f-]+\.png$/);
+
+    // The store serves it.
+    const served = await page.request.get(`http://localhost:3000${url}`);
+    expect(served.status()).toBe(200);
+
+    // Delete it again.
+    const del = await page.request.delete(`/api/admin/upload?url=${url}`);
+    expect(del.status()).toBe(200);
+    const gone = await page.request.get(`http://localhost:3000${url}`);
+    expect(gone.status()).toBe(404);
+  });
+
+  test("HQ sidebar shows the Home Branch", async ({ page }) => {
     await loginAsHq(page);
     await page.goto("/admin/products");
 
-    // HQ has no placed branch → the sidebar shows "Head Quarter" below the role.
-    await expect(page.locator("aside").getByText("Head Quarter")).toBeVisible();
+    // Every non-Owner admin user has exactly one Home Branch; HQ's all-branch
+    // reach comes from its grants, so the sidebar shows the placed branch.
+    await expect(
+      page.locator("aside").getByText("Cabang Jakarta Pusat")
+    ).toBeVisible();
   });
 });

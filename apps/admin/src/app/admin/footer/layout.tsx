@@ -1,25 +1,13 @@
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
+import { pagePermissionOrRedirect } from "@/lib/rbac/page-guard";
 
-// HQ-only hardcoded gate for the footer CMS page.
-// Footer content affects every storefront page, so only HQ may edit it.
+// Policy gate: all /admin/footer/* routes require the `footer:view` grant
+// from the Current Policy (server-authoritative per navigation). Editing is
+// gated separately by footer:edit at the API and client affordances.
 export default async function FooterLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
-
-  if (!session) {
-    redirect("/login?callbackUrl=/admin/footer");
-  }
-
-  if (session.user.role !== "hq") {
-    redirect("/admin?error=forbidden");
-  }
-
+  await pagePermissionOrRedirect("footer", "view", "/admin/footer");
   return <>{children}</>;
 }

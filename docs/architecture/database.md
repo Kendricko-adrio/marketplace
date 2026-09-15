@@ -36,6 +36,36 @@ with `relation already exists`.
   (`withTimezone: true`) convention to all auth/domain tables that were
   previously `timestamp without time zone`.
 - Migration `0009_tan_sheva_callister.sql` adds the `notifications` table.
+- Migration `0017_brave_maximus.sql` adds the new RBAC model: `admin_role`
+  (immutable `key`, editable `name`, `isSystem`, optimistic `version`,
+  nullable `archivedAt`, case-insensitive unique normalized-Name expression
+  index + length check), `admin_role_grant` (normalized `(role, module,
+  action)` row with scope, tuple-unique, action/scope/module-shape checks),
+  `users.role_id` (FK RESTRICT, **NOT NULL** — the final constraint,
+  enforced by the `0018` cutover; `0017` shipped it nullable only as a
+  transition step so the cutover could backfill from the legacy
+  `users.role` key) and `users.is_active`, plus `audit_log` policy/branch
+  extensions (`policy_version`, `branch_scope`, `branch_id`,
+  `related_branch_id` with `ON DELETE SET NULL` so Audit Events survive
+  Branch deletion).
+- Migration `0018_silly_mystique.sql` is the slice-9 cutover that made
+  `users.role_id` **NOT NULL** permanent schema: it fails fast
+  (before any write) on normalized-Role-Name collisions with the reserved
+  Initial-Role Names and on unexpected legacy `user.role` values, ensures the
+  system Roles/Initial grants exist idempotently, backfills `user.role_id`
+  with a normalized mapping (`lower(btrim(role)) = 'hq' → HQ; anything else
+  → least-privilege Admin), asserts no NULL `role_id` remains before
+  enforcing NOT NULL, then drops the legacy `user.role` column and
+  `permission` table with recovery-safe `IF EXISTS` drops. After the cutover
+  the legacy `users.role` key no longer exists anywhere — assignment is
+  `role_id` + Home Branch only. The `permission`
+  drop is deliberately **not** `CASCADE` and does **not** translate legacy
+  permission customization: per-Admin permission tuning made through
+  `/api/admin/permissions` during the maintenance window is intentionally
+  discarded and must be re-expressed as a custom Role via the new Roles UI
+  after cutover. Rollback is a paired operation (restore the pre-cutover
+  backup and redeploy the previous image) — there is no dual-read/write
+  compatibility path.
 - Migrations `0011`/`0012` add domain checks and uniqueness constraints,
   pickup verification lockout state, deterministic cart uniqueness, and change
   the admin-user branch FK to `ON DELETE RESTRICT`.

@@ -1,76 +1,115 @@
 import { NextRequest, NextResponse } from "next/server";
-import { withPermission } from "@/lib/auth-guard";
+import { serializeError } from "@/lib/logger";
+import { guard, crossBranchNotFound } from "@/lib/rbac/guard";
+import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import {
-  getNotificationScope,
+  notificationScopeFromAuthorization,
   markRead,
   deleteNotification,
 } from "@/lib/notifications";
-import { requestLogger, serializeError } from "@/lib/logger";
 
-// PATCH /api/admin/notifications/{id}/read
-export const PATCH = withPermission(
-  async ({ user }, request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    const { id } = await params;
-    const log = requestLogger(request, {
-      module: "admin-notifications",
-      action: "mark-read",
-      userId: user.id,
-      role: user.role,
+// PATCH /api/admin/notifications/{id}   [notifications:edit]
+// DELETE /api/admin/notifications/{id}  [notifications:delete]
+//
+// The object seam is the scoped update/delete itself: own-branch scope pins
+// the mutation to the Home Branch, so a cross-branch id affects zero rows and
+// maps to 404 (existence is not disclosed). All-branch scope is unrestricted.
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const guardResult = await guard("notifications", "edit", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger, ctx } = guardResult;
+
+  const scope = notificationScopeFromAuthorization(ctx.authorization);
+  if (!scope) {
+    logger.warn("notifications.mark_read.scope_unresolvable", {
+      outcome: "denied",
+      reason: "missing_home_branch",
+      userId: ctx.user.id,
       notificationId: id,
     });
-    try {
-      const scope = getNotificationScope(user);
-      const ok = await markRead(id, scope);
-      if (!ok) {
-        return NextResponse.json(
-          { success: false, error: "Notification not found" },
-          { status: 404 }
-        );
-      }
-      log.info("notification marked read");
-      return NextResponse.json({ success: true });
-    } catch (error) {
-      log.error("mark read failed", { error: serializeError(error) });
+    return NextResponse.json(
+      { success: false, error: "Forbidden", code: "DENIED" },
+      { status: 403 }
+    );
+  }
+
+  try {
+    const ok = await markRead(id, scope);
+    if (!ok) {
+      crossBranchNotFound(logger.child({ notificationId: id }));
       return NextResponse.json(
-        { success: false, error: "Failed to mark notification as read" },
-        { status: 500 }
+        { success: false, error: "Notification not found" },
+        { status: 404 }
       );
     }
-  },
-  "notifications",
-  "edit"
-);
+    logger.info("notifications.mark_read", {
+      outcome: "success",
+      notificationId: id,
+      scope: scope.mode,
+    });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    logger.error("notifications.mark_read.failure", {
+      outcome: "error",
+      error: serializeError(error),
+    });
+    return NextResponse.json(
+      { success: false, error: "Failed to mark notification as read" },
+      { status: 500 }
+    );
+  }
+}
 
-// DELETE /api/admin/notifications/{id}
-export const DELETE = withPermission(
-  async ({ user }, request: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
-    const { id } = await params;
-    const log = requestLogger(request, {
-      module: "admin-notifications",
-      action: "delete",
-      userId: user.id,
-      role: user.role,
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const guardResult = await guard("notifications", "delete", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger, ctx } = guardResult;
+
+  const scope = notificationScopeFromAuthorization(ctx.authorization);
+  if (!scope) {
+    logger.warn("notifications.delete.scope_unresolvable", {
+      outcome: "denied",
+      reason: "missing_home_branch",
+      userId: ctx.user.id,
       notificationId: id,
     });
-    try {
-      const scope = getNotificationScope(user);
-      const ok = await deleteNotification(id, scope);
-      if (!ok) {
-        return NextResponse.json(
-          { success: false, error: "Notification not found" },
-          { status: 404 }
-        );
-      }
-      log.info("notification deleted");
-      return NextResponse.json({ success: true });
-    } catch (error) {
-      log.error("delete notification failed", { error: serializeError(error) });
+    return NextResponse.json(
+      { success: false, error: "Forbidden", code: "DENIED" },
+      { status: 403 }
+    );
+  }
+
+  try {
+    const ok = await deleteNotification(id, scope);
+    if (!ok) {
+      crossBranchNotFound(logger);
       return NextResponse.json(
-        { success: false, error: "Failed to delete notification" },
-        { status: 500 }
+        { success: false, error: "Notification not found" },
+        { status: 404 }
       );
     }
-  },
-  "notifications",
-  "delete"
-);
+    logger.info("notifications.delete", {
+      outcome: "success",
+      notificationId: id,
+      scope: scope.mode,
+    });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    logger.error("notifications.delete.failure", {
+      outcome: "error",
+      error: serializeError(error),
+    });
+    return NextResponse.json(
+      { success: false, error: "Failed to delete notification" },
+      { status: 500 }
+    );
+  }
+}

@@ -66,6 +66,19 @@ export async function deleteFile(fileUrl: string): Promise<void> {
   if (!fileUrl.startsWith("/uploads/")) return;
 
   const relativePath = fileUrl.replace("/uploads/", "");
+  // Reject dot-segments and separators that could land the resolved path in
+  // a different purpose folder than the URL names (e.g.
+  // `/uploads/products/../homepage/x`). Root containment below stays as the
+  // final backstop.
+  const segments = relativePath.split("/");
+  if (
+    relativePath.includes("\\") ||
+    segments.some(
+      (segment) => segment.length === 0 || segment === "." || segment === ".."
+    )
+  ) {
+    return;
+  }
   const root = path.resolve(/* turbopackIgnore: true */ getUploadsDir());
   const fullPath = path.resolve(/* turbopackIgnore: true */ root, relativePath);
   if (!fullPath.startsWith(`${root}${path.sep}`)) return;

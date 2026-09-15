@@ -55,9 +55,20 @@ Auth: `withAuth(..., ["admin", "hq"])` — any authenticated admin.
 
 ### `DELETE /api/admin/upload` (admin app)
 
-Auth: `withAuth(..., ["admin", "hq"])`.
+Auth: `withAuth(..., ["admin", "hq"])` + RBAC guard on the owning purpose.
 
-- Query param `url` (required → 400); calls `deleteFile(url)`.
+- Query param `url` (required → 400).
+- The URL is canonicalized/validated first (`resolveUploadDeleteUrl` in
+  `apps/admin/src/lib/rbac/upload-purposes.ts`): percent-encoding is decoded
+  until stable, then literal or encoded traversal (`..`/`.` segments),
+  encoded separators (`%2F`, `%5C`), backslashes, NUL bytes, and malformed
+  encoding are rejected → 400. The resolved path must stay under
+  `/uploads/<first-segment>/`, so `/uploads/products/../homepage/x` can never
+  be authorized as `products.edit` and delete a homepage file.
+- The purpose is derived from the validated folder (products/homepage/orders
+  → that module's `edit` authority); the guard runs after validation.
+- Deletion runs on the canonical URL via `deleteFile` (which also rejects
+  dot-segments and keeps root containment).
 - Response: `{ success: true }`.
 
 ### `GET /uploads/{path...}` (store app)
@@ -114,5 +125,8 @@ origin via `toStoreUrl()` in `apps/admin/src/lib/store-url.ts`
 - `GET /uploads/homepage/..%2F..%2F.env` (or any `..` path) → 403.
 - `POST /api/admin/upload?folder=../../etc` → 400 `"Invalid folder"`; a
   `.txt` file → 400; a 6 MB image → 400.
+- `DELETE /api/admin/upload?url=/uploads/products/../homepage/x.webp` (or its
+  `%2e%2e` / `%252e%252e` / `%2F` encoded forms) → 400 `"Invalid url"`; the
+  homepage file is NOT deleted and the RBAC guard never runs.
 - Remove a banner slide → the old file is deleted from disk (check
   `public/uploads/homepage/`).

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { withPermission } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/rbac/route-guards";
 
 /**
  * Server-side proxy that forwards to the storefront /api/branches endpoint.

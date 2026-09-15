@@ -1,12 +1,44 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
+import { AUTH } from "../config";
 
 // Admin analytics — the dashboard page is a placeholder, so the spec covers
 // the metrics endpoint (GET /api/admin/analytics) and its invariants.
+//
+// Fixture note: the seeded Admin Role (admintoko) intentionally has NO
+// analytics grant (deny-by-default — asserted in rbac-security). The metrics
+// invariants below therefore run under the seeded HQ user, whose Role starts
+// with analytics view-all.
+
+async function loginAsHq(page: Page): Promise<void> {
+  await page.goto("/login");
+  await page.getByLabel("Email atau Username").fill("hqmanager");
+  await page.getByLabel("Password").fill("hq123");
+  await page.getByRole("button", { name: "Masuk", exact: true }).click();
+  await page.waitForURL("**/admin/**");
+}
 
 test.describe("admin analytics", () => {
-  test("returns all dashboard metrics with consistent aggregates", async ({
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test("branch admin without the analytics grant is denied (deny-by-default)", async ({
+    browser,
+  }) => {
+    // The shared saved session is admintoko (Admin Role): analytics is not
+    // part of the seeded Admin grant set → 403.
+    const context = await browser.newContext({
+      storageState: AUTH.admin,
+      baseURL: "http://localhost:3001",
+    });
+    const page = await context.newPage();
+    const res = await page.request.get("/api/admin/analytics");
+    expect(res.status()).toBe(403);
+    await context.close();
+  });
+
+  test("HQ reads all dashboard metrics with consistent aggregates", async ({
     page,
   }) => {
+    await loginAsHq(page);
     const res = await page.request.get("/api/admin/analytics");
     expect(res.status()).toBe(200);
     const { data } = await res.json();
@@ -42,6 +74,7 @@ test.describe("admin analytics", () => {
   });
 
   test("revenue counts only paid orders", async ({ page }) => {
+    await loginAsHq(page);
     const res = await page.request.get("/api/admin/analytics");
     const { data } = await res.json();
 

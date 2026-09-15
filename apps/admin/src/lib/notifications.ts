@@ -1,18 +1,23 @@
 import { db, notifications, branches, orders, clients } from "@/db";
 import { eq, and, desc, sql, gt, type SQL } from "drizzle-orm";
-import type { AuthContext } from "./auth-guard";
+import {
+  branchScopeFromAuthorization,
+  type BranchAuthorization,
+  type BranchPredicateScope,
+} from "@/lib/rbac/branch-scope";
 
-export type NotificationScope =
-  | { mode: "all" }
-  | { mode: "own"; branchId: string };
+export type NotificationScope = BranchPredicateScope;
 
-export function getNotificationScope(
-  user: AuthContext["user"]
-): NotificationScope {
-  if (user.role === "hq" || !user.branchId) {
-    return { mode: "all" };
-  }
-  return { mode: "own", branchId: user.branchId };
+/**
+ * Map the unified guard's successful `notifications` authorization into the
+ * query scope. Own-branch scope is pinned to the server-pinned Home Branch;
+ * a missing Home Branch returns `null` (fail closed — the route turns this
+ * into a 403 denial instead of widening to all-branch).
+ */
+export function notificationScopeFromAuthorization(
+  authorization: BranchAuthorization
+): NotificationScope | null {
+  return branchScopeFromAuthorization(authorization);
 }
 
 export function buildScopeCondition(

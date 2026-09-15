@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { withAuth } from "@/lib/auth-guard";
 import {
-  getNotificationScope,
+  notificationScopeFromAuthorization,
   listNotifications,
   getNotificationItem,
   getUnreadCount,
   getDbNow,
   type NotificationListItem,
+  type NotificationScope,
 } from "@/lib/notifications";
 import { waitForNotification } from "@/lib/notification-broadcaster";
+import { serializeError, type Logger } from "@/lib/logger";
+import { guard, type PolicyContext } from "@/lib/rbac/guard";
 import type { Notification } from "@/db";
-import { requestLogger, serializeError } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +34,7 @@ function rawToItem(notification: Notification): NotificationListItem {
   };
 }
 
-// GET /api/admin/notifications/poll?since={ISO8601}
+// GET /api/admin/notifications/poll?since={ISO8601}   [notifications:view]
 // Long-polling endpoint for real-time notifications.
 //
 // Behavior:
@@ -43,95 +44,124 @@ function rawToItem(notification: Notification): NotificationListItem {
 //   - If `since` is provided and notifications exist with createdAt > since,
 //     they are returned immediately.
 //   - Otherwise the request waits up to ~25s for a new notification scoped to
-//     this admin before returning an empty response.
-export const GET = withAuth(
-  async ({ user }, request: NextRequest) => {
-    const log = requestLogger(request, {
-      module: "admin-notifications-poll",
-      userId: user.id,
-      role: user.role,
-    });
-    try {
-      const scope = getNotificationScope(user);
-      const { searchParams } = new URL(request.url);
-      const sinceParam = searchParams.get("since");
-      const since = sinceParam ? new Date(sinceParam) : undefined;
+//     this admin's policy branch scope before returning an empty response.
+export async function GET(request: NextRequest) {
+  const guardResult = await guard("notifications", "view", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger, ctx } = guardResult;
 
-      // If no `since`, just give the client the current unread count and a
-      // fresh server timestamp. This avoids shipping every historical row to
-      // the bell on first load.
-      if (!since) {
-        const unreadCount = await getUnreadCount(scope);
-        const serverNow = await getDbNow();
-        log.info("poll initial", { unreadCount });
-        return NextResponse.json({
-          success: true,
-          data: [],
-          unreadCount,
-          serverNow: serverNow.toISOString(),
-        });
-      }
+  const scope = resolveScope(logger, ctx);
+  if (!scope) {
+    return NextResponse.json(
+      { success: false, error: "Forbidden", code: "DENIED" },
+      { status: 403 }
+    );
+  }
 
-      // Catch up: any notifications inserted while this client was disconnected.
-      const { items } = await listNotifications(scope, {
-        since,
-        page: 1,
-        limit: 20,
-      });
+  try {
+    const { searchParams } = new URL(request.url);
+    const sinceParam = searchParams.get("since");
+    const since = sinceParam ? new Date(sinceParam) : undefined;
 
-      if (items.length > 0) {
-        const unreadCount = await getUnreadCount(scope);
-        // IMPORTANT: return the DB's current time (not the latest item's
-        // createdAt) as the watermark. The client sends this back as `since`,
-        // and the next catch-up compares `createdAt > since`. Because serverNow
-        // is captured AFTER the items exist, it is strictly greater than any
-        // delivered item's createdAt — so they are excluded next round and the
-        // watermark always advances forward. Using the item's own createdAt as
-        // the watermark would stick the watermark at that item (truncated to ms
-        // by toISOString while the DB stores microseconds) and re-deliver it
-        // forever — a hot loop.
-        const serverNow = await getDbNow();
-        log.info("poll catch-up", { count: items.length, unreadCount });
-        return NextResponse.json({
-          success: true,
-          data: items,
-          unreadCount,
-          serverNow: serverNow.toISOString(),
-        });
-      }
-
-      // Wait for a new notification scoped to this admin.
-      const notification = await waitForNotification(scope, 25000);
+    // If no `since`, just give the client the current unread count and a
+    // fresh server timestamp. This avoids shipping every historical row to
+    // the bell on first load.
+    if (!since) {
       const unreadCount = await getUnreadCount(scope);
       const serverNow = await getDbNow();
-
-      // waitForNotification returns the bare notification row (no joins), so
-      // re-fetch it with the order/branch/customer joins to populate the
-      // Order/Cabang/Status columns. Falls back to the raw row if the join
-      // lookup misses (e.g. row deleted between emit and fetch).
-      let data: NotificationListItem[] = [];
-      if (notification) {
-        const item = await getNotificationItem(notification.id);
-        data = item ? [item] : [rawToItem(notification)];
-      }
-      log.info("poll wakeup", {
-        hasData: data.length > 0,
+      logger.info("notifications.poll.initial", {
+        outcome: "success",
         unreadCount,
       });
-
       return NextResponse.json({
         success: true,
-        data,
+        data: [],
         unreadCount,
         serverNow: serverNow.toISOString(),
       });
-    } catch (error) {
-      log.error("poll failed", { error: serializeError(error) });
-      return NextResponse.json(
-        { success: false, error: "Failed to poll notifications" },
-        { status: 500 }
-      );
     }
-  },
-  ["admin", "hq"]
-);
+
+    // Catch up: any notifications inserted while this client was disconnected.
+    const { items } = await listNotifications(scope, {
+      since,
+      page: 1,
+      limit: 20,
+    });
+
+    if (items.length > 0) {
+      const unreadCount = await getUnreadCount(scope);
+      // IMPORTANT: return the DB's current time (not the latest item's
+      // createdAt) as the watermark. The client sends this back as `since`,
+      // and the next catch-up compares `createdAt > since`. Because serverNow
+      // is captured AFTER the items exist, it is strictly greater than any
+      // delivered item's createdAt — so they are excluded next round and the
+      // watermark always advances forward. Using the item's own createdAt as
+      // the watermark would stick the watermark at that item (truncated to ms
+      // by toISOString while the DB stores microseconds) and re-deliver it
+      // forever — a hot loop.
+      const serverNow = await getDbNow();
+      logger.info("notifications.poll.catch_up", {
+        outcome: "success",
+        count: items.length,
+        unreadCount,
+      });
+      return NextResponse.json({
+        success: true,
+        data: items,
+        unreadCount,
+        serverNow: serverNow.toISOString(),
+      });
+    }
+
+    // Wait for a new notification scoped to this admin's branch scope.
+    const notification = await waitForNotification(scope, 25000);
+    const unreadCount = await getUnreadCount(scope);
+    const serverNow = await getDbNow();
+
+    // waitForNotification returns the bare notification row (no joins), so
+    // re-fetch it with the order/branch/customer joins to populate the
+    // Order/Cabang/Status columns. Falls back to the raw row if the join
+    // lookup misses (e.g. row deleted between emit and fetch). A wakeup for
+    // another branch is dropped (stays null) — the next poll re-checks.
+    let data: NotificationListItem[] = [];
+    if (notification) {
+      const inScope =
+        scope.mode === "all" || notification.branchId === scope.branchId;
+      const item = inScope ? await getNotificationItem(notification.id) : null;
+      data = item ? [item] : [];
+    }
+    logger.info("notifications.poll.wakeup", {
+      outcome: "success",
+      hasData: data.length > 0,
+      unreadCount,
+    });
+
+    return NextResponse.json({
+      success: true,
+      data,
+      unreadCount,
+      serverNow: serverNow.toISOString(),
+    });
+  } catch (error) {
+    logger.error("notifications.poll.failure", {
+      outcome: "error",
+      error: serializeError(error),
+    });
+    return NextResponse.json(
+      { success: false, error: "Failed to poll notifications" },
+      { status: 500 }
+    );
+  }
+}
+
+function resolveScope(logger: Logger, ctx: PolicyContext): NotificationScope | null {
+  const scope = notificationScopeFromAuthorization(ctx.authorization);
+  if (!scope) {
+    logger.warn("notifications.poll.scope_unresolvable", {
+      outcome: "denied",
+      reason: "missing_home_branch",
+      userId: ctx.user.id,
+    });
+  }
+  return scope;
+}

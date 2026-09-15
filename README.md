@@ -43,6 +43,7 @@ shared packages, managed with npm workspaces.
 | `db:seed` | Seed sample data |
 | `db:reset` | Reset + reseed the DB |
 | `db:import-jubelio` | Full pull from Jubelio master data (see `docs/features/jubelio-sync.md`) |
+| `db:bootstrap-owner` | One-time System Owner bootstrap CLI (see `docs/deployment-docs/rbac-owner-bootstrap.md`) |
 | `lint` / `lint:store` / `lint:admin` | ESLint |
 
 > **Note on `db:push` vs `db:migrate`:** the dev DB is managed with `db:push`

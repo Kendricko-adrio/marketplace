@@ -31,7 +31,10 @@ const journal = JSON.parse(
   readFileSync(path.join(DRIZZLE_DIR, "meta", "_journal.json"), "utf8")
 ) as { entries: Array<{ idx: number; tag: string }> };
 
-const cutoverEntry = journal.entries.at(-1)!;
+// The cutover is pinned by idx, not "latest": migrations appended after it
+// (e.g. the analytics index migration) must not blind these guards.
+const CUTOVER_IDX = 18;
+const cutoverEntry = journal.entries.find((e) => e.idx === CUTOVER_IDX)!;
 
 function readCutoverSql(): string {
   return readFileSync(path.join(DRIZZLE_DIR, `${cutoverEntry.tag}.sql`), "utf8");
@@ -87,7 +90,8 @@ function canonicalNormOn(column: string): string {
 }
 
 describe("RBAC slice-9 cutover migration (0018)", () => {
-  it("is the latest journal entry", () => {
+  it("is present in the journal at its pinned idx", () => {
+    expect(cutoverEntry).toBeDefined();
     expect(cutoverEntry.idx).toBe(18);
     expect(readdirSync(DRIZZLE_DIR).some((f) => f.startsWith("0018_"))).toBe(
       true

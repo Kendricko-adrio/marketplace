@@ -81,7 +81,7 @@ e2e/
     roles-ui.spec.ts      # Roles UI: list/search/archived filter, immutable System Owner, deny-all create, clone, editor, reduction impact dialog, stale-conflict retry, archive/restore, No-Access + Policy-Unavailable states
     users-rbac.spec.ts    # Users APIs under current policy: strict payloads (legacy `role` rejected), valid roleId + Home Branch, ceiling/Owner-only/self-protection, deactivation + session revoke, last-active-Owner invariant
     rbac-security.spec.ts # branch-aware security matrix: own-branch Admin vs cross-branch viewer vs all-branch HQ across Products/Orders/Notifications/Branches/Analytics/Audit Log, fail-closed pickup; plus a Homepage-only Marketing custom Role (Global Module access with a mandatory Home Branch, unrelated modules deny/hide, next-request grant-reduction enforcement without logout)
-    analytics.spec.ts     # metrics endpoint invariants
+    analytics.spec.ts     # metrics endpoint invariants (revenue semantics vs independent SQL), 30-day WIB trend, RBAC deny/redirect/sidebar, dashboard UI (skeleton/retry/no-polling, chart + accessible table)
     notifications.spec.ts # long-poll, mark-all-read
     cms.spec.ts           # homepage/pages/footer + floating WhatsApp render
 apps/*/vitest.config.ts   # per-app unit config (aliases, include)

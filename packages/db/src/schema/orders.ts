@@ -104,6 +104,13 @@ export const orders = pgTable("orders", {
   // Supports the sweep cron's batch lookup of stale pending_payment orders
   // (WHERE status = 'pending_payment' AND expires_at < now()).
   statusExpiresIdx: index("idx_orders_status_expires").on(t.status, t.expiresAt),
+  // Analytics: rolling-window KPI aggregates and the 30-day WIB trend filter
+  // on created_at (optionally combined with the branch predicate).
+  createdAtIdx: index("idx_orders_created_at").on(t.createdAt),
+  branchCreatedAtIdx: index("idx_orders_branch_created_at").on(
+    t.branchId,
+    t.createdAt
+  ),
   pickupCodeUniqueIdx: uniqueIndex("orders_pickup_code_unique").on(t.pickupCode),
   statusCheck: check(
     "orders_status_valid",

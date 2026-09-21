@@ -735,6 +735,7 @@ test.describe("security matrix — Marketing homepage-only Role", () => {
         "Customer",
         "Notifikasi",
         "Cabang",
+        "Analitik",
         "Halaman",
         "Pengguna",
         "Footer",

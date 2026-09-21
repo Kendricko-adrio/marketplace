@@ -130,7 +130,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | GET | `/api/admin/orders/{id}` | admin-session (orders view) | Order detail including durable Jubelio stock operations |
 | POST | `/api/admin/orders/{id}/stock-review` | admin-session (orders edit) | Queue a manual-review stock operation for safe note reconciliation |
 | POST | `/api/admin/orders/{id}/verify-pickup` | admin-session (orders edit + Home Branch match) | Verify pickup code → complete order |
-| GET | `/api/admin/analytics` | admin-session | Dashboard aggregates |
+| GET | `/api/admin/analytics` | admin-session (analytics:view) | Dashboard aggregates + AOV + 30-day WIB revenue trend |
 | GET | `/api/admin/audit-log` | admin-session | List audit log (newest first) |
 | GET | `/api/admin/me` | admin-session | Current admin identity |
 | GET | `/api/admin/session-check` | admin-session (soft) | Must-reset-password check |
@@ -678,11 +678,11 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 #### `GET` `/api/admin/analytics`
 - **Auth**: admin-session (guard: `analytics:view`)
-- **Purpose**: Return dashboard aggregates — revenue, order/customer counts, orders grouped by status, and 5 most recent orders.
+- **Purpose**: Return dashboard aggregates — revenue, average order value, a 30-calendar-day (WIB) revenue trend, order/customer counts, orders grouped by status, and 5 most recent orders.
 - **Params**: —
 - **Body**: none
-- **Response**: 200 `{ success: true, data: { totalRevenue, monthlyRevenue, totalOrders, weeklyOrders, totalCustomers, ordersByStatus: [{ status, count }], recentOrders: [{ id, total, status, createdAt, customer }] } }`; 403 when an own-branch grant has no Home Branch (fail closed); 500 `"Failed to fetch analytics"`
-- **Notes**: Branch Analytics scope comes from the Current Policy: own-branch scope filters order count, paid revenue, statuses, recent activity, and distinct transacting customers to the server-pinned Home Branch (branch-less orders excluded); all-branch scope includes every order, including branch-less ones. `totalRevenue`/`monthlyRevenue` filter on `paymentStatus === "paid"` (last 30 days for monthly). `weeklyOrders` = orders with `createdAt >= 7 days ago`. A distinct customer counts only after transacting through an order in the authorized scope (the customer directory itself is global).
+- **Response**: 200 `{ success: true, data: { totalRevenue, monthlyRevenue, totalOrders, weeklyOrders, totalCustomers, averageOrderValue, ordersByStatus: [{ status, count }], recentOrders: [{ id, total, status, createdAt, customer }], trend: [{ date, revenue, orders }] } }`; 403 when an own-branch grant has no Home Branch (fail closed); 500 `"Failed to fetch analytics"`
+- **Notes**: Branch Analytics scope comes from the Current Policy: own-branch scope filters revenue, order counts, statuses, trend, recent activity, and distinct transacting customers to the server-pinned Home Branch (branch-less orders excluded); all-branch scope includes every order, including branch-less ones. **Revenue semantics**: every revenue aggregate (all-time, monthly, `averageOrderValue`, `trend[].revenue`) counts only orders with `paymentStatus = "paid"` AND `status <> "cancelled"` — a late-settled `failed_payment` order with `paymentStatus = "paid"` counts, the failed path does not, and cancelled orders never contribute revenue while still counting as orders. `monthlyRevenue` = rolling 30 × 24 h, `weeklyOrders` = rolling 7 × 24 h. `averageOrderValue` = all-time qualifying revenue ÷ qualifying order count (`0` when none). `trend` is exactly 30 consecutive `Asia/Jakarta` (WIB) calendar days ending today in WIB, oldest → newest, zero-filled (`date` = `"YYYY-MM-DD"`); trend `orders` counts all statuses. A distinct customer counts only after transacting through an order in the authorized scope (the customer directory itself is global). The response is additive over the original contract (original fields unchanged in shape).
 
 #### `GET` `/api/admin/audit-log`
 - **Auth**: admin-session (guard: `audit_log:view`)

@@ -2,15 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { footerConfig } from "@/db";
 import { eq } from "drizzle-orm";
-import { withAuth } from "@/lib/auth-guard";
+import { guard } from "@/lib/rbac/guard";
+import { serializeError } from "@/lib/logger";
 import { footerConfigSchema } from "@/lib/footer-config";
 
 // -----------------------------
-// GET /api/admin/footer — fetch footer config (HQ only)
+// GET /api/admin/footer — fetch footer config [footer:view]
 // Returns the singleton row's `data` field, or null if no row exists.
 // The client falls back to DEFAULT_FOOTER_CONFIG when data is null.
 // -----------------------------
-export const GET = withAuth(async () => {
+export async function GET(request: NextRequest) {
+  const guardResult = await guard("footer", "view", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger } = guardResult;
+
   try {
     const rows = await db
       .select({
@@ -21,31 +26,34 @@ export const GET = withAuth(async () => {
       .from(footerConfig)
       .limit(1);
 
-    if (rows.length === 0) {
-      return NextResponse.json({ success: true, data: null });
-    }
-
-    return NextResponse.json({ success: true, data: rows[0] });
+    logger.info("footer.get", { outcome: "success" });
+    return NextResponse.json({ success: true, data: rows[0] ?? null });
   } catch (error) {
-    console.error("Error fetching footer config:", error);
+    logger.error("footer.get.failure", {
+      outcome: "error",
+      error: serializeError(error),
+    });
     return NextResponse.json(
       { success: false, error: "Failed to fetch footer config" },
       { status: 500 }
     );
   }
-}, ["hq"]);
+}
 
 // -----------------------------
-// PUT /api/admin/footer — upsert footer config (HQ only)
+// PUT /api/admin/footer — upsert footer config [footer:edit]
 // Body: FooterConfigData (validated by zod)
 // -----------------------------
+export async function PUT(request: NextRequest) {
+  const guardResult = await guard("footer", "edit", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger, ctx } = guardResult;
 
-
-export const PUT = withAuth(async (ctx, request: NextRequest) => {
   try {
     const body = await request.json();
     const parsed = footerConfigSchema.safeParse(body);
     if (!parsed.success) {
+      logger.warn("footer.update.invalid_body", { outcome: "denied" });
       return NextResponse.json(
         {
           success: false,
@@ -74,6 +82,11 @@ export const PUT = withAuth(async (ctx, request: NextRequest) => {
         })
         .where(eq(footerConfig.id, existing[0].id));
 
+      logger.info("footer.update", {
+        outcome: "success",
+        footerConfigId: existing[0].id,
+        userId: ctx.user.id,
+      });
       return NextResponse.json({
         success: true,
         data: { id: existing[0].id, data },
@@ -87,12 +100,20 @@ export const PUT = withAuth(async (ctx, request: NextRequest) => {
       updatedBy: ctx.user.id,
     });
 
+    logger.info("footer.create", {
+      outcome: "success",
+      footerConfigId: id,
+      userId: ctx.user.id,
+    });
     return NextResponse.json({ success: true, data: { id, data } });
   } catch (error) {
-    console.error("Error saving footer config:", error);
+    logger.error("footer.update.failure", {
+      outcome: "error",
+      error: serializeError(error),
+    });
     return NextResponse.json(
       { success: false, error: "Failed to save footer config" },
       { status: 500 }
     );
   }
-}, ["hq"]);
+}

@@ -1,26 +1,13 @@
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
+import { pagePermissionOrRedirect } from "@/lib/rbac/page-guard";
 
-// Permission gate: all /admin/homepage/* routes require canView on homepage module.
+// Policy gate: all /admin/homepage/* routes require the global
+// `homepage:view` grant from the Current Policy (server-authoritative
+// per navigation).
 export default async function HomepageLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth.api.getSession({
-    headers: await headers(),
-  });
-
-  if (!session) {
-    redirect("/login?callbackUrl=/admin/homepage");
-  }
-
-  const permissions = await getPermissionsForRole(session.user.role);
-  if (!checkPermission(permissions, "homepage", "view")) {
-    redirect("/admin?error=forbidden");
-  }
-
+  await pagePermissionOrRedirect("homepage", "view", "/admin/homepage");
   return <>{children}</>;
 }

@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { homepageSections } from "@/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { withPermission } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/rbac/route-guards";
 
 const reorderSchema = z.object({
   items: z.array(

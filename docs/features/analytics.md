@@ -49,9 +49,17 @@ not provided.
 
 ## Scope
 
-**Not branch-scoped** — all metrics are global aggregates across every branch.
-This differs from the admin orders list, which is branch-scoped via
-`getBranchScope` (see `docs/api-reference.md` → `GET /api/admin/orders`).
+Branch Analytics aggregates are limited to the Authorized Branch from the
+**Current Policy**:
+
+- **own-branch scope** → order count, paid revenue, statuses, recent
+  activity, and distinct transacting customers are filtered to the
+  server-pinned Home Branch; orders without a branch are excluded.
+- **all-branch scope** → every order is included, including orders without
+  a branch.
+
+This mirrors the admin orders list, which is branch-scoped the same way
+(see `docs/api-reference.md` → `GET /api/admin/orders`).
 
 ## Admin UI
 

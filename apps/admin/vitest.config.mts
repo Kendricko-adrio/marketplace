@@ -11,6 +11,10 @@ export default defineConfig({
         import.meta.dirname,
         "../../packages/db/src/schema"
       ),
+      "@marketplace/db/src/rbac": path.resolve(
+        import.meta.dirname,
+        "../../packages/db/src/rbac"
+      ),
       "@marketplace/db": path.resolve(import.meta.dirname, "../../packages/db/src"),
       "@marketplace/ui": path.resolve(import.meta.dirname, "../../packages/ui/src"),
     },

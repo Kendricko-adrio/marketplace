@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useNotifications } from "@/providers/notification-provider";
 import { useAuth } from "@/providers/auth-provider";
+import { SYSTEM_OWNER_KEY } from "@marketplace/db/src/rbac/catalog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -58,7 +59,7 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 export default function NotificationsPage() {
-  const { isHQ } = useAdminInfo();
+  const isAllBranchViewer = useAllBranchViewer();
   const {
     notifications: liveNotifications,
     unreadCount,
@@ -232,7 +233,7 @@ export default function NotificationsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Judul</TableHead>
-                    {isHQ && <TableHead>Cabang</TableHead>}
+                    {isAllBranchViewer && <TableHead>Cabang</TableHead>}
                     <TableHead>Order</TableHead>
                     <TableHead>Waktu</TableHead>
                     <TableHead>Status</TableHead>
@@ -250,7 +251,7 @@ export default function NotificationsPage() {
                           </div>
                         )}
                       </TableCell>
-                      {isHQ && (
+                      {isAllBranchViewer && (
                         <TableCell>
                           {n.branch ? (
                             <div className="text-sm">
@@ -376,8 +377,19 @@ export default function NotificationsPage() {
   );
 }
 
-function useAdminInfo() {
-  const { user } = useAuth();
-  const isHQ = user?.role === "hq";
-  return { isHQ };
+function useAllBranchViewer(): boolean {
+  const { policy } = useAuth();
+  // The Branch column is a viewer-scope affordance, not an authorization
+  // decision: it appears when the viewer's Role resolves notifications
+  // across branches (all-branch grant or the code-owned System Owner
+  // bypass). Own-branch viewers only ever see their own branch's rows.
+  return (
+    policy?.role.key === SYSTEM_OWNER_KEY ||
+    (policy?.grants ?? []).some(
+      (grant) =>
+        grant.module === "notifications" &&
+        grant.action === "view" &&
+        grant.scope === "all_branches"
+    )
+  );
 }

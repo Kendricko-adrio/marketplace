@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { staticPages } from "@/db";
 import { eq } from "drizzle-orm";
-import { withPermission } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/rbac/route-guards";
 import { createPageSchema } from "@/lib/static-pages";
 
 // -----------------------------

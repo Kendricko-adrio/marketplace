@@ -9,24 +9,14 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { PageForm } from "@/components/admin/PageForm";
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth";
-import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
+import { pagePermissionOrRedirect } from "@/lib/rbac/page-guard";
 
 export const dynamic = "force-dynamic";
 
 export default async function NewPagePage() {
-  const session = await auth.api.getSession({ headers: await headers() });
-
-  if (!session) {
-    redirect("/login?callbackUrl=/admin/pages/new");
-  }
-
-  const permissions = await getPermissionsForRole(session.user.role);
-  if (!checkPermission(permissions, "pages", "edit")) {
-    redirect("/admin/pages?error=forbidden");
-  }
+  // Policy gate: creating pages requires the `pages:edit` grant from the
+  // Current Policy (server-authoritative on every navigation).
+  await pagePermissionOrRedirect("pages", "edit", "/admin/pages/new");
 
   return (
     <div className="space-y-6 max-w-5xl">

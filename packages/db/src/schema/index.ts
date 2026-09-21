@@ -28,8 +28,8 @@ export * from "./footer";
 // System schema
 export * from "./system";
 
-// RBAC permissions schema
-export * from "./permissions";
+// RBAC dynamic roles + scoped grants schema (the only authorization model)
+export * from "./rbac";
 
 // Notifications schema
 export * from "./notifications";

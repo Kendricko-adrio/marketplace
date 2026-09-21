@@ -8,18 +8,37 @@ import {
   jubelioStockOperations,
 } from "@/db";
 import { eq, and, desc, sql, ilike, or, gte, lte } from "drizzle-orm";
-import { withPermission, getBranchScope } from "@/lib/auth-guard";
-import { requestLogger, serializeError } from "@/lib/logger";
+import { serializeError } from "@/lib/logger";
+import { guard } from "@/lib/rbac/guard";
+import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import { parsePagination } from "@/lib/pagination";
 
-export const GET = withPermission(async (_ctx, request: NextRequest) => {
-  const log = requestLogger(request, {
-    module: "admin-orders",
-    action: "list",
-    userId: _ctx.user.id,
-    role: _ctx.user.role,
-  });
+export const dynamic = "force-dynamic";
+
+// GET /api/admin/orders   [orders:view]
+//
+// Branch scope comes from the Current Policy: own-branch view is pinned to
+// the Home Branch (a client `branchId` param cannot widen it); all-branch
+// view may optionally filter by `branchId`.
+export async function GET(request: NextRequest) {
+  const guardResult = await guard("orders", "view", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger, ctx } = guardResult;
+
   try {
+    const authorization = branchScopeFromAuthorization(ctx.authorization);
+    if (!authorization) {
+      logger.warn("orders.list.scope_unresolvable", {
+        outcome: "denied",
+        reason: "missing_home_branch",
+        userId: ctx.user.id,
+      });
+      return NextResponse.json(
+        { success: false, error: "Forbidden", code: "DENIED" },
+        { status: 403 }
+      );
+    }
+
     const { searchParams } = new URL(request.url);
     const status = searchParams.get("status");
     const branchIdParam = searchParams.get("branchId");
@@ -34,18 +53,13 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
     );
     const offset = (page - 1) * limit;
 
-    log.info("orders list requested", { status, branchIdParam, page, limit });
-
-    // ===== RBAC: determine branch scope =====
-    const scope = getBranchScope(_ctx.user);
-
     // Build the where conditions array
     const conditions = [];
 
-    // Branch scoping: branch admins always filtered to their branch;
-    // HQ can optionally filter by branchId param.
-    if (scope.mode === "own") {
-      conditions.push(eq(orders.branchId, scope.branchId));
+    // Branch scoping: own-branch view is pinned to the Home Branch regardless
+    // of any client-supplied branchId; all-branch view may filter by param.
+    if (authorization.mode === "own") {
+      conditions.push(eq(orders.branchId, authorization.branchId));
     } else if (branchIdParam) {
       conditions.push(eq(orders.branchId, branchIdParam));
     }
@@ -146,7 +160,12 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
     const countResult = await countQuery;
     const total = Number(countResult[0]?.count || 0);
 
-    log.info("orders list served", { total, page });
+    logger.info("orders.list", {
+      outcome: "success",
+      total,
+      page,
+      scope: authorization.mode,
+    });
     return NextResponse.json({
       success: true,
       data: ordersWithDetails,
@@ -158,10 +177,13 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
       },
     });
   } catch (error) {
-    log.error("fetch admin orders failed", { error: serializeError(error) });
+    logger.error("orders.list.failure", {
+      outcome: "error",
+      error: serializeError(error),
+    });
     return NextResponse.json(
       { success: false, error: "Failed to fetch orders" },
       { status: 500 }
     );
   }
-}, "orders", "view");
+}

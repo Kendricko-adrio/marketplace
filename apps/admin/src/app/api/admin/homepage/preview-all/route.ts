@@ -13,7 +13,7 @@ import {
   branches,
 } from "@/db";
 import { eq, and, asc, inArray, desc, ilike, or, gte, lte, sql } from "drizzle-orm";
-import { withPermission } from "@/lib/auth-guard";
+import { withPermission } from "@/lib/rbac/route-guards";
 import type { ProductFilterConfig, CarouselContent } from "@/db";
 
 /**

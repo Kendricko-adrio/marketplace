@@ -72,9 +72,17 @@ export const auth = betterAuth({
   socialProviders: {},
   user: {
     additionalFields: {
-      role: {
-        type: ["admin", "hq"],
-        defaultValue: "admin",
+      // Server-owned RBAC assignment fields: exactly one dynamic Role and the
+      // soft-deactivation flag. Clients cannot set either at auth time.
+      roleId: {
+        type: "string",
+        required: false,
+        input: false,
+      },
+      isActive: {
+        type: "boolean",
+        required: false,
+        defaultValue: true,
         input: false,
       },
       branchId: {
@@ -98,14 +106,44 @@ export const auth = betterAuth({
       create: {
         before: async (session, ctx) => {
           if (!ctx) return;
+          // Session admission (Current Policy): only an ACTIVE user with a
+          // valid, non-archived Role assignment may create an admin session.
+          // There is no legacy role-name field — admission relies solely on
+          // roleId + isActive, and the per-request policy resolver denies
+          // everything else.
           const user = (await ctx.context.internalAdapter.findUserById(
             session.userId
-          )) as { role?: string } | null;
-          // Only admins/hq are allowed to create admin sessions
-          if (!user || !user.role || !["admin", "hq"].includes(user.role)) {
+          )) as
+            | { isActive?: boolean | null; roleId?: string | null }
+            | null;
+          if (!user) {
             throw new APIError("FORBIDDEN", {
               message: "Invalid credentials",
               code: "INVALID_USER_TYPE",
+            });
+          }
+          if (user.isActive === false) {
+            throw new APIError("FORBIDDEN", {
+              message: "Account is deactivated",
+              code: "INACTIVE_USER",
+            });
+          }
+          if (!user.roleId) {
+            throw new APIError("FORBIDDEN", {
+              message: "Assigned role is not available",
+              code: "INVALID_ROLE_ASSIGNMENT",
+            });
+          }
+          const rows = await db
+            .select({ archivedAt: schema.adminRoles.archivedAt })
+            .from(schema.adminRoles)
+            .where(eq(schema.adminRoles.id, user.roleId))
+            .limit(1);
+          const assignedRole = rows[0];
+          if (!assignedRole || assignedRole.archivedAt !== null) {
+            throw new APIError("FORBIDDEN", {
+              message: "Assigned role is not available",
+              code: "INVALID_ROLE_ASSIGNMENT",
             });
           }
         },

@@ -57,6 +57,7 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 | `db:seed` / `db:reset` | Seed / reset + reseed the DB |
 | `db:studio` / `db:check` | Drizzle Studio / schema check |
 | `db:import-jubelio` | Pull Jubelio master data |
+| `db:bootstrap-owner` | One-time System Owner bootstrap CLI (RBAC) |
 | `lint` / `lint:store` / `lint:admin` | ESLint |
 | `test:unit` | Vitest unit tests (workspace: store, admin, db) |
 | `test:e2e` / `test:e2e:headed` | Playwright E2E — headless / visible browser |

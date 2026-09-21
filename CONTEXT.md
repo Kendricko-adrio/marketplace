@@ -9,7 +9,7 @@ A staff identity that can sign in to the administration application. Each Admin 
 _Avoid_: Customer, Client, member
 
 **Inactive Admin User**:
-An Admin User whose sign-in and active sessions are disabled while identity and audit attribution are retained. Reactivation is a validated user edit.
+An Admin User whose sign-in and active sessions are disabled while identity, Role Assignment, reserved email/username, and audit attribution are retained. Reactivation is a validated User edit within the actor's Authorization Ceiling.
 _Avoid_: deleted user, archived role
 
 **Role Assignment**:
@@ -17,11 +17,15 @@ The pairing of an Admin User with one Role and the required Home Branch. User ed
 _Avoid_: permission edit, role inheritance
 
 **Role**:
-A job function with an immutable identity, an editable unique display name, and a set of Permission Grants. Each Admin User has one Role; HQ and Admin are initial Roles, and authorized administrators may create more.
+A job function with an immutable identity, an editable unique display name, and a set of Permission Grants. Each Admin User has one Role; HQ and Admin are initial Roles, and authorized administrators may create more. Custom Roles have no product-defined quantity limit.
 _Avoid_: user type, account type
 
+**Role Name**:
+The normalized, case-insensitively unique display name of a Role. It is 2–64 characters, permits Unicode letters and numbers plus spaces, hyphens, and underscores, and remains reserved while its Role is archived; protected system names cannot identify a custom Role.
+_Avoid_: role key, reusable archived name
+
 **Archived Role**:
-A previously usable Role retained for history but unavailable for assignments or authorization. A Role can be archived only after it has no active Admin Users and may later be restored after policy validation.
+A previously usable Role retained for history but unavailable for assignments or authorization. A Role can be archived only after it has no active Admin Users. Archived Roles are excluded from the ordinary Role list and can be found through an explicit filter; restoration first opens the retained identity and grants as a review draft and activates them only after current-policy validation.
 _Avoid_: deleted role, inactive permission
 
 **System Owner**:
@@ -72,6 +76,10 @@ _Avoid_: inherited role, default Admin access
 The latest Role, assignment, and Permission Grant state used for every new request, including requests from Admin Users whose sessions predate a policy change.
 _Avoid_: login-time permission snapshot, stale role cache
 
+**Policy-Unavailable State**:
+The temporary fail-closed browser state entered when Current Policy cannot be refreshed. Previously rendered authorization state is cleared, protected navigation and data are hidden, and only retry plus account-recovery/logout actions remain available; it is distinct from a valid deny-all Role.
+_Avoid_: stale permission fallback, No-Access State
+
 **No-Access State**:
 The safe signed-in state for an Admin User whose Role has no view grant. It exposes no administrative data while retaining account recovery actions such as changing password and signing out.
 _Avoid_: failed login, silent redirect loop
@@ -101,15 +109,15 @@ The global view of Admin Users. User administration does not acquire branch owne
 _Avoid_: branch-owned user list
 
 **Branch Administration**:
-Administration of branch records. Own-branch scope permits viewing and editing the Home Branch; creating or deleting a branch requires all-branch scope.
+Administration of branch records. Own-branch scope permits viewing and editing the Home Branch; creating or deleting a branch requires all-branch scope. A Branch cannot be deleted while it remains the Home Branch of any active or inactive Admin User.
 _Avoid_: self-delete branch, own-branch creation
 
 **Branch Analytics**:
-Operational aggregates whose orders, revenue, recent activity, and distinct transacting customers are limited to the Admin User's Home Branch. All-branch analytics aggregate the whole business.
+Operational aggregates whose orders, revenue, recent activity, and distinct transacting customers are limited to the Admin User's Home Branch. A distinct customer counts only after transacting through an Order in the authorized scope. Orders without a Branch are excluded from own-branch results and included only in all-branch analytics.
 _Avoid_: globally filtered dashboard
 
 **Audit Event**:
-An immutable record of an attributable administrative or system action with explicit branch context when the affected data belongs to a branch. Own-branch access excludes global and system-wide events.
+An immutable, indefinitely retained record of an attributable administrative or system action with explicit branch context when the affected data belongs to a branch. It has no administrative delete operation. A Home Branch reassignment belongs to both the old and new Branch, while product synchronization and system-wide activity are global events. Own-branch access excludes global events and includes reassignment events involving that Branch.
 _Avoid_: debug log, mutable history
 
 **Footer Module**:

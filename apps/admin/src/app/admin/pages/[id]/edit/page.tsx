@@ -13,10 +13,7 @@ import { db } from "@/db";
 import { staticPages } from "@/db";
 import { eq } from "drizzle-orm";
 import { PageForm } from "@/components/admin/PageForm";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
+import { pagePermissionOrRedirect } from "@/lib/rbac/page-guard";
 
 export const dynamic = "force-dynamic";
 
@@ -27,16 +24,9 @@ export default async function EditPagePage({
 }) {
   const { id } = await params;
 
-  const session = await auth.api.getSession({ headers: await headers() });
-
-  if (!session) {
-    redirect(`/login?callbackUrl=/admin/pages/${id}/edit`);
-  }
-
-  const permissions = await getPermissionsForRole(session.user.role);
-  if (!checkPermission(permissions, "pages", "edit")) {
-    redirect("/admin/pages?error=forbidden");
-  }
+  // Policy gate: editing pages requires the `pages:edit` grant from the
+  // Current Policy (server-authoritative on every navigation).
+  await pagePermissionOrRedirect("pages", "edit", `/admin/pages/${id}/edit`);
 
   const rows = await db
     .select({

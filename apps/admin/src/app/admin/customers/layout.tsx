@@ -1,20 +1,12 @@
-import { auth } from "@/lib/auth";
-import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
+import { pagePermissionOrRedirect } from "@/lib/rbac/page-guard";
 
+// Policy gate: the Customer Directory requires the global `customers:view`
+// grant from the Current Policy (server-authoritative per navigation).
 export default async function CustomersLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const session = await auth.api.getSession({ headers: await headers() });
-  if (!session) redirect("/login?callbackUrl=/admin/customers");
-
-  const permissions = await getPermissionsForRole(session.user.role);
-  if (!checkPermission(permissions, "customers", "view")) {
-    redirect("/admin?error=forbidden");
-  }
-
+  await pagePermissionOrRedirect("customers", "view", "/admin/customers");
   return <>{children}</>;
 }

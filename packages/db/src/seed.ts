@@ -9,6 +9,7 @@ import bcrypt from "bcryptjs";
 import { assertSeedEnvironmentSafe } from "./seed-safety";
 import { seedCleanupEntries } from "./seed-cleanup";
 import { resolveSeedPlan } from "./seed-mode";
+import { INITIAL_ROLE_SEED } from "./rbac/seed-defaults";
 
 assertSeedEnvironmentSafe({ NODE_ENV: process.env.NODE_ENV });
 const seedPlan = resolveSeedPlan(process.env.SEED_MODE);
@@ -224,6 +225,37 @@ async function seed() {
     }
 
     // =====================
+    // ADMIN ROLES (new RBAC Initial Roles)
+    // =====================
+    // Seeded before users so the user rows can carry their `roleId`
+    // assignment. The legacy `role` column and permission table were
+    // dropped by migration 0018 (slice 9 cutover).
+    console.log("🔑 Seeding initial RBAC roles...");
+    const roleIdsBySeedKey = new Map<string, string>();
+    for (const roleSeed of INITIAL_ROLE_SEED) {
+      const roleId = generateId();
+      roleIdsBySeedKey.set(roleSeed.key, roleId);
+      await db.insert(schema.adminRoles).values({
+        id: roleId,
+        key: roleSeed.key,
+        name: roleSeed.name,
+        isSystem: roleSeed.isSystem,
+        version: 1,
+      });
+      if (roleSeed.grants.length > 0) {
+        await db.insert(schema.adminRoleGrants).values(
+          roleSeed.grants.map((grant) => ({
+            id: generateId(),
+            roleId,
+            module: grant.module,
+            action: grant.action,
+            scope: grant.scope,
+          }))
+        );
+      }
+    }
+
+    // =====================
     // ADMIN USERS
     // =====================
     console.log("👤 Creating admin users...");
@@ -238,7 +270,8 @@ async function seed() {
         displayUsername: "admintoko",
         email: "admin@store.com",
         emailVerified: true,
-        role: "admin",
+        roleId: roleIdsBySeedKey.get("admin")!,
+        isActive: true,
         image: null,
       },
       {
@@ -248,7 +281,8 @@ async function seed() {
         displayUsername: "hqmanager",
         email: "hq@store.com",
         emailVerified: true,
-        role: "hq",
+        roleId: roleIdsBySeedKey.get("hq")!,
+        isActive: true,
         image: null,
       },
     ]);
@@ -272,77 +306,6 @@ async function seed() {
         password: hashedPassword,
       });
     }
-
-    // =====================
-    // ADMIN PERMISSIONS (RBAC defaults)
-    // =====================
-    // HQ is treated as implicit superuser in application code, so only the
-    // "admin" role gets explicit rows here. Default: products + orders with
-    // view + edit (edit includes create), customers with view-only access,
-    // and no delete. Other operational modules follow the rows below.
-    console.log("🔒 Seeding admin role permissions...");
-    await db.insert(schema.permissions).values([
-      {
-        id: generateId(),
-        role: "admin",
-        module: "products",
-        canView: true,
-        canEdit: true,
-        canDelete: false,
-      },
-      {
-        id: generateId(),
-        role: "admin",
-        module: "orders",
-        canView: true,
-        canEdit: true,
-        canDelete: false,
-      },
-      {
-        id: generateId(),
-        ...schema.adminDefaultCustomerPermission,
-      },
-      {
-        id: generateId(),
-        role: "admin",
-        module: "branches",
-        canView: false,
-        canEdit: false,
-        canDelete: false,
-      },
-      {
-        id: generateId(),
-        role: "admin",
-        module: "homepage",
-        canView: false,
-        canEdit: false,
-        canDelete: false,
-      },
-      {
-        id: generateId(),
-        role: "admin",
-        module: "pages",
-        canView: false,
-        canEdit: false,
-        canDelete: false,
-      },
-      {
-        id: generateId(),
-        role: "admin",
-        module: "users",
-        canView: false,
-        canEdit: false,
-        canDelete: false,
-      },
-      {
-        id: generateId(),
-        role: "admin",
-        module: "notifications",
-        canView: true,
-        canEdit: true,
-        canDelete: true,
-      },
-    ]);
 
     // =====================
     // CLIENTS (store customers)
@@ -1016,12 +979,13 @@ async function seed() {
     // ASSIGN BRANCHES TO ADMIN USERS
     // =====================
     console.log("🔗 Assigning branches to admin users...");
-    // admintoko -> Jakarta Pusat (branchIds[0]); hqmanager oversees all (null)
+    // Every non-Owner Admin User always has exactly one Home Branch. HQ's
+    // all-branch reach comes from its all_branches grants, not from a null
+    // branch — the Home Branch only pins own-branch scope.
     await db
       .update(schema.users)
       .set({ branchId: branchIds[0] })
-      .where(eq(schema.users.id, adminId));
-    // HQ manager branchId stays null (oversees all branches)
+      .where(inArray(schema.users.id, [adminId, hqId]));
 
     console.log("📦 Seeding branch stocks per variant...");
     for (const branchId of branchIds) {
@@ -1785,8 +1749,8 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
     console.log("✅ Seeding completed successfully!");
     console.log("");
     console.log("🔑 Admin credentials:");
-    console.log("  admintoko / admin123   (role: admin)");
-    console.log("  hqmanager / hq123      (role: hq)");
+    console.log("  admintoko / admin123   (Role: Admin)");
+    console.log("  hqmanager / hq123      (Role: HQ)");
     console.log("  Email login also works: admin@store.com / admin123, hq@store.com / hq123");
     console.log("");
     console.log("🛒 Client credentials:");

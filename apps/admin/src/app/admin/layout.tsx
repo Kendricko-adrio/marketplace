@@ -2,6 +2,9 @@ import AdminSidebar from "@/components/AdminSidebar";
 import NotificationBell from "@/components/NotificationBell";
 import { NotificationProvider } from "@/providers/notification-provider";
 import { auth } from "@/lib/auth";
+import { loadPolicy } from "@/lib/rbac/resolver";
+import { createLogger } from "@/lib/logger";
+import { SYSTEM_OWNER_KEY } from "@marketplace/db/src/rbac/catalog";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -14,7 +17,21 @@ export default async function AdminLayout({
   if (!session) redirect("/login?callbackUrl=/admin");
   if (session.user.mustResetPassword) redirect("/reset-password?force=1");
 
-  if (session.user.role === "admin" && !session.user.branchId) {
+  // Policy-based placement check (no role-name branches): every non-Owner
+  // Admin User must have a Home Branch. System Owners are branch-free by
+  // design; an unresolvable policy is left to the child module layouts,
+  // which deny via the Current Policy.
+  const policy = await loadPolicy(session.user.id);
+  if (
+    policy &&
+    policy.role.key !== SYSTEM_OWNER_KEY &&
+    !policy.user.homeBranchId
+  ) {
+    createLogger({ route: "admin_layout" }).warn("admin.layout.missing_home_branch", {
+      outcome: "denied",
+      userId: policy.user.id,
+      roleId: policy.role.id,
+    });
     return (
       <main className="flex min-h-screen items-center justify-center p-6">
         <div className="max-w-lg rounded-lg border bg-background p-8 text-center shadow-sm">

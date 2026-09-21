@@ -1,5 +1,7 @@
-import Link from "next/link";
+import { SYSTEM_OWNER_KEY, type Grant } from "@marketplace/db/src/rbac/catalog";
+import { withinCeiling } from "@marketplace/db/src/rbac/policy";
 import { ChevronLeft } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,24 +14,16 @@ import { db } from "@/db";
 import { branches } from "@/db";
 import { eq } from "drizzle-orm";
 import { NewUserClient } from "./new-user-client";
-import { auth } from "@/lib/auth";
-import { headers } from "next/headers";
-import { redirect } from "next/navigation";
-import { checkPermission, getPermissionsForRole } from "@/lib/permissions";
+import { pagePermissionOrRedirect } from "@/lib/rbac/page-guard";
+import { listRoles } from "@/lib/rbac/roles-service";
+import type { RoleOption } from "@/components/admin/UserForm";
 
 export const dynamic = "force-dynamic";
 
 export default async function NewUserPage() {
-  const session = await auth.api.getSession({ headers: await headers() });
-
-  if (!session) {
-    redirect("/login?callbackUrl=/admin/users/new");
-  }
-
-  const permissions = await getPermissionsForRole(session.user.role);
-  if (!checkPermission(permissions, "users", "edit")) {
-    redirect("/admin/users?error=forbidden");
-  }
+  // Policy gate: creating users requires the `users:edit` grant from the
+  // Current Policy (server-authoritative on every navigation).
+  const policy = await pagePermissionOrRedirect("users", "edit", "/admin/users/new");
 
   const activeBranches = await db
     .select({
@@ -41,6 +35,34 @@ export default async function NewUserPage() {
     .from(branches)
     .where(eq(branches.status, "aktif"))
     .orderBy(branches.name);
+
+  // Assignable Roles for this actor: active Roles the actor may assign
+  // (Owner Role only for an Owner actor, others within the Authorization
+  // Ceiling). The API re-validates every assignment server-side.
+  const isOwnerActor = policy.role.key === SYSTEM_OWNER_KEY;
+  const allRoles = await listRoles({});
+  const assignableRoles: RoleOption[] = allRoles
+    .filter((role) => !role.archived)
+    .filter(
+      (role) => role.key !== SYSTEM_OWNER_KEY || isOwnerActor
+    )
+    .filter((role) =>
+      withinCeiling(
+        isOwnerActor,
+        policy.role.grants,
+        role.grants.map((g) => ({
+          module: g.module as Grant["module"],
+          action: g.action as Grant["action"],
+          scope: (g.scope ?? "global") as Grant["scope"],
+        }))
+      )
+    )
+    .map((role) => ({
+      id: role.id,
+      key: role.key,
+      name: role.name,
+      isSystem: role.isSystem,
+    }));
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -67,7 +89,10 @@ export default async function NewUserPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <NewUserClient branches={activeBranches} />
+          <NewUserClient
+            roles={assignableRoles}
+            branches={activeBranches}
+          />
         </CardContent>
       </Card>
     </div>

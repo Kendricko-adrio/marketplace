@@ -1,6 +1,7 @@
 ﻿import { pgTable, text, timestamp, boolean, date } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 import { branches } from "./branches";
+import { adminRoles } from "./rbac";
 
 // =========================================================
 // STORE: Client (customer) authentication schema
@@ -95,7 +96,17 @@ export const users = pgTable("user", {
   email: text("email").notNull().unique(),
   emailVerified: boolean("email_verified").notNull().default(false),
   image: text("image"),
-  role: text("role").notNull().default("admin"), // admin | hq
+  // New RBAC assignment: exactly one dynamic Role per Admin User (NOT NULL
+  // since the slice-9 cutover migration 0018, which backfilled role_id from
+  // the dropped legacy column and removed the permission table).
+  roleId: text("role_id")
+    .notNull()
+    .references(() => adminRoles.id, {
+    onDelete: "restrict",
+  }),
+  // Soft-deactivation flag: inactive users cannot sign in, retain their
+  // Role/Home Branch/audit attribution, and are reactivated via users:edit.
+  isActive: boolean("is_active").notNull().default(true),
   // Admin (branch staff) are scoped to one branch; HQ oversee all branches (null).
   branchId: text("branch_id").references(() => branches.id, {
     onDelete: "restrict",
@@ -156,6 +167,10 @@ export const usersRelations = relations(users, ({ many, one }) => ({
   branch: one(branches, {
     fields: [users.branchId],
     references: [branches.id],
+  }),
+  role: one(adminRoles, {
+    fields: [users.roleId],
+    references: [adminRoles.id],
   }),
 }));
 

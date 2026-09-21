@@ -1,18 +1,42 @@
 import { describe, it, expect } from "vitest";
-import { getNotificationScope, buildScopeCondition } from "./notifications";
 
-// Backs the notifications list/poll/mark-all-read routes' branch scoping.
-describe("getNotificationScope", () => {
-  it("gives HQ full scope", () => {
-    expect(
-      getNotificationScope({ id: "u1", name: "HQ", email: "hq@x.com", role: "hq", branchId: null })
-    ).toEqual({ mode: "all" });
+import { buildScopeCondition, notificationScopeFromAuthorization } from "./notifications";
+
+// =========================================================
+// RBAC: notifications scope (slice 7)
+// =========================================================
+// The notification list/poll/mark-read/delete helpers scope every query by
+// the caller's Current Policy, not by the legacy Role/nullable-branch
+// inference. Own-branch scope is pinned to the server-pinned Home Branch;
+// a missing Home Branch fails closed (never widens to all-branch).
+
+type Authz = Parameters<typeof notificationScopeFromAuthorization>[0];
+
+function ownAuthz(homeBranchId?: string): Authz {
+  return { allowed: true, scope: "own_branch", homeBranchId };
+}
+
+describe("notificationScopeFromAuthorization", () => {
+  it("maps own_branch policy scope to the Home Branch", () => {
+    expect(notificationScopeFromAuthorization(ownAuthz("br-1"))).toEqual({
+      mode: "own",
+      branchId: "br-1",
+    });
   });
 
-  it("scopes a branch admin to their branch", () => {
+  it("fails closed on own-branch scope without a Home Branch", () => {
+    // A branch operator whose Home Branch is missing must not become an
+    // all-scope reader: the route turns this into a denial.
+    expect(notificationScopeFromAuthorization(ownAuthz(undefined))).toBeNull();
+  });
+
+  it("maps all-branch policy scope to all (no filter)", () => {
     expect(
-      getNotificationScope({ id: "u2", name: "A", email: "a@x.com", role: "admin", branchId: "br-9" })
-    ).toEqual({ mode: "own", branchId: "br-9" });
+      notificationScopeFromAuthorization({
+        allowed: true,
+        scope: "all_branches",
+      })
+    ).toEqual({ mode: "all" });
   });
 });
 

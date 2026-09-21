@@ -17,9 +17,13 @@ test.use({ storageState: { cookies: [], origins: [] } });
 test.beforeAll(async () => {
   pool = new Pool({ connectionString: process.env.DATABASE_URL });
   const oldHash = await bcrypt.hash("old-password-123", 10);
+  // The target is a throwaway non-Owner admin user; assign the seeded HQ
+  // Role (normalized roleId FK — there is no legacy `role` column anymore).
+  // branch_id stays NULL: the fixture user never reaches an admin page (the
+  // forced password reset happens before any home-branch check).
   await pool.query(
-    `INSERT INTO "user" (id, name, username, display_username, email, email_verified, role, branch_id, must_reset_password)
-     VALUES ($1, 'Reset E2E Target', $2, $2, $3, true, 'hq', NULL, false)`,
+    `INSERT INTO "user" (id, name, username, display_username, email, email_verified, role_id, branch_id, must_reset_password)
+     VALUES ($1, 'Reset E2E Target', $2, $2, $3, true, (SELECT id FROM admin_role WHERE "key" = 'hq'), NULL, false)`,
     [targetId, targetUsername, targetEmail]
   );
   await pool.query(

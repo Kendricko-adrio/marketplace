@@ -2,7 +2,7 @@
 
 > Reference for **every HTTP API endpoint** in the project, derived from the
 > `route.ts` handlers under `apps/store/src/app` and `apps/admin/src/app`.
-> Last updated: 2026-08-17.
+> Last updated: 2026-09-14.
 >
 > This document describes behavior as implemented in source. If code and this
 > doc disagree, the **code is authoritative** — re-run the extraction or read
@@ -16,7 +16,7 @@ surface and its own Better Auth instance:
 | App | Path prefix | Dev URL | Prod URL | Better Auth |
 |---|---|---|---|---|
 | **Store** (storefront) | `apps/store` | `http://localhost:3000` | `dev-store.adfsport.cloud` | `client` cookie prefix · `clients` table |
-| **Admin** (back office) | `apps/admin` | `http://localhost:3001` | `dev-admin.adfsport.cloud` | `admin` cookie prefix · `users` table (roles `admin`/`hq`) |
+| **Admin** (back office) | `apps/admin` | `http://localhost:3001` | `dev-admin.adfsport.cloud` | `admin` cookie prefix · `users` table (dynamic RBAC Roles; see `docs/features/rbac.md`) |
 
 Both apps import the shared Drizzle schema and create their **own local `db`
 instance** (`@/db`). DB tables are owned solely by `packages/db`.
@@ -30,8 +30,7 @@ instance** (`@/db`). DB tables are owned solely by `packages/db`.
 | **`none`** | Public, no auth. |
 | **`client-session`** | Store Better Auth session (`client.session_token` cookie). Missing → `401`. |
 | **`admin-session`** | Admin Better Auth session (`admin.session_token` cookie). Missing → `401`. |
-| **`admin-session (permission: <module>:<action>)`** | Admin session **plus** a permission check via the in-app RBAC permission map (`<action>` ∈ `view`/`edit`/`delete`). |
-| **`admin-session (role: hq)`** | Admin session **plus** explicit `role === "hq"` check (HQ is the implicit superuser). |
+| **`admin-session (guard: <module>:<action>)`** | Admin session **plus** a Current Policy authorization via the unified `guard` (`apps/admin/src/lib/rbac/guard.ts`): 401 for a missing session, 403 with a stable code (`NO_ACCESS` for admission failures, `DENIED` for missing grants). Branch-aware grants carry an `own_branch`/`all_branches` scope; own scope is pinned server-side to the user's Home Branch. |
 | **`secret-header`** | Shared-secret header compared to a `process.env` var. **`503`** if the env var is unset on the server, **`401`** on mismatch. (Used by cron + webhooks.) |
 | **`signature-verification`** | Request body signature verified against a provider key (Midtrans `signature_key` = `SHA512(order_id + status_code + gross_amount + serverKey)`). |
 | **`internal (HMAC)`** | Server-to-server call (admin → store) carrying `secret = HMAC-SHA256(BETTER_AUTH_SECRET, orderId)` in the body. |
@@ -109,25 +108,35 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | GET | `/api/admin/branches/{id}` | admin-session (branches:view) | Fetch a branch |
 | PUT | `/api/admin/branches/{id}` | admin-session (branches:edit) | Update a branch |
 | DELETE | `/api/admin/branches/{id}` | admin-session (branches:delete) | Delete a branch |
-| GET | `/api/admin/users` | admin-session (users:view) | List admin users (+ branch, last login) |
-| POST | `/api/admin/users` | admin-session (users:edit) | Create admin/hq user |
+| GET | `/api/admin/users` | admin-session (users:view) | List admin users (Role + Home Branch summary, filters) |
+| POST | `/api/admin/users` | admin-session (users:edit) | Create a user (Role + Home Branch assignment) |
 | GET | `/api/admin/users/{id}` | admin-session (users:view) | Fetch a user |
-| PATCH | `/api/admin/users/{id}` | admin-session (users:edit) | Update user (name/email/role/branch) |
-| DELETE | `/api/admin/users/{id}` | admin-session (users:delete) | Delete a user (guards: self, last-hq) |
-| POST | `/api/admin/users/{id}/reset-password` | admin-session (users:edit) | Reset password + revoke sessions |
+| PUT | `/api/admin/users/{id}` | admin-session (users:edit) | Update user identity/assignment (strict payload) |
+| DELETE | `/api/admin/users/{id}` | — | **Removed** — answers 405; users are soft-deactivated via `POST /api/admin/users/{id}/deactivate` |
+| POST | `/api/admin/users/{id}/deactivate` | admin-session (users:edit) | Soft-deactivate a user (reason required, revokes sessions) |
+| POST | `/api/admin/users/{id}/reactivate` | admin-session (users:edit) | Reactivate a deactivated user (Authorization-Ceiling validated) |
+| POST | `/api/admin/users/{id}/reset-password` | admin-session (users:edit) | Reset password + revoke sessions (active users only) |
+| GET | `/api/admin/roles` | admin-session (roles:view) | List Roles (archived behind `?archived=true`) |
+| POST | `/api/admin/roles` | admin-session (roles:edit) | Create a Role (final deny-all/cloned draft) |
+| GET | `/api/admin/roles/{id}` | admin-session (roles:view) | Role detail (grants + user counts; archived fetchable) |
+| PUT | `/api/admin/roles/{id}` | admin-session (roles:edit) | Atomic complete-draft revision (optimistic `expectedVersion`) |
+| DELETE | `/api/admin/roles/{id}` | admin-session (roles:delete) | Archive a custom Role (reason required) |
+| POST | `/api/admin/roles/{id}/impact` | admin-session (roles:edit) | Preview grant diff + affected active users (read-only) |
+| GET | `/api/admin/roles/{id}/restore` | admin-session (roles:view) | Restore review of an archived Role |
+| POST | `/api/admin/roles/{id}/restore` | admin-session (roles:edit) | Activate an archived Role after reviewed revalidation |
 | POST | `/api/admin/upload` | admin-session | Upload a file |
 | DELETE | `/api/admin/upload` | admin-session | Delete an uploaded file |
 | GET | `/api/admin/orders` | admin-session (orders view) | List orders (RBAC branch-scoped) |
 | GET | `/api/admin/orders/{id}` | admin-session (orders view) | Order detail including durable Jubelio stock operations |
 | POST | `/api/admin/orders/{id}/stock-review` | admin-session (orders edit) | Queue a manual-review stock operation for safe note reconciliation |
-| POST | `/api/admin/orders/{id}/verify-pickup` | admin-session (orders edit, branch admin only) | Verify pickup code → complete order |
+| POST | `/api/admin/orders/{id}/verify-pickup` | admin-session (orders edit + Home Branch match) | Verify pickup code → complete order |
 | GET | `/api/admin/analytics` | admin-session | Dashboard aggregates |
 | GET | `/api/admin/audit-log` | admin-session | List audit log (newest first) |
 | GET | `/api/admin/me` | admin-session | Current admin identity |
 | GET | `/api/admin/session-check` | admin-session (soft) | Must-reset-password check |
-| GET | `/api/admin/linkable-destinations` | admin-session (hq) | Footer link target catalog |
-| GET | `/api/admin/footer` | admin-session (hq) | Fetch footer config |
-| PUT | `/api/admin/footer` | admin-session (hq) | Upsert footer config |
+| GET | `/api/admin/linkable-destinations` | admin-session (footer:view) | Footer link target catalog |
+| GET | `/api/admin/footer` | admin-session (footer:view) | Fetch footer config |
+| PUT | `/api/admin/footer` | admin-session (footer:edit) | Upsert footer config |
 | GET | `/api/admin/homepage` | admin-session (homepage:view) | List homepage sections |
 | POST | `/api/admin/homepage` | admin-session (homepage:edit) | Create a homepage section |
 | GET | `/api/admin/homepage/{id}` | admin-session (homepage:view) | Fetch a section |
@@ -141,10 +150,9 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | GET | `/api/admin/pages/{id}` | admin-session (pages:view) | Fetch a page |
 | PUT | `/api/admin/pages/{id}` | admin-session (pages:edit) | Update a page |
 | DELETE | `/api/admin/pages/{id}` | admin-session (pages:delete) | Delete a page |
-| GET | `/api/admin/permissions` | admin-session (hq) | List permissions |
-| PUT | `/api/admin/permissions` | admin-session (hq) | Upsert a permission (admin role) |
-| GET | `/api/admin/permissions/me` | admin-session | Current user's role + permissions |
-| GET | `/api/admin/notifications/poll` | admin-session | Long-poll real-time notifications (branch/HQ scoped) |
+| — | `/api/admin/permissions`, `/api/admin/permissions/me` | — | **Removed** — returns `404` (legacy permission endpoints dropped in the RBAC slice-9 cutover, migration 0018) |
+| GET | `/api/admin/policy/me` | admin-session | Current Policy: Role identity, exact grants/scopes, Home Branch, policy version (new RBAC) |
+| GET | `/api/admin/notifications/poll` | admin-session | Long-poll real-time notifications (Current Policy branch scope) |
 | GET | `/api/admin/notifications` | admin-session (notifications:view) | List notifications (paginated, isRead filter) |
 | PATCH | `/api/admin/notifications/{id}` | admin-session (notifications:edit) | Mark one notification as read |
 | POST | `/api/admin/notifications/mark-all-read` | admin-session (notifications:edit) | Mark all in-scope notifications as read |
@@ -387,21 +395,21 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Response**: 403 `"Forbidden"` (path contains `..`); 404 `"Not Found"` (file missing); 200 file bytes with `Content-Type` (`.jpg`/`.jpeg`/`.png`/`.webp`/`.gif` mapped, else `application/octet-stream`) and `Cache-Control: public, max-age=31536000, immutable`
 - **Notes**: Resolves path under `getUploadsDir()`; rejects `..` traversal. Long-term immutable caching (1 year).
 
-## Admin — Products, Categories, Branches, Users, Upload
+## Admin — Products, Categories, Branches, Users, Roles, Upload
 
 #### `GET` `/api/admin/products`
-- **Auth**: admin-session (permission: products/view)
+- **Auth**: admin-session (guard: products/view)
 - **Purpose**: List products with variants, categories, stock totals, and images (paginated), **scoped by the caller's branch access**.
 - **Params**: query `page` (default 1), `limit` (default 20), `search` (optional — case-insensitive partial match on name or slug)
 - **Body**: none
 - **Response**: 200 `{ success, data: [...], pagination: { page, limit, total, totalPages } }`; 500 error
-- **Notes**: Branch scope is applied via `getBranchScope` (`apps/admin/src/lib/auth-guard.ts`): HQ / branchless admin → every product, with stock summed across all branches; branch admin → **only products their branch carries** (products that have a `branch_stock` row for their `branchId`), with stock totals scoped to their branch only. The carried-product filter and the search filter are both applied to the list and the `count(*)` query so pagination stays in sync. Per-product stock totals come from the raw per-branch rows summed through the pure `computeScopedTotals` helper (`apps/admin/src/lib/branch-stock.ts`); the SQL `where` is the real access control and the helper is the tested guarantee (defence in depth). Per-product fields: `variants: [{id, price, isDefault}]`, `variantCount`, `totalStock`, `totalReserved`, `totalAvailable = max(0, totalStock - totalReserved)`, `categories: [name]`, `images: [{url}]`. Also spreads the full product row (incl. `collection` text label) and adds `gender` (resolved name from the `gender` dimension table via `genderId`, nullable — batch-looked-up per page) so carousel manual-mode preview cards can render the gender label. N+1 per product (variants, categories, branch stocks, productImages ordered by displayOrder).
+- **Notes**: Authorization is via the unified `guard` (`apps/admin/src/lib/rbac/guard.ts`, `products:view`); branch scope comes from the Current Policy via `branchScopeFromAuthorization` (`apps/admin/src/lib/rbac/branch-scope.ts`): all-branch scope → every product, with stock summed across branches; own-branch scope → **only products the server-pinned Home Branch carries** (products that have a `branch_stock` row for the Home Branch), with stock totals scoped to that branch only. An own-branch grant without a Home Branch fails closed (403). The carried-product filter and the search filter are both applied to the list and the `count(*)` query so pagination stays in sync. Per-product stock totals come from the raw per-branch rows summed through the pure `computeScopedTotals` helper (`apps/admin/src/lib/branch-stock.ts`); the SQL `where` is the real access control and the helper is the tested guarantee (defence in depth). Per-product fields: `variants: [{id, price, isDefault}]`, `variantCount`, `totalStock`, `totalReserved`, `totalAvailable = max(0, totalStock - totalReserved)`, `categories: [name]`, `images: [{url}]`. Also spreads the full product row (incl. `collection` text label) and adds `gender` (resolved name from the `gender` dimension table via `genderId`, nullable — batch-looked-up per page) so carousel manual-mode preview cards can render the gender label. N+1 per product (variants, categories, branch stocks, productImages ordered by displayOrder).
 
 #### `POST` `/api/admin/products` — **REMOVED**
 - **Status**: Removed. Jubelio is the source of truth for the product catalog; products are created via the Jubelio sync (`db:import-jubelio` / the Jubelio webhook / the per-product Sync button). The `GET` list endpoint remains.
 
 #### `GET` `/api/admin/products/{id}`
-- **Auth**: admin-session (permission: products/view)
+- **Auth**: admin-session (guard: products/view)
 - **Purpose**: Fetch a single product with its categories, variants (with images), and **per-branch stock scoped by the caller's role**.
 - **Params**: `{id}`
 - **Body**: none
@@ -415,7 +423,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Status**: Removed. Jubelio is the source of truth.
 
 #### `POST` `/api/admin/products/{id}/sync`
-- **Auth**: admin-session (permission: products/edit)
+- **Auth**: admin-session (guard: products/edit)
 - **Purpose**: Re-sync a single product from Jubelio (brand, description, gallery images, variants, per-branch stock). Triggered by the "Sync dari Jubelio" button on the admin product detail page.
 - **Params**: `{id}`
 - **Body**: none
@@ -423,7 +431,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Looks up the product's `jubelio_item_group_id`, calls `syncOneProduct(db, itemGroupId)` from `packages/db/src/jubelio-sync.ts` (fetches `/inventory/catalog/{id}` + `/inventory/items/all-stocks/`, upserts). Writes an `auditLogs` row (`action: "JUBELIO_SYNC_ADMIN"`). Env: `JUBELIO_EMAIL`/`JUBELIO_PASSWORD`/`JUBELIO_API_BASE_URL`.
 
 #### `GET` `/api/admin/categories`
-- **Auth**: admin-session (permission: products/view)
+- **Auth**: admin-session (guard: products/view)
 - **Purpose**: List active categories ordered by name.
 - **Params**: —
 - **Body**: none
@@ -431,7 +439,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Filters `categories.isActive = true`. No pagination. Only `GET` is exported here.
 
 #### `GET` `/api/admin/brands`
-- **Auth**: admin-session (permission: products/view)
+- **Auth**: admin-session (guard: products/view)
 - **Purpose**: List all product brands (dimension) for the homepage ProductFilterEditor dropdown.
 - **Params**: —
 - **Body**: none
@@ -439,7 +447,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Sync-managed dimension (no admin CRUD). Ordered by `name` asc. Read-only `GET`.
 
 #### `GET` `/api/admin/branches`
-- **Auth**: admin-session (permission: branches/view)
+- **Auth**: admin-session (guard: branches/view)
 - **Purpose**: List branches (paginated).
 - **Params**: query `page` (default 1), `limit` (default 20)
 - **Body**: none
@@ -447,15 +455,15 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Ordered by `createdAt` desc.
 
 #### `POST` `/api/admin/branches`
-- **Auth**: admin-session (permission: branches/edit)
+- **Auth**: admin-session (guard: branches/edit)
 - **Purpose**: Create a branch.
 - **Params**: —
 - **Body**: `{ name: string, code: string, city: string, address: string, latitude?: string, longitude?: string, operatingHours: { monday?: { open, close }|null, tuesday?, ..., sunday? } (default {}), googleMapsUrl?: string (valid URL or ""), status: "aktif"|"nonaktif" (default "aktif") }`
-- **Response**: 200 `{ success, data: { id } }`; 400 invalid; 500 error
-- **Notes**: `latitude`/`longitude` stored null if empty; `googleMapsUrl` validated as URL or literal `""`, stored null if empty. `id` via `crypto.randomUUID()`.
+- **Response**: 201 `{ success: true, data: branch }` (the created branch row, incl. `id`); 400 invalid; 500 error
+- **Notes**: `latitude`/`longitude` stored null if empty; `googleMapsUrl` validated as URL or literal `""`, stored null if empty. `id` via `crypto.randomUUID()`. Created resources return 201 with the full row (same contract as the Roles/Users POST endpoints).
 
 #### `GET` `/api/admin/branches/{id}`
-- **Auth**: admin-session (permission: branches/view)
+- **Auth**: admin-session (guard: branches/view)
 - **Purpose**: Fetch a single branch.
 - **Params**: `{id}`
 - **Body**: none
@@ -463,7 +471,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: —
 
 #### `PUT` `/api/admin/branches/{id}`
-- **Auth**: admin-session (permission: branches/edit)
+- **Auth**: admin-session (guard: branches/edit)
 - **Purpose**: Update a branch.
 - **Params**: `{id}`
 - **Body**: `{ name: string, code: string, city: string, address: string, latitude?: string, longitude?: string, operatingHours: { monday?: {open,close}|null, ... sunday? } (required), googleMapsUrl?: string (valid URL or ""), status: "aktif"|"nonaktif" }`
@@ -471,7 +479,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Unlike POST, `operatingHours` has no default (required) and `status` is required. `latitude`/`longitude`/`googleMapsUrl` stored null when empty. `updatedAt` set.
 
 #### `DELETE` `/api/admin/branches/{id}`
-- **Auth**: admin-session (permission: branches/delete)
+- **Auth**: admin-session (guard: branches/delete)
 - **Purpose**: Delete a branch.
 - **Params**: `{id}`
 - **Body**: none
@@ -479,55 +487,148 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: No FK/cascade handling; deletion may fail if `users.branchId` or `branchStocks` reference it (relies on DB cascade/restrict).
 
 #### `GET` `/api/admin/users`
-- **Auth**: admin-session (permission: users/view) — source comments indicate HQ-only intent
-- **Purpose**: List users with branch info and last login.
-- **Params**: query `search` (ilike on `name`/`email`/`username`), `role` (`"admin"` or `"hq"`)
+- **Auth**: admin-session (guard: users/view)
+- **Purpose**: List users (global directory) with Role + Home Branch summary.
+- **Params**: query `q`/`search` (ilike on `name`/`email`/`username`), `roleId` (filter by assigned Role id), `active` (`"true"`/`"false"`)
 - **Body**: none
-- **Response**: 200 `{ success, data: [{ id, name, username, email, role, branchId, branchName, branchCode, mustResetPassword, emailVerified, image, createdAt, updatedAt, lastLogin }] }`; 500 error
-- **Notes**: `lastLogin` derived from `max(adminSessions.createdAt)` per user (null if none). Left-join on `branches`. No pagination. Enforcement is via the permission map, not an explicit role check.
+- **Response**: 200 `{ success, data: [{ id, name, username, displayUsername, email, isActive, mustResetPassword, emailVerified, role: { id, key, name, isSystem } | null, branch: { id, name, code } | null, createdAt, updatedAt }] }`; 400 `LEGACY_FILTER_REMOVED` when the legacy `role` (name) filter is used; 500 error
+- **Notes**: Ordered by `createdAt` desc. No pagination. Role-name filters were removed in the RBAC slice-9 cutover — clients must filter by `roleId`.
 
 #### `POST` `/api/admin/users`
-- **Auth**: admin-session (permission: users/edit) — source comments indicate HQ-only intent
-- **Purpose**: Create an admin or HQ user.
+- **Auth**: admin-session (guard: users/edit)
+- **Purpose**: Create a user with a Role + Home Branch assignment (one transaction).
 - **Params**: —
-- **Body**: `{ name: string (2-100), email: string (valid email), role: "admin"|"hq", branchId?: string|null, passwordMode: "manual"|"generate", password?: string (min 8, required when manual) }`
-- **Response**: 200 `{ success, data: { id, name, username, email, role, branchId, mustResetPassword, password } }`; 400 invalid body / admin-requires-branch / branch-not-found / password-too-short; 409 email already used; 500 error
-- **Notes**: `role==="admin"` requires a valid `branchId`; `role==="hq"` forces `branchId=null`. Username auto-generated from `name` (lowercase, diacritics stripped, dots for separators, suffix increment on collision). `email` lowercased; `emailVerified=true`; `mustResetPassword=true`. Inserts a `credential` `adminAccounts` row with bcrypt hash (cost 10). Plaintext password returned once in response (never persisted).
+- **Body**: strict (`z.strictObject`) `{ name: string (2-100), email: string (valid email), roleId: string, branchId?: string|null, passwordMode: "manual"|"generate", password?: string (min 8, required when manual) }` — a legacy role-name payload fails 400
+- **Response**: 201 `{ success, data: <user summary + plaintext `password`> }`; 400 invalid body (`INVALID_BODY`) / `INVALID_ROLE` / `INVALID_BRANCH` / `INVALID_PASSWORD` / Authorization-Ceiling denial; 409 email already used (active **and** inactive users); 500 error
+- **Notes**: Assignment is validated in-transaction (valid active Role, mandatory Home Branch for non-Owner Roles, Authorization Ceiling, Owner-only promotion). Username auto-generated from `name` (lowercase, diacritics stripped, dots for separators, suffix increment on collision). `email` lowercased; `emailVerified=true`; `mustResetPassword=true`. Inserts a `credential` `adminAccounts` row with bcrypt hash (cost 10). Plaintext password returned once in response (never persisted).
 
 #### `GET` `/api/admin/users/{id}`
-- **Auth**: admin-session (permission: users/view)
-- **Purpose**: Fetch a single user with branch info.
+- **Auth**: admin-session (guard: users/view)
+- **Purpose**: Fetch a single user with Role + Home Branch summary.
 - **Params**: `{id}`
 - **Body**: none
-- **Response**: 200 `{ success, data: { id, name, username, displayUsername, email, role, branchId, branchName, branchCode, mustResetPassword, emailVerified, image, createdAt, updatedAt } }`; 404 not found; 500 error
-- **Notes**: Left-join on `branches`.
+- **Response**: 200 `{ success, data: <same user-summary shape as the list endpoint> }`; 404 not found; 500 error
+- **Notes**: Left-joins `branches` and `admin_roles`.
 
-#### `PATCH` `/api/admin/users/{id}`
-- **Auth**: admin-session (permission: users/edit)
-- **Purpose**: Update a user's name, email, role, and/or branch.
+#### `PUT` `/api/admin/users/{id}`
+- **Auth**: admin-session (guard: users/edit)
+- **Purpose**: Update a user's identity/assignment (strict payload).
 - **Params**: `{id}`
-- **Body**: `{ name?: string (2-100), email?: string, role?: "admin"|"hq", branchId?: string|null }`
-- **Response**: 200 `{ success: true }`; 400 invalid / admin-requires-branch / branch-not-found / role-change-to-admin-requires-branchId / cannot-demote-self; 404 not found; 409 email already used; 500 error
-- **Notes**: Self-protection: an HQ user cannot demote themselves (`ctx.user.id === id` and `role !== "hq"`). Role→`hq` clears `branchId`; role→`admin` requires a `branchId` in the payload. Email lowercased and uniqueness-checked against other users. `updatedAt` set.
+- **Body**: `{ name?: string (2-100), email?: string, roleId?: string, branchId?: string|null, reason?: string|null }`
+- **Response**: 200 `{ success, data: <user summary> }`; 400 invalid body / `INVALID_ROLE` / `INVALID_BRANCH` / Authorization-Ceiling denial; 404 not found; 409 email already used; 500 error
+- **Notes**: `z.strictObject` — a legacy `role` (name) payload fails 400. Assignment changes are validated against the actor's Authorization Ceiling; Home Branch rules follow the Current Policy (non-Owner Roles require a Home Branch).
 
-#### `DELETE` `/api/admin/users/{id}`
-- **Auth**: admin-session (permission: users/delete)
-- **Purpose**: Delete a user.
+#### `DELETE` `/api/admin/users/{id}` — **REMOVED**
+- **Status**: Users are soft-deactivated, never hard-deleted (audit attribution + identity reservation). The endpoint answers `405` (`USER_DEACTIVATE_REQUIRED`, `Allow: GET, PUT`) directing callers to `POST /api/admin/users/{id}/deactivate`.
+
+#### `POST` `/api/admin/users/{id}/deactivate`
+- **Auth**: admin-session (guard: users/edit)
+- **Purpose**: Soft-deactivate a user.
 - **Params**: `{id}`
-- **Body**: none
-- **Response**: 200 `{ success: true }`; 400 cannot-delete-self / cannot-delete-last-hq; 404 not found; 500 error
-- **Notes**: Cannot delete self. Prevents deleting the last remaining HQ user. Explicitly deletes `adminSessions` and `adminAccounts` for the user before deleting the `users` row.
+- **Body**: `{ reason: string (min 1) }` (strict)
+- **Response**: 200 on success; 400 `REASON_REQUIRED` (missing reason) / validation denial; 404 not found; 500 error
+- **Notes**: Retains the Role, Home Branch, identity, and audit attribution; revokes every existing session in the same transaction and blocks future sign-in.
+
+#### `POST` `/api/admin/users/{id}/reactivate`
+- **Auth**: admin-session (guard: users/edit)
+- **Purpose**: Reactivate a deactivated user.
+- **Params**: `{id}`
+- **Body**: `{ reason?: string|null }` (strict; optional)
+- **Response**: 200 on success; 400 when the retained Role is archived/invalid or the required Home Branch is missing (validated within the actor's Authorization Ceiling); 404 not found; 500 error
+- **Notes**: Reactivation re-runs assignment validation — a user whose Role was archived while inactive cannot be silently reactivated.
 
 #### `POST` `/api/admin/users/{id}/reset-password`
-- **Auth**: admin-session (permission: users/edit) — comment indicates HQ-only intent
+- **Auth**: admin-session (guard: users/edit)
 - **Purpose**: Reset a user's password.
 - **Params**: `{id}`
 - **Body**: `{ passwordMode: "generate" }` (no password field) or `{ passwordMode: "manual", password: string }` (minimum 8 characters)
-- **Response**: 200 `{ success, data: { password: string, mustResetPassword: true } }`; 400 invalid / password-too-short; 404 not found; 500 error
-- **Notes**: Updates the user's `credential` `adminAccounts` row password (bcrypt, cost 10), or creates one if absent. Sets `users.mustResetPassword=true`. Deletes all `adminSessions` for the user (revokes old password on all devices). Plaintext password is returned once and never logged; structured logs contain actor/target IDs, mode, and validation field names only.
+- **Response**: 200 `{ success, data: { password: string, mustResetPassword: true } }`; 400 invalid / password-too-short; 404 not found; 409 `USER_NOT_ACTIVE` (deactivated users are rejected); 500 error
+- **Notes**: Updates the user's `credential` `adminAccounts` row password (bcrypt, cost 10), or creates one if absent. Sets `users.mustResetPassword=true`. Revokes all sessions via the centralized `revokeUserSessions` seam (revokes old password on all devices). Plaintext password is returned once and never logged; structured logs contain actor/target IDs, mode, and validation field names only.
+
+#### Shared Roles contract (all `/api/admin/roles` endpoints)
+
+- **Auth**: the unified `guard` — `roles:view` for all reads, `roles:edit` for create/revise/impact/restore, `roles:delete` for archive. Guard failures: `401` for a missing session, `403 { success: false, error, code: "NO_ACCESS" | "DENIED" }` otherwise. `roles` is a **global module** — grants carry `scope: "global"` only; branch scope does not apply.
+- **Role shape** (`RoleDetail`): `{ id, key: string|null, name, description: string|null, isSystem, archived, archivedAt: string|null, version: int, userCount: int, activeUserCount: int, grants: [{ module, action: "view"|"edit"|"delete", scope: "global"|"own_branch"|"all_branches" }] }`. `key` is non-null only for System Roles (`system_owner`, `hq`, `admin`); `isSystem` Roles are visible but immutable. `userCount`/`activeUserCount` are computed per response.
+- **Grant shape**: validated against the code-owned catalog (`packages/db/src/rbac/catalog.ts`) — branch modules (`products`, `orders`, `notifications`, `branches`, `analytics`, `audit_log`) require `scope: "own_branch" | "all_branches"` (with per-action restrictions, e.g. `products:edit` is all-branch only); global modules (`customers`, `homepage`, `pages`, `users`, `roles`, `footer`) require `scope: "global"`. Unsupported module/action/scope combinations are rejected `400 INVALID_GRANTS`. Edit/delete grants must be covered by a view grant in the same module (`400 COVERAGE_VIOLATION`). Non-branch modules store `scope: "global"` regardless of the submitted value.
+- **Name rules**: normalized (whitespace runs collapsed, trimmed, lowercased) and case-insensitively unique across active **and** archived Roles (`409 DUPLICATE_NAME`); 2–64 chars, Unicode letters/numbers + spaces/hyphens/underscores (`400 INVALID_NAME`); the System Role display names ("System Owner", "HQ", "Admin") are protected (`400 PROTECTED_NAME` when renaming to them).
+- **Authorization ceiling**: a non-System-Owner actor cannot create/revise a Role whose grants exceed their own effective grants, and cannot revise a Role whose **current** grants exceed their ceiling (`403 CEILING_VIOLATION`). The System Owner Role (`key: system_owner`) is immutable and never archivable (`403 OWNER_IMMUTABLE`); a non-Owner cannot revise the Role they hold (`403 SELF_ROLE_REVISION`).
+- **Stable error envelope**: every service denial is `{ success: false, error, code }` with a fixed status (`roles-http.ts`): `NOT_FOUND` 404 · `INVALID_BODY`/`INVALID_NAME`/`PROTECTED_NAME`/`INVALID_GRANTS`/`COVERAGE_VIOLATION`/`REDUCTION_REASON_REQUIRED`/`REASON_REQUIRED` 400 · `CEILING_VIOLATION`/`OWNER_IMMUTABLE`/`SELF_ROLE_REVISION`/`SYSTEM_ROLE_NOT_ARCHIVABLE` 403 · `DUPLICATE_NAME`/`STALE_VERSION`/`ROLE_HAS_ACTIVE_USERS`/`ROLE_NOT_ARCHIVED`/`CONFLICT` 409 · `INTERNAL` 500. Validation failures: `{ success: false, error: "Invalid request body", code: "INVALID_BODY" }` 400.
+- **Transactional behavior**: every mutation runs in one DB transaction that locks the Role row (`SELECT … FOR UPDATE`), re-validates the optimistic version, replaces the complete grant set, bumps `version`, and writes the immutable audit event (`ROLE_*`, `branchScope: "global"`, `policyVersion` = the actor's Current Policy version) **before commit** — a failed audit write aborts the mutation. Surviving unique-constraint races map to `409 DUPLICATE_NAME` / `409 CONFLICT` / `400 INVALID_GRANTS`. See `docs/features/rbac.md`.
+
+#### `GET` `/api/admin/roles`
+
+- **Auth**: admin-session (guard: `roles:view`)
+- **Purpose**: Searchable Role list with grants and user counts. Default excludes archived Roles.
+- **Params**: query `q` (optional — case-insensitive partial match on `name`), `archived` (`"true"` shows **only** archived Roles; any other value shows only active ones)
+- **Body**: none
+- **Response**: 200 `{ success: true, data: RoleDetail[] }` ordered by `createdAt` asc (System Roles first, seeded order); 401/403 guard; 500 `{ code: "INTERNAL" }`
+- **Notes**: No pagination. Archived Roles are visible only with `?archived=true` (or individually by id — see `GET /api/admin/roles/{id}`).
+
+#### `POST` `/api/admin/roles`
+
+- **Auth**: admin-session (guard: `roles:edit`)
+- **Purpose**: Create a custom Role from a final draft (deny-all, explicit grants, or cloned).
+- **Params**: —
+- **Body**: `{ name: string (min 1; normalized rules apply), description?: string|null, grants?: [{ module, action, scope }], cloneFromId?: string }` — omitting `grants` (and `cloneFromId`) creates a deny-all draft; `cloneFromId` copies the source Role's grants (source must be active — `404 NOT_FOUND` otherwise — and the copied set is ceiling-checked); an explicit `grants` array overrides and is validated first for catalog well-formedness, then against the ceiling.
+- **Response**: 201 `{ success: true, data: RoleDetail }` (`version: 1`, `userCount: 0`); 400 `INVALID_BODY`/`INVALID_NAME`/`PROTECTED_NAME`/`INVALID_GRANTS`/`COVERAGE_VIOLATION`; 403 `CEILING_VIOLATION`; 404 `NOT_FOUND` (clone source); 409 `DUPLICATE_NAME`; 500 `INTERNAL`
+- **Notes**: `isSystem: false`, `key: null`. Audit: `ROLE_CREATED` with `changes: { name, description, grants, cloneFromId }`.
+
+#### `GET` `/api/admin/roles/{id}`
+
+- **Auth**: admin-session (guard: `roles:view`)
+- **Purpose**: Fetch a single Role with its grants and user counts. **Archived Roles are fetchable by id** (needed for the archived editor and restore review); the restore review itself stays separately validated on `/restore`.
+- **Params**: `{id}`
+- **Body**: none
+- **Response**: 200 `{ success: true, data: RoleDetail }`; 404 `{ success: false, error: "Role not found", code: "NOT_FOUND" }`; 401/403 guard; 500 `INTERNAL`
+- **Notes**: Unlike the list endpoint, archived Roles are returned here (`includeArchived: true`).
+
+#### `PUT` `/api/admin/roles/{id}`
+
+- **Auth**: admin-session (guard: `roles:edit`)
+- **Purpose**: Atomic **complete-draft** revision of a Role's identity and grants (the whole grant set is replaced; omitted grants are removed).
+- **Params**: `{id}`
+- **Body**: `{ name: string, description?: string|null, grants: [{ module, action, scope }] (required), expectedVersion: int (positive), reason?: string|null }` — `reason` is required by the planner whenever the draft removes or narrows a grant (`400 REDUCTION_REASON_REQUIRED`)
+- **Response**: 200 `{ success: true, data: RoleDetail }` (bumped `version`, new grant set); 400 `INVALID_BODY`/`INVALID_NAME`/`PROTECTED_NAME`/`INVALID_GRANTS`/`COVERAGE_VIOLATION`/`REDUCTION_REASON_REQUIRED`; 403 `CEILING_VIOLATION`/`OWNER_IMMUTABLE`/`SELF_ROLE_REVISION`; 404 `NOT_FOUND` (unknown **or archived** Role — archived Roles must be restored first); 409 `STALE_VERSION`/`DUPLICATE_NAME`/`CONFLICT`; 500 `INTERNAL`
+- **Notes**: Optimistic concurrency — `expectedVersion` must equal the Role's current `version` (`409 STALE_VERSION` otherwise). A concurrent duplicate-name insert loses the race into `409 DUPLICATE_NAME`; other constraint races become `409 CONFLICT`. Archived Roles cannot be revised (`404`). Audit: `ROLE_UPDATED` with `changes: { before: { name, description, grants }, after: { name, description, grants }, diff: { added, removed }, reduction, reason }`.
+
+#### `DELETE` `/api/admin/roles/{id}` — archive (no hard delete)
+
+- **Auth**: admin-session (guard: `roles:delete`)
+- **Purpose**: Archive a custom Role (soft delete — the row and its grants are retained for the restore review and audit history).
+- **Params**: `{id}`
+- **Body**: `{ reason: string (min 1) }`
+- **Response**: 200 `{ success: true, data: RoleDetail }` (`archived: true`, **retained** grants, `activeUserCount: 0`, bumped `version`); 400 `INVALID_BODY`/`REASON_REQUIRED`; 403 `SYSTEM_ROLE_NOT_ARCHIVABLE`; 404 `NOT_FOUND`; 409 `ROLE_HAS_ACTIVE_USERS`/`CONFLICT`; 500 `INTERNAL`
+- **Notes**: System Roles are never archivable. The active-user guard is re-checked **inside** the transaction (`409 ROLE_HAS_ACTIVE_USERS` — "Reassign or deactivate the active users of this Role first"), so a concurrent assignment cannot slip past the pre-check. Grant rows are retained on archive; `archivedAt` is set and `version` bumps (a later restore revalidates the retained grants under the current catalog). Audit: `ROLE_ARCHIVED` with `changes: { before: { name, grants }, reason }`.
+
+#### `POST` `/api/admin/roles/{id}/impact`
+
+- **Auth**: admin-session (guard: `roles:edit`)
+- **Purpose**: Preview a proposed revision before applying it: the grant diff (reductions and widenings) and the number of active users currently assigned to the Role. Read-only — no mutation, no audit event.
+- **Params**: `{id}`
+- **Body**: `{ name?: string, grants?: [{ module, action, scope }] }` — a partial draft; omitting `grants` diffs against the Role's current grants
+- **Response**: 200 `{ success: true, data: { role: { id, name, version }, reduction: boolean, diff: { added: Grant[], removed: Grant[] }, invalidGrants: Grant[], affectedActiveUsers: int } }`; 400 `INVALID_BODY`; 404 `NOT_FOUND` (unknown **or archived** Role); 401/403 guard; 500 `INTERNAL`
+- **Notes**: `reduction` is true when `diff.removed` is non-empty. `invalidGrants` uses **set-level** classification of the after-set (`classifyGrantSet`): a mutation grant is only flagged invalid when the remainder of the draft cannot cover it — `products:edit:all` is valid when `products:view:all` is retained alongside it.
+
+#### `GET` `/api/admin/roles/{id}/restore`
+
+- **Auth**: admin-session (guard: `roles:view`)
+- **Purpose**: Restore review of an archived Role: its identity plus the **retained** grants classified against the **current** grant catalog.
+- **Params**: `{id}`
+- **Body**: none
+- **Response**: 200 `{ success: true, data: { role: { id, name, description, version, archivedAt }, validGrants: Grant[], invalidGrants: Grant[] } }`; 404 `{ success: false, error: "Archived Role not found", code: "NOT_FOUND" }` (unknown **or not-archived** Role); 401/403 guard; 500 `INTERNAL`
+- **Notes**: Classification is set-level (`classifyGrantSet`) — a mutation grant covered by the valid remainder stays valid.
+
+#### `POST` `/api/admin/roles/{id}/restore`
+
+- **Auth**: admin-session (guard: `roles:edit`)
+- **Purpose**: Activate an archived Role after reviewed revalidation (new name/description/grants submitted by the client).
+- **Params**: `{id}`
+- **Body**: `{ name: string, description?: string|null, grants: [{ module, action, scope }] (required), expectedVersion: int (any int — a stale or non-positive value is a semantic `409 STALE_VERSION`, not a body error) }`
+- **Response**: 200 `{ success: true, data: RoleDetail }` (`archived: false`, `archivedAt: null`, bumped `version`); 400 `INVALID_BODY`/`INVALID_NAME`/`PROTECTED_NAME`/`INVALID_GRANTS`/`COVERAGE_VIOLATION`; 403 `CEILING_VIOLATION`; 404 `NOT_FOUND`; 409 `STALE_VERSION`/`ROLE_NOT_ARCHIVED`/`DUPLICATE_NAME`/`CONFLICT`; 500 `INTERNAL`
+- **Notes**: The optimistic version gate runs first (pre-transaction) so a stale draft is rejected before any validation; the transaction then re-locks and re-checks. Catalog well-formedness gates the ceiling (unsupported module/action/scope is `INVALID_GRANTS`, never a ceiling verdict). Name uniqueness includes archived Roles (excluding the Role being restored). Audit: `ROLE_RESTORED` with `changes: { before: { name, archivedAt }, after: { name, grants }, policyVersionAfter }`.
 
 #### `POST` `/api/admin/upload`
-- **Auth**: admin-session (role: admin | hq)
+- **Auth**: admin-session (guard: `<owning-purpose module>:<action>` — purpose-bound, e.g. `products:edit` for product images; catalog scope is all-branch only, so branch-scoped editors cannot upload product images)
 - **Purpose**: Upload a single file to a configured folder.
 - **Params**: query `folder` (default `"products"`; must be in `ALLOWED_FOLDERS`)
 - **Body**: multipart/form-data field `file` (File)
@@ -535,69 +636,69 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Validates `file.type` against `ALLOWED_TYPES` (JPEG, PNG, WebP, GIF) and `file.size` ≤ `MAX_FILE_SIZE` (5MB). Filename = `<crypto.randomUUID()>.<ext>`; saved via `saveFile(folder, filename, buffer)`.
 
 #### `DELETE` `/api/admin/upload`
-- **Auth**: admin-session (role: admin | hq)
+- **Auth**: admin-session (guard on the URL's owning purpose: `<module>:<edit>`)
 - **Purpose**: Delete an uploaded file by URL.
 - **Params**: query `url`
 - **Body**: none
-- **Response**: 200 `{ success: true }`; 400 missing `url`; 500 error
-- **Notes**: Delegates to `deleteFile(url)` helper (file-system removal).
+- **Response**: 200 `{ success: true }`; 400 missing `url` / invalid `url`; 500 error
+- **Notes**: The URL is canonicalized and validated (`resolveUploadDeleteUrl`) BEFORE deriving the purpose: percent-encoding is decoded until stable, and literal or encoded traversal (`..`/`.` dot segments), encoded separators (`%2F`, `%5C`), backslashes, NUL bytes, and malformed encoding are rejected — so `/uploads/products/../homepage/x` is denied (400) instead of being authorized as `products.edit` and deleting a homepage file. The resolved path must stay under `/uploads/<first-segment>/`; deletion requires the owning folder's module edit authority (e.g. `products.edit`). Deletion runs against the canonical URL via `deleteFile` (which additionally rejects dot-segments and keeps root containment).
 
 ## Admin — Orders, Analytics, Audit, Session, Misc
 
 #### `GET` `/api/admin/orders`
-- **Auth**: admin-session (permission: orders `view`; both `admin` and `hq` pass the guard)
-- **Purpose**: List orders with customer/branch summary and per-order item count, scoped by RBAC branch visibility.
-- **Params**: `status` (exact match), `branchId` (HQ-only filter), `from` / `to` (date range on `createdAt`; `to` inclusive by +1 day), `pickupFrom` / `pickupTo` (date range on `pickupDate`; `to` inclusive by +1 day; orders with NULL `pickupDate` are excluded when either is set), `search` (ilike on `orders.id`, `clients.name`, or `orders.contactPhone`), `page` (default 1), `limit` (default 20)
+- **Auth**: admin-session (guard: orders `view`)
+- **Purpose**: List orders with customer/branch summary and per-order item count, scoped by the Current Policy's Branch Scope.
+- **Params**: `status` (exact match), `branchId` (all-branch scope only — optional filter; own-branch scope ignores it and pins to the Home Branch), `from` / `to` (date range on `createdAt`; `to` inclusive by +1 day), `pickupFrom` / `pickupTo` (date range on `pickupDate`; `to` inclusive by +1 day; orders with NULL `pickupDate` are excluded when either is set), `search` (ilike on `orders.id`, `clients.name`, or `orders.contactPhone`), `page` (default 1), `limit` (default 20)
 - **Body**: none
 - **Response**: 200 `{ success: true, data: [{ ...orders, customer: {id,name,email}, branch: {id,name,city}, itemCount, stockNeedsReview }], pagination: { page, limit, total, totalPages } }`; 500 `{ success: false, error: "Failed to fetch orders" }`
-- **Notes**: Branch scope via `getBranchScope` — `scope.mode === "own"` forces `orders.branchId = scope.branchId` (branch admins); HQ only filters by `branchId` when supplied. N+1 item-count query per order.
+- **Notes**: Branch scope comes from the Current Policy via `branchScopeFromAuthorization` — `scope.mode === "own"` pins `orders.branchId` to the server-trusted Home Branch regardless of any client-supplied `branchId`; all-branch scope filters by the `branchId` param when supplied. An own-branch grant without a Home Branch fails closed (403). N+1 item-count query per order.
 
 #### `GET` `/api/admin/orders/{id}`
-- **Auth**: admin-session (permission: orders `view`)
+- **Auth**: admin-session (guard: orders `view`)
 - **Purpose**: Fetch a single order's full detail including items (with variant + first display image), customer/branch, and its durable Jubelio stock-operation lifecycle.
 - **Params**: path `id` (order id)
 - **Body**: none
-- **Response**: 200 `{ success: true, data: { ...order fields, ppnRate, ppnAmount, customer, branch, items, stockOperations: [{ id, type, status, remoteAdjustmentId, attemptCount, lastError, createdAt, updatedAt }] } }`; 404 `"Order not found"`; 403 `"Forbidden — order belongs to a different branch"`; 500 `"Failed to fetch order"`
-- **Notes**: RBAC enforced — a branch admin whose `order.branchId !== scope.branchId` gets 403. Read-only.
+- **Response**: 200 `{ success: true, data: { ...order fields, ppnRate, ppnAmount, customer, branch, items, stockOperations: [{ id, type, status, remoteAdjustmentId, attemptCount, lastError, createdAt, updatedAt }] } }`; 404 `"Order not found"` (also returned for a cross-branch id — existence is not disclosed); 403 `DENIED` only when an own-branch grant has no Home Branch; 500 `"Failed to fetch order"`
+- **Notes**: RBAC enforced via the unified `guard` (`orders:view`) + `branchScopeFromAuthorization`: own-branch scope can only view orders whose `branchId` equals the server-pinned Home Branch; a cross-branch id maps to `404` via `crossBranchNotFound`. All-branch scope sees every order. Read-only.
 
 #### `POST` `/api/admin/orders/{id}/stock-review`
-- **Auth**: admin-session (permission: orders `edit`; branch-scoped)
+- **Auth**: admin-session (guard: orders `edit`; branch-scoped via Current Policy — cross-branch operations map to 404)
 - **Purpose**: Move one operation from `manual_review` to `reconciling` so the store cron safely searches Jubelio by its unique note.
 - **Body**: `{ operationId: string }`
 - **Response**: 200 on queueing; 400 invalid input; 403 branch mismatch; 404 unknown order; 409 operation no longer in manual review; 500 error.
 - **Notes**: This endpoint never submits an inventory adjustment. It writes a `RECHECK_JUBELIO_STOCK` audit entry and only enables note-based reconciliation, preventing blind duplicate writes.
 
 #### `POST` `/api/admin/orders/{id}/verify-pickup`
-- **Auth**: admin-session (permission: orders `edit`; **branch admins only — HQ is rejected**)
+- **Auth**: admin-session (guard: orders `edit`; **the caller must have a server-pinned Home Branch and the order must belong to it — even an all-branch editor verifies from one physical branch**)
 - **Purpose**: Verify the customer's pickup code and, on match, trigger the store's internal order-complete flow to mark the order completed.
 - **Params**: path `id` (order id)
 - **Body**: `{ pickupCodeInput: string (1..10 chars) }` (zod-validated)
-- **Response**: 200 on completion; 400 for invalid input/state; 403 for role/branch mismatch; 404 unknown order; 409 invalid code; 429 while temporarily locked (with `Retry-After`); 502 when store completion fails; 500 on exception.
-- **Notes**: Branch-admin-only. Pickup codes use constant-time comparison. Five failed attempts lock verification for 15 minutes; a successful verification resets attempt/lock state. Completion is delegated to the store HMAC-protected internal endpoint and recorded in `auditLogs`.
+- **Response**: 200 on completion; 400 for invalid input/state; 403 when the caller has no Home Branch in Current Policy (a policy without one can never verify); 404 for unknown or cross-branch orders (existence not disclosed); 409 invalid code; 429 while temporarily locked (with `Retry-After`); 502 when store completion fails; 500 on exception.
+- **Notes**: The branch identity is the server-pinned Home Branch from the Current Policy — never a client-supplied value. Cross-branch ids hide behind 404. Pickup codes use constant-time comparison. Five failed attempts lock verification for 15 minutes; a successful verification resets attempt/lock state. Completion is delegated to the store HMAC-protected internal endpoint and recorded in `auditLogs` (`VERIFY_PICKUP_CODE`, with the policy version and branch scope stamped on the Audit Event).
 
 #### `GET` `/api/admin/analytics`
-- **Auth**: admin-session (roles: `admin`, `hq`)
+- **Auth**: admin-session (guard: `analytics:view`)
 - **Purpose**: Return dashboard aggregates — revenue, order/customer counts, orders grouped by status, and 5 most recent orders.
 - **Params**: —
 - **Body**: none
-- **Response**: 200 `{ success: true, data: { totalRevenue, monthlyRevenue, totalOrders, weeklyOrders, totalCustomers, ordersByStatus: [{ status, count }], recentOrders: [{ id, total, status, createdAt, customer }] } }`; 500 `"Failed to fetch analytics"`
-- **Notes**: `totalRevenue`/`monthlyRevenue` filter on `paymentStatus === "paid"` (last 30 days for monthly). `weeklyOrders` = orders with `createdAt >= 7 days ago`. `totalOrders`/`totalCustomers` are unfiltered. Not branch-scoped (global aggregates).
+- **Response**: 200 `{ success: true, data: { totalRevenue, monthlyRevenue, totalOrders, weeklyOrders, totalCustomers, ordersByStatus: [{ status, count }], recentOrders: [{ id, total, status, createdAt, customer }] } }`; 403 when an own-branch grant has no Home Branch (fail closed); 500 `"Failed to fetch analytics"`
+- **Notes**: Branch Analytics scope comes from the Current Policy: own-branch scope filters order count, paid revenue, statuses, recent activity, and distinct transacting customers to the server-pinned Home Branch (branch-less orders excluded); all-branch scope includes every order, including branch-less ones. `totalRevenue`/`monthlyRevenue` filter on `paymentStatus === "paid"` (last 30 days for monthly). `weeklyOrders` = orders with `createdAt >= 7 days ago`. A distinct customer counts only after transacting through an order in the authorized scope (the customer directory itself is global).
 
 #### `GET` `/api/admin/audit-log`
-- **Auth**: admin-session (roles: `admin`, `hq`)
+- **Auth**: admin-session (guard: `audit_log:view`)
 - **Purpose**: List audit log entries newest-first, joined with the acting user's name/email.
 - **Params**: `limit` (default 50)
 - **Body**: none
 - **Response**: 200 `{ success: true, data: [{ ...auditLogs, user: { id, name, email } | { name: "System", email: null } }] }`; 500 `"Failed to fetch audit log"`
-- **Notes**: Left-joins `users` on `auditLogs.userId`; missing user normalized to `{ name: "System", email: null }`. No pagination cursor — only `limit`.
+- **Notes**: Left-joins `users` on `auditLogs.userId`; missing user normalized to `{ name: "System", email: null }`. No pagination cursor — only `limit`. Branch scope comes from the Current Policy: own-branch scope returns only Home-Branch events (`single_branch` events on the Home Branch plus `dual_branch` reassignment events touching it as old or new branch); global/system/product-sync events are excluded. All-branch scope returns branch-tagged and global events alike.
 
 #### `GET` `/api/admin/me`
-- **Auth**: admin-session (roles: `admin`, `hq`)
-- **Purpose**: Return the currently logged-in admin user's identity for client-side role/branch UI decisions.
+- **Auth**: admin-session (no module authorization gate — identity only)
+- **Purpose**: Return the currently signed-in admin user's identity (id, name, email, assigned Role id, Home Branch id).
 - **Params**: —
 - **Body**: none
-- **Response**: 200 `{ success: true, user: { id, name, email, role, branchId } }`; 500 `"Failed to fetch current user"`
-- **Notes**: Read-only. Fields come from the Better Auth session `user` object (extended with `role` and `branchId`).
+- **Response**: 200 `{ success: true, user: { id, name, email, roleId, branchId } }`; 401 if unauthenticated; 500 `"Failed to fetch current user"`
+- **Notes**: Read-only; carries no protected business data, so there is no module gate. Policy discovery (grants/scopes/policyVersion) lives in `GET /api/admin/policy/me`; the legacy `role` name field is gone (assignment is `roleId` + `branchId`).
 
 #### `GET` `/api/admin/session-check`
 - **Auth**: admin-session (no role check; missing session returns `200` not `401`)
@@ -608,33 +709,33 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Reads `session.user.mustResetPassword`. Errors swallowed and returned as `authenticated: false` with `200` — no error surface to the client.
 
 #### `GET` `/api/admin/linkable-destinations`
-- **Auth**: admin-session (role: `hq`)
+- **Auth**: admin-session (guard: `footer:view`)
 - **Purpose**: Return categorized storefront destinations usable as footer link hrefs (consumed by FooterLinkPicker).
 - **Params**: —
 - **Body**: none
 - **Response**: 200 `{ success: true, data: { pages: [{ label: title, href: "/pages/<slug>" }], static: [{ label, href }, ...] } }`; 500 `"Failed to fetch linkable destinations"`
-- **Notes**: HQ-only. `pages` = published static pages (`isPublished = true`) ordered by `displayOrder` then `title`. `static` is hard-coded: Beranda `/`, Semua Produk `/products`, Cabang `/branches`, Keranjang Belanja `/cart`, Checkout `/checkout`, Akun Saya `/account`, Masuk `/login`, Daftar `/register`. Auth-gated routes are safe to link because storefront middleware redirects guests to `/login?callbackUrl=`.
+- **Notes**: Gated by `footer:view`. `pages` = published static pages (`isPublished = true`) ordered by `displayOrder` then `title`. `static` is hard-coded: Beranda `/`, Semua Produk `/products`, Cabang `/branches`, Keranjang Belanja `/cart`, Checkout `/checkout`, Akun Saya `/account`, Masuk `/login`, Daftar `/register`. Auth-gated routes are safe to link because storefront middleware redirects guests to `/login?callbackUrl=`.
 
 #### `GET` `/api/admin/footer`
-- **Auth**: admin-session (role: `hq`)
+- **Auth**: admin-session (guard: `footer:view`)
 - **Purpose**: Fetch the singleton footer-config row's `data` field (or `null` if none exists; the admin form falls back to empty fields, and the storefront renders an empty footer until a row is seeded — see `docs/features/footer.md`).
 - **Params**: —
 - **Body**: none
 - **Response**: 200 `{ success: true, data: null }` (no row) or `{ success: true, data: { id, data, updatedAt } }`; 500 `"Failed to fetch footer config"`
-- **Notes**: HQ-only. Read-only.
+- **Notes**: Read-only.
 
 #### `PUT` `/api/admin/footer`
-- **Auth**: admin-session (role: `hq`)
+- **Auth**: admin-session (guard: `footer:edit`)
 - **Purpose**: Upsert the singleton footer config row.
 - **Params**: —
 - **Body**: `{ brandName: string (1..100), tagline: string (≤300, default ""), copyrightText: string (1..200), columns: [{ title: string (1..100), links: [{ label: string (1..100), href: string (1..500) }] }] (max 3 columns, max 5 links/column, default []), socialMedia: [{ platform: "instagram"|"facebook"|"twitter"|"tiktok"|"youtube"|"linkedin"|"whatsapp", url: string (≤500, default ""), enabled: boolean (default false) }] (default []) }` (zod-validated)
 - **Response**: 200 `{ success: true, data: { id, data } }` (update or insert); 400 `{ success: false, error: "Invalid request body", details: <zod fieldErrors> }`; 500 `"Failed to save footer config"`
-- **Notes**: HQ-only. Upsert: selects the first `footerConfig` row; if found, updates `data`, `updatedAt = now()`, `updatedBy = ctx.user.id`; else inserts with `id = crypto.randomUUID()`. No audit-log write.
+- **Notes**: Upsert: selects the first `footerConfig` row; if found, updates `data`, `updatedAt = now()`, `updatedBy = ctx.user.id`; else inserts with `id = crypto.randomUUID()`. No audit-log write.
 
-## Admin — Homepage, Pages, Permissions, Auth, Uploads
+## Admin — Homepage, Pages, Removed legacy permission endpoints, Auth, Uploads
 
 #### `GET` `/api/admin/homepage`
-- **Auth**: admin-session (permission: `homepage:view`)
+- **Auth**: admin-session (guard: `homepage:view`)
 - **Purpose**: List all homepage sections ordered by `displayOrder`, with carousel products hydrated.
 - **Params**: —
 - **Body**: none
@@ -642,7 +743,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: For `carousel_product` sections, joins `homepageSectionProducts` → `products` and attaches a `products` array of `{ id, name, slug, displayOrder }`. `store_banner` and other types returned as-is.
 
 #### `POST` `/api/admin/homepage`
-- **Auth**: admin-session (permission: `homepage:edit`)
+- **Auth**: admin-session (guard: `homepage:edit`)
 - **Purpose**: Create a new homepage section.
 - **Params**: —
 - **Body**: `{ type: "banner"|"carousel_product"|"promo_cards"|"announcement_bar"|"store_banner", title?: string|null, subtitle?: string|null, content?: object, isActive?: boolean (default true), productIds?: string[] }`
@@ -650,7 +751,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Content validated per-type via Zod (`banner` → `slides` max 5, `carousel_product` → `mode` enum manual/filter + `limit` 1-20, `promo_cards` → `cards` max 6, `announcement_bar` → `message` + `variant`). The carousel/promo `filter` object (`ProductFilterConfig`) accepts `search`, `category`/`brand`/`gender` (slugs), `minPrice`, `maxPrice`, `hasDiscount`, `sortOrder` (`newest|priceAsc|priceDesc`) — field names match the `/api/products` query format. New section's `displayOrder` = `max(existing)+1`. Junction rows only inserted for `carousel_product` when `content.mode !== "filter"`.
 
 #### `GET` `/api/admin/homepage/{id}`
-- **Auth**: admin-session (permission: `homepage:view`)
+- **Auth**: admin-session (guard: `homepage:view`)
 - **Purpose**: Fetch a single homepage section by id, with linked products for carousels.
 - **Params**: `{ id }` (path)
 - **Body**: none
@@ -658,7 +759,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: For `carousel_product`, returns `products` ordered by junction `displayOrder`. Non-carousel sections return `products: []`.
 
 #### `PATCH` `/api/admin/homepage/{id}`
-- **Auth**: admin-session (permission: `homepage:edit`)
+- **Auth**: admin-session (guard: `homepage:edit`)
 - **Purpose**: Update a homepage section.
 - **Params**: `{ id }` (path)
 - **Body**: `{ type?, title?: string|null, subtitle?: string|null, content?: object, isActive?: boolean, displayOrder?: number, productIds?: string[] }`
@@ -666,7 +767,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Validates content per effective type. For `banner`/`promo_cards` content changes, extracts `/uploads/` image URLs from old vs new content and deletes orphaned files via `deleteFile`. For `carousel_product`, when `productIds` provided: deletes all existing junction rows first, then re-inserts only if carousel is NOT in `filter` mode. Sets `updatedAt`.
 
 #### `DELETE` `/api/admin/homepage/{id}`
-- **Auth**: admin-session (permission: `homepage:delete`)
+- **Auth**: admin-session (guard: `homepage:delete`)
 - **Purpose**: Delete a homepage section and its referenced image files.
 - **Params**: `{ id }` (path)
 - **Body**: none
@@ -674,7 +775,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Before DB delete, extracts `/uploads/` image URLs from `banner` slides and `promo_cards` cards and deletes the files (per-file errors swallowed).
 
 #### `PATCH` `/api/admin/homepage/reorder`
-- **Auth**: admin-session (permission: `homepage:edit`)
+- **Auth**: admin-session (guard: `homepage:edit`)
 - **Purpose**: Reorder homepage sections by updating `displayOrder`.
 - **Params**: —
 - **Body**: `{ items: { id: string, displayOrder: number }[] }`
@@ -682,7 +783,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Iterates items and updates each section's `displayOrder` + `updatedAt` sequentially (no transaction).
 
 #### `GET` `/api/admin/homepage/preview-all`
-- **Auth**: admin-session (permission: `homepage:view`)
+- **Auth**: admin-session (guard: `homepage:view`)
 - **Purpose**: Return ALL homepage sections (active and inactive) fully hydrated for admin preview.
 - **Params**: —
 - **Body**: none
@@ -690,7 +791,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Unlike the storefront endpoint, includes inactive sections. For `carousel_product` in `manual` mode, hydrates products with the cheapest-variant net price and the default-variant image, returning `products: { id, name, slug, price, basePrice, image, collection, gender }[]` (`price` = net, `basePrice` = RRP; `collection` from the product row, `gender` resolved from `genderId` via a per-page gender-name lookup — both nullable). For `filter` mode, runs `resolveFilterModeProducts` mirroring storefront logic (status `aktif`, optional `search`/`category`/`brand`/price range/`hasDiscount`/`sortOrder` of `newest|priceAsc|priceDesc`, limit clamped 1-20); filter-mode products also carry `collection`/`gender` (via a left join on `genders`). `store_banner` sections include `branches` (status `aktif`, ordered by `name`).
 
 #### `GET` `/api/admin/homepage/preview-products`
-- **Auth**: admin-session (permission: `homepage:view`)
+- **Auth**: admin-session (guard: `homepage:view`)
 - **Purpose**: Server-side proxy to storefront `/api/products` for carousel filter-mode preview.
 - **Params**: query — forwards whitelisted `search`, `category`, `brand`, `minPrice`, `maxPrice`, `hasDiscount`, `sortOrder`, `sortBy`, `page`, `limit`
 - **Body**: none
@@ -698,7 +799,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: Forwards only the whitelisted params; defaults `limit=10`, `page=1`. Store base URL from `NEXT_PUBLIC_STORE_URL` || `STORE_URL` || `http://localhost:3000`. Uses `cache: "no-store"`. Avoids CORS by fetching server-to-store.
 
 #### `GET` `/api/admin/pages`
-- **Auth**: admin-session (permission: `pages:view`)
+- **Auth**: admin-session (guard: `pages:view`)
 - **Purpose**: List all static pages ordered by `displayOrder` then `updatedAt`.
 - **Params**: —
 - **Body**: none
@@ -706,7 +807,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: —
 
 #### `POST` `/api/admin/pages`
-- **Auth**: admin-session (permission: `pages:edit`)
+- **Auth**: admin-session (guard: `pages:edit`)
 - **Purpose**: Create a static page.
 - **Params**: —
 - **Body**: `{ slug: string (1-60 chars, /^[a-z0-9-]+$/), title: string (1-200 chars), content?: string (default ""), isPublished?: boolean (default true), displayOrder?: int (default 0) }`
@@ -714,7 +815,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: `id` via `crypto.randomUUID()`. Enforces slug uniqueness against `staticPages`.
 
 #### `GET` `/api/admin/pages/{id}`
-- **Auth**: admin-session (permission: `pages:view`)
+- **Auth**: admin-session (guard: `pages:view`)
 - **Purpose**: Fetch a single static page by id.
 - **Params**: `{ id }` (path)
 - **Body**: none
@@ -722,7 +823,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: —
 
 #### `PUT` `/api/admin/pages/{id}`
-- **Auth**: admin-session (permission: `pages:edit`)
+- **Auth**: admin-session (guard: `pages:edit`)
 - **Purpose**: Update a static page.
 - **Params**: `{ id }` (path)
 - **Body**: `{ slug?: string, title?: string, content?: string, isPublished?: boolean, displayOrder?: int }`
@@ -730,36 +831,25 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Notes**: When `slug` is provided, uniqueness is checked excluding the current id. Only provided fields are written; `updatedAt` always refreshed.
 
 #### `DELETE` `/api/admin/pages/{id}`
-- **Auth**: admin-session (permission: `pages:delete`)
+- **Auth**: admin-session (guard: `pages:delete`)
 - **Purpose**: Delete a static page.
 - **Params**: `{ id }` (path)
 - **Body**: none
 - **Response**: 200 `{ success: true, data: { id } }`; 404 if not found; 500 on error
 - **Notes**: —
 
-#### `GET` `/api/admin/permissions`
-- **Auth**: admin-session (role: `hq`)
-- **Purpose**: List all permissions.
+#### `/api/admin/permissions` — **REMOVED** (`GET`, `PUT`)
+
+#### `GET` `/api/admin/permissions/me` — **REMOVED**
+- **Status**: All three legacy permission endpoints return **`404`**. They were removed by the RBAC slice-9 cutover (migration `0018` dropped the `permission` table, the static permission map, and the legacy `users.role` column; runbook: `docs/deployment-docs/rbac-rollout.md`). There is no permission-map CRUD anymore: grants are managed via `/api/admin/roles` as normalized scoped grants on dynamic Roles, and policy discovery is `GET /api/admin/policy/me`.
+
+#### `GET` `/api/admin/policy/me`
+- **Auth**: admin-session (no module authorization gate — this is how the client discovers its own policy, including the deny-all No-Access case)
+- **Purpose**: Return the caller's Current Policy: Role identity, the exact current grants/scopes, Home Branch display data, and the policy version (`role.version`).
 - **Params**: —
 - **Body**: none
-- **Response**: 200 `{ success: true, data: rows }` (from `getAllPermissions()`); 401 if no session; 403 if role !== `hq`; 500 on error
-- **Notes**: Explicit `session.user.role !== "hq"` → 403. Not using `withPermission` wrapper.
-
-#### `PUT` `/api/admin/permissions`
-- **Auth**: admin-session (role: `hq`)
-- **Purpose**: Upsert a permission entry for the `admin` role on a given module.
-- **Params**: —
-- **Body**: `{ role: string, module: string, canView: boolean, canEdit: boolean, canDelete: boolean }`
-- **Response**: 200 `{ success: true }`; 401 if no session; 403 if role !== `hq`; 400 if `role` missing, `role !== "admin"`, `module` missing/not in `moduleNames`, or any of `canView`/`canEdit`/`canDelete` not boolean; 500 on error
-- **Notes**: Only the `admin` role can be modified (`hq` is implicit superuser and not editable here). `module` must be one of `moduleNames`. Calls `upsertPermission(role, module, { canView, canEdit, canDelete })`.
-
-#### `GET` `/api/admin/permissions/me`
-- **Auth**: admin-session
-- **Purpose**: Return the current user's role, permissions, and placed branch.
-- **Params**: —
-- **Body**: none
-- **Response**: 200 `{ success: true, data: { role, permissions, branch: { id, name, code, city } | null } }` (permissions from `getPermissionsForRole(role)`; `branch` is the admin's placed branch resolved by joining `branches` on `session.user.branchId`, `null` for HQ / branchless admins); 401 if no session; 500 on error
-- **Notes**: Any authenticated admin can read their own permissions; no role restriction. `branch` lets the admin sidebar render the placement ("Cabang …" for branch admins, "Head Quarter" for HQ) without a second request — the auth-provider already calls this endpoint on every admin page.
+- **Response**: 200 `{ success: true, data: { user: { id, name, email, isActive, homeBranchId, homeBranch: { id, name, code, city } | null }, role: { id, key, name, isSystem, archived }, grants, policyVersion, mustResetPassword } }`; 401 `UNAUTHENTICATED` if no session; 403 `NO_ACCESS` when the policy is unresolvable (unassigned/invalid Role); 500 on error
+- **Notes**: `force-dynamic`. The policy is resolved from the database on every call — never cached in the session — so role/grant/assignment changes apply on the next request. The browser mirrors this payload through `apps/admin/src/lib/rbac/policy-client.ts` for client-side checks.
 
 #### `GET` & `POST` `/api/auth/*`
 - **Auth**: managed per-endpoint by Better Auth `auth.handler`
@@ -787,7 +877,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
   - With `since` and new rows exist: 200 `{ success: true, data: NotificationListItem[], unreadCount: N, serverNow: "<latest-createdAt-or-db-now>" }`
   - With `since` and no new rows within ~25s: 200 `{ success: true, data: [], unreadCount: N, serverNow: "<db-now-iso>" }`
   - 401 if no session; 500 on error
-- **Notes**: `dynamic = "force-dynamic"`. Scope is enforced server-side: branch admins only receive notifications for `branchId = user.branchId`; HQ receives notifications for all branches. The client reconnects immediately after every response, using `serverNow` as the next `since` value. The in-memory pending-poll broadcaster (`apps/admin/src/lib/notification-broadcaster.ts`) wakes matching listeners when a new notification row is inserted.
+- **Notes**: `dynamic = "force-dynamic"`. Scope is enforced server-side from the Current Policy: own-branch scope only receives notifications for the server-pinned Home Branch; all-branch scope receives notifications for all branches. An own-branch grant without a Home Branch fails closed (403), never widening to all-branch. The client reconnects immediately after every response, using `serverNow` as the next `since` value. The in-memory pending-poll broadcaster (`apps/admin/src/lib/notification-broadcaster.ts`) wakes matching listeners when a new notification row is inserted.
 
 #### `GET` `/api/admin/notifications`
 - **Auth**: admin-session (`notifications:view`)
@@ -795,7 +885,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: `isRead` (`"all"` | `"read"` | `"unread"`, default `"all"`), `page` (int, default `1`), `limit` (int, default `20`, max `100`)
 - **Body**: none
 - **Response**: 200 `{ success: true, data: NotificationListItem[], pagination: { page, limit, total, totalPages } }`; 401/403/500 on error
-- **Notes**: Branch-scoped for branch admins; HQ sees all. Each row includes joined `branch` and `order` details (customer name, order status, total).
+- **Notes**: Scope comes from the Current Policy: own-branch scope is pinned to the server-pinned Home Branch; all-branch scope sees all. Each row includes joined `branch` and `order` details (customer name, order status, total).
 
 #### `PATCH` `/api/admin/notifications/{id}`
 - **Auth**: admin-session (`notifications:edit`)
@@ -832,7 +922,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 ## Appendix — Cross-cutting behaviors
 
 - **Stock reservation model**: availability is `branch_stock.stock - pendingRemoteStock`. `reservedStock` represents a confirmed Jubelio deduction and is not subtracted again. Place-order writes a negative adjustment before Midtrans; failure/expiry writes a positive compensation. Catalog sync never touches either runtime counter. See `docs/features/stock-reservation.md`.
-- **RBAC (admin)**: admin list/detail endpoints are branch-scoped via `getBranchScope` — branch admins see only their own branch; HQ sees all. Edit/delete operations additionally check the permission map (`<module>:<view|edit|delete>`); a few endpoints require `role: "hq"`.
-- **Audit log**: significant mutations write `audit_log` rows (e.g. `VERIFY_PICKUP_CODE`, `JUBELIO_SYNC_WEBHOOK`). Several upsert/delete endpoints (products, pages, footer, users) do **not** write audit entries — noted per endpoint.
+- **RBAC (admin)**: every policy-protected route seam uses the unified `guard` (`apps/admin/src/lib/rbac/guard.ts`) — 401 for a missing session, 403 with a stable code (`NO_ACCESS` for admission failures, `DENIED` for missing grants). Branch-aware list/detail endpoints are scoped via `branchScopeFromAuthorization` (`apps/admin/src/lib/rbac/branch-scope.ts`): `own_branch` scope is pinned server-side to the user's Home Branch (fail closed when missing); `all_branches` imposes no branch filter. Cross-branch object ids map to 404 via `crossBranchNotFound` so existence is not disclosed. Policy discovery is `GET /api/admin/policy/me`; the legacy permission map and `/api/admin/permissions` endpoints were removed (404) by the slice-9 cutover.
+- **Audit log**: significant mutations write `audit_log` rows through the unified `writeAuditEvent` seam (`apps/admin/src/lib/rbac/audit-writer.ts`): Roles (`ROLE_CREATED/UPDATED/ARCHIVED/RESTORED`), Users (`USER_CREATED/UPDATED/DEACTIVATED/REACTIVATED`), Branches (`CREATE/UPDATE/DELETE_BRANCH`), order stock-review (`RECHECK_JUBELIO_STOCK`) and pickup verification (`VERIFY_PICKUP_CODE`), and Jubelio syncs (`JUBELIO_SYNC_ADMIN`, `JUBELIO_SYNC_WEBHOOK`). RBAC/branch/order writers run **inside the mutation's transaction** and stamp `policyVersion` plus a `branchScope` classification (`global`/`single_branch`/`dual_branch` + `branchId`/`relatedBranchId`). Homepage/pages/footer mutations and notification deletes keep no audit trail — noted per endpoint. The store webhook row is a legacy unclassified event (no `policyVersion`/`branchScope`). Full writer/shape reference: `docs/features/audit-log.md`.
 - **Idempotency**: payment webhooks (Midtrans + sweep) use a claim-guard so duplicate/replayed notifications are safe. The Jubelio webhook is upsert-only on natural keys, so replays are safe.
 - **Transactions**: most admin CRUD endpoints do **not** wrap multi-row writes in a DB transaction (noted where relevant); `place-order` and the stock-claim flows do.

@@ -73,6 +73,18 @@ describe("deleteFile", () => {
     expect(existsSync(outside)).toBe(true);
   });
 
+  it("refuses folder-escaping traversal that stays inside the root", async () => {
+    // Resolves to <root>/homepage/x.webp: inside the uploads root (root
+    // containment alone would pass) but outside the /uploads/products folder
+    // the URL names. deleteFile must reject the dot segment, not just
+    // out-of-root escapes.
+    const homepageFile = path.join(dir, "homepage", "x.webp");
+    mkdirSync(path.dirname(homepageFile), { recursive: true });
+    writeFileSync(homepageFile, "x");
+    await deleteFile("/uploads/products/../homepage/x.webp");
+    expect(existsSync(homepageFile)).toBe(true);
+  });
+
   it("is a no-op when the file does not exist", async () => {
     await expect(deleteFile("/uploads/products/missing.png")).resolves.toBeUndefined();
   });

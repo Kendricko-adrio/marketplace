@@ -1,13 +1,16 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { staticPages } from "@/db";
 import { eq, asc } from "drizzle-orm";
-import { withAuth } from "@/lib/auth-guard";
+import { guard } from "@/lib/rbac/guard";
+import { serializeError } from "@/lib/logger";
 
 // -----------------------------
-// GET /api/admin/linkable-destinations — HQ only
-// Returns categorized lists of storefront destinations that can be used
-// as footer link hrefs. Consumed by FooterLinkPicker.
+// GET /api/admin/linkable-destinations [footer:view]
+// Link destination reads follow the Footer module: the picker only feeds
+// footer links, so the Footer view grant governs the read. Returns
+// categorized lists of storefront destinations that can be used as footer
+// link hrefs. Consumed by FooterLinkPicker.
 // -----------------------------
 
 interface LinkableDestination {
@@ -32,7 +35,11 @@ const STATIC_ROUTES: LinkableDestination[] = [
   { label: "Daftar", href: "/register" },
 ];
 
-export const GET = withAuth(async () => {
+export async function GET(request: NextRequest) {
+  const guardResult = await guard("footer", "view", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger } = guardResult;
+
   try {
     // Fetch published static pages, ordered by displayOrder then title.
     const pageRows = await db
@@ -50,6 +57,7 @@ export const GET = withAuth(async () => {
       href: `/pages/${p.slug}`,
     }));
 
+    logger.info("linkable_destinations.get", { outcome: "success" });
     return NextResponse.json({
       success: true,
       data: {
@@ -58,10 +66,13 @@ export const GET = withAuth(async () => {
       },
     });
   } catch (error) {
-    console.error("Error fetching linkable destinations:", error);
+    logger.error("linkable_destinations.get.failure", {
+      outcome: "error",
+      error: serializeError(error),
+    });
     return NextResponse.json(
       { success: false, error: "Failed to fetch linkable destinations" },
       { status: 500 }
     );
   }
-}, ["hq"]);
+}

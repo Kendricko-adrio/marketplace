@@ -5,7 +5,10 @@ export const seedCleanupEntries: ReadonlyArray<
   readonly [name: string, table: AnyPgTable]
 > = [
   ["notifications", schema.notifications],
-  ["permissions", schema.permissions],
+  // New RBAC tables: grants before roles; roles after users because
+  // users.role_id references admin_role with ON DELETE RESTRICT.
+  // (The legacy permission table was dropped by migration 0018.)
+  ["adminRoleGrants", schema.adminRoleGrants],
   ["staticPages", schema.staticPages],
   ["footerConfig", schema.footerConfig],
   ["homepageSectionProducts", schema.homepageSectionProducts],
@@ -29,6 +32,7 @@ export const seedCleanupEntries: ReadonlyArray<
   ["adminAccounts", schema.adminAccounts],
   ["adminVerifications", schema.adminVerifications],
   ["users", schema.users],
+  ["adminRoles", schema.adminRoles],
   ["branches", schema.branches],
   ["vouchers", schema.vouchers],
   ["addresses", schema.addresses],

@@ -7,10 +7,19 @@ import {
 } from "@/db";
 import { asc, inArray, desc } from "drizzle-orm";
 import { z } from "zod";
-import { withPermission } from "@/lib/auth-guard";
+import { serializeError } from "@/lib/logger";
+import { guard } from "@/lib/rbac/guard";
 import { validateContent } from "@/lib/homepage-content";
 
-export const GET = withPermission(async () => {
+// =========================================================
+// RBAC: global Homepage module — GET requires homepage:view,
+// POST requires homepage:edit (Current Policy, not a Role name).
+// =========================================================
+export async function GET(request: NextRequest) {
+  const guardResult = await guard("homepage", "view", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger } = guardResult;
+
   try {
     const sections = await db
       .select()
@@ -69,15 +78,22 @@ export const GET = withPermission(async () => {
       return section;
     });
 
+    logger.info("homepage.list", {
+      outcome: "success",
+      count: data.length,
+    });
     return NextResponse.json({ success: true, data });
   } catch (error) {
-    console.error("Error fetching homepage sections:", error);
+    logger.error("homepage.list.failure", {
+      outcome: "error",
+      error: serializeError(error),
+    });
     return NextResponse.json(
       { success: false, error: "Failed to fetch homepage sections" },
       { status: 500 }
     );
   }
-}, "homepage", "view");
+}
 
 const createSectionSchema = z.object({
   type: z.enum([
@@ -94,7 +110,11 @@ const createSectionSchema = z.object({
   productIds: z.array(z.string()).optional(),
 });
 
-export const POST = withPermission(async (_ctx, request: NextRequest) => {
+export async function POST(request: NextRequest) {
+  const guardResult = await guard("homepage", "edit", { request });
+  if (!guardResult.ok) return guardResult.response;
+  const { logger, ctx } = guardResult;
+
   try {
     const body = await request.json();
     const parsed = createSectionSchema.safeParse(body);
@@ -160,15 +180,23 @@ export const POST = withPermission(async (_ctx, request: NextRequest) => {
       }
     }
 
+    logger.info("homepage.create", {
+      outcome: "success",
+      sectionId,
+      actorId: ctx.user.id,
+    });
     return NextResponse.json({
       success: true,
       data: { id: sectionId },
     });
   } catch (error) {
-    console.error("Error creating homepage section:", error);
+    logger.error("homepage.create.failure", {
+      outcome: "error",
+      error: serializeError(error),
+    });
     return NextResponse.json(
       { success: false, error: "Failed to create section" },
       { status: 500 }
     );
   }
-}, "homepage", "edit");
+}

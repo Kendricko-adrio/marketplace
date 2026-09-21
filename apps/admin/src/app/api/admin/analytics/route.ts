@@ -1,23 +1,59 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { clients, orders } from "@/db";
-import { sql, desc, gte, and, eq, count as countFn } from "drizzle-orm";
+import {
+  sql,
+  desc,
+  gte,
+  and,
+  eq,
+  ne,
+  count as countFn,
+  type SQL,
+} from "drizzle-orm";
 import { guard } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import { serializeError } from "@/lib/logger";
+import {
+  trendWindowKeys,
+  trendWindowStart,
+  zeroFilledTrend,
+  type TrendRow,
+} from "@/lib/analytics-wib";
+
+// =========================================================
+// Revenue condition — the single source of truth for EVERY revenue aggregate
+// in this route: an order contributes revenue only when it is paid AND not
+// cancelled. Late-settled failed_payment orders with paymentStatus 'paid'
+// count; the normal failed path (failed_payment + 'failed') is excluded;
+// cancelled orders never contribute.
+// =========================================================
+const revenueCondition: SQL = and(
+  eq(orders.paymentStatus, "paid"),
+  ne(orders.status, "cancelled")
+) as SQL;
 
 // GET /api/admin/analytics   [analytics:view]
 //
 // Branch Analytics aggregates are limited to the Authorized Branch from the
 // Current Policy:
-//   - own scope  → order count, paid revenue, statuses, recent activity, and
-//     distinct transacting customers are filtered to the Home Branch; Orders
-//     without a Branch are excluded.
+//   - own scope  → revenue, order counts, statuses, trend, recent activity,
+//     and distinct transacting customers are filtered to the Home Branch;
+//     Orders without a Branch are excluded.
 //   - all scope  → every Order is included, including Orders without a
 //     Branch.
 // A distinct customer counts only after transacting through an Order in the
 // authorized scope (the Customer Directory is global, but analytics counts
 // transactors, not directory entries).
+//
+// Exactly four queries are started (before Promise.all) per request:
+//   1. consolidated KPI with FILTER aggregates (revenue, qualifying order
+//      count, rolling 30d revenue, rolling 7d orders, total orders, distinct
+//      transactors);
+//   2. 30-day WIB calendar-day trend grouped by
+//      to_char(created_at AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD');
+//   3. order status counts;
+//   4. five recent orders joined with their customer.
 export async function GET(request: NextRequest) {
   const guardResult = await guard("analytics", "view", { request });
   if (!guardResult.ok) return guardResult.response;
@@ -40,54 +76,47 @@ export async function GET(request: NextRequest) {
     const branchCondition =
       scope.mode === "own" ? eq(orders.branchId, scope.branchId) : undefined;
 
+    // One clock reading drives every window: the rolling KPI windows and the
+    // WIB trend window must agree on "now".
     const now = new Date();
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const trendStart = trendWindowStart(now);
 
-    // Total revenue (all time)
-    const totalRevenue = await db
-      .select({ sum: sql<string>`COALESCE(SUM(CAST(total AS DECIMAL)), 0)` })
-      .from(orders)
-      .where(
-        branchCondition
-          ? and(eq(orders.paymentStatus, "paid"), branchCondition)
-          : eq(orders.paymentStatus, "paid")
-      );
-
-    // Revenue this month
-    const monthlyRevenue = await db
-      .select({ sum: sql<string>`COALESCE(SUM(CAST(total AS DECIMAL)), 0)` })
-      .from(orders)
-      .where(
-        and(
-          eq(orders.paymentStatus, "paid"),
-          gte(orders.createdAt, thirtyDaysAgo),
-          branchCondition
-        )
-      );
-
-    // Total orders
-    const totalOrders = await db
-      .select({ count: countFn() })
+    // 1) Consolidated KPI — FILTER aggregates keep this a single scan.
+    const kpiQuery = db
+      .select({
+        totalRevenue: sql<string>`COALESCE(SUM(CAST(${orders.total} AS DECIMAL)) FILTER (WHERE ${revenueCondition}), 0)`,
+        revenueOrderCount: sql<number>`COUNT(*) FILTER (WHERE ${revenueCondition})`.mapWith(
+          Number
+        ),
+        monthlyRevenue: sql<string>`COALESCE(SUM(CAST(${orders.total} AS DECIMAL)) FILTER (WHERE ${revenueCondition} AND ${orders.createdAt} >= ${thirtyDaysAgo}), 0)`,
+        weeklyOrders:
+          sql<number>`COUNT(*) FILTER (WHERE ${orders.createdAt} >= ${sevenDaysAgo})`.mapWith(
+            Number
+          ),
+        totalOrders: sql<number>`COUNT(*)`.mapWith(Number),
+        totalCustomers:
+          sql<number>`COUNT(DISTINCT ${orders.userId})`.mapWith(Number),
+      })
       .from(orders)
       .where(branchCondition);
 
-    // Orders this week
-    const weeklyOrders = await db
-      .select({ count: countFn() })
+    // 2) 30-day WIB trend — grouped by WIB calendar day. `orders` counts all
+    //    statuses; `revenue` applies the revenue condition via FILTER.
+    const trendDayKey = sql`to_char(${orders.createdAt} AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD')`;
+    const trendQuery = db
+      .select({
+        day: sql<string>`${trendDayKey}`,
+        orders: sql<number>`COUNT(*)`.mapWith(Number),
+        revenue: sql<string>`COALESCE(SUM(CAST(${orders.total} AS DECIMAL)) FILTER (WHERE ${revenueCondition}), 0)`,
+      })
       .from(orders)
-      .where(and(gte(orders.createdAt, sevenDaysAgo), branchCondition));
+      .where(and(branchCondition, gte(orders.createdAt, trendStart)))
+      .groupBy(trendDayKey);
 
-    // Distinct transacting customers in the authorized scope: a customer
-    // counts only after transacting through an Order in scope (null-branch
-    // Orders are excluded under own scope and included under all scope).
-    const totalCustomers = await db
-      .select({ count: countFn(sql`DISTINCT ${orders.userId}`) })
-      .from(orders)
-      .where(branchCondition);
-
-    // Orders by status
-    const ordersByStatus = await db
+    // 3) Order status counts (all statuses).
+    const statusQuery = db
       .select({
         status: orders.status,
         count: countFn(),
@@ -96,8 +125,8 @@ export async function GET(request: NextRequest) {
       .where(branchCondition)
       .groupBy(orders.status);
 
-    // Recent orders (joined with clients)
-    const recentOrders = await db
+    // 4) Recent orders (joined with clients).
+    const recentQuery = db
       .select({
         id: orders.id,
         total: orders.total,
@@ -111,6 +140,17 @@ export async function GET(request: NextRequest) {
       .orderBy(desc(orders.createdAt))
       .limit(5);
 
+    const [kpiRows, trendRows, statusRows, recentOrders] = await Promise.all([
+      kpiQuery.execute(),
+      trendQuery.execute(),
+      statusQuery.execute(),
+      recentQuery.execute(),
+    ]);
+
+    const kpi = kpiRows[0];
+    const qualifyingRevenue = parseFloat(kpi?.totalRevenue ?? "0");
+    const qualifyingOrderCount = Number(kpi?.revenueOrderCount ?? 0);
+
     logger.info("analytics.summary", {
       outcome: "success",
       scope: scope.mode,
@@ -118,16 +158,25 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       success: true,
       data: {
-        totalRevenue: parseFloat(totalRevenue[0]?.sum || "0"),
-        monthlyRevenue: parseFloat(monthlyRevenue[0]?.sum || "0"),
-        totalOrders: Number(totalOrders[0]?.count || 0),
-        weeklyOrders: Number(weeklyOrders[0]?.count || 0),
-        totalCustomers: Number(totalCustomers[0]?.count || 0),
-        ordersByStatus: ordersByStatus.map((o) => ({
+        // All-time revenue under the revenue condition.
+        totalRevenue: qualifyingRevenue,
+        // Rolling 30×24h revenue (not the WIB calendar window).
+        monthlyRevenue: parseFloat(kpi?.monthlyRevenue ?? "0"),
+        totalOrders: Number(kpi?.totalOrders ?? 0),
+        weeklyOrders: Number(kpi?.weeklyOrders ?? 0),
+        totalCustomers: Number(kpi?.totalCustomers ?? 0),
+        // All-time qualifying revenue ÷ qualifying order count; 0 when none.
+        averageOrderValue:
+          qualifyingOrderCount > 0
+            ? qualifyingRevenue / qualifyingOrderCount
+            : 0,
+        ordersByStatus: statusRows.map((o) => ({
           status: o.status,
           count: Number(o.count),
         })),
         recentOrders,
+        // Exactly 30 WIB calendar days, oldest → newest, zero-filled.
+        trend: zeroFilledTrend(trendRows as TrendRow[], trendWindowKeys(now)),
       },
     });
   } catch (error) {

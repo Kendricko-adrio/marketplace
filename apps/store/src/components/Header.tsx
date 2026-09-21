@@ -110,7 +110,7 @@ export default function Header() {
             <Button
               variant="ghost"
               size="sm"
-              className="hidden md:inline-flex text-white hover:bg-white/10 gap-2"
+              className="hidden md:inline-flex text-white hover:bg-white/10 hover:text-white gap-2"
             >
               <MapPin className="h-4 w-4" />
               Cabang
@@ -140,7 +140,7 @@ export default function Header() {
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
-                  className="relative h-10 w-10 rounded-full p-0 text-white hover:bg-white/10"
+                  className="relative h-10 w-10 rounded-full p-0 text-white hover:bg-white/10 hover:text-white"
                 >
                   <Avatar className="h-9 w-9">
                     <AvatarImage
@@ -201,7 +201,7 @@ export default function Header() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="text-white hover:bg-white/10"
+                  className="text-white hover:bg-white/10 hover:text-white"
                 >
                   Masuk
                 </Button>

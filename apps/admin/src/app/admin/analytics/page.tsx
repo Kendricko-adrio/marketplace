@@ -1,36 +1,21 @@
-import { Construction } from "lucide-react";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import AnalyticsDashboard from "./analytics-dashboard";
 
+// Server shell for the analytics dashboard. The layout enforces the
+// analytics:view policy gate; the dashboard itself client-fetches
+// GET /api/admin/analytics (skeleton → data / error + retry, no polling).
 export default function AdminAnalyticsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold tracking-tight">Analitik</h2>
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight">Analitik</h2>
+          <p className="text-sm text-muted-foreground">
+            Ringkasan pendapatan, pesanan, dan aktivitas terbaru.
+          </p>
+        </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Construction className="h-5 w-5 text-muted-foreground" />
-            Segera Hadir
-          </CardTitle>
-          <CardDescription>
-            Halaman analitik sedang dalam pengembangan.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="text-sm text-muted-foreground">
-            Data laporan dan analitik akan tersedia di sini setelah fitur
-            selesai dikembangkan.
-          </p>
-        </CardContent>
-      </Card>
+      <AnalyticsDashboard />
     </div>
   );
 }

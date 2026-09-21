@@ -12,6 +12,15 @@
 // order by awaited selects; `mutationRows` are returned by every
 // `.returning()` / awaited insert, update or delete; empty results are
 // returned once the queue is exhausted (the natural "no rows" case).
+//
+// Select chains additionally support `.groupBy()`, `.having()`, `.innerJoin()`
+// and `.leftJoin()` (shape-recording no-ops) and `.execute()` (marks the op as
+// started and resolves the queued rows — routes that start several queries
+// concurrently before Promise.all are observable through `op.executed`).
+// `.where(arg)` records its argument verbatim on the op (`op.where`), so seam
+// tests can render the predicate through Drizzle's own dialect and assert
+// semantic conditions (target column, bound value) without re-implementing
+// the builder.
 
 export interface FakeDbConfig {
   /** Rows returned by awaited select chains, consumed in call order. */
@@ -22,6 +31,8 @@ export interface FakeDbConfig {
   failInsert?: (values: Record<string, unknown>) => boolean;
   /** Reject an update when this predicate returns true. */
   failUpdate?: (set: Record<string, unknown>) => boolean;
+  /** Reject awaited/executed selects when this predicate returns true. */
+  failSelect?: () => boolean;
 }
 
 export interface RecordedOp {
@@ -31,6 +42,10 @@ export interface RecordedOp {
   set?: unknown;
   /** Row-lock mode, e.g. "update" for `.for("update")`. */
   lock?: string;
+  /** The `.where()` argument as passed (Drizzle predicate or undefined); absent when `.where` was never called. */
+  where?: unknown;
+  /** True once `.execute()` was called on this select chain. */
+  executed?: boolean;
 }
 
 export interface FakeDb {
@@ -66,9 +81,24 @@ export function createFakeDb(config: FakeDbConfig = {}): FakeDb {
 
   function chain(promise: Promise<Record<string, unknown>[]>, op: RecordedOp) {
     const q: Record<string, unknown> = {};
-    for (const method of ["from", "where", "limit", "offset", "orderBy"]) {
+    for (const method of [
+      "from",
+      "limit",
+      "offset",
+      "orderBy",
+      "groupBy",
+      "having",
+      "innerJoin",
+      "leftJoin",
+    ]) {
       q[method] = () => q;
     }
+    // `.where()` is recorded (argument kept verbatim on the op) instead of
+    // being a pure no-op, so tests can assert the applied predicates.
+    q.where = (value: unknown) => {
+      op.where = value;
+      return q;
+    };
     q.set = (value: unknown) => {
       op.set = value;
       return q;
@@ -80,6 +110,10 @@ export function createFakeDb(config: FakeDbConfig = {}): FakeDb {
     q.for = (mode: string) => {
       op.lock = mode;
       return q;
+    };
+    q.execute = () => {
+      op.executed = true;
+      return promise;
     };
     q.returning = () => promise;
     // Awaitable even without `.returning()`.
@@ -98,7 +132,10 @@ export function createFakeDb(config: FakeDbConfig = {}): FakeDb {
     executor.select = (..._args: unknown[]) => {
       const op: RecordedOp = { kind: "select", isTx };
       ops.push(op);
-      return chain(Promise.resolve(nextSelectRows()), op);
+      const promise = config.failSelect?.()
+        ? Promise.reject(new Error("fake select failure"))
+        : Promise.resolve(nextSelectRows());
+      return chain(promise, op);
     };
 
     executor.insert = (_table: unknown) => ({

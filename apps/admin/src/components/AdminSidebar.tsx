@@ -8,6 +8,7 @@ import {
   Users,
   UserRoundSearch,
   Store,
+  BarChart3,
   LayoutTemplate,
   FileText,
   Shield,
@@ -67,6 +68,7 @@ export default function AdminSidebar() {
     { href: "/admin/customers", label: "Customer", icon: UserRoundSearch, module: "customers" },
     { href: "/admin/notifications", label: "Notifikasi", icon: Bell, module: "notifications" },
     { href: "/admin/branches", label: "Cabang", icon: Store, module: "branches" },
+    { href: "/admin/analytics", label: "Analitik", icon: BarChart3, module: "analytics" },
     { href: "/admin/homepage", label: "Homepage", icon: LayoutTemplate, module: "homepage" },
     { href: "/admin/pages", label: "Halaman", icon: FileText, module: "pages" },
     { href: "/admin/users", label: "Pengguna", icon: Users, module: "users" },
@@ -153,7 +155,7 @@ export default function AdminSidebar() {
                 className={cn(
                   "w-full justify-start gap-3",
                   isActive
-                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                    ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
                     : "hover:bg-accent hover:text-accent-foreground",
                   permissionsLoading && link.module && "opacity-60"
                 )}

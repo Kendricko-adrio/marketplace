@@ -42,6 +42,16 @@ Before placing a doc, check the live folder structure with `ls docs/` (do not
 rely on memory) and update `docs/features/` / `docs/deployment-docs/`
 index/README if any of them mention a file that moved.
 
+### Transient plans vs. enduring docs
+
+`plan/` (a root-level folder, **not** part of `docs/`) holds **transient**
+conceptual multi-feature plans with their own lifecycle — a plan file is
+deleted when its plan reaches Done; see [`plan/README.md`](../plan/README.md).
+`docs/` holds **enduring** documentation only. When a plan retires, its
+lasting design/invariant/flow content is distilled into the appropriate
+`docs/` folder per the destination rules above; plans are never kept in
+`docs/` in raw form.
+
 ## Rules
 
 - **Keep `docs/api-reference.md` fresh**: every new/changed endpoint is

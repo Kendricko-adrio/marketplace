@@ -1,0 +1,19 @@
+{"stage":"intent","run":"1790411482966","itemId":43842,"locationId":7,"price":1000,"qty":1,"initial":"Belum Bayar","next":"Siap Proses"}
+{"stage":"baseline","stock":{"onHand":4,"onOrder":2,"reserved":"<absent>","available":2}}
+{"stage":"dispatch_intent","operation":"create","ids":{"so":null,"invoice":null,"payment":null}}
+{"stage":"write_http","operation":"create","status":200}
+{"stage":"create_id","ids":{"so":68398,"invoice":null,"payment":null}}
+{"stage":"create_verified","so":{"id":68398,"channel_status":"Belum Bayar","wms_status":"UNKNOWN","is_paid":null,"internal_status":null,"invoice_id":null,"is_canceled":null,"source":1,"location_id":7,"grand_total":1000,"items":[{"detail_id":74681,"item_id":43842,"qty":1,"price":1000,"amount":1000}]},"list":{"channel_status":"Belum Bayar","wms_status":"UNKNOWN","is_paid":null},"stock":{"onHand":4,"onOrder":3,"reserved":"<absent>","available":1}}
+{"stage":"dispatch_intent","operation":"invoice","ids":{"so":68398,"invoice":null,"payment":null}}
+{"stage":"write_http","operation":"invoice","status":200}
+{"stage":"invoice_id","ids":{"so":68398,"invoice":45944,"payment":null}}
+{"stage":"invoice_verified","ids":{"so":68398,"invoice":45944,"payment":null},"so":{"id":68398,"channel_status":"Belum Bayar","wms_status":"UNKNOWN","is_paid":null,"internal_status":null,"invoice_id":45944,"is_canceled":null,"source":1,"location_id":7,"grand_total":1000,"items":[{"detail_id":74681,"item_id":43842,"qty":1,"price":1000,"amount":1000}]},"stock":{"onHand":3,"onOrder":2,"reserved":"<absent>","available":1}}
+{"stage":"dispatch_intent","operation":"payment","ids":{"so":68398,"invoice":45944,"payment":null}}
+{"stage":"write_http","operation":"payment","status":200}
+{"stage":"payment_id","ids":{"so":68398,"invoice":45944,"payment":26}}
+{"stage":"pre_edit","ids":{"so":68398,"invoice":45944,"payment":26},"so":{"id":68398,"channel_status":"Belum Bayar","wms_status":"UNKNOWN","is_paid":null,"internal_status":null,"invoice_id":45944,"is_canceled":null,"source":1,"location_id":7,"grand_total":1000,"items":[{"detail_id":74681,"item_id":43842,"qty":1,"price":1000,"amount":1000}]},"list":{"channel_status":"Belum Bayar","wms_status":"UNKNOWN","is_paid":null},"paymentAssociations":1,"paymentList":{"totalCount":0,"ids":[]},"stock":{"onHand":3,"onOrder":2,"reserved":"<absent>","available":1}}
+{"stage":"edit_payload_validated","ids":{"so":68398,"invoice":45944,"payment":26},"changedFields":["salesorder_id","salesorder_no","transaction_date","channel_status","shipping_cost","insurance_cost","items[0].salesorder_detail_id"],"intentionalDifference":"channel_status only"}
+{"stage":"dispatch_intent","operation":"edit","ids":{"so":68398,"invoice":45944,"payment":26}}
+{"stage":"write_http","operation":"edit","status":200}
+{"stage":"edit_response","id":68398,"responseId":68398}
+{"stage":"VERIFIED_API_ONLY","ids":{"so":68398,"invoice":45944,"payment":26},"before":{"id":68398,"channel_status":"Belum Bayar","wms_status":"UNKNOWN","is_paid":null,"internal_status":null,"invoice_id":45944,"is_canceled":null,"source":1,"location_id":7,"grand_total":1000,"items":[{"detail_id":74681,"item_id":43842,"qty":1,"price":1000,"amount":1000}]},"after":{"id":68398,"channel_status":"Siap Proses","wms_status":"UNKNOWN","is_paid":null,"internal_status":null,"invoice_id":45944,"is_canceled":null,"source":1,"location_id":7,"grand_total":1000,"items":[{"detail_id":74681,"item_id":43842,"qty":1,"price":1000,"amount":1000}]},"beforeStock":{"onHand":3,"onOrder":2,"reserved":"<absent>","available":1},"afterStock":{"onHand":3,"onOrder":2,"reserved":"<absent>","available":1},"beforePaymentList":{"totalCount":0,"ids":[]},"afterPaymentList":{"totalCount":0,"ids":[]},"list":{"channel_status":"Siap Proses","wms_status":"UNKNOWN","is_paid":null},"note":"UI and hidden accounting side effects not yet independently proven"}

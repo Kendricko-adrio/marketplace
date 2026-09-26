@@ -11,7 +11,7 @@ Run everything from the repo root.
 
 ## Prerequisites
 
-- **Unit tests**: none — pure logic only.
+- **Focused SO gateway and stock-sync unit tests**: no database needed (`npm exec --workspace=apps/store -- vitest run src/lib/jubelio-sales-client.test.ts` and `npm exec --workspace=packages/db -- vitest run src/jubelio-sync.test.ts`). The Sales gateway tests stub the external HTTP boundary; they never start a mock server or contact Jubelio. The separate **legacy/candidate mock** tests are `npm exec --workspace=apps/jubelio-mock -- vitest run src/server.test.ts`; they are not used by the new Sales gateway. **The full `npm run test:unit` suite is not entirely infrastructure-free**: `apps/admin/src/lib/rbac/users-service-db.test.ts`, `packages/db/src/migrations/migration-0018-rehearsal.test.ts`, and `apps/store/src/lib/jubelio-sales-operations.db.test.ts` need local PostgreSQL. Without port 5432, the first two fail with `ECONNREFUSED`; the new ledger suite skips five race tests and **fails its explicit environment-blocker test**. The ledger claim is not DB-verified until those tests run against a prepared schema. Do not mistake that infrastructure failure for an SO regression.
 - **E2E tests**:
   - PostgreSQL up (`docker compose up -d`) with schema + seed applied:
     `npm run db:push && npm run db:seed`.
@@ -58,7 +58,7 @@ E2E_ADMIN_IDENTIFIER=... E2E_ADMIN_PASSWORD=...
 
 ```
 playwright.config.ts      # projects: setup, store, admin + webServer
-apps/jubelio-mock/        # stateful HTTP mock for Jubelio stock adjustments
+apps/jubelio-mock/        # stateful Jubelio mock (legacy adjustments + candidate Sales API)
 e2e/
   config.ts               # auth-state paths + TEST_USERS (env-overridable)
   auth.setup.ts           # logs in once per app, saves storageState
@@ -67,7 +67,8 @@ e2e/
     account.spec.ts       # authenticated smoke (reuses saved session)
     products.spec.ts      # infinite scroll, sidebar filters, pricing, grey-out
     product-detail.spec.ts# metadata (brand/gender/category/price/discount/stock)
-    checkout.spec.ts      # cart → checkout → PPN snapshot → local payment boundary; vouchers
+    checkout.spec.ts      # legacy adjustment checkout → PPN snapshot → local payment boundary; vouchers
+    sales-recovery.spec.ts# secret-protected cron queues stale SO dispatch for manual review (no provider write)
     onboarding.spec.ts   # fresh user → /onboarding → cookie (isolated user via pg)
     static-pages.spec.ts  # CMS pages + footer rendering
   admin/                  # admin specs (baseURL http://localhost:3001)
@@ -90,16 +91,76 @@ packages/db/vitest.config.ts
 
 ### E2E pitfalls (learned the hard way)
 
-- `npm run dev:store` starts both the storefront and Jubelio mock. Playwright
-  starts them as separate managed processes. Non-production stock writes never
-  use the live Jubelio host.
+- `npm run dev:store` starts both the storefront and Jubelio mock for the
+  **still-active legacy adjustment flow**. Playwright starts them as separate
+  managed processes. The new Sales gateway has **no mock mode**: outside
+  production it fails closed unless explicitly opted into a pinned real
+  test-account host; it has no checkout caller yet. Legacy non-production
+  stock writes still use the local mock.
 - Mock controls: `POST http://127.0.0.1:3002/__control/reset`, then
   `PUT /__control/scenario` with one of `success`, `insufficient-stock`,
   `server-error`, `rate-limit-once`, `unauthorized-once`,
-  `timeout-before-apply`, `timeout-after-apply`, or `malformed-success`.
-- `checkout.spec.ts` asserts successful reserve-before-Midtrans, PPN display
-  and persisted pricing snapshot, provider snapshot persistence, rejection,
-  and late-settlement re-acquisition.
+  `timeout-before-apply`, `timeout-after-apply`, or `malformed-success` for
+  legacy adjustments. The **candidate** Sales API mock supports
+  `timeout-after-apply` and `malformed-success-after-apply` for SO create,
+  cancel, invoice creation and payment. Reset state between cases; seed an
+  item/location with `POST /__control/stocks/ensure`. `GET /__control/requests`
+  exposes attempted HTTP writes for assertions. `GET /inventory/` reflects
+  SO `on_order` and `available` changes observed in the single test-account
+  canary. The mock invoice/payment effects and 409 duplicate behavior are
+  **hypotheses**, not verified Jubelio behavior. No test may interpret a green
+  mock as approval for real invoice/payment writes or checkout activation.
+- The Sales Order gateway (`apps/store/src/lib/jubelio-sales-client.ts`) now
+  backs the live checkout (Sales-Order cutover). It never uses the local mock
+  server; its ~65 focused tests stub the external HTTP boundary and assert
+  one POST per write, independent GET confirmations, pre-invoice
+cancellation, fail-closed ambiguous outcomes, and the sandbox-observed
+  invoice/payment response shapes (`{status,id}` responses, numeric
+  `payment_type`, invoice linkage via the SO GET's `invoice_id`, payment
+  association via `invoices[]`).
+- **Sandbox integration**: `npm run sandbox:sales` (apps/store) runs the real
+  Path 1 chain against the isolated `.env` test account (requires
+  `JUBELIO_SALES_TEST_ACCOUNT_ENABLED=true`): SO create/confirm/stock series,
+  confirmed cancel/stock restore, invoice conversion + linkage, payment +
+  association, and gateway refusal to cancel after an invoice. It writes test
+  records into the sandbox account only.
+- Confirmed create/cancel accounting crash replay and a recovered invoice
+  with mismatched items are covered by
+  `apps/store/src/lib/jubelio-sales-recovery.db.test.ts` (PostgreSQL required).
+  `packages/db/src/checkout-live-stock.db.test.ts` verifies live checkout
+  stock reads with a stubbed provider, stale-local-zero recovery, fail-closed
+  invalid/network observations and concurrent-hold protection. The provider
+  clock is distinct from the local `branch_stock.updated_at` hold clock.
+- **Sandbox re-verification (2026-09-25):** item 101187 had no stock; a
+  previous invoice conversion for SO 68388 returned an ambiguous 500. The
+  read-only investigation script `apps/store/src/scripts/inspect-sandbox-so-68388.ts`
+  found no SO invoice ID and only a different SO in the customer-filtered
+  invoice list. This does NOT settle the ambiguity: an operator must decide
+  disposition; never re-POST the invoice. New stocked item 43822/location 2
+  passed the full Path 1 chain (SO 68390 → invoice 45939 → payment 16).
+  Re-run with `JUBELIO_SANDBOX_ITEM_ID=43822 JUBELIO_SANDBOX_LOCATION_ID=2
+  npm run sandbox:sales` from `apps/store` after checking stock availability.
+  Stock-only scan boundary and PostgreSQL race tests are in
+  `packages/db/src/jubelio-stock-refresh*.test.ts`; cron auth tests in
+  `apps/store/src/app/api/cron/refresh-jubelio-stock/route.test.ts`.
+  `checkout.spec.ts` checks that an old local observation no longer removes
+  cart items before the live place-order check. `provisional-stock.spec.ts`
+  checks the provisional product/cart display and customer-visible checkout
+  errors with a **stubbed HTTP checkout response**; this UI stub does not
+  prove a live Jubelio SO create or stock read.
+- The SO hold concurrency guarantees are DB-tested in
+  `apps/store/src/lib/jubelio-sales-holds.db.test.ts` (requires PostgreSQL:
+  parallel holds cannot oversell; a sync refresh never clears holds; the
+  confirmed-create mirror decrements exactly once).
+- `sales-recovery.spec.ts` uses a dedicated DB fixture and the real cron HTTP
+  endpoint to prove unauthorized requests cannot triage an operation and
+  authorized sweeps reconcile/mark aged unknown claims.
+- `checkout.spec.ts` exercises the SO flow end-to-end when
+  `JUBELIO_SALES_TEST_ACCOUNT_ENABLED=true`: confirmed SO before Midtrans,
+  zero adjustment writes, fail-closed manual-review routing for unknown
+  remote items, late settlement after a confirmed cancel → paid-but-blocked,
+  and authoritative payment-attribute persistence. It cancels its sandbox
+  Sales Orders in `afterAll`.
 - `cms.spec.ts` saves/enables/disables WhatsApp and restores the complete footer
   JSON. `users.spec.ts` verifies generated-password reset through login.
 - For late settlement, Playwright sets the non-production-only
@@ -114,8 +175,9 @@ packages/db/vitest.config.ts
   `/checkout/payment-test` page, so CI never creates a real Midtrans charge.
 - Checkout uses deterministic seeded fixtures and cleans up orders plus stock
   reservations in `afterAll`, keeping repeated runs isolated.
-- Unit tests remain infrastructure-free; E2E requires the disposable seeded
-  PostgreSQL database described above.
+- The **focused** SO gateway/stock-sync unit tests above need no database;
+  the full unit suite includes PostgreSQL-dependent migration/RBAC tests.
+  E2E requires the disposable seeded PostgreSQL database described above.
 
 - **React hydration race**: filling a controlled input right after navigation
   gets reverted when hydration takes over. Wait for a client-side signal first

@@ -1,0 +1,26 @@
+{"stage":"intent","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","fixture":{"itemId":43842,"locationId":7,"qty":1,"price":1000,"contactId":-1},"maxPosts":{"login":1,"stock":1,"create":1,"invoice":1,"payment":1,"edit":1}}
+{"stage":"dispatch_intent","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","operation":"login","ids":{"so":null,"invoice":null,"payment":null},"counts":{"login":1,"stock":0,"create":0,"invoice":0,"payment":0,"edit":0,"get":0}}
+{"stage":"write_http","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","operation":"login","status":200}
+{"stage":"journal_preflight","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","count":95540,"newestId":96600,"sorted":true}
+{"stage":"dispatch_intent","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","operation":"stock","ids":{"so":null,"invoice":null,"payment":null},"counts":{"login":1,"stock":1,"create":0,"invoice":0,"payment":0,"edit":0,"get":2}}
+{"stage":"write_http","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","operation":"stock","status":200}
+{"stage":"stock_preflight","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","onHand":3,"onOrder":2,"available":1,"reserved":"<absent>"}
+{"stage":"dispatch_intent","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","operation":"create","ids":{"so":null,"invoice":null,"payment":null},"counts":{"login":1,"stock":1,"create":1,"invoice":0,"payment":0,"edit":0,"get":2}}
+{"stage":"write_http","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","operation":"create","status":200}
+{"stage":"create_id","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","ids":{"so":68399,"invoice":null,"payment":null}}
+{"stage":"create_verified","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","ids":{"so":68399,"invoice":null,"payment":null}}
+{"stage":"dispatch_intent","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","operation":"invoice","ids":{"so":68399,"invoice":null,"payment":null},"counts":{"login":1,"stock":1,"create":1,"invoice":1,"payment":0,"edit":0,"get":3}}
+{"stage":"write_http","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","operation":"invoice","status":200}
+{"stage":"invoice_id","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","ids":{"so":68399,"invoice":45945,"payment":null}}
+{"stage":"invoice_verified","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","ids":{"so":68399,"invoice":45945,"payment":null},"total":1000}
+{"stage":"dispatch_intent","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","operation":"payment","ids":{"so":68399,"invoice":45945,"payment":null},"counts":{"login":1,"stock":1,"create":1,"invoice":1,"payment":1,"edit":0,"get":5}}
+{"stage":"write_http","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","operation":"payment","status":200}
+{"stage":"payment_id","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","ids":{"so":68399,"invoice":45945,"payment":28}}
+{"stage":"payment_verified","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","ids":{"so":68399,"invoice":45945,"payment":28},"total":1000}
+{"stage":"journal_after_payment","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","initialCount":95540,"currentCount":95542,"initialHigh":96600,"currentHigh":96602,"newVisible":2,"relatedIds":[96602,96601]}
+{"stage":"pre_edit","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","ids":{"so":68399,"invoice":45945,"payment":28},"journal":{"count":95542,"high":96602,"linkedIds":[96602,96601],"linkedLineCounts":[2,4]}}
+{"stage":"edit_payload_validated","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","ids":{"so":68399,"invoice":45945,"payment":28},"changedIntent":"channel_status only","preservedDetailId":74682}
+{"stage":"dispatch_intent","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","operation":"edit","ids":{"so":68399,"invoice":45945,"payment":28},"counts":{"login":1,"stock":1,"create":1,"invoice":1,"payment":1,"edit":1,"get":15}}
+{"stage":"write_http","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","operation":"edit","status":200}
+{"stage":"edit_response","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","ids":{"so":68399,"invoice":45945,"payment":28},"responseId":68399}
+{"stage":"result","run":"2b884de6-4912-41a1-a8ee-9279a977ce24","ids":{"so":68399,"invoice":45945,"payment":28},"soChannelBefore":"Belum Bayar","soChannelAfter":"Siap Proses","soCoreChanged":false,"invoiceChanged":false,"paymentChanged":false,"journal":{"beforeCount":95542,"immediatelyAfterCount":95542,"delayedAfterCount":95542,"beforeHigh":96602,"immediatelyAfterHigh":96602,"delayedAfterHigh":96602,"relatedDetailChanges":[{"id":96602,"changed":false},{"id":96601,"changed":false}],"newVisibleIds":[]},"warning":"bounded recent-page observation only; no universal accounting or concurrency guarantee"}

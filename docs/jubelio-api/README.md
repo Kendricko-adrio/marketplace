@@ -1,17 +1,22 @@
-# Jubelio API Spec (`dist.yaml`)
+# Jubelio API references
 
-`dist.yaml` is the OpenAPI specification of the Jubelio API
-(`https://api2.jubelio.com`), exported from Jubelio's API documentation. It is
-the reference for the sync implementation in
-`packages/db/src/jubelio-sync.ts` (see `docs/features/jubelio-sync.md` for the full
-sync design).
+These are **two separate APIs**:
+
+| Reference | Host | Scope |
+|---|---|---|
+| [`dist.yaml`](dist.yaml) | `https://api2.jubelio.com` | Omnichannel OpenAPI specification, exported from Jubelio's API documentation. Used as a reference for master-data sync in `packages/db/src/jubelio-sync.ts`. |
+| [`shipment-v1.8.md`](shipment-v1.8.md) | `https://api-shipment.jubelio.com` (sandbox: `https://api-shipment.sandbox.jubelio.com`) | Shipment API contract from the supplied [`API Contract Jubelio Shipment v1.8.pdf`](../../API%20Contract%20Jubelio%20Shipment%20v1.8.pdf): regions, rates, AWB create/cancel/detail, and webhook. This is a documented contract, **not** a live-verified integration. |
+
+Do not treat Shipment paths, credentials, or tokens as interchangeable with
+Omnichannel's. See `docs/features/jubelio-sync.md` for the existing sync design.
 
 ## How to use
 
-- **Import into an API client** — Postman, Insomnia, or Stoplight can import
-  `dist.yaml` directly to browse endpoints and try requests.
-- **Read it directly** — the file is plain YAML; search for a path (e.g.
-  `/inventory/items/masters`) to see its parameters and response schema.
+- **Omnichannel:** Import `dist.yaml` into Postman, Insomnia, or Stoplight, or
+  search the YAML for a path such as `/inventory/items/masters`.
+- **Shipment:** Read [`shipment-v1.8.md`](shipment-v1.8.md) for the PDF-derived
+  API reference with page citations and explicit contract ambiguities. The PDF
+  is not an importable OpenAPI specification.
 
 ## Most relevant endpoints for sync
 
@@ -25,11 +30,13 @@ sync design).
 
 ## Caveat: spec vs. live behavior
 
-This spec is an **external reference** and may drift from the actual API
-behavior. If the spec and the live API disagree, the code in
-`packages/db/src/jubelio-sync.ts` is the source of truth — it has been
-verified against the live API.
+`dist.yaml` is an **external reference** and may drift from actual Omnichannel
+API behavior. If it and the live sync API disagree, the code in
+`packages/db/src/jubelio-sync.ts` is the reference for behavior already
+verified against the live API. The Shipment PDF has **not** been verified
+against live Shipment endpoints in this repository.
 
 ## Related docs
 
-- `docs/features/jubelio-sync.md` — sync architecture, invariants, env vars, webhook setup
+- `docs/features/jubelio-sync.md` — Omnichannel sync architecture, invariants, env vars, webhook setup
+- `docs/jubelio-api/shipment-v1.8.md` — Shipment-specific contract reference

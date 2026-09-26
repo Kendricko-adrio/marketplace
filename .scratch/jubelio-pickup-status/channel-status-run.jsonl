@@ -1,0 +1,9 @@
+{"stage":"intent","runId":"1790391588025","marker":"OKCIR_TEST_CREATED","itemId":43842,"locationId":7}
+{"stage":"baseline","stock":{"onHand":4,"onOrder":0,"reserved":"<absent>","available":4}}
+{"stage":"before_create","label":"control"}
+{"stage":"create_id","label":"control","id":68396}
+{"stage":"confirmed","label":"control","observation":{"id":68396,"detail":{"channel_status":null,"wms_status":"UNKNOWN","is_paid":null,"internal_status":null,"invoice_id":null},"list":{"channel_status":null,"wms_status":"UNKNOWN","is_paid":null,"internal_status":null,"invoice_id":"<absent>"},"readyToProcess":false},"stock":{"onHand":4,"onOrder":1,"reserved":"<absent>","available":3}}
+{"stage":"before_create","label":"variant"}
+{"stage":"create_id","label":"variant","id":68397}
+{"stage":"confirmed","label":"variant","observation":{"id":68397,"detail":{"channel_status":"OKCIR_TEST_CREATED","wms_status":"UNKNOWN","is_paid":null,"internal_status":null,"invoice_id":null},"list":{"channel_status":"OKCIR_TEST_CREATED","wms_status":"UNKNOWN","is_paid":null,"internal_status":null,"invoice_id":"<absent>"},"readyToProcess":false},"stock":{"onHand":4,"onOrder":2,"reserved":"<absent>","available":2}}
+{"stage":"done_no_more_writes","stock":{"onHand":4,"onOrder":2,"reserved":"<absent>","available":2}}

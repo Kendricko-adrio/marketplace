@@ -47,7 +47,7 @@ deployment/
 | 9 | [verification.md](verification.md) | Verifikasi deployment |
 | 10 | [operations.md](operations.md) | Operasional sehari-hari (redeploy, backup, stop) |
 | 11 | [cron-sweep.md](cron-sweep.md) | Sweep reservasi stok (cron) |
-| 12 | [jubelio-sync.md](jubelio-sync.md) | Sync Jubelio (import + webhook) |
+| 12 | [jubelio-sync.md](jubelio-sync.md) | Sync Jubelio (import, webhook, stock-only cron + rollout checks) |
 | 13 | [letsencrypt.md](letsencrypt.md) | Rate-limit Let's Encrypt |
 | 14 | [troubleshooting.md](troubleshooting.md) | Troubleshooting |
 | 15 | [environments.md](environments.md) | Memisahkan staging & production |

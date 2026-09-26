@@ -8,7 +8,8 @@ verifies it, then moves it to `## Completed` with a one-line summary.
 - [x] task-id | title | priority: P1/P2/P3 | verify: ... | description   ← done → move to Completed
 
 ## Rules
-- Checkbox `[ ]`/`[x]` is the SINGLE source of truth for status. No `status:` field.
+- Checkbox `[ ]`/`[x]` is the SINGLE source of truth for status of **small, non-plan tasks**. No `status:` field.
+- Multi-feature conceptual plans live in `plan/` — their status is tracked only in `plan/index.md` and is **never duplicated as a top-level task here**. Per-feature implementation work of a plan may appear as sub-tasks whose `verify:` links back to the plan file, but plan status itself lives only in the index.
 - priority: P1 = bug/blocker, P2 = feature, P3 = nice-to-have. Loop picks lowest number first.
 - `verify:` is the Definition of Done. If it can't be verified, the task isn't done.
 - If a task can't proceed, move it to `## Blocked` with the reason — never leave it pending.

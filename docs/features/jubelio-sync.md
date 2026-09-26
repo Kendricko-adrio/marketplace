@@ -25,7 +25,7 @@ locations are imported, including staging and webstore locations.
 
 ## Architecture (mirrors SOH sync)
 
-Three entry points share `packages/db/src/jubelio-sync.ts`:
+Four entry points share the Jubelio stock read client (`packages/db/src/jubelio-sync.ts`):
 
 1. **One-shot pull** — `npm run db:import-jubelio`
    (`packages/db/src/import-jubelio.ts`). Paginates `/inventory/items/masters`,
@@ -41,6 +41,12 @@ Three entry points share `packages/db/src/jubelio-sync.ts`:
    (`apps/admin/src/app/api/admin/products/[id]/sync/route.ts`), triggered by
    the "Sync dari Jubelio" button on the admin product detail page. Calls
    `syncOneProduct(db, item_group_id)`.
+4. **Recurring stock-only scan** — `POST /api/cron/refresh-jubelio-stock`
+   (`packages/db/src/jubelio-stock-refresh.ts`) runs with `CRON_SECRET`
+   daily as a reconciliation safety net. It reads mapped item/location pairs in bounded,
+   resumable keyset pages, only applying complete provider stock observations
+   to existing rows. It does not import catalog or change local SO holds.
+   See [deployment instructions](../deployment-docs/jubelio-sync.md).
 
 The importer writes `on_hand`, `on_order`, `reserved`, and `available` into
 `branch_stock.stock`, `on_order_stock`, `provider_reserved_stock`, and
@@ -79,9 +85,9 @@ adjustments. Local pending holds and the provider's `available` series are
 combined conservatively. The product and cart display the last-known values
 as provisional. Place-order reads selected item/location pairs live, rejects
 missing/inconsistent/unreachable provider observations, and atomically holds
-`available - pendingRemoteStock` before creating a Sales Order.
-A provider outage blocks checkout, not a fallback to legacy adjustments. See
-[Sales Orders](jubelio-sales-orders.md) and
+`available - pendingRemoteStock` before creating a Sales Order. The daily
+stock-only scan repairs webhook gaps without sending an adjustment or a Sales
+Order; it is not a checkout fallback during a provider outage. See [Sales Orders](jubelio-sales-orders.md) and
 [stock reservation](stock-reservation.md).
 
 ## Auth

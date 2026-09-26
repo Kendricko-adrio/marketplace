@@ -364,6 +364,13 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Response**: 400 `{ success: false, error: "orderId is required" | "Order must be ready_for_pickup (current: <status>)" }`; 403 `{ success: false, error: "Unauthorized" }` (missing/invalid secret, or `BETTER_AUTH_SECRET` unset); 404 `{ success: false, error: "Order not found" }`; 500 `{ success: false, error: "Failed to complete order" }`; 200 `{ success: true, completedAt: string (ISO) }`
 - **Notes**: Only `ready_for_pickup` orders can be completed. Loads `orderItems` to render the completed email and sends via `sendEmail` to `order.contactEmail`; email failure is logged but does not fail the request (order is already completed). Env dependency: `BETTER_AUTH_SECRET` (shared with admin app). After the `completed` status is committed, a `after()`-scheduled BEST-EFFORT channel mirror reconciliation projects `Selesai` onto the Jubelio Status Channel (ticket #06; derived ONLY from the committed local state, never from the HTTP response; a mirror failure is logged and never affects the completion, pickup or this response — the sweep re-projects completed orders GET-only by the persisted SO id).
 
+#### `POST` `/api/cron/refresh-jubelio-stock`
+- **Auth**: `X-Cron-Secret` equals configured `CRON_SECRET`; unset → 503, mismatch → 401.
+- **Purpose**: Bounded recurring **read-only** provider stock refresh for mapped variants and branches (no full catalog import, adjustment write, or SO ledger write).
+- **Body**: none
+- **Response**: 200 `{ success: true, pages, items, observed, missing, failed }`; partial/failed reads → 503 `{ success: false, ...counts }`; unexpected error → 503.
+- **Notes**: DB-backed keyset cursor advances per batch (100 IDs, max 200 pages/invocation), so a bad item cannot starve subsequent items. Only complete observations update existing `branch_stock` provider series and `provider_stock_synced_at`; pending local holds are untouched. Schedule once daily as webhook-gap reconciliation; place-order independently re-reads selected Jubelio stock before SO create. Monitor failures, run duration and mapped-row coverage. See `docs/deployment-docs/jubelio-sync.md`.
+
 #### `POST` `/api/cron/sweep-reservations`
 - **Auth**: secret-header (`X-Cron-Secret` vs `process.env.CRON_SECRET`) — **503** if env unset, **401** on mismatch
 - **Purpose**: Sales-Order safety-net sweep for orders whose outcome was missed.

@@ -25,6 +25,7 @@ const ROWS: BranchStockInputRow[] = [
     stock: 10,
     reservedStock: 1,
     pendingRemoteStock: 1,
+    availableStock: 10,
   },
   {
     branchId: "br-jkt",
@@ -39,6 +40,7 @@ const ROWS: BranchStockInputRow[] = [
     stock: 15,
     reservedStock: 0,
     pendingRemoteStock: 0,
+    availableStock: 15,
   },
   {
     branchId: "br-jkt",
@@ -53,6 +55,7 @@ const ROWS: BranchStockInputRow[] = [
     stock: 20,
     reservedStock: 2,
     pendingRemoteStock: 2,
+    availableStock: 20,
   },
   {
     branchId: "br-bdg",
@@ -67,6 +70,7 @@ const ROWS: BranchStockInputRow[] = [
     stock: 3,
     reservedStock: 5, // reserved > stock → available clamps to 0
     pendingRemoteStock: 5,
+    availableStock: 3,
   },
 ];
 
@@ -130,6 +134,7 @@ describe("groupBranchStock", () => {
         stock: 0,
         reservedStock: 0,
         pendingRemoteStock: 0,
+        availableStock: 0,
       },
     ];
     const out = groupBranchStock({ mode: "all" }, rows);
@@ -165,17 +170,17 @@ describe("groupBranchStock", () => {
 // Mirrors the same scope rules as groupBranchStock (defence in depth: the SQL
 // `where` is the real access control; this pure filter is the tested guarantee).
 const TOTALS_ROWS: ScopedTotalsInputRow[] = [
-  { branchId: "br-jkt", stock: 20, reservedStock: 2, pendingRemoteStock: 2 },
-  { branchId: "br-jkt", stock: 15, reservedStock: 0, pendingRemoteStock: 0 },
-  { branchId: "br-srb", stock: 10, reservedStock: 1, pendingRemoteStock: 1 },
-  { branchId: "br-bdg", stock: 3, reservedStock: 5, pendingRemoteStock: 5 }, // pending > stock → clamps
+  { branchId: "br-jkt", stock: 20, reservedStock: 2, pendingRemoteStock: 2, availableStock: 20 },
+  { branchId: "br-jkt", stock: 15, reservedStock: 0, pendingRemoteStock: 0, availableStock: 15 },
+  { branchId: "br-srb", stock: 10, reservedStock: 1, pendingRemoteStock: 1, availableStock: 10 },
+  { branchId: "br-bdg", stock: 3, reservedStock: 5, pendingRemoteStock: 5, availableStock: 0 }, // pending > available → clamps
 ];
 
 describe("computeScopedTotals", () => {
   it("mode 'all' sums every row and clamps available at 0", () => {
     const out = computeScopedTotals({ mode: "all" }, TOTALS_ROWS);
-    // 20 + 15 + 10 + 3 = 48; 2 + 0 + 1 + 5 = 8 → 40.
-    expect(out).toEqual({ totalStock: 48, totalReserved: 8, totalAvailable: 40 });
+    // Sellable per row: (20−2) + (15−0) + (10−1) + max(0, 0−5) = 18+15+9+0 = 42.
+    expect(out).toEqual({ totalStock: 48, totalReserved: 8, totalAvailable: 42 });
   });
 
   it("mode 'own' keeps only the matching branch's rows", () => {
@@ -197,7 +202,7 @@ describe("computeScopedTotals", () => {
 
   it("available clamps to 0 when reserved exceeds stock (own branch)", () => {
     const rows: ScopedTotalsInputRow[] = [
-      { branchId: "br-bdg", stock: 3, reservedStock: 5, pendingRemoteStock: 5 },
+      { branchId: "br-bdg", stock: 3, reservedStock: 5, pendingRemoteStock: 5, availableStock: 0 },
     ];
     const out = computeScopedTotals({ mode: "own", branchId: "br-bdg" }, rows);
     expect(out).toEqual({ totalStock: 3, totalReserved: 5, totalAvailable: 0 });

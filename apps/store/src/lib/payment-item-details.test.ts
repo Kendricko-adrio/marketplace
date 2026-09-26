@@ -22,6 +22,28 @@ describe("buildPaymentItemDetails", () => {
     expect(details.reduce((sum, item) => sum + item.price * item.quantity, 0)).toBe(117000);
   });
 
+  it("limits a long product name to 50 characters in Midtrans details without changing its price", () => {
+    const details = buildPaymentItemDetails({
+      items: [{
+        id: "sku-1",
+        name: "Celana Pendek Neymar JR Creativity Training Shorts 658952 13",
+        price: "699000.00",
+        quantity: 1,
+      }],
+      discount: "0.00",
+      shippingCost: "0.00",
+      serviceFee: "0.00",
+      ppnRatePercent: "11",
+      ppnAmount: "76890.00",
+      total: "775890.00",
+    });
+
+    expect(details).toEqual([
+      { id: "sku-1", name: "Celana Pendek Neymar JR Creativity Training Shorts", price: 699000, quantity: 1 },
+      { id: "PPN", name: "PPN 11%", price: 76890, quantity: 1 },
+    ]);
+  });
+
   it("represents discounts as a negative line and omits zero adjustments", () => {
     expect(buildPaymentItemDetails({
       items: [{ id: "sku-1", name: "Sepatu", price: "100000", quantity: 2 }],

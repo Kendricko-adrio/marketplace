@@ -1,5 +1,15 @@
 # Order Flow (End-to-End)
 
+> **Sales-Order cutover (2026-09-24):** checkout, the settlement pipeline and
+> the sweep now run the Jubelio **Sales-Order** lifecycle (see
+> [`jubelio-sales-orders.md`](jubelio-sales-orders.md)). The differences vs
+> the original text: the paid claim (`pending_payment` → `processing`/`paid`)
+> no longer touches stock and no longer grants pickup; `ready_for_pickup` +
+> pickup code are granted only by `fulfillPaidOrder` AFTER the Sales-Order
+> settlement (invoice → payment) is verified. A paid order whose settlement
+> is ambiguous stays `processing`/`paid` with `fulfillmentBlockedReason` set
+> and never exposes a pickup code.
+
 ## Purpose
 
 End-to-end lifecycle of a customer order: checkout → Midtrans Snap payment →
@@ -62,22 +72,23 @@ tinted summary panel while retaining the branch name and city at a glance.
    required. Validates body (`phone`, `email`, `pickupDate`, `pickupTime`,
    `selectedItemIds`), loads the user's cart, filters the selected items,
    enforces **single-branch checkout**, checks branch `status = "aktif"` +
-   pickup slot (`validatePickupSlot`), soft stock pre-check, and authoritative
-   pricing. PPN comes from `tax.ppnRatePercent` (11% fallback), is applied after
-   discount, and is rounded upward to whole Rupiah. The rate and amount are
-   snapshotted on the order. A short transaction then:
-   insert order (`pending_payment`/`pending`, `paymentMethod` NULL,
-   `expiresAt`), insert
-   `order_item` rows, an atomic `pending_remote_stock` hold, and a durable
-   Jubelio reserve operation. After commit, a negative Jubelio adjustment is
-   sent outside the transaction. Midtrans Snap is created only after Jubelio
-   confirms the deduction. A second short transaction
-   persists `snapRedirectUrl` and deletes only the checked-out cart items.
-   A Jubelio rejection/ambiguous result blocks Midtrans and preserves the cart;
-   Midtrans item details include the PPN snapshot and sum exactly to the order
-   gross total. Re-payment uses the same stored snapshot rather than current
-   config. Midtrans creation failure triggers a compensating positive Jubelio
-   adjustment. Returns
+   pickup slot (`validatePickupSlot`), then reads the selected stock live from
+   Jubelio. Missing/inconsistent/unreachable stock or insufficient `available`
+   blocks checkout before a Sales Order is sent; the last-known local mirror
+   is advisory. It reconciles that mirror without overwriting concurrent
+   holds and applies authoritative pricing. PPN comes from
+   `tax.ppnRatePercent` (11% fallback), is applied after discount, and is
+   rounded upward to whole Rupiah. A short transaction inserts order/items,
+   atomically holds `pending_remote_stock` against the just-read observation,
+   and persists a durable Jubelio Sales Order create intent. After commit the
+   SO POST and GET confirmation run outside the transaction. Midtrans Snap is
+   created only after a confirmed SO. A second transaction persists
+   `snapRedirectUrl` and deletes only the checked-out cart items. A rejected
+   or ambiguous provider result blocks Midtrans and preserves the cart. Item
+   details include the PPN snapshot and sum to the order gross total; names
+   are shortened to 50 characters only in Midtrans payloads. Re-payment uses
+   the stored snapshot. Midtrans initialization failure triggers SO cancel
+   (or manual review if the provider outcome is ambiguous). Returns
    `{ success, orderId, redirectUrl,
    token }`; customer is redirected to the Snap page.
 2. **Pay** — the customer picks a method (QRIS, GoPay, transfer bank/VA, or
@@ -138,7 +149,12 @@ tinted summary panel while retaining the branch name and city at a glance.
    auth via `secret = HMAC-SHA256(BETTER_AUTH_SECRET, orderId)` (shared secret
    between the two apps; mismatch → 403). Requires `ready_for_pickup`, sets
    `status = "completed"`, then schedules the order-completed email with
-   Next.js `after()` so SMTP latency does not block the response. The
+   Next.js `after()` so SMTP latency does not block the response. The same
+   `after()` boundary schedules the best-effort channel mirror
+   reconciliation, which projects `Selesai` onto the Jubelio Status Channel
+   from the committed `completed` state only (ticket #06) — a mirror failure
+   is logged and never affects the completion or the response (the sweep's
+   GET-only reconciliation covers any mirror gap). The
    admin route then writes an `audit_log` row (`VERIFY_PICKUP_CODE`).
 
 ## Failure path

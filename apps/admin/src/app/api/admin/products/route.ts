@@ -151,6 +151,7 @@ export async function GET(request: NextRequest) {
               stock: branchStocks.stock,
               reservedStock: branchStocks.reservedStock,
               pendingRemoteStock: branchStocks.pendingRemoteStock,
+              availableStock: branchStocks.availableStock,
             })
             .from(branchStocks)
             .where(

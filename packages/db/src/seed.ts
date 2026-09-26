@@ -990,10 +990,16 @@ async function seed() {
     console.log("📦 Seeding branch stocks per variant...");
     for (const branchId of branchIds) {
       for (const variantId of allVariantIds) {
+        // `availableStock` mirrors the provider snapshot; for seeded fixtures
+        // the provider `available` equals on-hand (no on_order/reserved), so
+        // the Sales-Order sellable rule sees the same figure.
+        const stock = Math.floor(Math.random() * 50) + 5;
         await db.insert(schema.branchStocks).values({
           branchId,
           productVariantId: variantId,
-          stock: Math.floor(Math.random() * 50) + 5,
+          stock,
+          availableStock: stock,
+          providerStockSyncedAt: new Date(),
         });
       }
     }
@@ -1210,6 +1216,20 @@ async function seed() {
           description: string;
         }
       | undefined;
+    // Durable Jubelio sales-order ledger fixtures (demo mode) — declared
+    // before the order loop and populated from real fixture orders below.
+    let salesOperationFixture:
+      | {
+          orderId: string;
+          create: { itemId: number; quantity: number; price: number; unit: string };
+        }
+      | undefined;
+    let cancelledSalesFixture:
+      | {
+          orderId: string;
+          create: { itemId: number; quantity: number; price: number; unit: string };
+        }
+      | undefined;
 
     for (let i = 0; i < orderStatuses.length; i++) {
       const status = orderStatuses[i];
@@ -1311,6 +1331,34 @@ async function seed() {
           description: variant.productName,
         };
       }
+      // Realistic durable Jubelio sales-order operation fixtures: the paid
+      // "completed" order carries a CONFIRMED create (SO id persisted from the
+      // independent GET), and the cancelled order carries a CONFIRMED create
+      // plus a CONFIRMED pre-invoice cancel. All three keep the at-most-once
+      // ledger invariants visible in demo data (status confirmed ⇒
+      // salesOrderId present).
+      if (status === "completed") {
+        salesOperationFixture = {
+          orderId,
+          create: {
+            itemId: variant.jubelioItemId ?? 10_005,
+            quantity: qty,
+            price: parseFloat(variant.price),
+            unit: "Buah",
+          },
+        };
+      }
+      if (status === "cancelled") {
+        cancelledSalesFixture = {
+          orderId,
+          create: {
+            itemId: variant.jubelioItemId ?? 10_005,
+            quantity: qty,
+            price: parseFloat(variant.price),
+            unit: "Buah",
+          },
+        };
+      }
     }
 
     if (failedPaymentStockFixture) {
@@ -1357,6 +1405,172 @@ async function seed() {
           lastError: "Seeded release requires operator reconciliation",
         },
       ]);
+    }
+
+    // Durable Jubelio sales-order operation fixtures. These rows are deleted
+    // with their orders (ON DELETE CASCADE), so the FK-ordered cleanup pass
+    // above stays correct without a separate entry.
+    if (salesOperationFixture || cancelledSalesFixture) {
+      console.log("🧾 Seeding Jubelio sales-order operation ledger...");
+      const salesOperationRows: Array<
+        typeof schema.jubelioSalesOperations.$inferInsert
+      > = [];
+      if (salesOperationFixture) {
+        const operationId = generateId();
+        salesOperationRows.push({
+          id: operationId,
+          orderId: salesOperationFixture.orderId,
+          type: "create",
+          status: "confirmed",
+          reference: `OKCIR_SO_CREATE:${salesOperationFixture.orderId}:${operationId}`,
+          payload: {
+            type: "create",
+            create: {
+              contactId: -1,
+              customerName: "John Doe",
+              locationId: 2_001,
+              note: `OKCIR_SO_CREATE:${salesOperationFixture.orderId}:${operationId}`,
+              channelStatus: "Belum Bayar",
+              items: [
+                {
+                  itemId: salesOperationFixture.create.itemId,
+                  quantity: salesOperationFixture.create.quantity,
+                  price: salesOperationFixture.create.price,
+                  discAmount: 0,
+                  taxAmount: 0,
+                  unit: salesOperationFixture.create.unit,
+                  taxId: 0,
+                },
+              ],
+            },
+          },
+          // Confirmed via the independent GET /sales/orders/{id}; the numeric
+          // remote identifier is persisted separately from the local order.
+          salesOrderId: 69012,
+          attemptCount: 1,
+          dispatchedAt: new Date(Date.now() - 30 * 60 * 1000),
+          confirmedAt: new Date(Date.now() - 29 * 60 * 1000),
+        });
+      }
+      if (cancelledSalesFixture) {
+        const createOperationId = generateId();
+        const cancelOperationId = generateId();
+        salesOperationRows.push(
+          {
+            id: createOperationId,
+            orderId: cancelledSalesFixture.orderId,
+            type: "create",
+            status: "confirmed",
+            reference: `OKCIR_SO_CREATE:${cancelledSalesFixture.orderId}:${createOperationId}`,
+            payload: {
+              type: "create",
+              create: {
+                contactId: -1,
+                customerName: "John Doe",
+                locationId: 2_001,
+                note: `OKCIR_SO_CREATE:${cancelledSalesFixture.orderId}:${createOperationId}`,
+                channelStatus: "Belum Bayar",
+                items: [
+                  {
+                    itemId: cancelledSalesFixture.create.itemId,
+                    quantity: cancelledSalesFixture.create.quantity,
+                    price: cancelledSalesFixture.create.price,
+                    discAmount: 0,
+                    taxAmount: 0,
+                    unit: cancelledSalesFixture.create.unit,
+                    taxId: 0,
+                  },
+                ],
+              },
+            },
+            salesOrderId: 69013,
+            attemptCount: 1,
+            dispatchedAt: new Date(Date.now() - 60 * 60 * 1000),
+            confirmedAt: new Date(Date.now() - 59 * 60 * 1000),
+          },
+          {
+            id: cancelOperationId,
+            orderId: cancelledSalesFixture.orderId,
+            type: "cancel",
+            status: "confirmed",
+            reference: `OKCIR_SO_CANCEL:${cancelledSalesFixture.orderId}:${cancelOperationId}`,
+            payload: {
+              type: "cancel",
+              cancel: { salesOrderId: 69013 },
+            },
+            salesOrderId: 69013,
+            attemptCount: 1,
+            dispatchedAt: new Date(Date.now() - 45 * 60 * 1000),
+            confirmedAt: new Date(Date.now() - 44 * 60 * 1000),
+          }
+        );
+      }
+      if (salesOperationRows.length > 0) {
+        await db.insert(schema.jubelioSalesOperations).values(salesOperationRows);
+      }
+    }
+
+    // Durable channel-status mirror projection fixture (ticket #03). The
+    // completed fixture order passed through ready_for_pickup before
+    // completing, so its 'Siap Proses' target is CONFIRMED (observed by the
+    // independent post-edit GET) and its full-payload edit snapshot is
+    // retained for audit. Rows cascade with their order; no new cleanup pass
+    // is needed.
+    if (salesOperationFixture) {
+      const intentId = generateId();
+      await db.insert(schema.jubelioChannelStatusIntents).values({
+        id: intentId,
+        orderId: salesOperationFixture.orderId,
+        salesOrderId: 69012,
+        targetVersion: 1,
+        targetStatus: "Siap Proses",
+        status: "confirmed",
+        payload: {
+          type: "edit",
+          edit: {
+            salesorderId: 69012,
+            salesorderNo: "SO-000069012",
+            contactId: -1,
+            customerName: "John Doe",
+            transactionDate: new Date(Date.now() - 65 * 60 * 1000).toISOString(),
+            isTaxIncluded: false,
+            note: `OKCIR_SO_CREATE:${salesOperationFixture.orderId}:seed-create`,
+            refNo: "",
+            locationId: 2001,
+            source: 1,
+            channelStatus: "Siap Proses",
+            subTotal: salesOperationFixture.create.price * salesOperationFixture.create.quantity,
+            totalDisc: 0,
+            totalTax: 0,
+            grandTotal:
+              salesOperationFixture.create.price * salesOperationFixture.create.quantity,
+            addFee: 0,
+            addDisc: 0,
+            serviceFee: 0,
+            items: [
+              {
+                salesorderDetailId: 74001,
+                itemId: salesOperationFixture.create.itemId,
+                quantity: salesOperationFixture.create.quantity,
+                price: salesOperationFixture.create.price,
+                disc: 0,
+                discAmount: 0,
+                taxAmount: 0,
+                amount:
+                  salesOperationFixture.create.price * salesOperationFixture.create.quantity,
+                unit: salesOperationFixture.create.unit,
+                taxId: 1,
+                locationId: 2001,
+              },
+            ],
+          },
+        },
+        lastObservedStatus: "Siap Proses",
+        lastObservedAt: new Date(Date.now() - 28 * 60 * 1000),
+        attemptCount: 1,
+        dispatchedAt: new Date(Date.now() - 30 * 60 * 1000),
+        confirmedAt: new Date(Date.now() - 28 * 60 * 1000),
+      });
     }
 
     // =====================

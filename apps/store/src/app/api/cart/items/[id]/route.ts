@@ -4,6 +4,7 @@ import { carts, cartItems, branchStocks } from "@/db";
 import { eq, and } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
+import { requestLogger, serializeError } from "@/lib/logger";
 
 const updateItemSchema = z.object({
   quantity: z.number().int().positive(),
@@ -13,6 +14,7 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const log = requestLogger(request, { module: "cart-item-update" });
   try {
     const access = await requireOnboardedApiSession();
     if (!access.ok) return access.response;
@@ -72,14 +74,11 @@ export async function PUT(
         )
         .limit(1);
 
-      // Confirmed reservations are already reflected in Jubelio on-hand.
-      const availableStock =
-        (stockRow[0]?.stock ?? 0) - (stockRow[0]?.pendingRemoteStock ?? 0);
-      if (quantity > availableStock) {
-        return NextResponse.json(
-          { success: false, error: "Insufficient stock at this branch" },
-          { status: 400 }
-        );
+      // Last-known stock is provisional. The mapped pair is verified against
+      // Jubelio when placing the order, not while editing the cart.
+      if (!stockRow.length) {
+        log.warn("cart update rejected — branch stock mapping missing", { id });
+        return NextResponse.json({ success: false, error: "Stock mapping unavailable" }, { status: 409 });
       }
     }
 
@@ -89,12 +88,13 @@ export async function PUT(
       .set({ quantity, updatedAt: new Date() })
       .where(eq(cartItems.id, id));
 
+    log.info("cart item updated", { id, quantity });
     return NextResponse.json({
       success: true,
       message: "Cart item updated",
     });
   } catch (error) {
-    console.error("Error updating cart item:", error);
+    log.error("cart item update failed", { error: serializeError(error) });
     return NextResponse.json(
       { success: false, error: "Failed to update cart item" },
       { status: 500 }
@@ -106,6 +106,7 @@ export async function DELETE(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const log = requestLogger(request, { module: "cart-item-remove" });
   try {
     const access = await requireOnboardedApiSession();
     if (!access.ok) return access.response;
@@ -132,12 +133,13 @@ export async function DELETE(
       .delete(cartItems)
       .where(and(eq(cartItems.id, id), eq(cartItems.cartId, cart[0].id)));
 
+    log.info("cart item removed", { id });
     return NextResponse.json({
       success: true,
       message: "Cart item removed",
     });
   } catch (error) {
-    console.error("Error removing cart item:", error);
+    log.error("cart item remove failed", { error: serializeError(error) });
     return NextResponse.json(
       { success: false, error: "Failed to remove cart item" },
       { status: 500 }

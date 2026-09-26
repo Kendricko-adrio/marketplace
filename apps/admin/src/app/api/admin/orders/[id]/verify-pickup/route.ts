@@ -100,6 +100,23 @@ export async function POST(
       );
     }
 
+    // Sales-Order settlement gate: a paid-but-ambiguous order must never be
+    // picked up, even if legacy data somehow carries a pickup code.
+    if (order.fulfillmentBlockedReason) {
+      orderLog.warn("verify-pickup.fulfillment_blocked", {
+        outcome: "denied",
+        reason: order.fulfillmentBlockedReason,
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Pesanan diblokir untuk pengambilan: settlement Jubelio belum terverifikasi. Lihat antrean review.",
+        },
+        { status: 409 }
+      );
+    }
+
     if (isPickupVerificationLocked(order.pickupLockedUntil)) {
       const retryAfter = Math.max(
         1,

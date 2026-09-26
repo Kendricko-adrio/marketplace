@@ -12,6 +12,7 @@ import {
   LayoutTemplate,
   FileText,
   Shield,
+  ShieldQuestion,
   LogOut,
   Loader2,
   ChevronDown,
@@ -65,6 +66,7 @@ export default function AdminSidebar() {
   const links: SidebarLink[] = [
     { href: "/admin/products", label: "Produk", icon: Package, module: "products" },
     { href: "/admin/orders", label: "Pesanan", icon: ShoppingBag, module: "orders" },
+    { href: "/admin/orders/reviews", label: "Review Jubelio", icon: ShieldQuestion, module: "orders" },
     { href: "/admin/customers", label: "Customer", icon: UserRoundSearch, module: "customers" },
     { href: "/admin/notifications", label: "Notifikasi", icon: Bell, module: "notifications" },
     { href: "/admin/branches", label: "Cabang", icon: Store, module: "branches" },

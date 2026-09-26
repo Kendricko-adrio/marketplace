@@ -18,6 +18,8 @@ interface ProductCardProps {
   /** True when the product has no sellable stock in any branch — the card is
    *  greyed out and the detail link is disabled. */
   outOfStock?: boolean;
+  /** Last-known stock is zero; the product remains selectable until live check. */
+  stockUnconfirmed?: boolean;
 }
 
 export default function ProductCard({
@@ -30,6 +32,7 @@ export default function ProductCard({
   gender,
   collection,
   outOfStock,
+  stockUnconfirmed,
 }: ProductCardProps) {
   const discount = originalPrice
     ? Math.round(((originalPrice - price) / originalPrice) * 100)
@@ -57,7 +60,12 @@ export default function ProductCard({
       )}
       {outOfStock && (
         <Badge className="absolute top-2 left-2 bg-muted text-muted-foreground">
-          Stok Habis
+          Stok Belum Tersedia
+        </Badge>
+      )}
+      {stockUnconfirmed && !outOfStock && (
+        <Badge className="absolute top-2 left-2 bg-muted text-muted-foreground">
+          Cek stok saat bayar
         </Badge>
       )}
     </>

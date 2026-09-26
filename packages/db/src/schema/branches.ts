@@ -61,15 +61,27 @@ export const branchStocks = pgTable(
       .notNull()
       .references(() => productVariants.id, { onDelete: "cascade" }),
     stock: integer("stock").notNull().default(0),
-    // Quantity already deducted from Jubelio for pending_payment orders. It is
-    // lifecycle/audit state, not subtracted from `stock` again because Jubelio
-    // on-hand already includes the deduction. Cleared on payment success or
-    // after a compensating Jubelio release is confirmed.
+    // Quantity already deducted from Jubelio for legacy adjustment-era
+    // pending_payment orders. Retained for legacy rows and audit only — the
+    // Sales-Order flow never writes it (see jubelio-sales-api-switching).
     reservedStock: integer("reserved_stock").notNull().default(0),
-    // Units held locally while the Jubelio adjustment result is not confirmed.
-    // Confirmed reservations are already reflected in `stock` (Jubelio
-    // on-hand), so storefront availability is `stock - pendingRemoteStock`.
+    // Units held locally for Sales Orders whose remote outcome is not yet
+    // confirmed. Acquired atomically BEFORE the SO POST; cleared after a
+    // confirmed cancel or when the SO is confirmed (the provider then holds
+    // the unit via `on_order`, mirrored below).
     pendingRemoteStock: integer("pending_remote_stock").notNull().default(0),
+    // Jubelio stock series mirrored from /inventory/items/all-stocks/.
+    // `on_order` + `reserved` are provider-side liabilities; `available` is
+    // Jubelio's own sellable figure (available = on_hand − on_order − reserved).
+    // NULL `availableStock` means "never synced" and fails closed: sellable is
+    // computed as `availableStock - pendingRemoteStock`, so NULL exposes 0.
+    onOrderStock: integer("on_order_stock").notNull().default(0),
+    providerReservedStock: integer("provider_reserved_stock")
+      .notNull()
+      .default(0),
+    availableStock: integer("available_stock"),
+    // Provider observation time, not a local hold/update time. NULL fails closed.
+    providerStockSyncedAt: timestamp("provider_stock_synced_at", { withTimezone: true }),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -79,6 +91,15 @@ export const branchStocks = pgTable(
     check(
       "branch_pending_remote_stock_nonnegative",
       sql`${t.pendingRemoteStock} >= 0`
+    ),
+    check("branch_on_order_stock_nonnegative", sql`${t.onOrderStock} >= 0`),
+    check(
+      "branch_provider_reserved_stock_nonnegative",
+      sql`${t.providerReservedStock} >= 0`
+    ),
+    check(
+      "branch_available_stock_nonnegative",
+      sql`${t.availableStock} is null or ${t.availableStock} >= 0`
     ),
   ]
 );

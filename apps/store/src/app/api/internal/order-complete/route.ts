@@ -9,6 +9,7 @@ import {
   orderCompletedEmailText,
 } from "@/lib/email-templates-order";
 import { requestLogger, serializeError } from "@/lib/logger";
+import { reconcileJubelioChannelStatusForOrder } from "@/lib/jubelio-channel-mirror";
 
 // Internal endpoint called by the admin app to mark an order as completed
 // and send Email #2 (Order Completed). Guarded by an HMAC secret derived
@@ -93,6 +94,30 @@ export async function POST(request: NextRequest) {
       .where(eq(orders.id, orderId));
 
     orderLog.info("order completed", { completedAt: completedAt.toISOString() });
+
+    // Ticket #06 — best-effort channel mirror trigger, scheduled via `after()`
+    // so the admin's pickup-verification request never waits on the Jubelio
+    // edit. The `Selesai` projection is derived from the COMMITTED local
+    // state (this update above) — never from the verification-code success or
+    // the store->admin HTTP outcome alone. A mirror failure (including a
+    // lost/ambiguous response path) cannot undo the completion or pickup:
+    // the sweep re-projects completed orders GET-only by the persisted SO id.
+    after(async () => {
+      try {
+        const mirror = await reconcileJubelioChannelStatusForOrder(db, {
+          orderId: completedOrderId,
+          logger: orderLog,
+        });
+        orderLog.info("channel-status mirror reconciled after completion", {
+          outcome: mirror.status,
+        });
+      } catch (mirrorError) {
+        orderLog.error(
+          "channel-status mirror reconciliation failed after completion",
+          { error: serializeError(mirrorError) }
+        );
+      }
+    });
 
     // Email is a post-response side effect. SMTP latency must not keep the
     // admin's pickup verification request open after the order is committed.

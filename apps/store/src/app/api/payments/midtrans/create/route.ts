@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { orders, orderItems, jubelioStockOperations } from "@/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { orders, orderItems } from "@/db";
+import { eq } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { createPayment } from "@/lib/midtrans";
 import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
@@ -89,19 +89,14 @@ export async function POST(request: NextRequest) {
       }), log);
     }
 
-    const reserveRows = await db
-      .select({ status: jubelioStockOperations.status })
-      .from(jubelioStockOperations)
-      .where(
-        and(
-          eq(jubelioStockOperations.orderId, orderId),
-          eq(jubelioStockOperations.type, "reserve"),
-          inArray(jubelioStockOperations.status, ["applied", "committed"])
-        )
-      )
-      .limit(1);
-    if (reserveRows.length === 0) {
-      log.warn("repayment rejected — Jubelio reserve not confirmed");
+    // Re-payment reuses the SAME confirmed Sales Order — never a new SO. The
+    // create operation must be confirmed (verified via GET /sales/orders/{id})
+    // before Midtrans is involved; the settlement pipeline later converts that
+    // same SO to an invoice.
+    if (order.jubelioSalesOrderId == null) {
+      log.warn("repayment rejected — no confirmed Jubelio Sales Order", {
+        jubelioSalesOrderId: order.jubelioSalesOrderId,
+      });
       return NextResponse.json(
         {
           success: false,

@@ -101,10 +101,7 @@ export async function GET(request: NextRequest) {
       conditions.push(brand.length ? eq(products.brandId, brand[0].id) : sql`false`);
     }
 
-    // Branch filter (branch id) via a subquery: the product must have at least
-    // one variant with available stock (stock - pendingRemoteStock > 0) at that
-    // branch. Composes with the other conditions and applies to the count
-    // query too, so pagination.total reflects the branch-filtered set.
+    // Branch filtering uses provider mappings, not a provisional stock count.
     if (branchId) {
       conditions.push(
         inArray(
@@ -116,10 +113,13 @@ export async function GET(request: NextRequest) {
               branchStocks,
               eq(branchStocks.productVariantId, productVariants.id)
             )
+            .innerJoin(branches, eq(branches.id, branchStocks.branchId))
             .where(
               and(
                 eq(branchStocks.branchId, branchId),
-                sql`${branchStocks.stock} - ${branchStocks.pendingRemoteStock} > 0`
+                eq(branches.status, "aktif"),
+                sql`${branches.jubelioLocationId} is not null`,
+                sql`${productVariants.jubelioItemId} is not null`
               )
             )
         )
@@ -164,7 +164,9 @@ export async function GET(request: NextRequest) {
       JOIN ${branches} ON ${branches.id} = ${branchStocks.branchId}
       WHERE ${productVariants.productId} = ${products.id}
         AND ${branches.status} = 'aktif'
-        AND ${branchStocks.stock} - ${branchStocks.pendingRemoteStock} > 0
+        AND ${branches.jubelioLocationId} IS NOT NULL
+        AND ${productVariants.jubelioItemId} IS NOT NULL
+        AND COALESCE(${branchStocks.availableStock}, 0) - ${branchStocks.pendingRemoteStock} > 0
     )`;
 
     const chosenSort =
@@ -219,7 +221,7 @@ export async function GET(request: NextRequest) {
     // the page's products, then their branch-stock rows restricted to active
     // branches (same rule as the product-detail API).
     const pageVariantRows = await db
-      .select({ id: productVariants.id, productId: productVariants.productId })
+      .select({ id: productVariants.id, productId: productVariants.productId, jubelioItemId: productVariants.jubelioItemId })
       .from(productVariants)
       .where(
         inArray(
@@ -246,6 +248,8 @@ export async function GET(request: NextRequest) {
             productVariantId: branchStocks.productVariantId,
             stock: branchStocks.stock,
             pendingRemoteStock: branchStocks.pendingRemoteStock,
+            availableStock: branchStocks.availableStock,
+            jubelioLocationId: branches.jubelioLocationId,
           })
           .from(branchStocks)
           .innerJoin(branches, eq(branchStocks.branchId, branches.id))
@@ -255,17 +259,22 @@ export async function GET(request: NextRequest) {
     const variantToProduct = new Map(
       pageVariantRows.map((v) => [v.id, v.productId])
     );
+    const mappedVariantIds = new Set(
+      pageVariantRows.filter((v) => v.jubelioItemId != null).map((v) => v.id)
+    );
     const stockByProduct = new Map<
       string,
-      { stock: number; pendingRemoteStock: number }[]
+      { stock: number; pendingRemoteStock: number; availableStock: number | null }[]
     >();
     for (const row of pageStockRows) {
       const productId = variantToProduct.get(row.productVariantId);
-      if (!productId) continue;
+      if (!productId || row.jubelioLocationId == null ||
+          !mappedVariantIds.has(row.productVariantId)) continue;
       const list = stockByProduct.get(productId) ?? [];
       list.push({
         stock: row.stock,
         pendingRemoteStock: row.pendingRemoteStock,
+        availableStock: row.availableStock,
       });
       stockByProduct.set(productId, list);
     }
@@ -304,7 +313,9 @@ export async function GET(request: NextRequest) {
           ...product,
           price: product.price ?? product.basePrice,
           image,
-          hasStock: hasAvailableStock(stockByProduct.get(product.id) ?? []),
+          // A mapped branch remains selectable with a provisional zero.
+          hasStock: (stockByProduct.get(product.id)?.length ?? 0) > 0,
+          lastKnownInStock: hasAvailableStock(stockByProduct.get(product.id) ?? []),
         };
       })
     );

@@ -4,6 +4,7 @@ import { carts, cartItems, productVariants, branchStocks, branches } from "@/db"
 import { eq, and, sql } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
+import { requestLogger, serializeError } from "@/lib/logger";
 
 const addItemSchema = z.object({
   variantId: z.string(),
@@ -28,6 +29,7 @@ async function getOrCreateCart(userId: string) {
 }
 
 export async function POST(request: NextRequest) {
+  const log = requestLogger(request, { module: "cart-items-add" });
   try {
     const access = await requireOnboardedApiSession();
     if (!access.ok) return access.response;
@@ -73,6 +75,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if (variant[0].jubelioItemId == null || branch[0].jubelioLocationId == null) {
+      log.warn("cart item rejected — Jubelio mapping missing", { variantId, branchId });
+      return NextResponse.json({ success: false, error: "Jubelio stock mapping unavailable" }, { status: 409 });
+    }
+
     // Check branch stock for this variant
     const stockRow = await db
       .select()
@@ -85,18 +92,14 @@ export async function POST(request: NextRequest) {
       )
       .limit(1);
 
-    // Confirmed reservations are already reflected in Jubelio on-hand.
-    const availableStock =
-      (stockRow[0]?.stock ?? 0) - (stockRow[0]?.pendingRemoteStock ?? 0);
-
-    const cart = await getOrCreateCart(session.user.id);
-
-    if (quantity > availableStock) {
-      return NextResponse.json(
-        { success: false, error: "Insufficient stock at this branch" },
-        { status: 400 }
-      );
+    // The local mirror is provisional: zero can recover after a fresh read
+    // from Jubelio during place-order. Do not block cart entry based on age or
+    // last-known availability; a mapped stock row is still required.
+    if (!stockRow.length) {
+      log.warn("cart item rejected — branch stock mapping missing", { variantId, branchId });
+      return NextResponse.json({ success: false, error: "Stock mapping unavailable" }, { status: 409 });
     }
+    const cart = await getOrCreateCart(session.user.id);
 
     const changed = await db
       .insert(cartItems)
@@ -113,7 +116,6 @@ export async function POST(request: NextRequest) {
           quantity: sql`${cartItems.quantity} + ${quantity}`,
           updatedAt: new Date(),
         },
-        setWhere: sql`${cartItems.quantity} + ${quantity} <= ${availableStock}`,
       })
       .returning({ id: cartItems.id });
 
@@ -124,9 +126,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    log.info("cart item added", { variantId, branchId, quantity });
     return NextResponse.json({ success: true, message: "Item added to cart" });
   } catch (error) {
-    console.error("Error adding to cart:", error);
+    log.error("cart item add failed", { error: serializeError(error) });
     return NextResponse.json(
       { success: false, error: "Failed to add to cart" },
       { status: 500 }

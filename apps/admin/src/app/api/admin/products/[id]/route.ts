@@ -166,6 +166,7 @@ export async function GET(
           stock: branchStocks.stock,
           reservedStock: branchStocks.reservedStock,
           pendingRemoteStock: branchStocks.pendingRemoteStock,
+          availableStock: branchStocks.availableStock,
         })
         .from(branchStocks)
         .innerJoin(branches, eq(branchStocks.branchId, branches.id))

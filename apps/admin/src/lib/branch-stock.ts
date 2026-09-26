@@ -26,6 +26,8 @@ export type BranchStockInputRow = {
   stock: number;
   reservedStock: number;
   pendingRemoteStock: number;
+  /** Provider `available` snapshot; NULL = never synced / unusable → 0. */
+  availableStock: number | null;
 };
 
 export type BranchStockRow = {
@@ -56,6 +58,8 @@ export type ScopedTotalsInputRow = {
   stock: number;
   reservedStock: number;
   pendingRemoteStock: number;
+  /** Provider `available` snapshot; NULL = never synced / unusable → 0. */
+  availableStock: number | null;
 };
 
 export type ScopedTotals = {
@@ -75,16 +79,20 @@ export function computeScopedTotals(
   let totalStock = 0;
   let totalReserved = 0;
   let totalPendingRemote = 0;
+  let totalAvailable = 0;
   for (const r of visible) {
     totalStock += r.stock;
     totalReserved += r.reservedStock;
     totalPendingRemote += r.pendingRemoteStock;
+    // Sellable (Sales-Order flow): provider available − local unconfirmed
+    // holds; a missing snapshot fails closed to 0.
+    totalAvailable += Math.max(0, (r.availableStock ?? 0) - r.pendingRemoteStock);
   }
 
   return {
     totalStock,
     totalReserved,
-    totalAvailable: Math.max(0, totalStock - totalPendingRemote),
+    totalAvailable,
   };
 }
 
@@ -140,7 +148,9 @@ export function groupBranchStock(
       stock: r.stock,
       reservedStock: r.reservedStock,
       pendingRemoteStock: r.pendingRemoteStock,
-      available: Math.max(0, r.stock - r.pendingRemoteStock),
+      // Sellable (Sales-Order flow): provider available − local unconfirmed
+      // SO holds; fail closed on a missing snapshot.
+      available: Math.max(0, (r.availableStock ?? 0) - r.pendingRemoteStock),
     });
   }
 

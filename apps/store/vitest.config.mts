@@ -7,9 +7,9 @@ export default defineConfig({
       "@": path.resolve(import.meta.dirname, "src"),
       // More specific subpath first — @rollup/plugin-alias matches the first
       // entry whose key is a prefix of the specifier.
-      "@marketplace/db/src/schema": path.resolve(
+      "@marketplace/db/src": path.resolve(
         import.meta.dirname,
-        "../../packages/db/src/schema"
+        "../../packages/db/src"
       ),
       "@marketplace/db": path.resolve(import.meta.dirname, "../../packages/db/src"),
       "@marketplace/ui": path.resolve(import.meta.dirname, "../../packages/ui/src"),
@@ -18,7 +18,12 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.{ts,tsx}"],
-    // The store has no tests yet — don't fail the workspace run for it.
+    // DB integration files share a development database. A sweep test scans
+    // outstanding operations globally, while another test deliberately inserts
+    // an unaccountable fixture; parallel files can make that sweep fail for
+    // unrelated rows. Keep store test files serial, without weakening the
+    // production recovery's fail-closed behavior.
+    fileParallelism: false,
     passWithNoTests: true,
   },
 });

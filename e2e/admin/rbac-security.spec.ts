@@ -103,8 +103,8 @@ test.beforeAll(async () => {
   );
   await pool.query(
     `INSERT INTO branch_stock
-       (branch_id, product_variant_id, stock, reserved_stock, pending_remote_stock)
-     VALUES ($1, $2, 5, 0, 0)`,
+       (branch_id, product_variant_id, stock, reserved_stock, pending_remote_stock, available_stock)
+     VALUES ($1, $2, 5, 0, 0, 5)`,
     [sbyBranchId, variantId]
   );
 

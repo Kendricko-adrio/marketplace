@@ -233,8 +233,9 @@ test.describe("admin orders", () => {
     await expect(page.getByText("reconciling")).toBeVisible({ timeout: 15_000 });
   });
 
-  test("order detail shows the immutable PPN snapshot", async ({ page }) => {
+  test("order detail labels Jubelio IDs as transaction references", async ({ page }) => {
     await page.goto(`/admin/orders/${READY_ORDER_ID}`);
+    await expect(page.getByText("Referensi ID transaksi Jubelio.")).toBeVisible();
     await expect(page.getByText("PPN (11%)")).toBeVisible();
     const stored = await pool.query(
       `SELECT ppn_amount FROM orders WHERE id = $1`,

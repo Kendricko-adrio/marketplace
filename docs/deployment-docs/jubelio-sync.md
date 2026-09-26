@@ -21,8 +21,10 @@ JUBELIO_SYNC_MAX_PRODUCTS=      # kosong = fetch semua; integer = cap untuk test
 
 ## A.1 Stock adjustment safety
 
-Stock writes used by checkout have stricter environment controls than catalog
-reads.
+Checkout now uses the Sales Order gateway exclusively. The adjustment checkout
+and stock-write account mapping below are historical, not active checkout
+settings; see [Jubelio Sales Orders](../features/jubelio-sales-orders.md)
+for the current runtime gates and settlement.
 
 Staging runs `jubelio-mock` as a private Compose service
 (`JUBELIO_MOCK_API_BASE_URL=http://jubelio-mock:3002`). Repo default untuk
@@ -64,6 +66,32 @@ The gateway resolves `adjp_acct_id` and `adjm_acct_id` from
 emergency overrides and should normally remain empty. The gateway also requires
 `NODE_ENV=production` and the exact HTTPS host `https://api2.jubelio.com`. If
 any check fails, checkout stops before Midtrans.
+
+### A.2 Sales Order gateway (active checkout)
+
+`apps/store/src/lib/jubelio-sales-client.ts` has **no mock runtime** and is
+wired to every new checkout. In non-production it throws before any request unless the
+explicit `JUBELIO_SALES_TEST_ACCOUNT_ENABLED=true` opt-in is configured with
+`JUBELIO_API_BASE_URL=https://api2.jubelio.com` and real credentials belonging
+to an independently verified isolated test account. The production branch
+requires both `APP_ENV=production` and `NODE_ENV=production`, the explicit
+pinned URL and `JUBELIO_STOCK_WRITES_ENABLED=true`; the test-account flag
+cannot bypass the production branch. Do **not** add the test-account flag to
+production Compose. Staging Compose does not forward it; staging currently
+uses production-mode stock settings (see warning above), so do not mistake
+its running mock service for a Sales gateway safety boundary.
+
+These configuration gates do not constitute go-live approval. Test-account
+isolation is by owner-confirmed credentials, not by the shared hostname. The
+mock still serves unrelated legacy consumers; the Sales gateway never calls it.
+After migration 0022, bootstrap real Jubelio stock for the catalog:
+`branch_stock.provider_stock_synced_at` is NULL on legacy rows. Browsing uses
+last-known availability provisionally; every new checkout reads selected
+item/location stock directly from Jubelio, then atomically holds it before SO
+create. Missing, inconsistent, or unreachable provider reads block checkout.
+Local hold writes must never refresh the provider observation clock.
+A periodic stock reconciliation job is outside this Sales-Order cutover.
+The live checkout read remains mandatory during a provider outage.
 
 The stock HTTP scheduler is process-wide. It spaces request starts to stay at
 or below `JUBELIO_STOCK_MAX_REQUESTS_PER_MINUTE`, caps simultaneous requests at

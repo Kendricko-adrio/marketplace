@@ -1,15 +1,34 @@
 # Sweep Reservasi Stok (cron)
 
-Saat customer place-order, stok Jubelio langsung dikurangi dan dicatat sebagai
-`branch_stock.reserved_stock` selama customer di halaman pembayaran Midtrans.
-Jika customer tidak bayar
-sampai TTL habis (`orders.expires_at`), reservasi harus dilepas. Path utama:
-webhook `expire` dari Midtrans. **Safety-net**: cron `sweep-reservations` yang
-men-scan order `pending_payment` yang sudah lewat `expires_at`, re-verify
-status ke Midtrans, lalu finalize (kalau ternyata sudah bayar) atau fail +
-restore stok lewat adjustment positif (kalau belum). Endpoint yang sama juga
-mereconcile write Jubelio yang timeout atau terputus setelah request dikirim,
-termasuk compensation dan re-acquisition untuk late settlement.
+> **Sales-Order cutover (2026-09-24):** cron yang sama sekarang menjalankan
+> lifecycle **Jubelio Sales Order** (lihat
+> `docs/features/jubelio-sales-orders.md`). Tugasnya: (1) mereconcile
+> operasi SO yang masih in-flight via ID remote + GET (cancel terkonfirmasi →
+> hold dilepas; invoice/pembayaran → GET-verify), (2) melanjutkan settlement
+> untuk order paid yang macet di `processing` (webhook missed/crash/step
+> ambigu — `ready_for_pickup` hanya setelah invoice + pembayaran terverifikasi),
+> (3) men-expire order `pending_payment` basi (path gagal membatalkan SO
+> pre-invoice; hold dilepas hanya setelah cancel dikonfirmasi), dan (4)
+> **paling akhir (prioritas terendah, tiket #03/#04/#05/#06)**: mereconcile cermin
+> Status Channel — intent *aged* `possibly_sent` (target apa pun)
+> direkonsiliasi **GET-only** via SO id tersimpan (order terminal juga;
+> tidak pernah re-POST; kegagalan GET 5xx/429 tetap `possibly_sent` untuk
+> retry GET-only berikutnya), intent pending yang order lokalnya sudah terminal (completed/cancelled) dispositionskan atomik pending→aborted dengan alasan statis PENDING_TERMINAL_SUPERSEDED (tanpa POST/GET; possibly_sent tidak pernah di-abort; order `failed_payment` TIDAK lagi blanket-terminal — jalur `Gagal Bayar` tiket #05 yang mengatur intent pending-nya; KECUALI tiket #06: intent pending `Selesai` pada order completed yang ledger SO-nya masih terverifikasi penuh itu proyeksi terkini dan didispatch, bukan di-abort) dan order `ready_for_pickup` ATAU `completed` yang terlewat
+> (crash sebelum intent / completion sebelum trigger post-commit tiket #06: `Selesai`) didispatch best-effort (cermin `Menunggu Verifikasi` tiket #04 dan `Gagal Bayar`/mismatch cancel-started tiket #05 tetap berjalan pada window-nya masing-masing) — kegagalan cermin tidak
+> pernah menyentuh pembayaran/pickup/fulfillment dan tidak pernah
+> menggagalkan sweep; langkah cermin berjalan SETELAH langkah kritis
+> (settlement/expiry) supaya budget cron (55s) selalu dipakai untuk
+> pembayaran/fulfillment lebih dulu. Adjustment
+> positif/negatif tidak pernah dikirim lagi. Deployment WAJIB menjalankan
+> migrations 0021–0022 (lihat atas) **dan** 0024–0025 (tabel proyeksi cermin
+> `jubelio_channel_status_intent` + partial unique index per SO) sebelum
+> mengaktifkan cron versi ini. Tidak ada env var baru dan tidak ada perubahan
+> jadwal job.
+
+Saat customer place-order, Sales Order dibuat di Jubelio dan stok di-hold
+secara lokal (`branch_stock.pending_remote_stock`). Jika customer tidak bayar
+sampai TTL habis (`orders.expires_at`), SO harus dibatalkan. Path utama:
+webhook `expire` dari Midtrans. **Safety-net**: cron `sweep-reservations`.
 
 Endpoint: `POST /api/cron/sweep-reservations`, auth via header `X-Cron-Secret`
 (nilai = `CRON_SECRET` di `.env`). Endpoint **idempoten** — aman dijalankan
@@ -97,7 +116,7 @@ Tunggu ~1 menit, lalu cek log hari ini:
 ```bash
 tail -f /home/ops/log/marketplace-sweep/staging/marketplace-sweep-$(date +%F).log
 # Expected (tiap 1 menit, satu file per hari):
-# [2026-01-01T10:00:00+0700] OK {"success":true,"scanned":0,"finalized":0,"failed":0,"jubelioSync":{"scanned":0,"applied":0,"failed":0,"pending":0}}
+# [2026-01-01T10:00:00+0700] OK {"success":true,"scanned":0,"finalized":0,"failed":0,"jubelioSync":{"scanned":0,"applied":0,"failed":0,"pending":0},"jubelioSalesReview":{"scanned":0,"marked":0,"failed":0},"channelMirrorReview":{"possiblySentScanned":0,"skippedFresh":0,"recovered":0,"investigated":0,"stillUnknown":0,"pendingTerminalScanned":0,"pendingTerminalAborted":0,"pendingTerminalSkipped":0,"missedOrdersScanned":0,"missedDispatched":0,"missedFailed":0,"verifikasiOrdersScanned":0,"verifikasiDispatched":0,"verifikasiFailed":0,"gagalBayarOrdersScanned":0,"gagalBayarDispatched":0,"gagalBayarFailed":0,"failed":0}}
 ```
 
 Kalau request gagal (mis. endpoint 503, jaringan putus), barisnya berbentuk:
@@ -120,6 +139,13 @@ harian):
 > - `failed` = order benar-benar expired → `failed_payment` + reservasi dilepas.
 > - `jubelioSync` = operasi adjustment durable yang discan, terkonfirmasi,
 >   gagal, atau masih menunggu rekonsiliasi.
+> - `jubelioSalesReview` = up to 50 SO create/cancel claims older than 15 minutes
+>   and still `dispatched_unknown`, atomically moved to `manual_review`.
+>   `failed` counts DB scan/mark errors; check structured error logs even when
+>   the cron returns HTTP 200. This **never** repeats a Jubelio POST, releases
+>   a stock hold, or proves the write failed. SO checkout and the admin SO
+>   review queue are not yet enabled. Deploy migration 0020 before deploying
+>   the updated cron route, otherwise the scan logs an error on every run.
 
 ## D. Catatan
 

@@ -12,11 +12,13 @@ import {
   genders,
 } from "@/db";
 import { eq, and, asc, sql } from "drizzle-orm";
+import { requestLogger, serializeError } from "@/lib/logger";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const log = requestLogger(request, { module: "product-detail" });
   try {
     const { id } = await params;
 
@@ -96,10 +98,9 @@ export async function GET(
             ? variantImages.map((img) => img.url)
             : (productData.images ?? []).map((img) => img.url);
 
-        // Get branches with available stock for this variant.
-        // Confirmed reservations are already reflected in Jubelio on-hand.
-        // Branches with zero/negative available are hidden.
-        const branchStockRows = await db
+        // Show mapped active branches even when the last-known stock is zero.
+        // The provider is checked live at checkout; display stock is provisional.
+        const branchStockRows = variant.jubelioItemId == null ? [] : await db
           .select({
             branchId: branches.id,
             name: branches.name,
@@ -108,6 +109,7 @@ export async function GET(
             stock: branchStocks.stock,
             reservedStock: branchStocks.reservedStock,
             pendingRemoteStock: branchStocks.pendingRemoteStock,
+            availableStock: branchStocks.availableStock,
           })
           .from(branchStocks)
           .innerJoin(branches, eq(branchStocks.branchId, branches.id))
@@ -115,14 +117,15 @@ export async function GET(
             and(
               eq(branchStocks.productVariantId, variant.id),
               eq(branches.status, "aktif"),
-              sql`${branchStocks.stock} - ${branchStocks.pendingRemoteStock} > 0`
+              sql`${branches.jubelioLocationId} is not null`
             )
           )
           .orderBy(asc(branches.name));
 
         const branchStock = branchStockRows.map((b) => ({
           ...b,
-          available: b.stock - b.pendingRemoteStock,
+          available:
+            Math.max(0, (b.availableStock ?? 0) - b.pendingRemoteStock),
         }));
 
         return {
@@ -141,6 +144,7 @@ export async function GET(
       ...new Set(variants.filter((v) => v.size).map((v) => v.size)),
     ];
 
+    log.info("product detail loaded", { productId: productData.id });
     return NextResponse.json({
       success: true,
       data: {
@@ -157,7 +161,7 @@ export async function GET(
       },
     });
   } catch (error) {
-    console.error("Error fetching product:", error);
+    log.error("product detail failed", { error: serializeError(error) });
     return NextResponse.json(
       { success: false, error: "Failed to fetch product" },
       { status: 500 }

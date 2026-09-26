@@ -3,20 +3,19 @@ import { db } from "@/db";
 import {
   carts,
   cartItems,
-  productVariants,
-  products,
   branches,
   branchStocks,
   orders,
   orderItems,
-  jubelioStockOperations,
+  productVariants,
+  products,
 } from "@/db";
 import { eq, and, sql } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
 import { pickupDateToInstant, validatePickupSlot } from "@/lib/pickup-validation";
 import { createPayment, getMockPaymentResult } from "@/lib/midtrans";
-import { getConfigNumber, getPpnRatePercent } from "@/lib/config";
+import { getConfigNumber, getConfigString, getPpnRatePercent } from "@/lib/config";
 import {
   calculateLineItemSubtotal,
   calculateOrderPricing,
@@ -25,20 +24,24 @@ import { buildPaymentItemDetails } from "@/lib/payment-item-details";
 import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
 import { claimAndFailOrder } from "@/lib/order-finalize";
 import { initializeReservedOrderPayment } from "@/lib/payment-initialization";
+import { verifyCheckoutStock } from "@marketplace/db/src/checkout-live-stock";
 import {
-  applyJubelioStockOperation,
-  createReserveOperationValues,
-  failOrderWithAmbiguousReserve,
-} from "@/lib/jubelio-stock-saga";
+  dispatchJubelioSalesCreate,
+} from "@/lib/jubelio-sales-lifecycle";
+import { recordJubelioSalesIntent } from "@/lib/jubelio-sales-operations";
+import type { JubelioSalesOrderCreateRequest } from "@marketplace/db/src/schema";
 
 /**
- * Thrown inside the place-order transaction when the atomic stock-reservation
- * UPDATE matches 0 rows (another concurrent checkout took the last units).
- * The catch block translates it into a 400 so the customer can retry; the whole
- * transaction rolls back, releasing any reservations made for earlier items.
+ * Thrown inside the place-order transaction when the atomic SO-hold UPDATE
+ * matches 0 rows (another concurrent checkout took the last sellable unit, or
+ * no provider `available` snapshot exists). The catch block translates it
+ * into a 400/503 so the customer can retry; the whole transaction rolls back.
  */
 class InsufficientStockError extends Error {
-  constructor(public productName: string) {
+  constructor(
+    public productName: string,
+    public missingSnapshot = false
+  ) {
     super(`Insufficient stock for ${productName}`);
     this.name = "InsufficientStockError";
   }
@@ -56,6 +59,20 @@ const placeOrderSchema = z.object({
   selectedItemIds: z.array(z.string()).min(1, "Select at least one item to checkout"),
 });
 
+/**
+ * Emergency pause switch (plan feature 4): when `checkout.paused` is set,
+ * NEW checkouts are blocked — never with an adjustment fallback. Fail closed:
+ * if the config cannot be read, checkouts stay blocked until it can be.
+ */
+export async function isCheckoutPaused(): Promise<boolean> {
+  try {
+    const value = await getConfigString("checkout.paused", "false");
+    return value.trim().toLowerCase() === "true";
+  } catch {
+    return true;
+  }
+}
+
 export async function POST(request: NextRequest) {
   let log = requestLogger(request, { module: "place-order" });
   log.info("place order requested");
@@ -63,6 +80,24 @@ export async function POST(request: NextRequest) {
     const access = await requireOnboardedApiSession();
     if (!access.ok) return withRequestId(access.response, log);
     const { session } = access;
+
+    // Emergency pause: block NEW checkouts only; in-flight orders keep their
+    // normal reconciliation paths. Never falls back to the retired adjustment
+    // flow.
+    if (await isCheckoutPaused()) {
+      log.warn("checkout rejected — new checkouts are paused");
+      return withRequestId(
+        NextResponse.json(
+          {
+            success: false,
+            error:
+              "Checkout sedang dijeda sementara. Silakan coba beberapa saat lagi.",
+          },
+          { status: 503 }
+        ),
+        log
+      );
+    }
 
     const body = await request.json();
     const parsed = placeOrderSchema.safeParse(body);
@@ -140,7 +175,6 @@ export async function POST(request: NextRequest) {
     }
 
     // ===== Enforce single-branch checkout =====
-    // All selected items must belong to the same branch.
     const branchIds = new Set(
       selectedItems.map((i) => i.branchId).filter((b): b is string => !!b)
     );
@@ -219,40 +253,39 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // ===== Re-check stock for each selected item (soft check) =====
-    // Confirmed remote reservations are already reflected in Jubelio on-hand
-    // (`stock`). Only holds still waiting for remote confirmation are
-    // subtracted here. This is a soft UX pre-check; the authoritative guard is the
-    // atomic conditional UPDATE inside the transaction below.
-    for (const item of selectedItems) {
-      const stockRow = await db
-        .select()
-        .from(branchStocks)
-        .where(
-          and(
-            eq(branchStocks.branchId, branchId),
-            eq(branchStocks.productVariantId, item.variantId)
-          )
-        )
-        .limit(1);
-
-      const availableStock =
-        (stockRow[0]?.stock ?? 0) - (stockRow[0]?.pendingRemoteStock ?? 0);
-      if (item.quantity > availableStock) {
-        log.warn("checkout rejected — soft stock check failed", {
-          variantId: item.variantId,
-          requestedQuantity: item.quantity,
-          availableStock,
-        });
-        return NextResponse.json(
-          {
-            success: false,
-            error: `Insufficient stock for ${item.productName} at this branch`,
-          },
-          { status: 400 }
-        );
+    // Read the local mirror first, then verify ALL selected pairs against the
+    // provider before creating an SO. A stale/zero local cache is advisory:
+    // the provider is the stock source of truth. The atomic hold below still
+    // protects against concurrent checkouts on this site.
+    const stockCheck = await verifyCheckoutStock(db, selectedItems.map((item) => ({
+      branchId,
+      variantId: item.variantId,
+      itemId: item.jubelioItemId!,
+      locationId: branch[0].jubelioLocationId!,
+      quantity: item.quantity,
+      productName: item.productName,
+    })));
+    if (!stockCheck.ok) {
+      const stockFailure = {
+        reason: stockCheck.reason,
+        detail: stockCheck.detail,
+        productName: stockCheck.productName,
+        itemIds: selectedItems.map((item) => item.jubelioItemId),
+        locationId: branch[0].jubelioLocationId,
+      };
+      if (stockCheck.reason === "unavailable") {
+        log.error("checkout rejected — Jubelio stock unavailable", stockFailure);
+      } else {
+        log.warn("checkout rejected — Jubelio stock insufficient", stockFailure);
       }
+      return withRequestId(NextResponse.json({
+        success: false,
+        error: stockCheck.reason === "insufficient"
+          ? `Stok ${stockCheck.productName} di cabang ini tidak mencukupi. Silakan kurangi jumlah atau pilih barang lain.`
+          : "Stok Jubelio belum dapat diverifikasi. Silakan coba beberapa saat lagi.",
+      }, { status: stockCheck.reason === "insufficient" ? 409 : 503 }), log);
     }
+    log.info("Jubelio stock verified before Sales Order", { itemCount: selectedItems.length });
 
     // ===== Calculate totals =====
     const subtotal = calculateLineItemSubtotal(
@@ -283,10 +316,12 @@ export async function POST(request: NextRequest) {
     // ===== Reservation TTL (minutes) from system_config (cached at boot) =====
     const ttlMinutes = await getConfigNumber("reservation.ttlMinutes", 15);
 
-    // ===== Persist order + reservation atomically, then call Midtrans outside the transaction =====
+    // ===== Persist order + SO hold + create intent atomically, then run the
+    // ===== SO create and Midtrans OUTSIDE the transaction =====
     const orderId = crypto.randomUUID();
-    const stockOperationId = crypto.randomUUID();
-    // Single anchor for both the local reservation clock and the Midtrans expiry
+    // Unique provider-facing create note/reference.
+    const createReference = `OKCIR_SO_CREATE:${orderId}:${crypto.randomUUID()}`;
+    // Single anchor for both the local hold clock and the Midtrans expiry
     // countdown (`expiry.start_time`) so async methods (VA/GoPay) cannot outlive
     // the reservation TTL.
     const paymentStartedAt = new Date();
@@ -299,18 +334,35 @@ export async function POST(request: NextRequest) {
       ttlMinutes,
     });
 
+    const createRequest: JubelioSalesOrderCreateRequest = {
+      // The verified generic Jubelio customer contact.
+      contactId: -1,
+      customerName: session.user.name || "Customer",
+      locationId: branch[0].jubelioLocationId!,
+      note: createReference,
+      refNo: orderId,
+      channelStatus: "Belum Bayar",
+      items: selectedItems.map((item) => ({
+        itemId: item.jubelioItemId!,
+        quantity: item.quantity,
+        price: Number(item.variantPrice),
+        discAmount: 0,
+        taxAmount: 0,
+        unit: process.env.JUBELIO_ITEM_UNIT?.trim() || "Buah",
+        // The provider FK-rejects tax_id 0; the account's "No Tax" record id
+        // (sandbox 2026-09-24: 1, rate 0.00) is the safe default.
+        taxId: Number(process.env.JUBELIO_ITEM_TAX_ID) || 1,
+      })),
+    };
+
     try {
       await db.transaction(async (tx) => {
         // ===== Create the order =====
-        // expiresAt drives the sweep cron and pairs with the Midtrans expiry
-        // so the reservation is released even if the `expire` webhook is missed.
         await tx.insert(orders).values({
           id: orderId,
           userId: session.user.id,
           branchId,
           status: "pending_payment",
-          // Set later from the authoritative Midtrans GET status (the method is
-          // unknowable until the customer picks one on the hosted Snap page).
           paymentMethod: null,
           paymentStatus: "pending",
           pickupDate: pickupDateToInstant(pickupDate),
@@ -340,15 +392,13 @@ export async function POST(request: NextRequest) {
           });
         }
 
-        // ===== Atomically hold stock while Jubelio confirms the adjustment =====
-        // Conditional UPDATE: only increments pending_remote_stock if enough is
-        // still available (stock - pending_remote_stock >= qty). 0 rows means another
-        // concurrent checkout took the last units → throw to roll back the whole
-        // transaction (releasing reservations made for earlier items in this tx).
-        // This is race-free without FOR UPDATE: two concurrent checkouts for the
-        // last unit produce one match and one miss.
+        // ===== Atomically hold stock BEFORE the SO POST =====
+        // Conditional UPDATE: only increments pending_remote_stock if enough
+        // sellable stock remains (provider available − holds ≥ qty) and a
+        // provider snapshot exists (fail closed). 0 rows means another
+        // concurrent checkout took the last units → throw to roll back.
         for (const item of selectedItems) {
-          const reserved = await tx
+          const held = await tx
             .update(branchStocks)
             .set({
               pendingRemoteStock: sql`${branchStocks.pendingRemoteStock} + ${item.quantity}`,
@@ -358,58 +408,113 @@ export async function POST(request: NextRequest) {
               and(
                 eq(branchStocks.branchId, branchId),
                 eq(branchStocks.productVariantId, item.variantId),
-                sql`${branchStocks.stock} - ${branchStocks.pendingRemoteStock} >= ${item.quantity}`
+                // Never hold against a snapshot superseded by a concurrent
+                // webhook, checkout, or provider refresh.
+                eq(branchStocks.providerStockSyncedAt, stockCheck.observedAt),
+                sql`COALESCE(${branchStocks.availableStock}, 0) - ${branchStocks.pendingRemoteStock} >= ${item.quantity}`
               )
             )
             .returning({ branchId: branchStocks.branchId });
-          if (reserved.length === 0) {
-            throw new InsufficientStockError(item.productName);
+          if (held.length === 0) {
+            const snapshot = await tx
+              .select({ availableStock: branchStocks.availableStock, providerStockSyncedAt: branchStocks.providerStockSyncedAt })
+              .from(branchStocks)
+              .where(
+                and(
+                  eq(branchStocks.branchId, branchId),
+                  eq(branchStocks.productVariantId, item.variantId)
+                )
+              )
+              .limit(1);
+            throw new InsufficientStockError(
+              item.productName,
+              snapshot[0]?.availableStock == null || snapshot[0]?.providerStockSyncedAt?.getTime() !== stockCheck.observedAt.getTime()
+            );
           }
-          log.info("local stock hold created", {
+          log.info("local SO hold created", {
             variantId: item.variantId,
             quantity: item.quantity,
           });
         }
 
-        await tx.insert(jubelioStockOperations).values(
-          createReserveOperationValues({
-            operationId: stockOperationId,
-            orderId,
-            locationId: branch[0].jubelioLocationId!,
-            items: selectedItems.map((item) => ({
-              variantId: item.variantId,
-              itemId: item.jubelioItemId!,
-              quantity: item.quantity,
-              description: item.productName,
-            })),
-          })
-        );
-
+        // ===== Persist the create intent BEFORE any provider POST =====
+        await recordJubelioSalesIntent(tx, {
+          orderId,
+          type: "create",
+          reference: createReference,
+          payload: { type: "create", create: createRequest },
+        });
       });
 
-      // Never create a Midtrans transaction until Jubelio confirms that its
-      // on-hand stock has been reduced. Provider calls stay outside the DB tx.
-      log.info("Jubelio stock reserve dispatched", { operationId: stockOperationId });
-      const stockOutcome = await applyJubelioStockOperation(stockOperationId, undefined, log);
-      log.info("Jubelio stock reserve completed", {
-        operationId: stockOperationId,
-        status: stockOutcome.status,
+      // Provider call stays OUTSIDE the DB transaction: exactly one SO create
+      // POST, confirmed via GET before Midtrans is involved.
+      log.info("Jubelio sales order create dispatched");
+      const createOutcome = await dispatchJubelioSalesCreate({
+        orderId,
+        create: createRequest,
+        logger: log,
       });
-      if (stockOutcome.status !== "applied") {
-        if (stockOutcome.status === "reconciling") {
-          await failOrderWithAmbiguousReserve(
-            orderId,
-            "Stock confirmation from Jubelio is still pending",
+      log.info("Jubelio sales order create completed", {
+        status: createOutcome.status,
+      });
+
+      if (createOutcome.status !== "confirmed") {
+        if (createOutcome.status === "rejected") {
+          // Definitive pre-apply rejection: release the hold, fail the order.
+          await db.transaction(async (tx) => {
+            const orderRows = await tx
+              .select({ branchId: orders.branchId })
+              .from(orders)
+              .where(eq(orders.id, orderId))
+              .limit(1);
+            const orderBranchId = orderRows[0]?.branchId;
+            if (orderBranchId) {
+              for (const item of selectedItems) {
+                await tx
+                  .update(branchStocks)
+                  .set({
+                    pendingRemoteStock: sql`GREATEST(0, ${branchStocks.pendingRemoteStock} - ${item.quantity})`,
+                    updatedAt: new Date(),
+                  })
+                  .where(
+                    and(
+                      eq(branchStocks.branchId, orderBranchId),
+                      eq(branchStocks.productVariantId, item.variantId)
+                    )
+                  );
+              }
+            }
+            await tx
+              .update(orders)
+              .set({
+                status: "failed_payment",
+                paymentStatus: "failed",
+                paymentFailureReason: createOutcome.message,
+                midtransFailureStatus: "sales_order_rejected",
+                updatedAt: new Date(),
+              })
+              .where(
+                and(eq(orders.id, orderId), eq(orders.status, "pending_payment"))
+              );
+          });
+          return withRequestId(
+            NextResponse.json(
+              {
+                success: false,
+                error:
+                  "Stock produk berubah atau tidak mencukupi. Silakan periksa keranjang Anda.",
+              },
+              { status: 409 }
+            ),
             log
           );
         }
-        const status = stockOutcome.status === "rejected" ? 409 : 503;
-        const error =
-          stockOutcome.status === "rejected"
-            ? "Stock produk berubah atau tidak mencukupi. Silakan periksa keranjang Anda."
-            : "Stock sedang dikonfirmasi. Silakan coba kembali beberapa saat lagi.";
+        // manual_review / in_flight: the create may have been applied or is
+        // still unknown. Keep the hold, keep the order pending, never retry.
+        const message =
+          "Pesanan sedang diproses. Tim kami akan mengonfirmasi ketersediaan stok — silakan cek status pesanan atau hubungi kami.";
         return withRequestId(
-          NextResponse.json({ success: false, error }, { status }),
+          NextResponse.json({ success: false, error: message }, { status: 503 }),
           log
         );
       }
@@ -466,7 +571,7 @@ export async function POST(request: NextRequest) {
             "initialization_error",
             log
           );
-          log.error("payment initialization failed; reservation released", {
+          log.error("payment initialization failed; sales-order cancel dispatched", {
             error: serializeError(error),
           });
         },
@@ -494,21 +599,27 @@ export async function POST(request: NextRequest) {
         }),
         log
       );
-    } catch (midtransError) {
+    } catch (checkoutError) {
       // Insufficient stock → 400 (customer can retry / pick fewer units).
-      if (midtransError instanceof InsufficientStockError) {
-        log.warn("insufficient stock — reservation transaction rolled back", {
-          productName: midtransError.productName,
+      if (checkoutError instanceof InsufficientStockError) {
+        log.warn("insufficient stock — checkout transaction rolled back", {
+          productName: checkoutError.productName,
+          missingSnapshot: checkoutError.missingSnapshot,
         });
         return withRequestId(
           NextResponse.json(
-            { success: false, error: midtransError.message },
-            { status: 400 }
+            {
+              success: false,
+              error: checkoutError.missingSnapshot
+                ? "Stok berubah saat checkout. Silakan coba lagi."
+                : checkoutError.message,
+            },
+            { status: checkoutError.missingSnapshot ? 503 : 400 }
           ),
           log
         );
       }
-      const err = midtransError as {
+      const err = checkoutError as {
         message?: string;
         httpStatusCode?: number;
         ApiResponse?: unknown;
@@ -518,7 +629,7 @@ export async function POST(request: NextRequest) {
         httpStatusCode: err.httpStatusCode,
         apiResponse: err.ApiResponse,
       });
-      // The compensation path marks the order failed and releases reservation;
+      // The compensation path marks the order failed and cancels the SO;
       // checked-out cart rows are preserved so the customer can retry.
       return withRequestId(
         NextResponse.json(

@@ -13,7 +13,7 @@ how the marketplace syncs from Jubelio, replacing the older CSV-based SOH sync
 | `item_group` (`item_group_id`, `item_group_name`, `sell_price`, `description`, `selected_brand_name`, `thumbnail`, `images[]`) | `product` | `jubelio_item_group_id` (unique) | `base_price` = group `sell_price`; `thumbnail` = card image; `images` JSONB = gallery from `/inventory/catalog/{id}` |
 | `item` / sku (`item_id`, `item_code`, `sell_price`, `barcode`, `variation_values`) | `product_variant` | `jubelio_item_id` (unique) | `sku` = `item_code` (GTIN); `price` = variant `sell_price`; `size`/`color` from `variation_values` (`Ukuran`→size, `Warna`→color) |
 | `location` (`location_id`, `location_code`, `location_name`, `is_active`) | `branch` | `jubelio_location_id` (unique) | Source: `GET /locations/list` (NOT `/locations/`, which returns only the webstore). `code` = `location_code`; `status` mirrors `is_active`. **This is the branch** — not the channel. |
-| stock: `(item_id, location_id)` `on_hand`/`available` | `branch_stock` | composite `(branchId, productVariantId)` | `stock` = `on_hand`. Catalog sync never writes checkout counters (`reservedStock`, `pendingRemoteStock`). |
+| stock: `(item_id, location_id)` `on_hand`/`on_order`/`reserved`/`available` | `branch_stock` | composite `(branchId, productVariantId)` | `stock` = `on_hand`; `onOrderStock` = `on_order`; `providerReservedStock` = `reserved`; `availableStock` = `available`; `providerStockSyncedAt` = actual provider observation write time; browse stock is provisional, while place-order requires a fresh live provider read. Catalog sync never writes checkout counters (`pendingRemoteStock`) nor the legacy `reservedStock`. |
 | `category` (`category_id`, `category_name`) | `category` | `jubelio_category_id` (unique) | Created **on demand** — only categories used by synced products (see decision 8). Upserted by slug (merges with CSV-SOH categories). |
 | `selected_brand_name` | `brand` | `slug` | Upserted by slug per product (create if new, link if existing). |
 
@@ -42,6 +42,15 @@ Three entry points share `packages/db/src/jubelio-sync.ts`:
    the "Sync dari Jubelio" button on the admin product detail page. Calls
    `syncOneProduct(db, item_group_id)`.
 
+The importer writes `on_hand`, `on_order`, `reserved`, and `available` into
+`branch_stock.stock`, `on_order_stock`, `provider_reserved_stock`, and
+`available_stock` on both first insert and subsequent conflict updates. It
+preserves local `pending_remote_stock` and legacy `reserved_stock`. To verify
+this mapping against PostgreSQL without contacting Jubelio, run
+`npm exec --workspace=packages/db -- vitest run src/jubelio-sync.db.test.ts`;
+the fixture is rolled back after the test. Ensure the local schema is current
+(`npm run db:push` in development) before running it.
+
 ## Importing one product by exact name
 
 From the repository root:
@@ -63,23 +72,17 @@ stock are imported in the same way as a full pull. This mode reads from the
 configured `JUBELIO_API_BASE_URL`; it does not perform checkout stock
 adjustments.
 
-## Checkout stock adjustments
+## Checkout Sales Orders
 
-Checkout writes use a separate gateway in
-`apps/store/src/lib/jubelio-stock-client.ts`:
-
-- `POST /inventory/adjustments/` with negative `qty_in_base` reserves stock.
-- The same endpoint with positive `qty_in_base` compensates a failed or
-  expired payment.
-- `GET /inventory/items/to-stock/{location_id}` supplies unit/cost metadata.
-- `GET /wms/default-bin/{location_id}` supplies `bin_id`.
-- `POST /inventory/items/all-stocks/` confirms absolute on-hand after a write.
-- `GET /inventory/adjustments/` is searched by the unique operation note after
-  ambiguous timeouts.
-
-The marketplace does not retry an ambiguous POST blindly. Durable operation
-state and the unique note make crash recovery and reconciliation fail-closed.
-See `docs/features/stock-reservation.md`.
+Checkout uses `apps/store/src/lib/jubelio-sales-client.ts`, not inventory
+adjustments. Local pending holds and the provider's `available` series are
+combined conservatively. The product and cart display the last-known values
+as provisional. Place-order reads selected item/location pairs live, rejects
+missing/inconsistent/unreachable provider observations, and atomically holds
+`available - pendingRemoteStock` before creating a Sales Order.
+A provider outage blocks checkout, not a fallback to legacy adjustments. See
+[Sales Orders](jubelio-sales-orders.md) and
+[stock reservation](stock-reservation.md).
 
 ## Auth
 

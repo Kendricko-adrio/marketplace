@@ -666,6 +666,9 @@ export default function CartPage() {
                 </>
               )}
 
+              <p className="mb-3 text-xs text-muted-foreground">
+                Ketersediaan stok dikonfirmasi dari Jubelio saat bayar.
+              </p>
               <Button
                 className="w-full gap-2"
                 size="lg"

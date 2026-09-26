@@ -56,7 +56,7 @@ index/README if any of them mention a file that moved.
 | Area | Where to start |
 |---|---|
 | API reference (our endpoints) | `docs/api-reference.md` |
-| Features | `docs/features/` (e.g. `stock-reservation.md`, `jubelio-sync.md`) |
+| Features | `docs/features/` (e.g. `stock-reservation.md`, `jubelio-sync.md`, `jubelio-sales-orders.md`) |
 | Deployment / ops | `docs/deployment-docs/README.md` |
 | Third-party APIs | `docs/jubelio-api/README.md` |
 | Internal architecture | `docs/architecture/README.md` |

@@ -1,12 +1,46 @@
-# Jubelio-backed Stock Reservation
+# Stock Reservation (Sales-Order hold)
 
 ## Purpose
 
-Checkout reserves inventory in Jubelio before a customer is allowed to open
-Midtrans. This prevents the same units from being sold by a retail outlet or
-another marketplace channel during the 15-minute payment window.
+Checkout reserves inventory before a customer is allowed to open Midtrans.
+Since the Jubelio Sales-Order cutover (see
+[`jubelio-sales-orders.md`](jubelio-sales-orders.md)) the hold is a **local
+Sales-Order hold plus a remote Sales Order** — the direct-adjustment
+lifecycle below is RETIRED and kept only as the historical record of legacy
+rows.
 
-## Locked direct-adjustment lifecycle
+## Implemented: SO hold semantics
+
+- Sellable = provider `available` (mirrored into `branch_stock.available_stock`
+  by jubelio-sync, all four series: on_hand/on_order/reserved/available)
+  minus local unconfirmed holds (`pending_remote_stock`).
+- The hold is acquired atomically BEFORE the SO create POST. Confirmed create
+  clears it and decrements the `availableStock` mirror in one transaction;
+  confirmed cancel does **not** subtract an unrelated pending order's hold.
+  The provider restores stock on cancel and the next real sync refreshes it.
+  An interrupted confirmation is recovered via the operation's nullable
+  `hold_accounted_at` marker, never another remote POST.
+- Fail closed: checkout first re-reads the selected items/branch from Jubelio.
+  Missing, inconsistent, or unreachable observations block an SO create;
+  last-known catalog stock is provisional. A local `updated_at` or old
+  `provider_stock_synced_at` is never proof of live availability. Ambiguous
+  create outcomes keep the hold and go to manual review.
+- Concurrency guarantees are proven against PostgreSQL in
+  `apps/store/src/lib/jubelio-sales-holds.db.test.ts` (parallel checkouts
+  cannot oversell; a sync refresh never clears or double-subtracts a hold).
+- `reserved_stock` is a legacy adjustment-era ledger column: historical record
+  only, never part of the sellable formula, never written by the SO flow.
+
+---
+
+# RETIRED: direct-adjustment lifecycle (historical)
+
+The lifecycle below served checkout until the Sales-Order cutover. The
+runtime paths were removed; the text is retained as the record of legacy
+rows (`jubelio_stock_operation`, `reserved_stock`) that may still exist for
+pre-cutover orders.
+
+## Locked direct-adjustment lifecycle (retired)
 
 The marketplace uses Jubelio inventory adjustments as a stock hold; it does
 not create Jubelio Reserved Stock records or Sales Orders. This decision avoids

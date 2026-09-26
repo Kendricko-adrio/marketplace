@@ -141,6 +141,48 @@
       "when": 1789492856790,
       "tag": "0019_volatile_fenris",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790260107895,
+      "tag": "0020_dry_rogue",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1790266468346,
+      "tag": "0021_nervous_weapon_omega",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1790316140797,
+      "tag": "0022_kind_steel_serpent",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1790418449575,
+      "tag": "0023_glamorous_guardian",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1790421598766,
+      "tag": "0024_icy_phil_sheldon",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790421972056,
+      "tag": "0025_flippant_firestar",
+      "breakpoints": true
     }
   ]
 }

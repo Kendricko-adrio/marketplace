@@ -33,7 +33,7 @@ function wholeRupiah(value: string | number, field: string): number {
 export function buildPaymentItemDetails(snapshot: PaymentSnapshot): PaymentItemDetail[] {
   const details: PaymentItemDetail[] = snapshot.items.map((item) => ({
     id: item.id,
-    name: item.name,
+    name: Array.from(item.name).slice(0, 50).join("").trimEnd(),
     price: wholeRupiah(item.price, "item price"),
     quantity: item.quantity,
   }));

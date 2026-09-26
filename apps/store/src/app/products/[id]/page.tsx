@@ -182,10 +182,10 @@ export default function ProductDetailPage() {
     (b) => b.branchId === selectedBranchId
   );
   const stockLabel = selectedBranchId
-    ? `Stok: ${selectedBranchStock?.available ?? 0}`
+    ? `Stok terakhir: ${selectedBranchStock?.available ?? 0}`
     : availableBranches.length > 0
     ? "Pilih cabang"
-    : "Stok habis di semua cabang";
+    : "Stok cabang belum tersedia";
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -226,8 +226,9 @@ export default function ProductDetailPage() {
         <div>
           <h1 className="text-3xl font-bold mb-2">{product.name}</h1>
 
-          <div className="flex items-center gap-4 mb-6 text-sm text-muted-foreground">
-            <span className="text-green-600 font-medium">{stockLabel}</span>
+          <div className="mb-6 text-sm text-muted-foreground">
+            <span className="font-medium">{stockLabel}</span>
+            <p className="mt-1">Stok dikonfirmasi dari Jubelio saat bayar</p>
           </div>
 
           <div className="mb-8">
@@ -335,7 +336,7 @@ export default function ProductDetailPage() {
                         </div>
                       </div>
                       <Badge variant="secondary" className="ml-auto">
-                        Stok: {b.available}
+                        Stok terakhir: {b.available}
                       </Badge>
                     </button>
                   );
@@ -365,11 +366,7 @@ export default function ProductDetailPage() {
                 variant="ghost"
                 size="icon"
                 onClick={() =>
-                  setQuantity(
-                    selectedBranchStock
-                      ? Math.min(selectedBranchStock.available, quantity + 1)
-                      : quantity + 1
-                  )
+                  setQuantity(quantity + 1)
                 }
                 className="h-10 w-10 text-muted-foreground hover:text-foreground"
               >

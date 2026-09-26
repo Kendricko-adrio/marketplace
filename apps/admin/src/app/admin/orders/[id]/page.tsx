@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -63,6 +63,10 @@ interface OrderDetail {
   paymentFailureReason: string | null;
   midtransFailureStatus: string | null;
   pickupCode: string | null;
+  jubelioSalesOrderId: number | null;
+  jubelioInvoiceId: number | null;
+  jubelioPaymentId: number | null;
+  fulfillmentBlockedReason: string | null;
   pickupDate: string | null;
   pickupTime: string | null;
   contactPhone: string;
@@ -608,6 +612,37 @@ export default function AdminOrderDetailPage() {
               </span>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Jubelio Sales-Order settlement status (remote ids + block reason) */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Status Jubelio (Sales Order)</CardTitle>
+          <CardDescription>
+            Referensi ID transaksi Jubelio.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2 text-sm">
+          <div className="flex flex-wrap gap-x-8 gap-y-1">
+            <span>
+              Sales Order ID:{" "}
+              <span className="font-mono">{order.jubelioSalesOrderId ?? "—"}</span>
+            </span>
+            <span>
+              Invoice ID:{" "}
+              <span className="font-mono">{order.jubelioInvoiceId ?? "—"}</span>
+            </span>
+            <span>
+              Payment ID:{" "}
+              <span className="font-mono">{order.jubelioPaymentId ?? "—"}</span>
+            </span>
+          </div>
+          {order.fulfillmentBlockedReason && (
+            <div className="rounded-md bg-amber-50 p-3 text-xs text-amber-800 border border-amber-200">
+              Pengambilan diblokir: {order.fulfillmentBlockedReason}
+            </div>
+          )}
         </CardContent>
       </Card>
 

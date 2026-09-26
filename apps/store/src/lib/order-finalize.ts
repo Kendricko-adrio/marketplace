@@ -2,12 +2,11 @@ import { db } from "@/db";
 import {
   orders,
   orderItems,
-  branchStocks,
   branches,
   notifications,
-  jubelioStockOperations,
+  jubelioSalesOperations,
 } from "@/db";
-import { eq, and, gte, inArray, sql } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { sendEmail } from "@/lib/email";
 import {
   pickupReadyEmailHTML,
@@ -16,28 +15,10 @@ import {
   paymentFailedEmailText,
 } from "@/lib/email-templates-order";
 import { createLogger, serializeError, type Logger } from "@/lib/logger";
-import { releaseJubelioStockForOrder } from "@/lib/jubelio-stock-saga";
 import { generatePickupCode } from "@/lib/pickup-code";
+import { dispatchJubelioSalesCancel } from "@/lib/jubelio-sales-lifecycle";
 
 export { generatePickupCode } from "@/lib/pickup-code";
-
-export function canFinalizeReservedStock(
-  reservedStock: number,
-  quantity: number
-): boolean {
-  return reservedStock >= quantity;
-}
-
-export function getStockFinalizationDeltas(
-  quantity: number,
-  usesRemoteAdjustment: boolean
-): { stock: number; reservedStock: number; pendingRemoteStock: number } {
-  return {
-    stock: usesRemoteAdjustment ? 0 : -quantity,
-    reservedStock: -quantity,
-    pendingRemoteStock: usesRemoteAdjustment ? 0 : -quantity,
-  };
-}
 
 /**
  * Map a Midtrans transaction_status to a human-readable failure reason.
@@ -68,7 +49,7 @@ export function describeFailureReason(
  * Pure helper so the multi-attempt semantics are unit-testable.
  *
  * - "finalize" → payment succeeded (settlement, or capture with accepted fraud).
- * - "fail"     → terminal failure (expire): release the reservation.
+ * - "fail"     → terminal failure (expire): cancel the Sales Order.
  * - "defer"    → non-terminal (pending/deny/cancel/failure): Snap allows the
  *   customer to retry with another method on the same order, so the order must
  *   stay pending_payment until settlement or the TTL sweep.
@@ -105,7 +86,7 @@ export type PaymentAttributes = {
  * does not reload it for the claim — the claim-guard UPDATE is the source of
  * truth for who wins the race.
  */
-type OrderView = {
+export type OrderView = {
   id: string;
   branchId: string | null;
   contactEmail: string;
@@ -119,126 +100,100 @@ type OrderView = {
 };
 
 /**
- * Atomically claim a pending_payment order as paid and finalize it:
- *   1. claim-guard UPDATE (pending_payment/pending → processing/paid). If it
- *      returns 0 rows, another handler (webhook or sweep) already processed the
- *      order → return { claimed: false } so the caller skips side effects.
- *   2. commit the already-applied Jubelio deduction by decreasing only
- *      reservedStock. `stock` already mirrors Jubelio's reduced on-hand value.
- *   3. generate a collision-checked pickup code and move to ready_for_pickup.
- *   4. send the pickup-ready email (best-effort, outside the tx).
- *
- * The claim guard serializes the webhook-vs-sweep race: only the first caller
- * to flip status off pending_payment proceeds; the other sees 0 rows and skips.
+ * Claim a paid order (pending_payment → processing + paid) WITHOUT exposing
+ * fulfillment. Sales-Order settlement (invoice → payment verification) gates
+ * `ready_for_pickup`: the claim guard serializes the webhook-vs-sweep race,
+ * and only a VERIFIED settlement may move the order to ready_for_pickup.
+ * If 0 rows are updated, another handler already processed the order.
  */
-export async function claimAndFinalizePaidOrder(
+export async function claimPaidOrder(
   orderId: string,
-  order: OrderView,
   logger?: Logger,
   paymentAttributes?: PaymentAttributes
 ): Promise<FinalizeResult> {
   const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
+  const claimed = await db
+    .update(orders)
+    .set({
+      status: "processing",
+      paymentStatus: "paid",
+      ...(paymentAttributes?.paymentType
+        ? { paymentMethod: paymentAttributes.paymentType }
+        : {}),
+      ...(paymentAttributes?.transactionId
+        ? { midtransTransactionId: paymentAttributes.transactionId }
+        : {}),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(orders.id, orderId),
+        eq(orders.status, "pending_payment"),
+        eq(orders.paymentStatus, "pending")
+      )
+    )
+    .returning({ id: orders.id });
+  if (claimed.length === 0) {
+    log.info("paid-order claim lost — already handled by another path");
+    return { claimed: false };
+  }
+  log.info("order paid → processing (awaiting Sales-Order settlement)");
+  return { claimed: true };
+}
+
+/**
+ * Block fulfillment for a PAID order whose Sales-Order settlement is
+ * unverified or ambiguous. Keeps Midtrans's authoritative paid status, never
+ * touches paymentStatus, and (together with the absence of a pickup code)
+ * keeps the order out of ready_for_pickup until an operator resolves it.
+ */
+export async function blockOrderFulfillment(
+  orderId: string,
+  reason: string
+): Promise<void> {
+  await db
+    .update(orders)
+    .set({ fulfillmentBlockedReason: reason, updatedAt: new Date() })
+    .where(
+      and(eq(orders.id, orderId), eq(orders.paymentStatus, "paid"))
+    );
+}
+
+/**
+ * Move a PAID, settlement-verified order to ready_for_pickup: collision-checked
+ * pickup code, admin notification, pickup-ready email. Guarded to
+ * processing + paid + unblocked, so a paid-but-ambiguous order can never gain
+ * a pickup code.
+ */
+export async function fulfillPaidOrder(
+  orderId: string,
+  order: OrderView,
+  logger?: Logger
+): Promise<FinalizeResult> {
+  const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
   if (!order.branchId) {
-    log.error("cannot finalize — order has no branchId");
+    log.error("cannot fulfill — order has no branchId");
     return { claimed: false };
   }
 
   let pickupCode: string | null = null;
-
   pickupCode = await db.transaction(async (tx) => {
-    // 1. Claim guard: pending_payment + pending → processing + paid.
-    //    The authoritative payment method/transaction id ride the winning
-    //    UPDATE, so a paid order never exists without its payment metadata.
-    const claimed = await tx
-      .update(orders)
-      .set({
-        status: "processing",
-        paymentStatus: "paid",
-        ...(paymentAttributes?.paymentType
-          ? { paymentMethod: paymentAttributes.paymentType }
-          : {}),
-        ...(paymentAttributes?.transactionId
-          ? { midtransTransactionId: paymentAttributes.transactionId }
-          : {}),
-        updatedAt: new Date(),
-      })
+    // Re-check the settlement gate inside the tx: a blocked order must never
+    // surface a pickup code.
+    const gate = await tx
+      .select({ id: orders.id })
+      .from(orders)
       .where(
         and(
           eq(orders.id, orderId),
-          eq(orders.status, "pending_payment"),
-          eq(orders.paymentStatus, "pending")
+          eq(orders.status, "processing"),
+          eq(orders.paymentStatus, "paid")
         )
       )
-      .returning({ id: orders.id });
-    if (claimed.length === 0) return null; // already handled by another path
-
-    // Orders created before this feature have no durable Jubelio operation.
-    // Keep their former local-stock semantics during a rolling deployment.
-    const reserveOperations = await tx
-      .select({ id: jubelioStockOperations.id })
-      .from(jubelioStockOperations)
-      .where(
-        and(
-          eq(jubelioStockOperations.orderId, orderId),
-          eq(jubelioStockOperations.type, "reserve")
-        )
-      )
+      .for("update")
       .limit(1);
-    const usesRemoteAdjustment = reserveOperations.length > 0;
+    if (gate.length === 0) return null;
 
-    // 2. Commit the already-applied remote reservation per item.
-    const items = await tx
-      .select()
-      .from(orderItems)
-      .where(eq(orderItems.orderId, orderId));
-
-    for (const item of items) {
-      const updatedStock = await tx
-        .update(branchStocks)
-        .set({
-          ...(usesRemoteAdjustment
-            ? {}
-            : {
-                stock: sql`${branchStocks.stock} - ${item.quantity}`,
-                pendingRemoteStock: sql`${branchStocks.pendingRemoteStock} - ${item.quantity}`,
-              }),
-          reservedStock: sql`${branchStocks.reservedStock} - ${item.quantity}`,
-          updatedAt: new Date(),
-        })
-        .where(
-          and(
-            eq(branchStocks.branchId, order.branchId!),
-            eq(branchStocks.productVariantId, item.variantId),
-            gte(branchStocks.reservedStock, item.quantity),
-            ...(usesRemoteAdjustment
-              ? []
-              : [
-                  gte(branchStocks.stock, item.quantity),
-                  gte(branchStocks.pendingRemoteStock, item.quantity),
-                ])
-          )
-        )
-        .returning({ branchId: branchStocks.branchId });
-
-      if (updatedStock.length === 0) {
-        throw new Error(
-          `Inventory reservation drift for variant ${item.variantId}`
-        );
-      }
-    }
-
-    await tx
-      .update(jubelioStockOperations)
-      .set({ status: "committed", updatedAt: new Date() })
-      .where(
-        and(
-          eq(jubelioStockOperations.orderId, orderId),
-          eq(jubelioStockOperations.type, "reserve"),
-          eq(jubelioStockOperations.status, "applied")
-        )
-      );
-
-    // 3. Generate a collision-checked pickup code.
     let code = generatePickupCode();
     let attempts = 0;
     while (attempts < 10) {
@@ -257,12 +212,12 @@ export async function claimAndFinalizePaidOrder(
       attempts++;
     }
 
-    // 4. Move to ready_for_pickup with the pickup code.
     await tx
       .update(orders)
       .set({
         status: "ready_for_pickup",
         pickupCode: code,
+        fulfillmentBlockedReason: null,
         updatedAt: new Date(),
       })
       .where(eq(orders.id, orderId));
@@ -272,7 +227,7 @@ export async function claimAndFinalizePaidOrder(
 
   if (!pickupCode) return { claimed: false };
 
-  // 5. Create admin notification so branch/HQ staff see the new paid order.
+  // Create admin notification so branch/HQ staff see the new paid order.
   let notificationId: string | null = null;
   try {
     notificationId = crypto.randomUUID();
@@ -294,7 +249,7 @@ export async function claimAndFinalizePaidOrder(
     log.error("admin notification insert failed", { error: serializeError(notifyError) });
   }
 
-  // 6. Send pickup-ready email (best-effort, outside the tx).
+  // Send pickup-ready email (best-effort, outside the tx).
   try {
     const [branchData, itemsForEmail] = await Promise.all([
       db
@@ -358,17 +313,24 @@ export async function claimAndFinalizePaidOrder(
 }
 
 /**
- * Atomically claim a pending_payment order as failed and release its stock
- * reservation:
- *   1. claim-guard UPDATE (pending_payment → failed_payment). If 0 rows,
- *      another handler already processed it → return { claimed: false }.
- *   2. enqueue and attempt a compensating Jubelio +qty adjustment. Local
- *      reservedStock remains held until Jubelio confirms the release.
- *   3. send the payment-failed email (best-effort, outside the tx).
- *
- * Note: paid-order reversal (refund after settlement) is intentionally NOT
- * handled here — consistent with the webhook, which treats paid orders as
- * terminal and ignores later failure callbacks.
+ * Backwards-compatible alias: legacy callers finalized payment + pickup in one
+ * step. The Sales-Order flow splits the claim (paid) from fulfillment
+ * (settlement-verified); this helper keeps the old call shape working by
+ * claiming the payment and letting the caller run settlement + fulfillment.
+ */
+export async function claimAndFinalizePaidOrder(
+  orderId: string,
+  _order: OrderView,
+  logger?: Logger,
+  paymentAttributes?: PaymentAttributes
+): Promise<FinalizeResult> {
+  return claimPaidOrder(orderId, logger, paymentAttributes);
+}
+
+/**
+ * Atomically claim a pending_payment order as failed, then cancel its Sales
+ * Order pre-invoice. The local hold is released ONLY after a confirmed cancel;
+ * an ambiguous cancel keeps the hold and routes to manual review.
  */
 export async function claimAndFailOrder(
   orderId: string,
@@ -378,16 +340,6 @@ export async function claimAndFailOrder(
   paymentAttributes?: PaymentAttributes
 ): Promise<FinalizeResult> {
   const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
-  // Re-load the order (the caller's in-memory copy may be stale by the time a
-  // sweep batch reaches it).
-  const orderRows = await db
-    .select()
-    .from(orders)
-    .where(eq(orders.id, orderId))
-    .limit(1);
-  if (orderRows.length === 0) return { claimed: false };
-  const order = orderRows[0];
-
   const claimed = await db.transaction(async (tx) => {
     const res = await tx
       .update(orders)
@@ -408,76 +360,76 @@ export async function claimAndFailOrder(
         and(eq(orders.id, orderId), eq(orders.status, "pending_payment"))
       )
       .returning({ id: orders.id });
-    if (res.length === 0) return false;
-
-    return true;
+    return res.length > 0;
   });
 
   if (!claimed) return { claimed: false };
 
-  // The order is terminal immediately, but stock is not exposed locally until
-  // the compensating Jubelio adjustment is confirmed. Failures remain durable
-  // in jubelio_stock_operation and are retried by the sweep cron.
+  // Pre-invoice cancel: never cancels once an invoice exists (the lifecycle
+  // refuses); the hold stays until a confirmed cancel or manual review.
   try {
-    const releaseResult = await releaseJubelioStockForOrder(orderId, undefined, log);
-    if (releaseResult.status === "skipped" && order.branchId) {
-      await db.transaction(async (tx) => {
-        const items = await tx
-          .select()
-          .from(orderItems)
-          .where(eq(orderItems.orderId, orderId));
-        for (const item of items) {
-          const released = await tx
-            .update(branchStocks)
-            .set({
-              reservedStock: sql`${branchStocks.reservedStock} - ${item.quantity}`,
-              pendingRemoteStock: sql`${branchStocks.pendingRemoteStock} - ${item.quantity}`,
-              updatedAt: new Date(),
-            })
-            .where(
-              and(
-                eq(branchStocks.branchId, order.branchId!),
-                eq(branchStocks.productVariantId, item.variantId),
-                gte(branchStocks.reservedStock, item.quantity),
-                gte(branchStocks.pendingRemoteStock, item.quantity)
-              )
-            )
-            .returning({ branchId: branchStocks.branchId });
-          if (released.length === 0) {
-            throw new Error(
-              `Legacy inventory reservation drift for variant ${item.variantId}`
-            );
-          }
-        }
-      });
+    const outcome = await dispatchJubelioSalesCancel({
+      orderId,
+      reason,
+      logger: log,
+    });
+    log.info("Sales-Order cancel dispatched on payment failure", {
+      status: outcome.status,
+      ...(outcome.status === "manual_review" || outcome.status === "rejected"
+        ? { message: outcome.message }
+        : {}),
+      ...(outcome.status === "skipped" ? { message: outcome.message } : {}),
+    });
+    if (outcome.status === "manual_review") {
+      await blockOrderFulfillment(
+        orderId,
+        `Sales-Order cancel is unresolved after payment failure: ${outcome.message}`
+      );
     }
-  } catch (releaseError) {
-    log.error("Jubelio stock release queued for retry", {
-      error: serializeError(releaseError),
+  } catch (cancelError) {
+    log.error("Sales-Order cancel dispatch failed", {
+      error: serializeError(cancelError),
     });
   }
 
   // Send payment-failed email (best-effort, outside the tx).
   try {
-    const itemsForEmail = await db
-      .select({
-        productName: orderItems.productName,
-        variantInfo: orderItems.variantInfo,
-        price: orderItems.price,
-        quantity: orderItems.quantity,
-      })
-      .from(orderItems)
-      .where(eq(orderItems.orderId, orderId));
-
-    const emailOrder = {
-      id: order.id,
-      total: order.total,
-      subtotal: order.subtotal,
-      serviceFee: order.serviceFee,
-      ppnRate: order.ppnRate,
-      ppnAmount: order.ppnAmount,
-      pickupDate: order.pickupDate,
-      pickupTime: order.pickupTime,
+    const [itemsForEmail, orderRows] = await Promise.all([
+      db
+        .select({
+          productName: orderItems.productName,
+          variantInfo: orderItems.variantInfo,
+          price: orderItems.price,
+          quantity: orderItems.quantity,
+        })
+        .from(orderItems)
+        .where(eq(orderItems.orderId, orderId)),
+      db
+        .select({
+          id: orders.id,
+          contactEmail: orders.contactEmail,
+          total: orders.total,
+          subtotal: orders.subtotal,
+          serviceFee: orders.serviceFee,
+          ppnRate: orders.ppnRate,
+          ppnAmount: orders.ppnAmount,
+          pickupDate: orders.pickupDate,
+          pickupTime: orders.pickupTime,
+        })
+        .from(orders)
+        .where(eq(orders.id, orderId))
+        .limit(1),
+    ]);
+    const emailOrder = orderRows[0] ?? {
+      id: orderId,
+      contactEmail: "",
+      total: "0",
+      subtotal: "0",
+      serviceFee: "0",
+      ppnRate: "0",
+      ppnAmount: "0",
+      pickupDate: null,
+      pickupTime: null,
     };
     const html = paymentFailedEmailHTML({
       order: emailOrder,
@@ -490,8 +442,8 @@ export async function claimAndFailOrder(
       items: itemsForEmail,
     });
     await sendEmail({
-      to: order.contactEmail,
-      subject: `Pembayaran Gagal — #${order.id.slice(0, 8).toUpperCase()}`,
+      to: emailOrder.contactEmail,
+      subject: `Pembayaran Gagal — #${orderId.slice(0, 8).toUpperCase()}`,
       html,
       text,
     });
@@ -501,4 +453,127 @@ export async function claimAndFailOrder(
 
   log.info("order failed_payment", { midtransStatus, reason });
   return { claimed: true };
+}
+
+export type LateSettlementResult = {
+  status: "settled" | "manual_review" | "skipped";
+  message?: string;
+};
+
+/**
+ * Late settlement: Midtrans reports payment for a FAILED order.
+ *
+ * - After a confirmed Sales-Order cancel the stock is already released
+ *   remotely: the paid status is kept (Midtrans is authoritative) but the
+ *   order is blocked from fulfillment and routed to manual review. No new SO,
+ *   invoice, payment or adjustment is ever created automatically.
+ * - If the SO cancel never happened (still active), the order can proceed
+ *   through the normal settlement pipeline.
+ */
+export async function processLateSettlement(
+  orderId: string,
+  logger?: Logger,
+  paymentAttributes?: PaymentAttributes
+): Promise<LateSettlementResult> {
+  const log = (logger ?? createLogger({ module: "late-settlement" })).child({ orderId });
+  const orderRows = await db
+    .select()
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1);
+  const order = orderRows[0];
+  if (!order || order.paymentStatus === "paid") return { status: "skipped" };
+  if (order.status !== "failed_payment") return { status: "skipped" };
+
+  const cancelOp = await db
+    .select({ status: jubelioSalesOperations.status })
+    .from(jubelioSalesOperations)
+    .where(
+      and(
+        eq(jubelioSalesOperations.orderId, orderId),
+        eq(jubelioSalesOperations.type, "cancel")
+      )
+    )
+    .limit(1);
+  const cancelConfirmed =
+    cancelOp.length > 0 &&
+    ["confirmed", "dispatched_unknown", "intent", "manual_review"].includes(
+      cancelOp[0].status
+    );
+
+  if (cancelConfirmed) {
+    const message =
+      "Late payment arrived after the Sales-Order cancel path started; manual reconciliation required";
+    // Keep Midtrans's authoritative paid status, block pickup, surface review.
+    await db
+      .update(orders)
+      .set({
+        status: "processing",
+        paymentStatus: "paid",
+        fulfillmentBlockedReason: message,
+        paymentFailureReason: null,
+        ...(paymentAttributes?.paymentType
+          ? { paymentMethod: paymentAttributes.paymentType }
+          : {}),
+        ...(paymentAttributes?.transactionId
+          ? { midtransTransactionId: paymentAttributes.transactionId }
+          : {}),
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(orders.id, orderId),
+          eq(orders.status, "failed_payment"),
+          eq(orders.paymentStatus, "failed")
+        )
+      );
+    log.warn("late settlement after cancel → manual review", { message });
+    return { status: "manual_review", message };
+  }
+
+  const claimed = await claimLatePaidOrder(orderId, log, paymentAttributes);
+  if (!claimed) return { status: "skipped" };
+  log.info("late settlement claimed — settlement pipeline takes over");
+  return { status: "settled" };
+}
+
+/**
+ * Claim a failed_payment order back to processing + paid (late settlement with
+ * an active Sales Order). Guarded to failed_payment + failed.
+ */
+export async function claimLatePaidOrder(
+  orderId: string,
+  logger?: Logger,
+  paymentAttributes?: PaymentAttributes
+): Promise<boolean> {
+  const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
+  const claimed = await db
+    .update(orders)
+    .set({
+      status: "processing",
+      paymentStatus: "paid",
+      fulfillmentBlockedReason: null,
+      paymentFailureReason: null,
+      midtransFailureStatus: null,
+      ...(paymentAttributes?.paymentType
+        ? { paymentMethod: paymentAttributes.paymentType }
+        : {}),
+      ...(paymentAttributes?.transactionId
+        ? { midtransTransactionId: paymentAttributes.transactionId }
+        : {}),
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(orders.id, orderId),
+        eq(orders.status, "failed_payment"),
+        eq(orders.paymentStatus, "failed")
+      )
+    )
+    .returning({ id: orders.id });
+  if (claimed.length === 0) {
+    log.info("late-paid claim lost — order moved on");
+    return false;
+  }
+  return true;
 }

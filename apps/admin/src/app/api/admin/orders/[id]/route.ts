@@ -70,6 +70,12 @@ export async function GET(
           ppnAmount: orders.ppnAmount,
           total: orders.total,
           midtransTransactionId: orders.midtransTransactionId,
+          // Remote Jubelio ids + fulfillment-block reason (Sales-Order flow).
+          // A paid-but-ambiguous order shows these instead of a pickup code.
+          jubelioSalesOrderId: orders.jubelioSalesOrderId,
+          jubelioInvoiceId: orders.jubelioInvoiceId,
+          jubelioPaymentId: orders.jubelioPaymentId,
+          fulfillmentBlockedReason: orders.fulfillmentBlockedReason,
           shippingCarrier: orders.shippingCarrier,
           trackingNumber: orders.trackingNumber,
           createdAt: orders.createdAt,

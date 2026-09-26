@@ -4,7 +4,6 @@ import {
   carts,
   cartItems,
   branches,
-  branchStocks,
   productVariants,
   products,
 } from "@/db";
@@ -166,90 +165,9 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // ===== Check stock for each selected item (soft UX pre-check) =====
-    // Available stock = Jubelio on-hand minus holds awaiting remote confirmation.
-    // Same calculation as the soft pre-check in place-order. The
-    // authoritative race-free guard remains the atomic conditional UPDATE
-    // inside the place-order transaction; this pre-check just gives the
-    // customer early feedback on the cart page instead of failing at step 3.
-    //
-    // Two outcomes per item when qty > available:
-    //   - available <= 0  → product is fully out of stock → remove it from cart
-    //   - 0 < available   → partial stock → lower the cart quantity to available
-    const outOfStock: { cartItemId: string; name: string }[] = [];
-    const adjusted: { cartItemId: string; name: string; available: number }[] = [];
-
-    for (const item of selectedItems) {
-      const stockRow = await db
-        .select()
-        .from(branchStocks)
-        .where(
-          and(
-            eq(branchStocks.branchId, branchId),
-            eq(branchStocks.productVariantId, item.variantId)
-          )
-        )
-        .limit(1);
-
-      const available =
-        (stockRow[0]?.stock ?? 0) - (stockRow[0]?.pendingRemoteStock ?? 0);
-
-      if (item.quantity > available) {
-        if (available <= 0) {
-          outOfStock.push({ cartItemId: item.id, name: item.productName });
-        } else {
-          adjusted.push({
-            cartItemId: item.id,
-            name: item.productName,
-            available,
-          });
-        }
-      }
-    }
-
-    if (outOfStock.length > 0 || adjusted.length > 0) {
-      // Remove fully out-of-stock items from the cart.
-      log.warn("insufficient stock — adjusting cart", {
-        outOfStock: outOfStock.length,
-        adjusted: adjusted.length,
-      });
-      if (outOfStock.length > 0) {
-        await db
-          .delete(cartItems)
-          .where(
-            and(
-              eq(cartItems.cartId, cart.id),
-              inArray(
-                cartItems.id,
-                outOfStock.map((o) => o.cartItemId)
-              )
-            )
-          );
-      }
-
-      // Lower the quantity of partially-available items to what's left.
-      for (const item of adjusted) {
-        await db
-          .update(cartItems)
-          .set({ quantity: item.available })
-          .where(eq(cartItems.id, item.cartItemId));
-      }
-
-      // Bump cart.updatedAt so the cart badge/provider reflects the change.
-      await db
-        .update(carts)
-        .set({ updatedAt: new Date() })
-        .where(eq(carts.id, cart.id));
-
-      return NextResponse.json({
-        success: false,
-        code: "INSUFFICIENT_STOCK",
-        outOfStock: outOfStock.map(({ name }) => ({ name })),
-        adjusted: adjusted.map(({ name, available }) => ({ name, available })),
-      });
-    }
-
-    // Branch is active and stock is sufficient — ok to proceed to /checkout.
+    // Local stock is provisional. Never remove or lower cart items using a
+    // daily snapshot; the final place-order verifies the provider live.
+    // Branch is active — ok to proceed to /checkout.
     log.info("checkout validation passed", { branchId });
     return withRequestId(
       NextResponse.json({ success: true }),

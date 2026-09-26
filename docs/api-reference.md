@@ -75,10 +75,10 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | POST | `/api/cart/items` | client-session | Add variant@branch to cart (merge) |
 | PUT | `/api/cart/items/{id}` | client-session | Update cart item quantity |
 | DELETE | `/api/cart/items/{id}` | client-session | Remove a cart item |
-| POST | `/api/cart/validate-checkout` | client-session | Pre-checkout branch/stock validation |
+| POST | `/api/cart/validate-checkout` | client-session | Pre-checkout branch validation (stock is checked live at place-order) |
 | POST | `/api/checkout/validate-step-2` | client-session | Validate pickup slot vs operating hours |
 | GET | `/api/checkout/order-status` | client-session | Poll order status/paymentStatus |
-| POST | `/api/checkout/place-order` | client-session | Reserve stock in Jubelio, then create Midtrans Snap |
+| POST | `/api/checkout/place-order` | client-session | Verify live Jubelio stock, hold locally, confirm SO, then create Midtrans Snap |
 | GET | `/api/orders` | client-session | List the user's orders |
 | GET | `/api/orders/{id}` | client-session | Order detail (+ pickup code when applicable) |
 | PATCH | `/api/account/profile` | client-session | Update client name/phone |
@@ -127,7 +127,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | POST | `/api/admin/upload` | admin-session | Upload a file |
 | DELETE | `/api/admin/upload` | admin-session | Delete an uploaded file |
 | GET | `/api/admin/orders` | admin-session (orders view) | List orders (RBAC branch-scoped) |
-| GET | `/api/admin/orders/{id}` | admin-session (orders view) | Order detail including durable Jubelio stock operations |
+| GET | `/api/admin/orders/{id}` | admin-session (orders view) | Order detail incl. durable Jubelio operations + remote SO/invoice/payment ids + fulfillment block reason |
+| GET | `/api/admin/reviews/sales-operations` | admin-session (orders view) | Read-only Sales-Order review queue: manual-review SO/invoice/payment ops + paid-but-blocked orders |
 | POST | `/api/admin/orders/{id}/stock-review` | admin-session (orders edit) | Queue a manual-review stock operation for safe note reconciliation |
 | POST | `/api/admin/orders/{id}/verify-pickup` | admin-session (orders edit + Home Branch match) | Verify pickup code → complete order |
 | GET | `/api/admin/analytics` | admin-session (analytics:view) | Dashboard aggregates + AOV + 30-day WIB revenue trend |
@@ -204,8 +205,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Purpose**: Paginated, filterable product list for storefront browsing.
 - **Params**: `search` (string, optional), `category` (slug, optional), `brand` (slug, optional), `minPrice` (string, optional), `maxPrice` (string, optional), `status` (string, default `"aktif"`), `hasDiscount` (`"true"` to filter products whose `basePrice > min(variant.price)`), `sortBy` (`"price"`|`"createdAt"`, default `"createdAt"`), `sortOrder` (`"asc"`|`"desc"`, default `"desc"`), `page` (int, default `1`), `limit` (int, default `12`, clamped to 1–100 via `parseListParams` in `apps/store/src/lib/list-params.ts`)
 - **Body**: none
-- **Response**: 200 `{ success: true, data: [{ id, name, slug, description, basePrice, status, createdAt, price, image, collection: string|null, gender: string|null, hasStock: boolean }], pagination: { page, limit, total, totalPages } }`; 500 `{ success: false, error }`
-- **Notes**: `price` is the cheapest variant net price and `basePrice` is the RRP. `hasStock` is true when at least one active-branch variant has `stock - pendingRemoteStock > 0`; product cards grey out otherwise. Price/category/brand filtering remains server-side and pagination-aware. **Out-of-stock products always sort to the bottom**: a tier-1 `ORDER BY (has sellable stock) DESC` runs above the user's chosen `sortBy`/`sortOrder`, so products with no sellable stock in any active branch appear after every in-stock product regardless of sort (e.g. a `price asc` sort still lists all in-stock items cheapest-first, then out-of-stock items). When a `branch` filter is active every returned product is already in-stock at that branch, so the tier has no effect. Requests are logged via the structured logger (`module: "products-list"`) and stamped with `x-request-id`.
+- **Response**: 200 `{ success: true, data: [{ id, name, slug, description, basePrice, status, createdAt, price, image, collection: string|null, gender: string|null, hasStock: boolean, lastKnownInStock: boolean }], pagination: { page, limit, total, totalPages } }`; 500 `{ success: false, error }`
+- **Notes**: `price` is the cheapest variant net price and `basePrice` is the RRP. `hasStock` means a mapped active branch can be selected, even when last-known availability is zero; `lastKnownInStock` is the provisional stock badge. Product cards grey out only without a mapped branch. Price/category/brand filtering remains server-side and pagination-aware. **Out-of-stock products always sort to the bottom**: a tier-1 `ORDER BY (has sellable stock) DESC` runs above the user's chosen `sortBy`/`sortOrder`, so products with no sellable stock in any active branch appear after every in-stock product regardless of sort (e.g. a `price asc` sort still lists all in-stock items cheapest-first, then out-of-stock items). A `branch` filter includes mapped products even when their last-known availability is zero; checkout verifies live stock. Requests are logged via the structured logger (`module: "products-list"`) and stamped with `x-request-id`.
 
 #### `GET` `/api/products/{id}`
 - **Auth**: none
@@ -213,7 +214,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: `{id}` — accepts either the product `id` or its `slug` (looked up by id first, then by slug)
 - **Body**: none
 - **Response**: 200 `{ success: true, data: { ...product, variants: [{ ...variant, branchStock: [{ branchId, stock, reservedStock, pendingRemoteStock, available }] }] } }`; 404 if not found; 500 on error
-- **Notes**: Active branch rows are exposed when `stock - pendingRemoteStock > 0`; `available` uses that same expression. Confirmed `reservedStock` is already reflected in reduced Jubelio on-hand and is not subtracted again.
+- **Notes**: All mapped active branch rows are exposed, including last-known zero; `available` is `max(0, availableStock - pendingRemoteStock)`. The label is provisional until the live checkout check.
 
 #### `GET` `/api/homepage`
 - **Auth**: none
@@ -254,16 +255,16 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Purpose**: Add a variant from a branch to the cart, merging into an existing (variantId+branchId) line.
 - **Params**: —
 - **Body**: `{ variantId: string, branchId: string, quantity: number (int, positive, default 1) }`
-- **Response**: 200 `{ success, message }` (`"Cart item updated"` or `"Item added to cart"`); 400 invalid body / `"Branch not available"` / `"Insufficient stock at this branch"`; 401 if unauth; 404 `"Variant not found"`; 500 on error
-- **Notes**: Available = `branch_stock.stock - branch_stock.pendingRemoteStock`. Branch must be active. A matching line increments quantity and re-validates availability.
+- **Response**: 200 `{ success, message }` (`"Cart item updated"` or `"Item added to cart"`); 400 invalid body / `"Branch not available"`; 401 if unauth; 404 `"Variant not found"`; 409 if Jubelio mapping is missing; 500 on error
+- **Notes**: Branch must be active and mapped to a Jubelio item/location row. Last-known stock does not restrict provisional cart quantity; place-order verifies live stock.
 
 #### `PUT` `/api/cart/items/{id}`
 - **Auth**: client-session
 - **Purpose**: Update the quantity of a single cart item.
 - **Params**: `{id}` (cart item id)
 - **Body**: `{ quantity: number (int, positive) }`
-- **Response**: 200 `{ success, message: "Cart item updated" }`; 400 invalid body / `"Insufficient stock at this branch"`; 401 if unauth; 404 `"Cart not found"` / `"Cart item not found"`; 500 on error
-- **Notes**: Item is scoped to the user's cart. Stock check uses `stock - pendingRemoteStock >= quantity`; cart changes do not reserve stock.
+- **Response**: 200 `{ success, message: "Cart item updated" }`; 400 invalid body; 401 if unauth; 404 `"Cart not found"` / `"Cart item not found"`; 409 if the stock mapping is missing; 500 on error
+- **Notes**: Item is scoped to the user's cart. Cart changes do not reserve stock. Last-known availability is provisional; live validation occurs in place-order.
 
 #### `DELETE` `/api/cart/items/{id}`
 - **Auth**: client-session
@@ -275,11 +276,11 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 #### `POST` `/api/cart/validate-checkout`
 - **Auth**: client-session
-- **Purpose**: Pre-checkout validation that the selected items' branch is still active and stock is sufficient.
+- **Purpose**: Pre-checkout validation that the selected items' branch is still active.
 - **Params**: —
 - **Body**: `{ selectedItemIds: string[] (min 1) }`
-- **Response**: 200 `{ success: true }`; 400 invalid body / `"Cart is empty"` / `"No selected items to checkout"` / multi-branch error / `{ success: false, code: "BRANCH_INACTIVE", branchName, removedItemCount }` / `{ success: false, code: "INSUFFICIENT_STOCK", outOfStock: [{name}], adjusted: [{name, available}] }`; 401 if unauth; 500 on error
-- **Notes**: Enforces single-branch checkout. On inactive/removed branch, deletes ALL of that branch's items from the cart. On insufficient stock: fully out-of-stock items (available ≤ 0) are deleted; partially available (0 < available) have their `quantity` lowered to `available`. Soft UX pre-check — the authoritative race-free guard lives in place-order's atomic conditional UPDATE.
+- **Response**: 200 `{ success: true }`; 400 invalid body / `"Cart is empty"` / `"No selected items to checkout"` / multi-branch error / `{ success: false, code: "BRANCH_INACTIVE", branchName, removedItemCount }`; 401 if unauth; 500 on error
+- **Notes**: Enforces single-branch checkout. On inactive/removed branch, deletes ALL of that branch's items from the cart. Stock is not checked or mutated here; the provider read and atomic hold happen during place-order.
 
 #### `POST` `/api/checkout/validate-step-2`
 - **Auth**: client-session
@@ -299,11 +300,11 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 #### `POST` `/api/checkout/place-order`
 - **Auth**: client-session
-- **Purpose**: Hold stock locally, confirm a negative Jubelio adjustment, then create Midtrans Snap and remove checked-out cart items.
+- **Purpose**: Read selected stock live from Jubelio, hold locally, confirm the Jubelio Sales Order, then create Midtrans Snap and remove checked-out cart items.
 - **Params**: —
 - **Body**: `{ phone: string (8-20), email: string (email), pickupDate: string (YYYY-MM-DD), pickupTime: string (HH:mm), selectedItemIds: string[] (min 1) }`
-- **Response**: 200 `{ success, orderId, redirectUrl, token }`; 400 invalid body/local stock failure; 401 if unauth; 409 definitive Jubelio rejection; 503 ambiguous Jubelio confirmation; 500 on error; 502 on Midtrans failure (cart preserved)
-- **Notes**: Enforces single-branch checkout and a Jakarta-time pickup slot. Server prices are authoritative. PPN uses `tax.ppnRatePercent` (11 fallback), applies after discount, rounds upward to whole Rupiah, and persists `ppnRate`/`ppnAmount` with the gross `total`. A short transaction creates the order/items, increments `pending_remote_stock`, and creates a durable reserve operation; `paymentMethod` stays `NULL` until the customer picks a method on the hosted Snap page. Midtrans is called only after Jubelio confirms the negative adjustment; item details include PPN and sum to the gross total, and the Snap token offers QRIS, GoPay, cards (3DS), and VA channels (`enabled_payments`). The Midtrans expiry countdown is anchored at place-order via `expiry.start_time` so it cannot outlive the reservation TTL. A Jubelio failure never creates a Midtrans transaction. Midtrans failure queues a positive compensation.
+- **Response**: 200 `{ success, orderId, redirectUrl, token }`; 400 invalid body/local stock failure; 401 if unauth; 409 insufficient provider stock or definitive Jubelio rejection; 503 unavailable/inconsistent provider stock or ambiguous Jubelio confirmation; 500 on error; 502 on Midtrans failure (cart preserved)
+- **Notes**: Enforces single-branch checkout and a Jakarta-time pickup slot. Server prices are authoritative. PPN uses `tax.ppnRatePercent` (11 fallback), applies after discount, rounds upward to whole Rupiah, and persists `ppnRate`/`ppnAmount` with the gross `total`. Before the transaction, the server reads selected pairs live via `/inventory/items/all-stocks/` and reconciles their local mirrors with CAS guards. Missing/inconsistent/failed reads fail closed without a Sales Order. The transaction creates order/items, atomically increments `pending_remote_stock` against that very observation and persists the SO create intent; `paymentMethod` stays `NULL` until the customer picks a method on the hosted Snap page. Midtrans is called only after Jubelio confirms the Sales Order; item details include PPN and sum to the gross total, with product names limited to 50 characters only in the Midtrans payload, and the Snap token offers QRIS, GoPay, cards (3DS), and VA channels (`enabled_payments`). The Midtrans expiry countdown is anchored at place-order via `expiry.start_time` so it cannot outlive the reservation TTL. A Jubelio failure never creates a Midtrans transaction. Midtrans failure triggers a confirmed SO cancel or manual review; it never blindly retries a write.
 
 #### `GET` `/api/orders`
 - **Auth**: client-session
@@ -337,7 +338,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: —
 - **Body**: `{ orderId: string }`
 - **Response**: 401 unauthorized; 400 missing id/not pending/expired; 403 forbidden; 404 not found; 409 `{ error: "Stock has not been confirmed by Jubelio" }`; 500 provider error; 200 `{ success, redirectUrl, token }`
-- **Notes**: Only owned `pending_payment` orders with an `applied` or `committed` Jubelio reserve operation can create another Midtrans session. Orders past `expiresAt` are rejected (400) — the sweep may already have released the stock. When a `snapRedirectUrl` is already stored it is returned as-is (the customer may have already chosen a method on Snap; Midtrans refuses to re-create a token for a used order_id). Otherwise a new Snap payment is created with the expiry anchored to the remaining reservation TTL (`expiry.start_time`).
+- **Notes**: Only owned `pending_payment` orders with an `applied` or `committed` Jubelio reserve operation can create another Midtrans session. Orders past `expiresAt` are rejected (400) — the sweep may already have released the stock. When a `snapRedirectUrl` is already stored it is returned as-is (the customer may have already chosen a method on Snap; Midtrans refuses to re-create a token for a used order_id). Otherwise a new Snap payment is created with product names limited to 50 characters in its item details and the expiry anchored to the remaining reservation TTL (`expiry.start_time`).
 
 #### `POST` `/api/webhooks/midtrans`
 - **Auth**: signature-verification (Midtrans `signature_key` = `SHA512(order_id + status_code + gross_amount + serverKey)`; plus authoritative re-verify with `getMidtransTransactionStatus`)
@@ -361,15 +362,15 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 - **Params**: —
 - **Body**: `{ orderId: string, secret: string }`
 - **Response**: 400 `{ success: false, error: "orderId is required" | "Order must be ready_for_pickup (current: <status>)" }`; 403 `{ success: false, error: "Unauthorized" }` (missing/invalid secret, or `BETTER_AUTH_SECRET` unset); 404 `{ success: false, error: "Order not found" }`; 500 `{ success: false, error: "Failed to complete order" }`; 200 `{ success: true, completedAt: string (ISO) }`
-- **Notes**: Only `ready_for_pickup` orders can be completed. Loads `orderItems` to render the completed email and sends via `sendEmail` to `order.contactEmail`; email failure is logged but does not fail the request (order is already completed). Env dependency: `BETTER_AUTH_SECRET` (shared with admin app).
+- **Notes**: Only `ready_for_pickup` orders can be completed. Loads `orderItems` to render the completed email and sends via `sendEmail` to `order.contactEmail`; email failure is logged but does not fail the request (order is already completed). Env dependency: `BETTER_AUTH_SECRET` (shared with admin app). After the `completed` status is committed, a `after()`-scheduled BEST-EFFORT channel mirror reconciliation projects `Selesai` onto the Jubelio Status Channel (ticket #06; derived ONLY from the committed local state, never from the HTTP response; a mirror failure is logged and never affects the completion, pickup or this response — the sweep re-projects completed orders GET-only by the persisted SO id).
 
 #### `POST` `/api/cron/sweep-reservations`
 - **Auth**: secret-header (`X-Cron-Secret` vs `process.env.CRON_SECRET`) — **503** if env unset, **401** on mismatch
-- **Purpose**: Safety-net sweep that releases stock reservations for stale `pending_payment` orders whose `expiresAt` has passed without a Midtrans `expire` webhook.
+- **Purpose**: Sales-Order safety-net sweep for orders whose outcome was missed.
 - **Params**: —
 - **Body**: none
-- **Response**: 503 `{ success: false, error: "Cron not configured" }`; 401 `{ success: false, error: "Unauthorized" }`; 500 `{ success: false, error: "Sweep failed" }`; 200 `{ success: true, scanned, finalized, failed, jubelioSync: { scanned, applied, failed, pending } }`
-- **Notes**: Reconciles due Jubelio stock operations first, then processes up to 100 stale orders. Provider calls remain outside DB transactions. Unique adjustment notes prevent blind retries after ambiguous writes. Claim guards make order finalization idempotent and safe with webhooks.
+- **Response**: 503 `{ success: false, error: "Cron not configured" }`; 401 `{ success: false, error: "Unauthorized" }`; 500 `{ success: false, error: "Sweep failed" }`; 200 `{ success: true, scanned, finalized, failed, jubelioSync, jubelioSalesReview: { scanned, marked, failed }, settlementReview: { scanned, fulfilled, review, pending }, channelMirrorReview: { possiblySentScanned, skippedFresh, recovered, investigated, stillUnknown, pendingTerminalScanned, pendingTerminalAborted, pendingTerminalSkipped, missedOrdersScanned, missedDispatched, missedFailed, failed } }`
+- **Notes**: (1) Reconciles up to 50 in-flight `jubelio_sales_operation` rows by persisted remote id + GET — a confirmed cancel is confirmed and its local hold released; invoice/payment ops are GET-verified through the settlement pipeline; aged unknown dispatches without remote ids go to `manual_review`. It never re-POSTs a write. (2) Resumes settlement for paid orders stuck in `processing` (missed webhook / crash / ambiguous step) — `ready_for_pickup` only after invoice + payment are verified; ambiguity keeps the order paid but blocked. (3) Processes up to 100 stale `pending_payment` orders: settled → paid claim + settlement pipeline; otherwise expire + fail (the failure path cancels the SO pre-invoice and releases the hold only after a confirmed cancel). (4) LAST (lowest priority): the bounded channel-status mirror reconciliation (tickets #03/#04/#05/#06) — aged possibly-sent intents (any target) are reconciled GET-ONLY by the persisted SO id (terminal orders included, never a re-POST; a fresh claim is left alone for 15 minutes; transient GET 5xx/429 stays possibly_sent for aged retry); pending intents whose committed local order went terminal (completed/cancelled) are durably superseded (pending→aborted, PENDING_TERMINAL_SUPERSEDED, no POST/GET) EXCEPT a pending `Selesai` intent whose completed order still has a fully verified SO ledger (that is the current projection and it dispatches); and mirror-eligible missed `ready_for_pickup` AND `completed` orders with no intent yet, only historical `aborted` intents, or a confirmed earlier stage (e.g. confirmed Siap Proses → next Selesai version) are dispatched best-effort (committed `ready_for_pickup` → `Siap Proses`, paid-but-blocked operator investigations → `Menunggu Verifikasi` (ticket #04), committed failed_payment orders with a safe-to-edit Sales Order → `Gagal Bayar` or the started-cancel mismatch record (ticket #05), and committed `completed` orders → `Selesai` (ticket #06); a committed `cancelled` order remains a future-facing `Dibatalkan` mapping contract only and is covered by the supersede window); resolved/in-progress orders are excluded by SQL and still-unknown intents rotate, so the bounded scan is fair across runs. Mirror failures are logged into `channelMirrorReview.failed` and never fail the sweep nor touch payment/pickup/fulfillment. Provider calls remain outside DB transactions; claim guards make webhook-vs-sweep races safe.
 
 #### `GET` `/api/onboarding/sync`
 - **Auth**: client-session

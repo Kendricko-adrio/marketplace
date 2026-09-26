@@ -98,6 +98,22 @@ export const orders = pgTable("orders", {
   midtransTransactionId: text("midtrans_transaction_id"),
   // Midtrans Snap redirect URL, saved so user can resume payment if they navigate away
   snapRedirectUrl: text("snap_redirect_url"),
+  // Confirmed remote Jubelio Sales Order id (persisted only after the
+  // independent GET /sales/orders/{id} verification). NULL for legacy
+  // adjustment-era orders.
+  jubelioSalesOrderId: integer("jubelio_sales_order_id"),
+  // Confirmed remote Jubelio invoice id (the Sales Invoice Number returned by
+  // /sales/packlists/create-invoice, persisted before payment and verified via
+  // GET /sales/invoices/{id}).
+  jubelioInvoiceId: integer("jubelio_invoice_id"),
+  // Confirmed remote Jubelio invoice payment id (from POST /sales/payments/,
+  // persisted only after a verified GET /sales/payments/{id}).
+  jubelioPaymentId: integer("jubelio_payment_id"),
+  // Why a PAID order is blocked from ready_for_pickup/pickup codes (Sales-Order
+  // settlement is unverified or ambiguous). NULL means fulfillment is not
+  // blocked. A non-null value keeps the order paid but never exposes a pickup
+  // code; the case is visible in the admin review queue.
+  fulfillmentBlockedReason: text("fulfillment_blocked_reason"),
   // Phase 2 shipping fields (nullable, unused in Phase 1)
   shippingCarrier: text("shipping_carrier"),
   trackingNumber: text("tracking_number"),

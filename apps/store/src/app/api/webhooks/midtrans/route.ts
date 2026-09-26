@@ -8,14 +8,16 @@ import {
   validateMidtransWebhookPayload,
 } from "@/lib/midtrans";
 import {
-  claimAndFinalizePaidOrder,
+  blockOrderFulfillment,
   claimAndFailOrder,
+  claimPaidOrder,
   describeFailureReason,
+  processLateSettlement,
   resolvePaymentOutcome,
   type PaymentAttributes,
 } from "@/lib/order-finalize";
+import { settleJubelioSalesOrder } from "@/lib/jubelio-sales-settlement";
 import { requestLogger, serializeError } from "@/lib/logger";
-import { processLateSettlementStock } from "@/lib/jubelio-stock-saga";
 
 export async function POST(request: NextRequest) {
   const log = requestLogger(request, { module: "midtrans-webhook" });
@@ -79,8 +81,9 @@ export async function POST(request: NextRequest) {
       });
     }
     // A failed_payment order is not skipped before authoritative re-verification:
-    // Midtrans can settle after TTL compensation. That path must re-acquire
-    // stock or enter manual review instead of discarding a valid payment.
+    // Midtrans can settle after TTL compensation. That path must reconcile the
+    // Sales Order (never re-settle after a confirmed cancel) instead of
+    // discarding a valid payment.
 
     // ===== Re-verify with Midtrans (best practice) =====
     // Fetch authoritative status directly from Midtrans to defend against
@@ -146,28 +149,36 @@ export async function POST(request: NextRequest) {
     );
 
     if (outcome === "finalize") {
-      // Payment success: convert reservation → real deduction, generate pickup
-      // code, move to ready_for_pickup, send email. Claim-guard makes this
-      // idempotent against the sweep cron racing this webhook.
-      orderLog.info("settlement → finalize dispatched", {
+      // Payment success: keep Midtrans's authoritative paid status. Fulfillment
+      // (ready_for_pickup + pickup code) happens ONLY after the Sales-Order
+      // settlement (invoice → payment) is verified; ambiguity keeps the order
+      // paid but blocked and creates a manual-review case.
+      orderLog.info("settlement → paid claim dispatched", {
         authoritativeStatus,
         paymentType: paymentAttributes.paymentType,
       });
       if (order.status === "failed_payment") {
-        const lateSettlement = await processLateSettlementStock(
+        // Late settlement: honor the confirmed-cancel rule (no new SO/invoice/
+        // payment) before running the settlement pipeline.
+        const late = await processLateSettlement(
           order.id,
-          undefined,
           orderLog,
           paymentAttributes
         );
-        orderLog.info("late settlement processed", lateSettlement);
+        orderLog.info("late settlement processed", late);
+        if (late.status === "settled") {
+          await settleJubelioSalesOrder(order.id, { logger: orderLog });
+        } else if (late.status === "manual_review" && late.message) {
+          await blockOrderFulfillment(order.id, late.message);
+        }
       } else {
-        await claimAndFinalizePaidOrder(
-          order.id,
-          order,
-          orderLog,
-          paymentAttributes
-        );
+        const claimed = await claimPaidOrder(order.id, orderLog, paymentAttributes);
+        if (claimed.claimed) {
+          const settlement = await settleJubelioSalesOrder(order.id, {
+            logger: orderLog,
+          });
+          orderLog.info("settlement pipeline completed", settlement);
+        }
       }
     } else if (outcome === "fail") {
       const reason =

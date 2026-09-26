@@ -15,8 +15,10 @@ export interface Product {
   image: string | null;
   collection: string | null;
   gender: string | null;
-  /** False when the product has no sellable stock in any branch. */
+  /** Whether at least one mapped branch can be selected. */
   hasStock: boolean;
+  /** Last-known availability only; checkout always confirms live. */
+  lastKnownInStock?: boolean;
 }
 
 export interface Pagination {
@@ -148,6 +150,7 @@ export default function InfiniteProductGrid({
               gender={product.gender ?? undefined}
               collection={product.collection ?? undefined}
               outOfStock={!product.hasStock}
+              stockUnconfirmed={product.hasStock && product.lastKnownInStock === false}
             />
           );
         })}

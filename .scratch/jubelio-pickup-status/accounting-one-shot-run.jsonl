@@ -1,2 +1,0 @@
-{"stage":"intent","run":"96008b6a-49d1-486e-8bec-fc1c162872f9","fixture":{"itemId":43842,"locationId":7,"qty":1,"price":1000,"contactId":-1},"maxPosts":{"login":1,"stock":1,"create":1,"invoice":1,"payment":1,"edit":1}}
-{"stage":"STOP","run":"96008b6a-49d1-486e-8bec-fc1c162872f9","reason":"Cannot access 'post' before initialization","ids":{"so":null,"invoice":null,"payment":null},"editAttempted":false,"counts":{"login":0,"stock":0,"create":0,"invoice":0,"payment":0,"edit":0,"get":0}}

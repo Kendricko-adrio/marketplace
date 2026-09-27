@@ -2,10 +2,34 @@
 
 Type: grilling
 Label: wayfinder:grilling
-Status: open
+Status: resolved
 Blocked by: none
 Parent: [Menuju spec pengiriman ke rumah via Jubelio Shipment yang siap ditinjau](../map.md)
 
 ## Question
 
 Untuk MVP tanpa voucher ongkir/asuransi opsional, apa yang dibayar pelanggan sebagai ongkir, bagaimana dasar pajak/biaya layanan diperhitungkan, siapa menanggung selisih antara quote yang disetujui dan harga booking/biaya penyedia, dan tindakan apa diambil bila selisih tidak dapat ditanggung? Tetapkan invarian total order, Midtrans, dan Sales Order serta batas kebijakan keuangan yang memerlukan konfirmasi ahli, tanpa mengira-ngira aturan pajak sebagai fakta.
+
+## Answer
+
+Pemilik memutuskan lewat kuesioner grilling (2026-09-27).
+
+**Apa yang dibayar pelanggan.** Pelanggan membayar tepat quote `rates` yang disetujui — **pass-through tanpa markup**. MVP tanpa voucher ongkir, tanpa asuransi opsional, dan **tanpa biaya layanan**; slot biaya layanan pada snapshot/skema tetap ada dengan nilai 0 agar dapat dinyalakan nanti tanpa mengubah struktur. PPN dihitung atas **(barang − diskon) + ongkir**, bukan hanya barang: rumus di [`ppn.md`](../../../docs/features/ppn.md) (`taxableBase = subtotal − diskon`) perlu direvisi memasukkan ongkir (dan biaya layanan bila kelak diaktifkan), memakai pembulatan ke atas yang sama dan snapshot `ppn_rate`/`ppn_amount` immutable. Perubahan ini hanya memengaruhi pesanan dengan ongkir > 0; total pickup tidak berubah. Konfirmasi konsultan pajak tetap **prasyarat aktivasi checkout delivery berbayar** — dasar keputusan: definisi harga jual dalam UU PPN mencakup semua biaya yang diminta penjual karena penyerahan BKP, termasuk biaya pengangkutan (lihat Evidence); tarif efektif 1,1% (PMK 71/2022) berlaku untuk tagihan kurir ke toko, bukan tagihan toko ke pembeli.
+
+**Kebijakan selisih umum.** Kebijakan [tiket 02](02-asal-kirim-dan-data-paket.md) ("toko menanggung selisih" untuk kasus berat/dimensi setelah packing) diperluas menjadi kebijakan umum: **semua selisih** antara quote yang disetujui/dibayar pelanggan dan `price` booking/biaya penyedia ditanggung **toko, tanpa ambang**, tanpa tagihan ulang kepada pelanggan. Bila staf booking dan `price` > ongkir yang sudah dibayar, app **tetap melanjutkan booking dan menyimpan selisih** (quote vs price) sebagai beban toko untuk laporan/audit; pelanggan tidak diganggu. App tetap melakukan rekonsiliasi `price == rates` saat create menurut keputusan tiket 01; karena tanpa ambang, kasus "selisih melebihi kebijakan" tidak ada di MVP, dan ambang dapat ditambahkan saat kurir live tanpa mengubah kebijakan ini. Sisi fakta vendor (idempotensi, timeout, arti `price_bill`, dampak cancel ke tagihan) tetap riset [tiket 04](04-booking-timeout-dan-pembatalan.md) bagian D — keputusan bisnis ini melengkapinya, bukan menggantikannya.
+
+**Invarian uang dan pembayaran.** Pembayaran sepenuhnya di **Midtrans**; **tidak ada penanganan pembayaran di API Shipment Jubelio** — app hanya mengirim request booking yang benar (konsisten keputusan pemilik no. 9: tagihan kurir di luar cakupan app). Invarian tetap mengikuti [`ppn.md`](../../../docs/features/ppn.md): `sum(item_details.price × quantity) = gross_amount = orders.total` dengan snapshot immutable dan re-payment membaca snapshot, bukan konfigurasi pajak berjalan; ongkir masuk sebagai line tersendiri di item details Midtrans. Invarian di sisi **Sales Order** belum dapat ditegakkan penuh: representasi ongkir di Sales Order Omnichannel belum terdokumentasi — jangan mengarang field; kandidat tambahan untuk [draf pertanyaan ke Jubelio](../draf-pertanyaan-ke-jubelio.md) atau diverifikasi saat implementasi Sales Order.
+
+**Asuransi.** Booking selalu mengirim `is_insurance: false`; kurir dengan aturan asuransi wajib menurut S&K publik Jubelio (SiCepat, barang >Rp500.000) **tidak ditawarkan** sampai semantik `shipping_insurance` dikonfirmasi ke Jubelio. Setor biaya Jubelio ke toko (invoice bulanan/Jubelio Wallet menurut S&K publik) tetap di luar cakupan app dan tidak memengaruhi perilaku ini.
+
+## Evidence
+
+- Keputusan pemilik via kuesioner grilling (2026-09-27): cakupan selisih = semua; ambang = tanpa ambang di MVP; momen selisih = booking lanjut + catat selisih; dasar PPN = atas barang + ongkir; biaya layanan = tidak ada; asuransi = `is_insurance` selalu false + kecualikan kurir wajib-asuransi; pembayaran = Midtrans, tidak ada handle payment di API Shipment Jubelio. Riset pajak dulu diminta pemilik sebelum memilih.
+- UU PPN Pasal 1 angka 18 (harga jual mencakup semua biaya yang diminta penjual karena penyerahan BKP; komponen termasuk biaya pengangkutan dan asuransi) — OnlinePajak, "Harga Jual Sebagai DPP PPN": https://www.online-pajak.com/tentang-efaktur-ppn/harga-jual-sebagai-dpp-ppn/
+- Artikel DJP (pajak.go.id): "Yuk, Kenali Aspek Perpajakan Jasa Pengiriman Paket" dan "Melongok Ketentuan PPN Jasa Ekspedisi Darat" — PPN atas jasa pengiriman paket adalah tarif efektif 1,1% dari jumlah yang ditagih (PMK 71/PMK.03/2022, kode faktur 05), mengatur tagihan **kurir kepada penjual**, bukan tagihan toko ke pembeli: https://www.pajak.go.id/id/artikel/yuk-kenali-aspek-perpajakan-jasa-pengiriman-paket
+- DDTC News, "Marketplace Juga Harus Pungut Pajak atas Ongkir dan Asuransi Barang" — PPh 22 atas ongkir untuk marketplace (PPh, bukan PPN; tidak mengubah rumus checkout): https://news.ddtc.co.id/berita/nasional/1820509/marketplace-juga-harus-pungut-pajak-atas-ongkir-dan-asuransi-barang
+- S&K publik Jubelio Shipment: biaya mengikuti publish rate ekspedisi, diskon 22% (regular) / 27% (J&T regular), tarif dapat berubah sewaktu-waktu, SiCepat wajib asuransi untuk barang >Rp500.000: https://jubelioshipment.com/syarat-dan-ketentuan/
+- [`docs/jubelio-api/shipment-v1.8.md`](../../../docs/jubelio-api/shipment-v1.8.md): nilai yang ditagih pelanggan = `rates` (bukan `final_rates`); `POST /shipments/create` mengembalikan `price` terpisah yang harus direkonsiliasi; tanpa quote ID/TTL; uji live 19/19 sampel `rates == final_rates` dan booking `price == rates` (mode mock).
+- Keputusan pemilik no. 7–9 di [`draf-pertanyaan-ke-jubelio.md`](../draf-pertanyaan-ke-jubelio.md): pakai `rates`; tanpa TTL, harga dijamin + tetap cek `price == rates` saat create; tagihan kurir di luar cakupan app.
+- [`docs/features/ppn.md`](../../../docs/features/ppn.md): rumus saat ini (PPN hanya atas `subtotal − diskon`, ongkir ditambahkan setelah PPN) yang perlu direvisi menurut keputusan ini; invarian snapshot immutable dan aturan re-payment tetap berlaku.
+- Riset internet dilakukan hanya ke halaman web publik tanpa request API vendor, sesuai batas peta.

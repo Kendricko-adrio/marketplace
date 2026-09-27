@@ -1,11 +1,23 @@
-# Kontrak quote hingga pembayaran
+1# Kontrak quote hingga pembayaran
 
 Type: grilling
 Label: wayfinder:grilling
-Status: open
+Status: resolved
 Blocked by: 01, 02, 03
 Parent: [Menuju spec pengiriman ke rumah via Jubelio Shipment yang siap ditinjau](../map.md)
 
 ## Question
 
 Dengan bukti tarif/layanan dan kebijakan harga yang telah diketahui, kapan quote perlu diperbarui karena waktu, asal, tujuan, isi keranjang, atau harga berubah; bagaimana pelanggan menyetujui ulang nominal; dan apa snapshot immutable untuk place-order, Sales Order, Midtrans, serta pembayaran ulang? Putuskan perilaku saat quote gagal/berubah tanpa menerima ongkir nol atau angka browser. Jangan mengasumsikan vendor menyediakan quote ID atau TTL.
+
+## Answer
+
+Pemilik mengonfirmasi kontrak UX dan nominal berikut untuk draf spec. Ini keputusan rancangan, **bukan** bukti bahwa checkout delivery sudah terimplementasi atau bahwa seluruh perilaku kurir live sudah diuji.
+
+1. **Quote dan invalidasi.** Tarif pelanggan bersumber dari `rates` Shipment yang diminta server, bukan `final_rates`, ongkir nol pengganti, atau angka browser ([01](01-kontrak-dan-akses-shipment.md), [03](03-kebijakan-nominal-delivery-mvp.md)). Perubahan alamat/tujuan, cabang asal, isi/kuantitas keranjang, harga barang, atau pilihan layanan membuat pilihan tarif sebelumnya tidak sah. Server menghitung ulang opsi dan total; selama menunggu, bagian ongkir menampilkan loading dan tombol lanjut/bayar nonaktif. Perubahan alamat biasa **bukan error**. Tidak ada refresh berkala berbasis waktu atau TTL aplikasi; keputusan pemilik di tiket 01 ialah tanpa TTL dan harga dianggap dijamin, bukan klaim bahwa vendor menyediakan quote ID/TTL.
+2. **Pengecekan terakhir dan persetujuan.** Pada tindakan **Buat pesanan**, server meminta/mengecek tarif lagi meskipun pelanggan tidak mengubah data. Bila nominal layanan terpilih berubah, tetap di checkout, perbarui ringkasan termasuk PPN/total, lalu tampilkan pesan: **“Ongkir telah berubah. Periksa kembali rincian pesanan sebelum melanjutkan.”** Pelanggan meninjau dan menekan **Buat pesanan** lagi untuk menyetujui nominal baru; jangan membuat order atau transaksi Midtrans sebelum persetujuan itu. Bila layanan terpilih hilang, tampilkan opsi terbaru dan minta pelanggan memilih ulang, tanpa memilihkan kurir otomatis. Harga barang yang berubah juga harus tercermin pada total yang ditinjau sebelum order dibuat; nominal dari browser tidak menjadi sumber kebenaran.
+3. **Gagal quote.** Jika pengecekan gagal atau tidak ada layanan tersedia, tahan checkout delivery: tombol buat pesanan delivery nonaktif, jelaskan bahwa ongkir belum tersedia, beri **Coba lagi** serta opsi **beralih ke pickup**. Jangan gunakan tarif lama atau ongkir nol sebagai pengganti. Ini berbeda dari keadaan loading normal saat alamat berubah.
+4. **Snapshot dan pembayaran.** Setelah persetujuan terakhir, place-order membekukan cabang asal, alamat tujuan, isi/kuantitas dan harga barang, diskon, layanan kurir yang dipilih, ongkir `rates`, tarif/jumlah PPN, biaya layanan (0 pada MVP), dan total beserta identitas/versi data yang diperlukan untuk memverifikasi persetujuan terhadap quote yang sama. Snapshot ini menjadi sumber angka order dan Midtrans, bukan input browser atau konfigurasi berjalan; `sum(item_details.price × quantity) = gross_amount = orders.total`, ongkir menjadi line tersendiri. Pembayaran ulang memakai snapshot order dan Sales Order **yang sama**, tidak me-quote ulang atau mengganti alamat/total diam-diam. Dasar PPN delivery mengikuti [03](03-kebijakan-nominal-delivery-mvp.md): barang setelah diskon + ongkir; konfirmasi konsultan pajak tetap gerbang aktivasi.
+5. **Booking sesudah pembayaran.** Quote `rates` yang disetujui tersimpan sebagai nilai pelanggan; `price` booking dan `price_bill` dicatat terpisah sebagaimana [04](04-booking-timeout-dan-pembatalan.md). Selisihnya menjadi beban toko, bukan alasan menagih ulang pelanggan ([03](03-kebijakan-nominal-delivery-mvp.md)). Tidak ada pembayaran lewat API Shipment.
+
+**Batas bukti yang dialihkan ke [08](08-bukti-penerimaan-spec.md):** cara merepresentasikan ongkir dan menegakkan kesamaan nominal pada Sales Order Omnichannel belum terdokumentasi/terbukti (pertanyaan vendor no. 20 di [draf pertanyaan](../draf-pertanyaan-ke-jubelio.md)). Issue 06 ditutup sebagai keputusan kontrak UX/order/Midtrans; penutupan ini **tidak** mengesahkan field SO rekaan atau menghapus kebutuhan bukti tersebut sebelum penerimaan spec/aktivasi. Tidak ada panggilan API, perubahan aplikasi, atau pengujian checkout pada tiket ini.

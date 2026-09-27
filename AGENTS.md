@@ -104,12 +104,16 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   Stop for new product decisions; do not silently re-plan. Read the on-demand
   [`development-workflow` skill](.agents/skills/development-workflow/SKILL.md)
   for the full process and gates.
-- **Subagents are opt-in and bounded.** Spawn only when the user explicitly
-  authorizes delegation for the current task/session; plan approval is not
-  permission. The main agent chooses bounded handoffs, owns decisions,
-  integration, plan-status bookkeeping and acceptance, and validates results.
-  No nested delegation without separate permission. Follow the skill's
-  handoff, isolation, and loop-stop rules.
+- **Subagents are opt-in, bounded, and edit-only implementers.** Spawn only
+  when the user explicitly authorizes delegation for the current task/session;
+  plan approval is not permission. For implementation handoffs, subagents may
+  read and edit files (including code, tests, and docs), but must not run unit
+  tests, E2E tests, builds, lint, typechecks, or other validation commands.
+  They hand back their changes and a concise report, then stop. The main agent
+  owns integration, review, and all validation: inspect the changes, run the
+  relevant tests/checks, and decide any follow-up edits. No nested subagents
+  without separate permission. Follow the skill's handoff, isolation, and
+  loop-stop rules.
 - **Plan → execute → review applies to any behavior-affecting change.** "Code"
   is broadly defined — no loopholes: app code, config/env files, schema files,
   seeders, middleware/route configs, files under `deployment/`. Pure research,
@@ -176,9 +180,11 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   `e2e/admin/` asserting user-visible behavior. The canonical way to verify
   a UI feature works is to run its Playwright spec and see it pass.
 - **Use the `tdd` skill** (`.agents/skills/tdd/SKILL.md`) for all test work:
-  red → green loop, one vertical slice at a time, tests at public seams only,
-  expected values from an independent source of truth (no tautological
-  assertions). Write the failing test first for features and bug fixes.
+  one vertical slice at a time, tests at public seams only, expected values
+  from an independent source of truth (no tautological assertions), and write
+  the failing test first for features and bug fixes. When an implementation is
+  delegated, the subagent authors/updates tests but does not execute them; the
+  main agent runs the tests and completes the red → green verification loop.
 - **Keep tests deterministic.** Do not depend on random data, time-of-day, or
   external services that are not mocked / controlled in the test environment.
 - **When a Playwright run fails, read the Markdown output — do NOT open the

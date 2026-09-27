@@ -2,10 +2,37 @@
 
 Type: grilling
 Label: wayfinder:grilling
-Status: open
+Status: resolved
 Blocked by: 03, 04, 05
 Parent: [Menuju spec pengiriman ke rumah via Jubelio Shipment yang siap ditinjau](../map.md)
 
 ## Question
 
 Siapa berwenang dan wajib bertindak ketika pembayaran sudah sah tetapi settlement Sales Order, packing, booking, atau status kirim ambigu/gagal; bagaimana kasus ditemukan dan dipulihkan tanpa booking ganda; kapan pelanggan diberi kabar; dan bukti apa yang memungkinkan delivery dinyatakan selesai? Tentukan batas MVP untuk kiriman bermasalah/retur dan eskalasi/refund manual, bukan merancang klaim atau refund otomatis di luar scope. Cocokkan izin dan Branch Scope dengan istilah di `CONTEXT.md`.
+
+## Answer
+
+Pemilik memutuskan lewat grilling bertahap (2026-09-27). Booking ambigu sudah ditangani [tiket 04](04-booking-timeout-dan-pembatalan.md) (tahan, tanpa retry, eskalasi) dan semantik status/karakteristik webhook di [tiket 05](05-webhook-dan-bukti-status.md); keputusan di bawah melengkapi tahap yang belum terjawab: settlement Sales Order, packing, kewenangan pelaku, kabar pelanggan, batas retur/refund, bukti selesai, dan tempat kasus ditemukan.
+
+**1. Settlement Sales Order ambigu → reuse paid-but-blocked, tanpa tombol verifikasi baru.** Delivery memakai mekanisme yang sudah live untuk pickup: settlement ambigu → pesanan **paid-but-blocked** (`manual_review` di ledger), TIDAK masuk antrean pemenuhan cabang, dan muncul di halaman reviews yang sudah ada. Pemulihan tetap lewat verifikasi ulang sistem (GET-only recovery di sweep/pipeline) setelah keadaan di Jubelio dibenarkan operator — **tanpa aksi tulis "tandai terverifikasi" baru**, menjaga prinsip read-only halaman reviews (blind write bisa menduplikasi operasi remote). Paritas dengan pickup: kode pickup juga hanya keluar setelah settlement terverifikasi.
+
+**2. Packing gagal → tandai tidak dapat dipenuhi + alasan wajib.** Aksi baru pada detail pesanan di antrean pemenuhan: "Tandai tidak dapat dipenuhi" dengan alasan baku (stok fisik kosong / barang rusak / melebihi batas layanan yang dibayar). Pesanan keluar dari antrean normal dan masuk daftar perlu tindak lanjut; setiap tindakan tercatat Audit Event. Solusi lanjutan (restock, ganti barang, batal + refund manual) diputuskan di luar app; app hanya mencatat hasilnya. Pembatalan SO pesanan **berbayar** tidak dibuat di MVP — eksekusinya prosedur manual tersendiri di sisi Jubelio, app tidak mengotomasi.
+
+**3. Kewenangan → kunci ke Home Branch, meniru Pickup Verification.** Semua tindakan penanganan pesanan terkendala (menandai tidak dapat dipenuhi, melepas tahanan booking ambigu, menandai selesai manual) hanya boleh dilakukan Admin User yang **Home Branch-nya = cabang pesanan**, meskipun Role-nya punya Order edit all-branch — persis pola Pickup Verification di [`CONTEXT.md`](../../../CONTEXT.md). Setiap tindakan tercatat Audit Event; visibility mengikuti grant `orders:view` + Branch Scope yang sudah ada (visibility ≠ kewenangan bertindak).
+
+**4. Kabar pelanggan → manual oleh staf setelah diagnosis jelas; tidak dicatat di app.** App tidak mengirim notifikasi otomatis untuk kendala apa pun. Staf mengabari pelanggan (telepon/WA/email) hanya setelah internal tahu apa yang terjadi dan apa solusinya; app menyediakan ringkasan kasus untuk disalin staf. Pemberitahuan **tidak** dilacak/dicatat di app pada MVP. (Keputusan 03/04 "pelanggan tidak diganggu" tetap berlaku untuk selisih harga — kasus terkendala ini berbeda: pelanggan tetap dikabari, tetap secara manual.)
+
+**5. Retur/kiriman bermasalah → selesai manual + alasan; refund & retur fisik di luar app.** `RETURNED`/`SHIPMENT_ISSUE` masuk daftar "kiriman perlu tindak lanjut"; admin Home Branch dapat menandai **selesai manual** dengan alasan wajib (Audit Event) supaya pesanan tidak menggantung selamanya. Refund (barang/ongkir) dan penanganan barang retur fisik sepenuhnya manual di luar app (dashboard Midtrans/transfer + prosedur internal), tidak dicatat sebagai transaksi di app. Eskalasi ke Jubelio/kurir (booking ambigu yang tak dapat dipastikan — sesuai tiket 04; `SHIPMENT_ISSUE` berlarut) adalah tindakan manual di luar app; app hanya menyediakan rangkuman data (AWB, ID SO/invoice/payment, timeline tracking) untuk disalin. Tidak ada klaim/refund otomatis di MVP.
+
+**6. Bukti delivery selesai → DELIVERED terverifikasi otomatis + selesai manual ber-alasan.** Pesanan selesai otomatis ketika `latest_status = DELIVERED` terverifikasi — via webhook terverifikasi atau GET AWB saat rekonsiliasi admin (reaktif, tanpa polling, sesuai tiket 05). Metadata POD (`delivered_img_url`, `sign_img_url`, `pod_url`) disimpan dan ditampilkan bila ada, tetapi **bukan syarat keras**. Bila bukti elektronik mentok/tak lengkap (mis. status kurir tidak pernah mencapai DELIVERED padahal barang diterima), admin Home Branch dapat menyatakan selesai manual dengan alasan wajib. `PICKED_UP` ≠ `DELIVERED` tetap berlaku.
+
+**7. Cara kasus ditemukan → satu daftar gabungan + filter.** Semua tipe pesanan terkendala (settlement blocked, packing gagal, booking ambigu, RETURNED/SHIPMENT_ISSUE) ditampung satu area "perlu tindak lanjut" dengan filter per tipe — lanjutan pola halaman reviews yang sudah menggabungkan `manual_review` + paid-but-blocked dalam satu halaman. Pemulihan tanpa booking ganda tetap mengikuti tiket 04: tidak ada retry create sampai booking pertama dipastikan tidak ada; melepas tahanan adalah aksi admin Home Branch.
+
+## Evidence
+
+- Keputusan pemilik via tanya-jawab terstruktur bertahap (2026-09-27) untuk seluruh butir Answer; klarifikasi dijawab langsung oleh pemilik (termasuk penolakan tombol "tandai terverifikasi" manual dan pencatatan kabar pelanggan).
+- Mekanisme paid-but-blocked + `manual_review` sudah live untuk pickup: [`jubelio-sales-orders.md`](../../../docs/features/jubelio-sales-orders.md) — "ambiguous → paid-but-blocked + `manual_review`"; "GET-only recovery". Halaman [`apps/admin/src/app/admin/orders/reviews/page.tsx`](../../../apps/admin/src/app/admin/orders/reviews/page.tsx) + API [`sales-operations/route.ts`](../../../apps/admin/src/app/api/admin/reviews/sales-operations/route.ts) read-only by design: "There are NO write actions here by design: operators investigate in Jubelio and resolve deliberately; a blind write could duplicate a remote operation"; guard `orders:view` + Branch Scope.
+- [`CONTEXT.md`](../../../CONTEXT.md) — Pickup Verification: "It always requires the order branch to equal the Admin User's Home Branch, even when the Role has all-branch Order editing" — pola yang ditiru untuk kewenangan penanganan terkendala; Audit Event untuk setiap tindakan attributable.
+- Preseden aksi claim + audit event sudah ada: [`orders-service.ts`](../../../apps/admin/src/lib/orders-service.ts) (`claimStockRecheck`: klaim atomik `manual_review` → `reconciling` + Audit Event).
+- App saat ini tidak punya mekanisme refund; pesanan berbayar terminal ([`order-flow.md`](../../../docs/features/order-flow.md): "Paid orders are terminal — later failure callbacks are ignored (no refund…)") — batas MVP refund di luar app konsisten dengan keadaan sekarang.
+- Tiket 04 (tahan booking ambigu, tanpa retry, eskalasi; cancel AWB dikecualikan dari MVP), tiket 05 (rekonsiliasi GET AWB reaktif tanpa polling, RETURNED/SHIPMENT_ISSUE tampil mentah, POD di payload DELIVERED), tiket 03 (pelanggan membayar tepat `rates`, selisih ditanggung toko, pelanggan tidak diganggu) — tetap berlaku dan dilengkapi keputusan ini.

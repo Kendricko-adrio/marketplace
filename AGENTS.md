@@ -194,10 +194,14 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 
 ## 6. Communication With the User
 
-- Respond in the user's language unless they request another language. Explain
-  the reasoning, relevant project context, practical consequences, and any
-  important caveats in enough detail for the user to understand the decision;
-  avoid unexplained jargon and unnecessary repetition.
+- Respond in the user's language unless they request another language. When
+  responding in Indonesian, keep commonly used English technical and product
+  terms in English rather than translating them literally or awkwardly. This
+  applies broadly, not just to specific examples such as interface, mock,
+  testing, develop, and UAT. Explain the reasoning, relevant project context,
+  practical consequences, and any important caveats in enough detail for the
+  user to understand the decision; avoid unexplained jargon and unnecessary
+  repetition.
 - Ground project-specific claims in references the user can inspect: link to
   relevant code snippets (with file paths and line numbers when available),
   files, endpoints, tests, or project documentation. For library/API claims,

@@ -4,7 +4,7 @@ Status: **sebagian besar terjawab oleh keputusan pemilik (2026-09-27) — lihat 
 
 **Pembaruan 2026-09-27 (uji live berizin):** no. **1** (aktivasi produksi) dan **3** (scope kredensial = produksi) **terjawab** oleh uji live — hapus atau ubah menjadi permintaan **kredensial sandbox**; no. **4** terjawab untuk `GET /services/categories` (tidak butuh Bearer), sisanya (wilayah/district/area) belum diuji. Sisa pertanyaan tetap relevan untuk dikirim.
 
-**Pembaruan 2026-09-27 (tiket 03):** ditambahkan no. **20–21** — invarian nominal Sales Order dan semantik asuransi `shipping_insurance` — hasil keputusan kebijakan nominal delivery; keduanya belum dijawab dan masuk daftar untuk dikirim.
+**Pembaruan keputusan tiket 08:** no. **20 tidak perlu dikirim untuk desain MVP**, bukan telah dijawab vendor: pemilik memilih SO pickup/delivery barang saja tanpa ongkir/pajak; website/Midtrans mencatat PPN website dan ongkir delivery. No. 21 masih opsional untuk konsultasi vendor mengenai asuransi; kurir wajib-asuransi dikecualikan sementara.
 
 ---
 
@@ -39,14 +39,14 @@ Perkenalkan, kami sedang mengintegrasikan Jubelio Shipment API untuk pengiriman 
 18. Untuk pesanan website internal (bukan channel marketplace), apakah wajib membuat Sales Order Omnichannel, dan bagaimana efeknya terhadap stok?
 19. **Baru (hasil uji create 2026-09-27):** hasil `POST /shipments/create` di produksi menghasilkan AWB berprefix **`MOCK-`** (contoh `MOCK-JS2420810000000001`) dan `shipment_id` mulai dari 1. Apakah tenant kami masih dalam mode mock/test? Bagaimana proses berpindah ke kurir live, dan apakah booking mock berdampak tagihan?
 
-**F. Invarian nominal & asuransi (tambahan dari tiket 03, 2026-09-27)**
+**F. Asuransi (tambahan dari tiket 03; no. 20 dibatalkan untuk MVP oleh tiket 08)**
 
-20. Untuk pesanan website internal yang wajib membuat Sales Order Omnichannel (lihat no. 18): bagaimana ongkir yang dibayar pelanggan direpresentasikan di Sales Order — sebagai line/field tersendiri (mis. biaya kirim/freight) atau digabung ke total? Apakah total Sales Order wajib sama dengan total pesanan website (subtotal − diskon + ongkir + PPN)? Kami menjaga invarian nominal order website → Midtrans → Sales Order ([tiket 03](issues/03-kebijakan-nominal-delivery-mvp.md)); mohon jawab dengan field/endpoint konkret, bukan asumsi.
+20. **Tidak dikirim pada MVP.** Pertanyaan historis mengenai field ongkir dan kesamaan total SO/website digugurkan oleh [keputusan pemilik tiket 08](issues/08-bukti-penerimaan-spec.md), **bukan** telah dijawab vendor. SO pickup/delivery hanya item barang setelah diskon, `tax_amount` item/`total_tax` SO 0 dan tanpa ongkir; invoice/pembayaran Jubelio diverifikasi pada nilai barang SO, sedangkan website/Midtrans memakai snapshot total pelanggan termasuk PPN website dan ongkir delivery. Jangan mengarang field ongkir SO atau menuntut total kedua sistem sama. Jika desain produk berubah nanti, ajukan pertanyaan baru secara terpisah.
 21. Apa semantik field `shipping_insurance` pada response `rates`/`rates/all` — premi asuransi (Rp) atau nominal pertanggungan? Uji live kami menampilkan nilai kecil (100–5.100) untuk semua kurir. Bila kami selalu booking dengan `is_insurance: false`, apakah kurir dengan aturan asuransi wajib menurut S&K Jubelio (SiCepat, barang >Rp500.000) tetap dapat di-quote dan di-booking tanpa premi, atau premi terpasang otomatis/tetap ditagih? Apakah ada kurir yang menolak booking tanpa asuransi?
 
 ---
 
-Catatan pemakaian: pertanyaan 1–4 menutup tiket "akses & kontrak"; 5–9 memengaruhi tiket quote→pembayaran (06); 10–12 tiket booking/timeout (04, 07); 13–14 tiket webhook (05); 15, 16–18 operasional & spec (08); 20–21 invarian Sales Order & kebijakan asuransi (03). Hapus nomor yang tidak relevan sesuai kebutuhan.
+Catatan pemakaian: pertanyaan 1–4 menutup tiket "akses & kontrak"; 5–9 memengaruhi tiket quote→pembayaran (06); 10–12 tiket booking/timeout (04, 07); 13–14 tiket webhook (05); 15, 16–18 operasional & spec (08); 20 dibatalkan untuk MVP oleh 08; 21 kebijakan asuransi (03). Hapus nomor yang tidak relevan sesuai kebutuhan.
 
 ## Jawaban pemilik (2026-09-27)
 
@@ -71,7 +71,7 @@ Catatan pemakaian: pertanyaan 1–4 menutup tiket "akses & kontrak"; 5–9 memen
 | 17 | Pemilik bertanya maksudnya → dijelaskan | Status `RETURNED`/`SHIPMENT_ISSUE` ditampilkan mentah di admin untuk tindakan manual |
 | 18 | **Sales Order Omnichannel wajib** untuk pesanan website | Desain order→SO + stok mengikuti `jubelio-sales-api-migration.md` |
 | 19 | Benar: **sandbox tenant via URL produksi** (mode mock); pembayaran di luar kebutuhan app | App cukup mengirim request yang benar; peralihan kurir-live = urusan vendor/pemilik |
-| 20 | Belum dijawab — baru ditambahkan dari tiket 03 (2026-09-27), kandidat dikirim ke vendor | Invarian Sales Order di tiket 03 tidak ditegakkan sampai bukti ada; jangan mengarang field |
+| 20 | Tidak diperlukan untuk desain MVP sesuai keputusan pemilik di tiket 08; **tidak dijawab vendor** | SO hanya barang, pajak 0 dan tanpa ongkir bagi pickup/delivery; website/Midtrans punya total sendiri, masing-masing diverifikasi terhadap snapshot |
 | 21 | Belum dijawab — baru ditambahkan dari tiket 03 (2026-09-27), kandidat dikirim ke vendor | Kebijakan asuransi tiket 03 berlaku dengan default aman (`is_insurance` false; kurir wajib-asuransi dikecualikan) sampai terkonfirmasi |
 
-**Sisa terbuka (tidak menghalangi desain):** jalur label saat kurir live, representasi ongkir di Sales Order Omnichannel (no. 20), dan semantik `shipping_insurance`/kurir wajib-asuransi (no. 21) — dua terakhir ditambahkan 2026-09-27 dari tiket 03. **Ditutup oleh keputusan pemilik (2026-09-27, tiket 05):** pertanyaan 13–14 (signature & event webhook) tidak perlu dikirim ke vendor — dokumentasi = source of truth; fixture tidak dibutuhkan; webhook akan diuji manual oleh pemilik; semantik `RETURNED`/`SHIPMENT_ISSUE` tampil mentah manual (no. 17 pun tidak lagi menghalangi).
+**Sisa terbuka (tidak menghalangi desain):** jalur label saat kurir live dan semantik `shipping_insurance`/kurir wajib-asuransi (no. 21). No. 20 telah ditarik dari daftar MVP oleh keputusan pemilik, bukan dibuktikan sebagai fakta API. **Ditutup oleh keputusan pemilik (2026-09-27, tiket 05):** pertanyaan 13–14 (signature & event webhook) tidak perlu dikirim ke vendor — dokumentasi = source of truth; fixture tidak dibutuhkan; webhook akan diuji manual oleh pemilik; semantik `RETURNED`/`SHIPMENT_ISSUE` tampil mentah manual (no. 17 pun tidak lagi menghalangi).

@@ -30,8 +30,8 @@ When an upstream Matt Pocock skill says "Call the Skill tool", Pi may not expose
 
 ## 3. Slice only when useful
 
-- If the build spans sessions, propose tracer-bullet tickets: each delivers a narrow, independently testable end-to-end behavior (rather than a whole database/API/UI layer), with acceptance criteria and real blockers. Show the numbered breakdown and dependencies to the user; get separate approval before publishing/queueing tickets. Small work goes straight from approved conversational scope or spec to implementation.
-- Tickets convey *what* must work, not a brittle list of file paths or an invitation to redesign product behavior. Carry the approved spec, testing seams, exclusions, and source-of-truth research in the handoff. One implementation session owns one approved slice; no second product plan is required.
+- If the build spans sessions or the user requests a multi-ticket breakdown, propose tracer-bullet tickets: each delivers a narrow, independently testable end-to-end behavior (rather than a whole database/API/UI layer), with acceptance criteria and real blockers. Show the numbered breakdown and dependencies to the user; get separate approval before publishing/queueing tickets. Small work goes straight from approved conversational scope or spec to implementation.
+- Tickets convey *what* must work, not a brittle list of file paths or an invitation to redesign product behavior. Carry the approved spec, testing seams, exclusions, and source-of-truth research in the handoff. **A session may cover one or several approved tickets according to the user's requested scope.** Even in a multi-ticket session, implement, test, review, and record the outcome of each verifiable slice before moving to the next; respect dependencies and do not mark blocked or unverified tickets Done. A new product decision still requires owner approval, not an agent-selected default. No second product plan is required.
 
 ## 4. Implement, review, and close
 

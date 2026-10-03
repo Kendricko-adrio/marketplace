@@ -122,6 +122,10 @@ const midtransStatuses = new Map<
 >();
 const requests: Array<{ method: string; path: string; body: unknown }> = [];
 let nextAdjustmentId = 1;
+let shipmentSequence = 6000;
+const shipmentRecords = new Map<number, Record<string, unknown>>();
+let shipmentRates = 20000;
+let shipmentScenario = "rate-normal";
 let scenario: Scenario = "success";
 let scenarioHits = 0;
 
@@ -299,6 +303,50 @@ export const jubelioMockServer = createServer(async (request, response) => {
     return json(response, 200, { status: "ok" });
   }
 
+  if (method === "PUT" && url.pathname === "/__control/shipment") {
+    shipmentScenario = String(body.scenario);
+    if (body.shipment && typeof body.shipment === "object" && !Array.isArray(body.shipment)) {
+      const fixture = body.shipment as Record<string, unknown>;
+      if (Number.isSafeInteger(fixture.shipment_id) && Number(fixture.shipment_id) > 0) shipmentRecords.set(Number(fixture.shipment_id), { ...fixture });
+    }
+    shipmentRates = typeof body.rates === "number" ? body.rates : 20000;
+    return json(response, 200, { status: "ok" });
+  }
+  if (method === "POST" && url.pathname === "/auth/generate-token") {
+    return json(response, 200, { token: "mock-token", expires_in: 86400 });
+  }
+  if (method === "POST" && url.pathname === "/rates/all") {
+    if (request.headers.authorization !== "Bearer mock-token") return json(response, 401, { error: "Unauthorized" });
+    if (shipmentScenario === "rate-failure") return json(response, 500, { error: "Fixture rate failure" });
+    return json(response, 200, shipmentScenario === "rate-empty" ? [] : [{ courier_id: 13, courier_name: "JNE", courier_service_id: 1327, courier_service_code: "REG", courier_service_name: "JNE REG Fixture", rates: shipmentRates, final_rates: 10000, shipping_insurance: null, is_cod_supported: false }]);
+  }
+
+  if (method === "GET" && url.pathname.startsWith("/shipments/awb/")) {
+    if (request.headers.authorization !== "Bearer mock-token") return json(response, 401, { error: "Unauthorized" });
+    const awb = decodeURIComponent(url.pathname.slice("/shipments/awb/".length));
+    const fixture = [...shipmentRecords.values()].find((record) => record.awb === awb);
+    return fixture ? json(response, 200, fixture) : json(response, 404, { error: "Unknown AWB" });
+  }
+
+  if (method === "POST" && url.pathname === "/shipments/create") {
+    if (request.headers.authorization !== "Bearer mock-token") return json(response, 401, { error: "Unauthorized" });
+    const shipment_id = ++shipmentSequence;
+    const booked = { shipment_id, awb: `MOCKAWB${shipment_id}`, tracking_url: `http://127.0.0.1:${process.env.JUBELIO_MOCK_PORT ?? "3112"}/tracking/${shipment_id}`, price: 25000, price_bill: 30000 };
+    shipmentRecords.set(shipment_id, { ...booked, ref_no: body.ref_no });
+    if (shipmentScenario === "booking-timeout-after-apply") await new Promise((resolve) => setTimeout(resolve, 1000));
+    return json(response, 200, booked);
+  }
+
+  const fixtureRegions: Record<string, unknown[]> = {
+    "/region/provinces": [{ province_id: "01", name: "Fixture Province" }],
+    "/region/cities/01": [{ city_id: "0101", province_id: "01", name: "Fixture City" }],
+    "/region/districts/0101": [{ district_id: "010101", city_id: "0101", name: "Fixture District" }],
+    "/region/areas/010101": [{ area_id: "01010101", district_id: "010101", name: "Fixture Area", zipcode: "01234" }],
+  };
+  if (method === "GET" && url.pathname.startsWith("/region/")) {
+    return json(response, 200, fixtureRegions[url.pathname] ?? []);
+  }
+
   if (method === "POST" && url.pathname === "/login") {
     return json(response, 200, { token: "mock-token" });
   }
@@ -374,8 +422,8 @@ export const jubelioMockServer = createServer(async (request, response) => {
     if (!contact) {
       return unknownRef(response, "Unknown contact_id");
     }
-    if (body.customer_name !== contact.contact_name) {
-      return badRequest(response, "customer_name does not match contact_id");
+    if (typeof body.customer_name !== "string" || !body.customer_name.trim()) {
+      return badRequest(response, "customer_name is required");
     }
     if (
       typeof body.transaction_date !== "string" ||
@@ -494,7 +542,7 @@ export const jubelioMockServer = createServer(async (request, response) => {
       salesorder_id: salesorderId,
       salesorder_no: `SO-${String(salesorderId).padStart(9, "0")}`,
       contact_id: contact.contact_id,
-      customer_name: contact.contact_name,
+      customer_name: body.customer_name,
       transaction_date: body.transaction_date,
       location_id: locationId,
       source: Number(body.source),
@@ -1104,11 +1152,14 @@ export const jubelioMockServer = createServer(async (request, response) => {
         .map((stock) => ({
           location_id: stock.locationId,
           on_hand: stock.onHand,
-          reserved: 0,
-          available: stock.onHand,
+          on_order: stock.onOrder,
+          reserved: stock.reserved,
+          available: availableStock(stock),
         })),
     }));
-    return json(response, 200, { locations: [], data });
+    const locations = [...new Set([...stocks.values()].filter((stock) => ids.includes(stock.itemId)).map((stock) => stock.locationId))]
+      .map((locationId) => ({ location_id: locationId, location_name: `Mock location ${locationId}` }));
+    return json(response, 200, { locations, data });
   }
 
   return json(response, 404, { error: "Not Found", path: url.pathname });

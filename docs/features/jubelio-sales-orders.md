@@ -3,7 +3,12 @@
 The storefront checks out through **Jubelio Sales Orders** for every new
 order. Inventory adjustments are retired from the runtime paths (plan:
 `plan/jubelio-sales-api-switching.md`). This document is the implemented
-behavior plus the sandbox-observed provider contract.
+behavior plus the sandbox-observed provider contract. For pickup, the SO,
+invoice and Jubelio payment contain only goods (zero discount, item/SO tax
+and shipping); the website and Midtrans include website PPN on goods. For
+example, Rp100,000 goods at 11% produce a Rp100,000 SO/invoice/payment but
+a Rp111,000 order/Midtrans charge. Confirmation compares provider money to
+the goods subtotal, not the website total. Delivery checkout is not active.
 
 ## Lifecycle (Path 1 settlement only)
 

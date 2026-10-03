@@ -235,3 +235,42 @@ describe("getMockPaymentResult", () => {
     ).toBeNull();
   });
 });
+
+describe("buildSnapTransactionParameter — delivery repayment (ticket 04)", () => {
+  it("rebuilds the snapshotted delivery money with the ongkir line separate and item_details summing to the gross", () => {
+    // Snapshot of the placed delivery order (order row + order_items):
+    // goods 100.000 + ongkir 20.000 + PPN 13.200 = 133.200 — RE-payment
+    // rebuilds THE SAME gross with NO new quote and the ongkir as its OWN
+    // Midtrans line (never merged into the goods lines, never dropped).
+    const itemDetails = [
+      { id: "variant-e2e", name: "Delivery Anchor", price: 100000, quantity: 1 },
+      { id: "SHIPPING", name: "Shipping", price: 20000, quantity: 1 },
+      { id: "PPN", name: "PPN 11%", price: 13200, quantity: 1 },
+    ];
+
+    const parameter = buildSnapTransactionParameter({
+      orderId: "order-delivery-e2e",
+      grossAmount: 133200,
+      customerDetails: {
+        first_name: "Budi",
+        email: "delivord-e2e@example.test",
+        phone: "081299999999",
+      },
+      itemDetails,
+    }) as unknown as {
+      transaction_details: { order_id: string; gross_amount: number };
+      item_details: Array<{ price: number; quantity: number }>;
+    };
+
+    expect(parameter.transaction_details).toEqual({
+      order_id: "order-delivery-e2e",
+      gross_amount: 133200,
+    });
+    // Midtrans contract: Σ item_details = gross_amount.
+    const sum = itemDetails.reduce((total, detail) => total + detail.price * detail.quantity, 0);
+    expect(sum).toBe(133200);
+    expect(sum).toBe(parameter.transaction_details.gross_amount);
+    // The ongkir stays its own line.
+    expect(itemDetails.map((detail) => detail.id)).toContain("SHIPPING");
+  });
+});

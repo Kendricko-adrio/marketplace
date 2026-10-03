@@ -271,6 +271,13 @@ export async function markJubelioSalesOperationConfirmed(
     paymentId?: number;
     /** Create GET's informational marker result, persisted with confirmation. */
     channelStatusMatches?: boolean;
+    /**
+     * Ticket 07 — the GET-only SYSTEM recovery may flip a KNOWN
+     * `manual_review` invoice/payment operation after the provider
+     * verification (the verified caller passes this; the flag is never
+     * exposed to any admin UI and never applies to create/cancel types).
+     */
+    readOnlyRecovery?: boolean;
   }
 ): Promise<JubelioSalesOperation | null> {
   const existing = await db
@@ -318,11 +325,25 @@ export async function markJubelioSalesOperationConfirmed(
     .where(
       and(
         eq(jubelioSalesOperations.id, operationId),
-        eq(jubelioSalesOperations.status, "dispatched_unknown")
+        recoveryEligible(operation, input.readOnlyRecovery === true)
+          ? inArray(jubelioSalesOperations.status, ["dispatched_unknown", "manual_review"])
+          : eq(jubelioSalesOperations.status, "dispatched_unknown")
       )
     )
     .returning();
   return updated[0] ?? null;
+}
+
+/** Only a KNOWN manual-review invoice/payment operation may recover by GET. */
+function recoveryEligible(
+  operation: { type: string; status: string },
+  readOnlyRecovery: boolean
+): boolean {
+  return (
+    readOnlyRecovery &&
+    (operation.type === "invoice" || operation.type === "payment") &&
+    operation.status === "manual_review"
+  );
 }
 
 /**

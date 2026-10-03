@@ -261,3 +261,69 @@ describe("parseJubelioStartPage", () => {
     );
   });
 });
+
+describe("upsertJubelioBranches — shipping-origin complement (ticket 02)", () => {
+  // GUARD (green by absence; turns red the moment the sync starts writing
+  // shipping columns). The local shipping-origin complement
+  // (shipping_phone/shipping_address/shipping_postal_code/shipping_area_id)
+  // belongs to the branch admin menu alone — Jubelio master data (location
+  // phone/address/post_code/area) must never seed it and never overwrite the
+  // branch admin's edit ("Pelengkap lokal diedit sekali di menu Branch admin
+  // dan tidak ditimpa impor Jubelio").
+  it("never writes the shipping-origin complement from Jubelio locations", async () => {
+    const inserted: Array<Record<string, unknown>> = [];
+    let conflictUpdate: Record<string, unknown> | undefined;
+    const db = {
+      insert: () => ({
+        values: (rows: Array<Record<string, unknown>>) => {
+          inserted.push(...rows);
+          return {
+            onConflictDoUpdate: async (config: Record<string, unknown>) => {
+              conflictUpdate = config;
+            },
+          };
+        },
+      }),
+    } as unknown as Db;
+
+    // A location WITH the full complement fields Jubelio carries (phone,
+    // address, post_code, area are all optional fields of JubelioLocation):
+    // the sync still must not map any of them into the shipping columns.
+    const location: JubelioLocation = {
+      location_id: 21,
+      location_name: "Gudang Pusat E2E",
+      location_code: "LOC-21",
+      is_pos_outlet: false,
+      is_active: true,
+      phone: "0215551000",
+      address: "Jl. Jubelio Master 1",
+      post_code: "12345",
+      area: "Kelurahan Master",
+    };
+
+    await upsertJubelioBranches(db, [location]);
+
+    // Insert path: the complement is never seeded from provider master data.
+    for (const row of inserted) {
+      expect(
+        Object.keys(row).filter((key) => key.startsWith("shipping")),
+        `insert must not carry shipping* keys (got ${Object.keys(row).join(", ")})`
+      ).toEqual([]);
+    }
+
+    // Update path: the conflict SET allowlist never touches the complement.
+    const setKeys = Object.keys(
+      (conflictUpdate?.set as Record<string, unknown>) ?? {}
+    );
+    // The known master-mirrored fields keep flowing (name/city/address/
+    // status/updatedAt at minimum — the address IS the general branch
+    // address, not the shipping sender block).
+    expect(setKeys).toEqual(
+      expect.arrayContaining(["name", "city", "address", "status", "updatedAt"])
+    );
+    expect(
+      setKeys.filter((key) => key.startsWith("shipping")),
+      `conflict SET must not contain shipping* keys (got ${setKeys.join(", ")})`
+    ).toEqual([]);
+  });
+});

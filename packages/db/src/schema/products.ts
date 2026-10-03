@@ -10,6 +10,7 @@
   index,
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
+import type { JubelioParcelDimensions } from "../jubelio-parcel";
 
 /**
  * Product-level gallery image entry. Populated from Jubelio
@@ -127,6 +128,9 @@ export const productVariants = pgTable(
     // barcode is the supplier EAN (may be non-unique / non-numeric), distinct
     // from our system `sku` (which is generated as `${ART}-${Size}`).
     barcode: text("barcode"),
+    // Per-SKU Omnichannel master parcel, integer grams and centimetres.
+    // Null/invalid masters use the IT-managed store fallback, never zeros.
+    parcelDimensions: jsonb("parcel_dimensions").$type<JubelioParcelDimensions>(),
     discount: text("discount"), // raw disc% from CSV (mixed int/decimal formats, stored as-is)
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

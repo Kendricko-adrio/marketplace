@@ -71,3 +71,10 @@ lasting design/invariant/flow content is distilled into the appropriate
 | Third-party APIs | `docs/jubelio-api/README.md` |
 | Internal architecture | `docs/architecture/README.md` |
 | Testing | `docs/testing/README.md` |
+| Home delivery lifecycle | [`docs/features/home-delivery.md`](features/home-delivery.md) |
+| Delivery follow-up | [`docs/features/delivery-follow-up.md`](features/delivery-follow-up.md) |
+| Delivery handoff and tracking | [`docs/features/delivery-tracking.md`](features/delivery-tracking.md) |
+| Delivery packing and booking | [`docs/features/delivery-fulfillment.md`](features/delivery-fulfillment.md) |
+| Delivery orders and settlement | [`docs/features/delivery-orders.md`](features/delivery-orders.md) |
+| Delivery checkout quotes | [`docs/features/delivery-quotes.md`](features/delivery-quotes.md) |
+| Client address book, branch shipping origin and parcel master | [`docs/features/client-addresses.md`](features/client-addresses.md) |

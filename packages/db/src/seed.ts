@@ -9,6 +9,7 @@ import bcrypt from "bcryptjs";
 import { assertSeedEnvironmentSafe } from "./seed-safety";
 import { seedCleanupEntries } from "./seed-cleanup";
 import { resolveSeedPlan } from "./seed-mode";
+import { shipmentSystemConfigSeedRows } from "./seed-system-config";
 import { INITIAL_ROLE_SEED } from "./rbac/seed-defaults";
 
 assertSeedEnvironmentSafe({ NODE_ENV: process.env.NODE_ENV });
@@ -360,10 +361,19 @@ async function seed() {
     // =====================
     console.log("📍 Creating addresses...");
     const addressId = generateId();
+    // Legacy demo address: Shipment hierarchy must be selected and verified
+    // through the address book. Never infer provider parents/labels from a
+    // postal code or treat the PDF's sample origin as verified destination.
     await db.insert(schema.addresses).values([
       {
         id: addressId,
         userId: customer1Id,
+        provinceId: null,
+        cityId: null,
+        districtId: null,
+        areaId: null,
+        province: null,
+        area: null,
         firstName: "John",
         lastName: "Doe",
         phone: "081234567890",
@@ -1951,6 +1961,7 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
         description:
           "Menit TTL reservasi stok saat customer menunggu pembayaran QRIS di Midtrans Snap. Setelah TTL, order dianggap expired dan reservasi dilepas (oleh webhook expire Midtrans / cron sweep).",
       },
+      ...shipmentSystemConfigSeedRows,
       {
         key: "tax.ppnRatePercent",
         value: "11",

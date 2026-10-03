@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Link from 'next/link';
 import {
   Eye,
   Search,
@@ -286,6 +287,13 @@ export default function AdminOrdersPage() {
             <MapPin className="h-3 w-3" /> Your Branch Only
           </Badge>
         )}
+        {/* Ticket 07 — the follow-up area link (only) on the orders list. */}
+        <Link
+          href="/admin/orders/follow-up"
+          className="text-sm text-primary hover:underline"
+        >
+          Tindak lanjut pengiriman
+        </Link>
       </div>
 
       <Card>

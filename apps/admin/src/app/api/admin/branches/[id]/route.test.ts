@@ -105,6 +105,17 @@ describe("PUT /api/admin/branches/[id]", () => {
     expect(inserts[0].values).toMatchObject({ action: "UPDATE_BRANCH" });
   });
 
+  it("does not overwrite a concurrent origin edit when legacy PUT omits origin fields", async () => {
+    const fake = setupDb({ selectQueue: [
+      [{ ...existingRow, shippingPhone: "021111111", shippingAddress: "Old origin", shippingPostalCode: "01234", shippingAreaId: null }],
+      [{ ...existingRow, shippingPhone: "021222222", shippingAddress: "New origin", shippingPostalCode: "54321", shippingAreaId: "01010101" }],
+    ] });
+    const response = await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams());
+    expect(response.status).toBe(200);
+    const mutation = fake.ops.find((op) => op.kind === "update")!.set as Record<string, unknown>;
+    for (const field of ["shippingPhone", "shippingAddress", "shippingPostalCode", "shippingAreaId"]) expect(mutation[field]).toBeUndefined();
+  });
+
   it("maps a vanished-mid-request branch to the stable 404", async () => {
     setupDb({
       // 1) route pre-check finds the row, 2) tx recheck finds it gone

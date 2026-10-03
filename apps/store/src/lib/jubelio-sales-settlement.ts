@@ -54,6 +54,10 @@ type SettleOrderRow = {
   pickupTime: string | null;
   status: string;
   paymentStatus: string;
+  // Ticket 04: `delivery` settlements never claim pickup — the verified gate
+  // completes in `processing` (no ready_for_pickup, no pickup code).
+  fulfillmentMethod: string | null;
+  fulfillmentBlockedReason: string | null;
 };
 
 async function loadOrder(orderId: string): Promise<SettleOrderRow | null> {
@@ -71,6 +75,8 @@ async function loadOrder(orderId: string): Promise<SettleOrderRow | null> {
       pickupTime: orders.pickupTime,
       status: orders.status,
       paymentStatus: orders.paymentStatus,
+      fulfillmentMethod: orders.fulfillmentMethod,
+      fulfillmentBlockedReason: orders.fulfillmentBlockedReason,
     })
     .from(orders)
     .where(eq(orders.id, orderId))
@@ -85,7 +91,7 @@ async function loadOrder(orderId: string): Promise<SettleOrderRow | null> {
  */
 export async function settleJubelioSalesOrder(
   orderId: string,
-  options: { logger?: Logger } = {}
+  options: { logger?: Logger; readOnlyRecovery?: boolean } = {}
 ): Promise<SettlementOutcome> {
   const log = options.logger ?? createLogger({ module: "jubelio-sales-settlement", orderId });
   const order = await loadOrder(orderId);
@@ -126,7 +132,22 @@ export async function settleJubelioSalesOrder(
     return { status: "manual_review", message };
   }
 
-  const invoiceResult = await ensureJubelioInvoice({ orderId, logger: log });
+  // Ticket 07 — the GET-only recovery flag forwards ONLY for a paid-
+  // blocked DELIVERY order; a NORMAL settlement keeps the flag off (the
+  // legacy behavior untouched; the recovery must never fire as a first
+  // attempt).
+  const recoveryForwarded =
+    (options.readOnlyRecovery === true ||
+      (order.fulfillmentMethod === "delivery" &&
+        order.fulfillmentBlockedReason != null)) &&
+    order.fulfillmentMethod === "delivery" &&
+    order.fulfillmentBlockedReason != null;
+
+  const invoiceResult = await ensureJubelioInvoice({
+    orderId,
+    logger: log,
+    ...(recoveryForwarded ? { readOnlyRecovery: true } : {}),
+  });
   if (invoiceResult.status !== "confirmed") {
     if (invoiceResult.status === "manual_review") {
       await blockOrderFulfillment(
@@ -139,7 +160,11 @@ export async function settleJubelioSalesOrder(
     return { status: "pending" };
   }
 
-  const paymentResult = await ensureJubelioPayment({ orderId, logger: log });
+  const paymentResult = await ensureJubelioPayment({
+    orderId,
+    logger: log,
+    ...(recoveryForwarded ? { readOnlyRecovery: true } : {}),
+  });
   if (paymentResult.status !== "confirmed") {
     if (paymentResult.status === "manual_review") {
       await blockOrderFulfillment(
@@ -150,6 +175,30 @@ export async function settleJubelioSalesOrder(
       return { status: "manual_review", message: paymentResult.message };
     }
     return { status: "pending" };
+  }
+
+  // Ticket 04 — DELIVERY gate: after BOTH invoice and payment are GET-
+  // confirmed (the confirm-once ledger above just committed them), the paid
+  // delivery order completes IN `processing` (no pickup code, no email, no
+  // Siap-Proses mirror) and the paid-but-blocked reason is cleared by a
+  // guarded conditional update (processing + paid only). A booking remains
+  // ticket 05. The outcome is decided by the committed ledger, not by the
+  // update's row count.
+  if (order.fulfillmentMethod === "delivery") {
+    await db
+      .update(orders)
+      .set({ fulfillmentBlockedReason: null, updatedAt: new Date() })
+      .where(
+        and(
+          eq(orders.id, orderId),
+          eq(orders.paymentStatus, "paid"),
+          eq(orders.status, "processing")
+        )
+      );
+    log.info("delivery fulfillment gate completed in processing", {
+      branchId: order.branchId,
+    });
+    return { status: "fulfilled", pickupCode: null };
   }
 
   const view: OrderView = {
@@ -237,7 +286,11 @@ export async function reconcileSettlements(
 ): Promise<{ scanned: number; fulfilled: number; review: number; pending: number }> {
   const log = logger ?? createLogger({ module: "settlement-reconcile" });
   const stuck = await db
-    .select({ id: orders.id })
+    .select({
+      id: orders.id,
+      fulfillmentMethod: orders.fulfillmentMethod,
+      fulfillmentBlockedReason: orders.fulfillmentBlockedReason,
+    })
     .from(orders)
     .where(
       and(
@@ -252,7 +305,16 @@ export async function reconcileSettlements(
   let review = 0;
   let pending = 0;
   for (const row of stuck) {
-    const outcome = await settleJubelioSalesOrder(row.id, { logger: log });
+    const outcome = await settleJubelioSalesOrder(row.id, {
+      logger: log,
+      // Ticket 07 — a paid-but-blocked DELIVERY order re-drives through the
+      // GET-only recovery (the verified manual_review ops); everything else
+      // keeps the legacy (option-off) settlement.
+      ...(row.fulfillmentMethod === "delivery" &&
+      row.fulfillmentBlockedReason != null
+        ? { readOnlyRecovery: true }
+        : {}),
+    });
     if (outcome.status === "fulfilled") fulfilled++;
     else if (outcome.status === "manual_review") review++;
     else pending++;

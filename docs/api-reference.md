@@ -166,6 +166,56 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 # Detailed endpoint reference
 
+## Admin — Delivery follow-up
+
+- `GET /api/admin/orders/follow-up?kind=all|settlement|packing|booking|shipment` — orders:view + Branch Scope, open safe summaries only.
+- `POST /api/admin/orders/{id}/delivery/packing-failure` — `{reasonCode: physical_stock_unavailable|damaged_goods|paid_service_limits_exceeded}` before booking; paid/processing preserved, normal fulfillment blocked.
+- `POST /api/admin/orders/{id}/delivery/release-booking` — strict `{proof:{source:'jubelio_confirmation',reference,reason,attemptNumber,absenceConfirmed:true,operationClosed:true}}`; only stable unknown, current attempt, explicit closed/no-booking provider confirmation. Archives proof; does not POST/create; next booking needs a separate click.
+- `POST /api/admin/orders/{id}/delivery/finish-manually` — `{reason}`; known booked/verified paid with issue or handoff/progress evidence, never ambiguous/AWB alone. Completed/paid, no invented courier DELIVERED or pickup code.
+
+Mutations require orders:edit + exact current DB Home Branch, even owner/all-scope; invalid400, forbidden403, hidden404, ineligible409. No admin mark-verified/refund/communication action. Settlement recovery is system-only GET of known IDs, never fresh intent/POST. [Details](features/delivery-follow-up.md).
+
+## Delivery — Handoff and tracking
+
+- Admin `POST /api/admin/orders/{id}/delivery/handoff {}` — physical stamp, idempotent, processing only; orders:edit + current Home Branch.
+- Admin `POST /api/admin/orders/{id}/delivery/reconcile {}` — reactive known-AWB GET only, same permission/Home Branch; identity verified before status/billing changes.
+- Public store `POST /api/webhooks/jubelio-shipment` — exact raw JSON body and hex `x-jubelio-signature`; dedicated Shipment webhook secret, constant-time HMAC(key=secret, raw+secret); 401 invalid signature, 503 missing secret, 200 accepted/duplicate/ignored.
+- Owned store order detail GET adds customer-safe tracking/POD/applied timeline; foreign clients remain 404.
+
+DELIVERED completes without mandatory POD; PICKED_UP does not. Replay/older/late issues never reopen completion. No provider create, SO, stock, payment or notification writes occur in tracking. See [delivery tracking](features/delivery-tracking.md).
+
+## Admin — Delivery packing and booking
+
+- `POST /api/admin/orders/{id}/delivery/packing` — strict `{}` JSON, stores frozen request and packing audit; no provider write.
+- `POST /api/admin/orders/{id}/delivery/book` — strict `{}` JSON, atomic one-time dispatch of packed request; returns AWB, Shipment ID and separate `quoteRates`, `bookingPrice`, `billedPrice` (nullable).
+- Existing order detail GET additionally returns fulfillment method, snapshot, shipment metadata and server Home Branch action hint.
+
+Both actions require `orders:edit` AND the current Home Branch matching the order, even for owner/all-scope roles. Denials: 403 missing grant/Home Branch, 404 unknown/cross-branch, 409 ineligible or `BOOKING_AMBIGUOUS`. Only verified-paid, processing, unblocked delivery is packable; the unpaid reservation TTL does not expire a paid order. Booking ambiguity is held without create retries. See [delivery fulfillment](features/delivery-fulfillment.md).
+
+## Store — Delivery placement
+
+`POST /api/checkout/place-order` retains legacy pickup input and additionally accepts strict delivery input `{ itemIds, contactPhone, contactEmail, fulfillmentMethod: "delivery", addressId, courierId, serviceId, approvedPricing }` or the same delivery approval with `{ newAddress, saveAddress: boolean, saveRequestId: UUID }` instead of `addressId`. `newAddress` uses the client address input fields documented below, including `isDefault` (only applied when `saveAddress` is true). An approved saved address is inserted in the local order transaction; repeated saves with the same client-scoped `saveRequestId` reuse the same address row. A changed destination needs a new request ID. Unsaved destinations produce only an order snapshot (nullable `address_id`). Requires onboarded client session. Delivery omits pickup slots; backend re-derives current cart/address/origin/parcels/rates and compares approval. Changed/unavailable service or pricing returns 409 `{ success: false, code: "DELIVERY_REPRICE_REQUIRED", data: { services } }` before order/SO/Snap writes. Confirmed placement uses one goods-only SO and snapshot-priced Snap. Repayment `/api/payments/midtrans/create` uses persisted amounts, not a new quote. See [delivery orders](features/delivery-orders.md).
+
+## Store — Delivery quotes
+
+`POST /api/checkout/delivery-quote` — onboarded store client session; strict body `{ itemIds: string[], addressId: string }` or `{ itemIds: string[], newAddress: ClientAddressInput }`. New addresses are verified against the Shipment hierarchy but not persisted on quote. Loads owned cart/address and current server prices/parcels/origin, verifies Shipment hierarchy and returns `{ success: true, data: { services } }` with rates-based shipping and delivery PPN/total. 404 missing/foreign rows; 400 invalid/unready inputs; 502 unavailable/no-service quote. No order, payment, insurance purchase or booking. See [delivery quotes](features/delivery-quotes.md).
+
+## Store — Client addresses and Shipment regions
+
+All routes below require an onboarded store client session. See [Client address book](features/client-addresses.md) for input validation, ownership, concurrency, and provider configuration.
+
+| Method | Route | Purpose |
+|---|---|---|
+| GET / POST | `/api/addresses` | List own addresses / create verified recipient address |
+| PATCH / DELETE | `/api/addresses/{id}` | Replace / delete owned address (foreign IDs return 404) |
+| POST | `/api/addresses/{id}/default` | Atomically set the single default |
+| GET | `/api/shipment/regions?level=provinces` | Shipment provinces |
+| GET | `/api/shipment/regions?level=cities\|districts\|areas&parentId={id}` | Children of a string Shipment region ID |
+
+Address input: `{ recipientName, phone, fullAddress, provinceId, cityId, districtId, areaId, postalCode, isDefault }`; IDs/postcodes remain strings. Successful address requests return `{ success: true, data }`. Invalid input/hierarchy returns 400, missing/foreign target 404, rate limit 429, unavailable backend 503. No address/region endpoint creates an order or books a courier.
+
+Admin branch POST/PUT additionally accepts nullable optional `shippingPhone`, `shippingAddress`, `shippingPostalCode`, `shippingAreaId`. Omitted PUT fields are preserved; null/empty clears them. Existing authorization/scope and transactional audit remain required. Full details: [origin and parcels](features/client-addresses.md#branch-origin-and-per-sku-parcels).
+
 ## Store — Catalog (products, branches, categories, homepage, vouchers)
 
 #### `GET` `/api/branches`

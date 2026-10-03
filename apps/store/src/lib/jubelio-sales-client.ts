@@ -27,8 +27,8 @@ import { createLogger, serializeError, type Logger } from "./logger";
  *   documented and would be an unverified recovery path.
  * - Cancel is pre-invoice only, confirmed by a GET of `is_canceled`.
  * - Invoice/payment operations are out of scope for this module.
- * - Runtime selection (`resolveJubelioSalesRuntime`): the sales gateway has
- *   NO mock runtime. It is disabled by default outside production and fails
+ * - Runtime selection (`resolveJubelioSalesRuntime`): an explicit E2E-only
+ *   loopback seam supports mock tests. Otherwise disabled outside production and fails
  *   closed at construction; real Jubelio traffic requires either the
  *   production write gate or the explicit, default-OFF
  *   `JUBELIO_SALES_TEST_ACCOUNT_ENABLED=true` opt-in with a pinned
@@ -40,6 +40,8 @@ export type JubelioSalesEnvironment = Partial<
     | "NODE_ENV"
     | "APP_ENV"
     | "JUBELIO_API_BASE_URL"
+    | "E2E_PROVIDER_MOCKS"
+    | "JUBELIO_SALES_MOCK_API_BASE_URL"
     | "JUBELIO_STOCK_WRITES_ENABLED"
     | "JUBELIO_SALES_TEST_ACCOUNT_ENABLED"
     | "JUBELIO_EMAIL"
@@ -54,14 +56,14 @@ export type JubelioSalesEnvironment = Partial<
 >;
 
 export type JubelioSalesRuntime = {
-  /** The sales gateway is always live; there is no mock mode. */
-  mode: "live";
+  /** Mock is restricted to an explicit non-production loopback E2E seam. */
+  mode: "live" | "mock";
   baseUrl: string;
   /**
    * How live mode was authorized: the unchanged production write gate, or
    * the explicit default-OFF test-account opt-in.
    */
-  liveSource: "production" | "test-account";
+  liveSource: "production" | "test-account" | "e2e-mock";
 };
 
 export type JubelioSalesOrderItemInput = {
@@ -263,7 +265,8 @@ function pinLiveSalesBaseUrl(configuredUrl: string): string {
 }
 
 /**
- * Sales-specific runtime resolution with NO mock mode. Outside production the
+ * Sales-specific runtime resolution with an explicit loopback-only E2E seam.
+ * Without that seam, outside production the
  * gateway is disabled by default and fails closed at construction: real
  * Jubelio traffic requires either the unchanged production write gate or the
  * explicit, exact, default-OFF `JUBELIO_SALES_TEST_ACCOUNT_ENABLED=true`
@@ -274,6 +277,22 @@ export function resolveJubelioSalesRuntime(
   env: JubelioSalesEnvironment
 ): JubelioSalesRuntime {
   const appEnv = env.APP_ENV ?? env.NODE_ENV ?? "development";
+  if (env.E2E_PROVIDER_MOCKS === "true") {
+    if (appEnv === "production" || env.NODE_ENV === "production") {
+      throw new Error("E2E provider mocks are forbidden in production");
+    }
+    let url: URL;
+    try {
+      url = new URL(env.JUBELIO_SALES_MOCK_API_BASE_URL ?? "");
+    } catch {
+      throw new Error("E2E sales mock requires a bare HTTP loopback origin");
+    }
+    if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
+        url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+      throw new Error("E2E sales mock requires a bare HTTP loopback origin");
+    }
+    return { mode: "mock", baseUrl: url.origin, liveSource: "e2e-mock" };
+  }
   if (appEnv === "production" && env.NODE_ENV === "production") {
     if (env.JUBELIO_STOCK_WRITES_ENABLED !== "true") {
       throw new Error(
@@ -768,7 +787,7 @@ export function createJubelioSalesGateway(options: {
         }));
   const log = (options.logger ?? createLogger({ module: "jubelio-sales" })).child({
     service: "jubelio",
-    runtime: `live:${runtime.liveSource}`,
+    runtime: `${runtime.mode}:${runtime.liveSource}`,
   });
   let token: string | null = null;
   let loginPromise: Promise<string> | null = null;
@@ -784,8 +803,8 @@ export function createJubelioSalesGateway(options: {
   }
 
   async function login(priority = 0): Promise<string> {
-    // The sales gateway has no mock mode: real (test-account or production)
-    // credentials are always required from the environment.
+    // Live modes require real credentials. The E2E loopback mock accepts
+    // placeholders, but credentials must still be supplied explicitly.
     const email = env.JUBELIO_EMAIL;
     const password = env.JUBELIO_PASSWORD;
     if (!email || !password) {

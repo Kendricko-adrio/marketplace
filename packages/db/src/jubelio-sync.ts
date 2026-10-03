@@ -32,6 +32,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { normalizeJubelioMasterParcel, type JubelioParcelDimensions } from "./jubelio-parcel";
 import { sql, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
@@ -216,6 +217,7 @@ export type JubelioCatalogSku = {
   barcode: string | null;
   variation_values: JubelioVariationValue[];
   end_qty?: number;
+  parcelDimensions?: JubelioParcelDimensions | null;
 };
 
 export type JubelioCatalogProduct = {
@@ -353,9 +355,21 @@ export async function fetchMastersPage(
 export async function fetchProductCatalog(
   itemGroupId: number
 ): Promise<JubelioCatalogProduct> {
-  return jubelioGet<JubelioCatalogProduct>(
-    `/inventory/catalog/${itemGroupId}`
-  );
+  const catalog = await jubelioGet<JubelioCatalogProduct>(`/inventory/catalog/${itemGroupId}`);
+  return enrichJubelioSkuParcels(catalog, (itemId) => jubelioGet<unknown>(`/inventory/items/${itemId}`));
+}
+
+/** Read every SKU's own master detail; never infer dimensions from its group. */
+export async function enrichJubelioSkuParcels(
+  catalog: JubelioCatalogProduct,
+  readItem: (itemId: number) => Promise<unknown>
+): Promise<JubelioCatalogProduct> {
+  const product_skus: JubelioCatalogSku[] = [];
+  // Sequential reads preserve the existing provider request throttle.
+  for (const sku of catalog.product_skus ?? []) {
+    product_skus.push({ ...sku, parcelDimensions: normalizeJubelioMasterParcel(await readItem(sku.item_id)) });
+  }
+  return { ...catalog, product_skus };
 }
 
 /** Per-location stock for a batch of variant item_ids. */
@@ -832,6 +846,7 @@ export async function upsertJubelioProducts(
           price: money(sku.sell_price),
           isDefault: firstVariant,
           barcode: sku.barcode ?? null,
+          parcelDimensions: sku.parcelDimensions ?? null,
           jubelioItemId: sku.item_id,
         })
         .onConflictDoUpdate({
@@ -842,6 +857,7 @@ export async function upsertJubelioProducts(
             size: sql`excluded.size`,
             price: sql`excluded.price`,
             barcode: sql`excluded.barcode`,
+            parcelDimensions: sql`excluded.parcel_dimensions`,
             updatedAt: now,
             // isDefault NOT updated — preserve admin edits.
           },

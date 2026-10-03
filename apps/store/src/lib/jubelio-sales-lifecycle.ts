@@ -432,6 +432,12 @@ export async function ensureJubelioInvoice(input: {
   orderId: string;
   gateway?: JubelioSalesGateway;
   logger?: Logger;
+  /**
+   * Ticket 07 — the SYSTEM GET-only recovery: verified manual_review
+   * operations reconcile by GET (never a POST); anything unverifiable stays
+   * held (in_flight). Admins/UI can never pass this flag.
+   */
+  readOnlyRecovery?: boolean;
 }): Promise<SettlementStepResult> {
   const log =
     input.logger?.child({ orderId: input.orderId, module: "jubelio-sales-invoice" }) ??
@@ -465,6 +471,54 @@ export async function ensureJubelioInvoice(input: {
       return { status: "confirmed" };
     }
     if (existing.status === "manual_review") {
+      // Ticket 07 — the GET-only recovery: a KNOWN manual-review invoice id
+      // is verified directly against the provider (a GET, never a POST); a
+      // verified match confirms through the recovery-flagged mark path, a
+      // mismatch/failure keeps it held (in_flight — no re-review writes).
+      if (input.readOnlyRecovery === true && existing.invoiceId != null) {
+        const gateway = input.gateway ?? getDefaultJubelioSalesGateway();
+        try {
+          const invoice = await gateway.getInvoice(existing.invoiceId);
+          const linkedOrder = await gateway.getSalesOrder(order.jubelioSalesOrderId!);
+          const verified =
+            linkedOrder.invoiceId === existing.invoiceId && !linkedOrder.isCanceled
+              ? await verifyInvoiceAgainstOrder({
+                  orderId: input.orderId,
+                  invoice,
+                  expectedSubtotal: toIntegerMoney(order.subtotal),
+                })
+              : { ok: false as const, message: "Sales Order does not reference the active invoice" };
+          if (verified.ok) {
+            const confirmed = await markJubelioSalesOperationConfirmed(
+              db,
+              existing.id,
+              { invoiceId: existing.invoiceId, readOnlyRecovery: true }
+            );
+            if (confirmed) {
+              await db
+                .update(orders)
+                .set({ jubelioInvoiceId: existing.invoiceId, updatedAt: new Date() })
+                .where(eq(orders.id, input.orderId));
+              log.info("Jubelio invoice recovered by GET (read-only recovery)", {
+                invoiceId: existing.invoiceId,
+              });
+              return { status: "confirmed" };
+            }
+            return { status: "in_flight" };
+          }
+          log.warn("recovery invoice verification failed", {
+            invoiceId: existing.invoiceId,
+            message: verified.message,
+          });
+          return { status: "in_flight" };
+        } catch (error) {
+          log.warn("recovery invoice GET failed", {
+            error: serializeError(error),
+          });
+          // Held either way: never a POST during recovery.
+          return { status: "in_flight" };
+        }
+      }
       return {
         status: "manual_review",
         message: existing.lastError ?? "Invoice operation is in manual review",
@@ -528,10 +582,27 @@ export async function ensureJubelioInvoice(input: {
     }
     // rejected/aborted: a definitive pre-apply failure. A paid order still
     // needs its invoice, but automatic retries are forbidden — manual review.
+    // Ticket 07 — the recovery NEVER re-POSTs a previously rejected write;
+    // it stays held until humans settle it outside the app.
+    if (input.readOnlyRecovery === true) {
+      log.info("recovery held — the invoice operation was already rejected", {
+        orderId: input.orderId,
+      });
+      return { status: "in_flight" };
+    }
     return {
       status: "manual_review",
       message: existing.lastError ?? "Invoice operation was rejected earlier",
     };
+  }
+
+  // Ticket 07 — the recovery NEVER records an intent/POST for a MISSING
+  // operation; it stays held (in_flight) until escalation resolves it.
+  if (input.readOnlyRecovery === true) {
+    log.info("recovery held — no invoice operation exists to verify", {
+      orderId: input.orderId,
+    });
+    return { status: "in_flight" };
   }
 
   // No operation yet: persist the intent, claim, POST once, persist the
@@ -699,6 +770,12 @@ export async function ensureJubelioPayment(input: {
   orderId: string;
   gateway?: JubelioSalesGateway;
   logger?: Logger;
+  /**
+   * Ticket 07 — the SYSTEM GET-only recovery: verified manual_review
+   * operations reconcile by GET (never a POST); anything unverifiable stays
+   * held (in_flight). Admins/UI can never pass this flag.
+   */
+  readOnlyRecovery?: boolean;
 }): Promise<SettlementStepResult> {
   const log =
     input.logger?.child({ orderId: input.orderId, module: "jubelio-sales-payment" }) ??
@@ -717,6 +794,13 @@ export async function ensureJubelioPayment(input: {
     .limit(1);
   const order = orderRows[0];
   if (!order?.jubelioInvoiceId) {
+    // Ticket 07 — a recovery never guesses an invoice id (no POST); held.
+    if (input.readOnlyRecovery === true) {
+      log.info("recovery held — no invoice id to verify the payment against", {
+        orderId: input.orderId,
+      });
+      return { status: "in_flight" };
+    }
     return {
       status: "manual_review",
       message: "Payment requires a verified invoice id",
@@ -732,6 +816,47 @@ export async function ensureJubelioPayment(input: {
       return { status: "confirmed" };
     }
     if (existing.status === "manual_review") {
+      // Ticket 07 — the GET-only recovery for a KNOWN payment id.
+      if (input.readOnlyRecovery === true && existing.paymentId != null) {
+        const gateway = input.gateway ?? getDefaultJubelioSalesGateway();
+        try {
+          const payment = await gateway.getPayment(existing.paymentId);
+          const mismatch = verifyPaymentAgainstRequest({
+            payment,
+            invoiceId: order.jubelioInvoiceId,
+            amount: toIntegerMoney(order.subtotal),
+          });
+          if (mismatch) {
+            log.warn("recovery payment verification failed", {
+              paymentId: existing.paymentId,
+              message: mismatch,
+            });
+            // Held: the op stays manual_review (never a flip without proof).
+            return { status: "in_flight" };
+          }
+          const confirmed = await markJubelioSalesOperationConfirmed(
+            db,
+            existing.id,
+            { paymentId: existing.paymentId, readOnlyRecovery: true }
+          );
+          if (confirmed) {
+            await db
+              .update(orders)
+              .set({ jubelioPaymentId: existing.paymentId, updatedAt: new Date() })
+              .where(eq(orders.id, input.orderId));
+            log.info("Jubelio payment recovered by GET (read-only recovery)", {
+              paymentId: existing.paymentId,
+            });
+            return { status: "confirmed" };
+          }
+          return { status: "in_flight" };
+        } catch (error) {
+          log.warn("recovery payment GET failed", {
+            error: serializeError(error),
+          });
+          return { status: "in_flight" };
+        }
+      }
       return {
         status: "manual_review",
         message: existing.lastError ?? "Payment operation is in manual review",
@@ -783,10 +908,27 @@ export async function ensureJubelioPayment(input: {
       }
       return { status: "in_flight" };
     }
+    // Ticket 07 — a recovery never re-POSTs a previously rejected/aborted
+    // payment write; it stays held (in_flight) until escalation resolves it.
+    if (input.readOnlyRecovery === true) {
+      log.info("recovery held — the payment operation was already rejected", {
+        orderId: input.orderId,
+      });
+      return { status: "in_flight" };
+    }
     return {
       status: "manual_review",
       message: existing.lastError ?? "Payment operation was rejected earlier",
     };
+  }
+
+  // Ticket 07 — the recovery NEVER records an intent/POST for a MISSING
+  // payment operation; it stays held (in_flight).
+  if (input.readOnlyRecovery === true) {
+    log.info("recovery held — no payment operation exists to verify", {
+      orderId: input.orderId,
+    });
+    return { status: "in_flight" };
   }
 
   const accountId = paymentAccountId();

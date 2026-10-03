@@ -5,7 +5,7 @@ import { desc, sql, eq } from "drizzle-orm";
 import { z } from "zod";
 import { guard } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
-import { createBranch, BranchServiceError } from "@/lib/branches-service";
+import { createBranch, parseBranchOrigin, BranchServiceError } from "@/lib/branches-service";
 import { serializeError } from "@/lib/logger";
 import { parsePagination } from "@/lib/pagination";
 // GET /api/admin/branches   [branches:view]
@@ -111,6 +111,13 @@ const createBranchSchema = z.object({
     .default({}),
   googleMapsUrl: z.string().url().optional().or(z.literal("")),
   status: z.enum(["aktif", "nonaktif"]).default("aktif"),
+  // Shipping-origin complement (ticket 02): optional on create — omitted/
+  // empty → NULL (never invent ready origin data); fail-closed value
+  // validation lives in parseBranchOrigin (single unit).
+  shippingPhone: z.string().nullable().optional(),
+  shippingAddress: z.string().nullable().optional(),
+  shippingPostalCode: z.string().nullable().optional(),
+  shippingAreaId: z.string().nullable().optional(),
 });
 
 // POST /api/admin/branches   [branches:edit:all]
@@ -148,6 +155,22 @@ export async function POST(request: NextRequest) {
     const data = parsed.data;
     const branchId = crypto.randomUUID();
 
+    // Shipping-origin complement (ticket 02): supplied values are validated
+    // fail-closed BEFORE any mutation; omitted/empty normalize to NULL — a
+    // new branch is never born with invented ready origin data.
+    const origin = parseBranchOrigin(data);
+    if (!origin.ok) {
+      logger.error("branches.create.origin_invalid", {
+        outcome: "denied",
+        error: origin.error,
+        branchId,
+      });
+      return NextResponse.json(
+        { success: false, error: origin.error },
+        { status: 400 }
+      );
+    }
+
     // Mutation + audit run in one local DB transaction (branches-service);
     // a failed audit write aborts the insert and vice versa.
     let created;
@@ -164,6 +187,10 @@ export async function POST(request: NextRequest) {
           operatingHours: data.operatingHours,
           googleMapsUrl: data.googleMapsUrl || null,
           status: data.status,
+          shippingPhone: origin.origin.shippingPhone ?? null,
+          shippingAddress: origin.origin.shippingAddress ?? null,
+          shippingPostalCode: origin.origin.shippingPostalCode ?? null,
+          shippingAreaId: origin.origin.shippingAreaId ?? null,
         },
         { actorId: ctx.user.id, policyVersion: ctx.policy.policyVersion }
       );

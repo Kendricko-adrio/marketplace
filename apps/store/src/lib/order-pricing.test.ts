@@ -15,6 +15,19 @@ describe("calculateLineItemSubtotal", () => {
 });
 
 describe("calculateOrderPricing", () => {
+  it("keeps pickup PPN on goods while delivery PPN includes the quoted shipping", () => {
+    expect(calculateOrderPricing({ subtotal: "100000", shippingCost: "20000", ppnRatePercent: "11", fulfillmentMethod: "pickup" })).toMatchObject({
+      taxableBase: "100000.00",
+      ppnAmount: "11000.00",
+      total: "131000.00",
+    });
+    expect(calculateOrderPricing({ subtotal: "100000", shippingCost: "20000", ppnRatePercent: "11", fulfillmentMethod: "delivery" })).toMatchObject({
+      taxableBase: "120000.00",
+      ppnAmount: "13200.00",
+      total: "133200.00",
+    });
+  });
+
   it("charges 11% PPN without incrementing an already-whole result", () => {
     expect(calculateOrderPricing({ subtotal: "100000", ppnRatePercent: "11" })).toMatchObject({
       taxableBase: "100000.00",

@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -30,6 +30,8 @@ import {
 } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 import { useCart } from "@/providers/cart-provider";
+import DeliveryQuotePanel, { type DeliveryAddressPreview } from "@/components/checkout/DeliveryQuotePanel";
+import type { DeliveryQuoteService } from "@/lib/delivery-quote";
 import {
   getDayHours,
   generateTimeSlots,
@@ -105,6 +107,50 @@ export default function CheckoutPage() {
 
   // Step 3 — Review
   const [confirmed, setConfirmed] = useState(false);
+
+  // ===== Fulfillment method (ticket 03) =====
+  // Step 2 opens with the METHOD choice: pickup (unchanged flow) or delivery
+  // (quote preview only — order creation lands in ticket 04). The delivery
+  // selection state is kept here ready for that hand-off; the pickup flow is
+  // never silently replaced by delivery.
+  const [fulfillmentMethod, setFulfillmentMethod] = useState<
+    "pickup" | "delivery"
+  >("pickup");
+  const [deliveryService, setDeliveryService] = useState<DeliveryQuoteService | null>(null);
+  const [deliveryPending, setDeliveryPending] = useState(false);
+  // Ticket 04: the approval needs the chosen address + the reprice sync.
+  const [deliveryAddressId, setDeliveryAddressId] = useState<string | null>(null);
+  const [deliveryNewAddress, setDeliveryNewAddress] = useState<import("@/lib/client-addresses").ClientAddressInput | null>(null);
+  const [deliverySaveAddress, setDeliverySaveAddress] = useState(false);
+  const [saveRequestId, setSaveRequestId] = useState(() => crypto.randomUUID());
+  const newAddressFingerprint = useRef<string | null>(null);
+  const handleNewAddressChange = useCallback((value: import("@/lib/client-addresses").ClientAddressInput | null) => {
+    const fingerprint = value ? JSON.stringify(value) : null;
+    if (fingerprint !== newAddressFingerprint.current) {
+      newAddressFingerprint.current = fingerprint;
+      setSaveRequestId(crypto.randomUUID());
+    }
+    setDeliveryNewAddress(value);
+  }, []);
+  const [deliveryAddressPreview, setDeliveryAddressPreview] = useState<DeliveryAddressPreview | null>(null);
+  const [repriceSync, setRepriceSync] = useState<{
+    services: DeliveryQuoteService[];
+    selected: DeliveryQuoteService | null;
+  } | null>(null);
+  const [repriceShown, setRepriceShown] = useState(false);
+  const REPRICE_MESSAGE =
+    "Ongkir telah berubah. Periksa kembali rincian pesanan sebelum melanjutkan.";
+
+  function handleFulfillmentMethodChange(method: "pickup" | "delivery") {
+    if (method === fulfillmentMethod) return;
+    setFulfillmentMethod(method);
+    setConfirmed(false);
+    // Any method change invalidates the old service + money immediately.
+    setDeliveryService(null);
+    setDeliveryPending(false);
+    setRepriceSync(null);
+    setRepriceShown(false);
+  }
 
   // ===== Fetch cart + read selected item IDs on mount =====
   useEffect(() => {
@@ -266,11 +312,18 @@ export default function CheckoutPage() {
     [selectedItems]
   );
   const pricing = useMemo(
-    () => calculateOrderPricing({
+    () => fulfillmentMethod === "delivery" && deliveryService ? deliveryService.pricing : calculateOrderPricing({
       subtotal,
+      // Delivery taxes the quoted ongkir (rates, never final_rates); the
+      // pickup flow keeps the historical goods-only PPN.
+      shippingCost:
+        fulfillmentMethod === "delivery" && deliveryService
+          ? deliveryService.shippingCost
+          : 0,
+      fulfillmentMethod,
       ppnRatePercent: cart?.ppnRatePercent ?? 11,
     }),
-    [subtotal, cart?.ppnRatePercent]
+    [subtotal, fulfillmentMethod, deliveryService, cart?.ppnRatePercent]
   );
   const total = Number(pricing.total);
 
@@ -299,7 +352,15 @@ export default function CheckoutPage() {
   };
 
   // ===== Server-side validation for Step 2 (via validate-step-2 endpoint) =====
+  // Delivery keeps the SAME review step (confirmed), but skips the pickup
+  // slot validation entirely — no pickup slots are ever filled for delivery.
   const handleNextFromStep2 = async () => {
+    if (fulfillmentMethod === "delivery") {
+      if (deliveryPending || !deliveryService) return;
+      setConfirmed(false);
+      setStep(3);
+      return;
+    }
     if (!validateStep2() || !branch) return;
     try {
       const res = await fetch("/api/checkout/validate-step-2", {
@@ -325,6 +386,74 @@ export default function CheckoutPage() {
   // ===== Place order =====
   const handlePlaceOrder = async () => {
     if (!confirmed) return;
+    if (fulfillmentMethod === "delivery") {
+      if (deliveryPending || !deliveryService || (!deliveryAddressId && !deliveryNewAddress)) return;
+      setSubmitting(true);
+      try {
+        // Ticket 04 — the approval body: ONLY the approval; every money field
+        // is re-derived server-side and compared against this approval.
+        const res = await fetch("/api/checkout/place-order", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            itemIds: selectedItems.map((item) => item.id),
+            contactPhone: phone,
+            contactEmail: email,
+            fulfillmentMethod: "delivery",
+            ...(deliveryNewAddress ? { newAddress: deliveryNewAddress, saveAddress: deliverySaveAddress, saveRequestId } : { addressId: deliveryAddressId }),
+            courierId: deliveryService.courierId,
+            serviceId: deliveryService.serviceId,
+            approvedPricing: deliveryService.pricing,
+          }),
+        });
+        const data = (await res.json()) as {
+          success: boolean;
+          orderId?: string;
+          redirectUrl?: string;
+          token?: string;
+          code?: string;
+          data?: { services?: DeliveryQuoteService[] };
+          error?: string;
+        };
+        if (!data.success && data.code === "DELIVERY_REPRICE_REQUIRED") {
+          // Keep the review; require a FRESH approval: clear the confirmed
+          // checkbox, sync the fresh services into the panel (fresh money;
+          // a vanished service clears the selection) — never an auto repost.
+          const fresh = data.data?.services ?? [];
+          const matched =
+            fresh.find(
+              (service) =>
+                service.courierId === deliveryService.courierId &&
+                service.serviceId === deliveryService.serviceId
+            ) ?? null;
+          setDeliveryService(matched);
+          setRepriceSync({ services: fresh, selected: matched });
+          setConfirmed(false);
+          setRepriceShown(true);
+          if (!matched) setStep(2);
+          // No toast: the inline banner carries the exact reprice message for
+          // the customer (a second surface would duplicate the locator).
+          return;
+        }
+        if (!data.success) {
+          toast.error(data.error || "Gagal membuat pesanan.");
+          return;
+        }
+        // Order placed successfully — refresh the navbar cart badge (the
+        // checked-out items were removed), then hand off to the payment page.
+        refreshCart();
+        if (data.redirectUrl) {
+          window.location.href = data.redirectUrl;
+        } else {
+          toast.error("Unexpected payment response. Please try again.");
+        }
+      } catch {
+        toast.error("An error occurred. Please try again.");
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
     setSubmitting(true);
     try {
       const res = await fetch("/api/checkout/place-order", {
@@ -402,7 +531,7 @@ export default function CheckoutPage() {
         <div className="flex items-center justify-between">
           {[
             { num: 1, label: "Kontak", icon: User },
-            { num: 2, label: "Ambil di Toko", icon: MapPin },
+            { num: 2, label: fulfillmentMethod === "delivery" ? "Pengiriman" : "Ambil di Toko", icon: MapPin },
             { num: 3, label: "Bayar & Pesan", icon: CreditCard },
           ].map((s, i) => (
             <div key={s.num} className="flex items-center flex-1 last:flex-none">
@@ -572,17 +701,94 @@ export default function CheckoutPage() {
             </Card>
           )}
 
-          {/* Step 2 — Pickup Branch & Time */}
+          {/* Step 2 — Method choice: pickup (unchanged) or delivery quote */}
           {step === 2 && (
             <Card>
               <CardContent className="p-6">
-                <h2 className="text-xl font-bold mb-1">Ambil di Toko</h2>
-                <p className="text-sm text-muted-foreground mb-6">
-                  Pilih perkiraan tanggal dan waktu kedatangan Anda untuk
-                  mengambil pesanan.
+                <h2 className="text-xl font-bold mb-1">
+                  {fulfillmentMethod === "delivery" ? "Kirim ke Alamat" : "Ambil di Toko"}
+                </h2>
+                <p className="text-sm text-muted-foreground mb-4">
+                  {fulfillmentMethod === "delivery"
+                    ? "Pilih alamat pengiriman, lalu periksa ongkir untuk melihat layanan yang tersedia."
+                    : "Pilih perkiraan tanggal dan waktu kedatangan Anda untuk mengambil pesanan."}
                 </p>
 
-                {/* Branch info (read-only — derived from selected items) */}
+                {/* Fulfillment method (ticket 03) — delivery is a quote preview only */}
+                <div className="mb-6 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => handleFulfillmentMethodChange("pickup")}
+                    className={`rounded-lg border p-4 text-left transition-colors ${
+                      fulfillmentMethod === "pickup"
+                        ? "border-primary bg-primary/5"
+                        : "hover:bg-muted/40"
+                    }`}
+                  >
+                    <span className="block font-medium">Ambil di cabang</span>
+                    <span className="text-xs text-muted-foreground">
+                      Ambil pesanan di cabang — Gratis (Pickup)
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleFulfillmentMethodChange("delivery")}
+                    className={`rounded-lg border p-4 text-left transition-colors ${
+                      fulfillmentMethod === "delivery"
+                        ? "border-primary bg-primary/5"
+                        : "hover:bg-muted/40"
+                    }`}
+                  >
+                    <span className="font-medium">Kirim ke alamat</span>
+                    <span className="text-xs text-muted-foreground">
+                      Cek layanan dan ongkir ke alamat Anda dahulu
+                    </span>
+                  </button>
+                </div>
+
+                {/* Delivery quote (ticket 03) — browser only sends {itemIds,
+                    addressId}; money is re-derived server-side. */}
+                {fulfillmentMethod === "delivery" && (
+                  <>
+                    {repriceShown && (
+                      <p className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium text-amber-900 dark:bg-amber-950/50 dark:text-amber-100">
+                        {REPRICE_MESSAGE}
+                      </p>
+                    )}
+                    <DeliveryQuotePanel
+                      itemIds={selectedItems.map((item) => item.id)}
+                      itemsKey={selectedItems
+                        .map(
+                          (item) =>
+                            `${item.id}:${item.quantity}:${item.variant.price}:${item.branchId ?? ""}`
+                        )
+                        .join("|")}
+                      onServiceChange={setDeliveryService}
+                      onPendingChange={(pending) => {
+                        setDeliveryPending(pending);
+                        if (pending) {
+                          setConfirmed(false);
+                          // A NEW quote (address/items change) retires the
+                          // previous reprice banner + sync.
+                          setRepriceShown(false);
+                          setRepriceSync(null);
+                        }
+                      }}
+                      onAddressChange={setDeliveryAddressId}
+                      onAddressSelected={setDeliveryAddressPreview}
+                      onNewAddressChange={handleNewAddressChange}
+                      onSaveAddressChange={setDeliverySaveAddress}
+                      initialAddressId={deliveryAddressId}
+                      initialNewAddress={deliveryNewAddress}
+                      initialSaveAddress={deliverySaveAddress}
+                      repriceSync={repriceSync}
+                    />
+                  </>
+                )}
+
+                {fulfillmentMethod === "pickup" && (
+                  <>
+                    {/* Branch info (read-only — derived from selected items) */}
                 <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4">
                   <div className="flex items-start gap-3">
                     <MapPin className="mt-0.5 h-5 w-5 flex-shrink-0 text-primary" />
@@ -642,7 +848,7 @@ export default function CheckoutPage() {
                         </SelectContent>
                       </Select>
                     ) : (
-                      <Select disabled>
+                      <Select value="" disabled>
                         <SelectTrigger>
                           <SelectValue placeholder="Pilih tanggal dahulu" />
                         </SelectTrigger>
@@ -683,8 +889,10 @@ export default function CheckoutPage() {
                     </p>
                   </div>
                 </div>
+                  </>
+                )}
 
-                {pickupError && (
+                {fulfillmentMethod === "pickup" && pickupError && (
                   <p className="mt-4 text-sm text-destructive">{pickupError}</p>
                 )}
 
@@ -692,7 +900,14 @@ export default function CheckoutPage() {
                   <Button variant="outline" onClick={() => setStep(1)}>
                     Kembali
                   </Button>
-                  <Button onClick={handleNextFromStep2} className="gap-2">
+                  <Button
+                    onClick={handleNextFromStep2}
+                    className="gap-2"
+                    disabled={
+                      fulfillmentMethod === "delivery" &&
+                      (deliveryPending || !deliveryService)
+                    }
+                  >
                     Lanjut <ArrowRight className="h-4 w-4" />
                   </Button>
                 </div>
@@ -704,6 +919,7 @@ export default function CheckoutPage() {
           {step === 3 && (
             <Card>
               <CardContent className="p-6">
+                {fulfillmentMethod === "delivery" && repriceShown && <p role="alert" className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium text-amber-900">{REPRICE_MESSAGE}</p>}
                 <h2 className="text-xl font-bold mb-1">Pembayaran</h2>
                 <p className="text-sm text-muted-foreground mb-6">
                   Periksa pesanan Anda, lalu konfirmasi untuk melanjutkan ke
@@ -760,18 +976,34 @@ export default function CheckoutPage() {
                   ))}
                 </div>
 
-                {/* Pickup + contact summary */}
+                {/* Shipping + contact summary */}
                 <div className="space-y-2 mb-6 rounded-lg border bg-muted/30 p-4 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Cabang</span>
                     <span className="font-medium">{branch?.name ?? "-"}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Estimasi Pickup</span>
-                    <span className="font-medium">
-                      {formatDateLabel(pickupDate)} · {pickupTime}
-                    </span>
-                  </div>
+                  {fulfillmentMethod === "delivery" ? (
+                    <div className="space-y-2">
+                      {deliveryAddressPreview && <div className="rounded-lg border p-3 text-sm">
+                        <p className="font-medium">{deliveryAddressPreview.recipientName} · {deliveryAddressPreview.phone}</p>
+                        <p>{deliveryAddressPreview.fullAddress}</p>
+                        <p className="text-muted-foreground">Kode pos {deliveryAddressPreview.postalCode}</p>
+                      </div>}
+                      <span className="text-muted-foreground">Pengiriman</span>
+                      <span className="font-medium">
+                        {deliveryService
+                          ? `${branch?.name ?? ""} → ${deliveryService.name}`
+                          : "-"}
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Estimasi Pickup</span>
+                      <span className="font-medium">
+                        {formatDateLabel(pickupDate)} · {pickupTime}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Telepon</span>
                     <span className="font-medium">{phone}</span>
@@ -782,7 +1014,8 @@ export default function CheckoutPage() {
                   </div>
                 </div>
 
-                {/* Pickup reminders (warning-styled) */}
+                {/* Pickup reminders (warning-styled — pickup only) */}
+                {fulfillmentMethod === "pickup" && (
                 <div className="mb-6 rounded-lg border border-amber-200 border-l-4 border-l-amber-500 bg-amber-50 p-4 dark:border-amber-800 dark:border-l-amber-500 dark:bg-amber-950/50">
                   <div className="flex items-start gap-2.5">
                     <TriangleAlert className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
@@ -799,6 +1032,7 @@ export default function CheckoutPage() {
                     </p>
                   </div>
                 </div>
+                )}
 
                 {/* Price breakdown */}
                 <div className="space-y-2 mb-6">
@@ -818,7 +1052,13 @@ export default function CheckoutPage() {
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Ongkos Kirim</span>
-                    <span className="text-green-600">Gratis (Pickup)</span>
+                    {fulfillmentMethod === "delivery" && deliveryService ? (
+                      <span>
+                        Rp {Number(deliveryService.shippingCost).toLocaleString("id-ID")}
+                      </span>
+                    ) : (
+                      <span className="text-green-600">Gratis (Pickup)</span>
+                    )}
                   </div>
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">Biaya Layanan</span>
@@ -842,11 +1082,9 @@ export default function CheckoutPage() {
                     className="mt-1 h-4 w-4 rounded border-input"
                   />
                   <span className="text-sm text-muted-foreground">
-                    Saya telah memeriksa pesanan dan menyetujui syarat &
-                    ketentuan. Saya akan mengambil pesanan di cabang terpilih
-                    sesuai estimasi waktu yang saya tentukan, dan saya bersedia
-                    menyebutkan email serta nomor telepon saya saat pengambilan
-                    pesanan di toko.
+                    {fulfillmentMethod === "delivery"
+                      ? "Saya telah memeriksa alamat penerima, layanan pengiriman dan total pesanan, serta menyetujui syarat & ketentuan."
+                      : "Saya telah memeriksa pesanan dan menyetujui syarat & ketentuan. Saya akan mengambil pesanan di cabang terpilih sesuai estimasi waktu yang saya tentukan, dan saya bersedia menyebutkan email serta nomor telepon saya saat pengambilan pesanan di toko."}
                   </span>
                 </label>
 
@@ -921,11 +1159,11 @@ export default function CheckoutPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">PPN ({pricing.ppnRatePercent}%)</span>
-                  <span>Rp {Number(pricing.ppnAmount).toLocaleString("id-ID")}</span>
+                  <span>{fulfillmentMethod === "delivery" && !deliveryService ? "—" : `Rp ${Number(pricing.ppnAmount).toLocaleString("id-ID")}`}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Ongkos Kirim</span>
-                  <span className="text-green-600">Gratis</span>
+                  <span>{fulfillmentMethod === "pickup" ? "Gratis (Pickup)" : deliveryService ? `Rp ${Number(deliveryService.shippingCost).toLocaleString("id-ID")}` : "Pilih layanan pengiriman"}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Biaya Layanan</span>
@@ -938,14 +1176,14 @@ export default function CheckoutPage() {
               <div className="flex justify-between font-bold">
                 <span>Total</span>
                 <span className="text-primary">
-                  Rp {total.toLocaleString("id-ID")}
+                  {fulfillmentMethod === "delivery" && !deliveryService ? "—" : `Rp ${total.toLocaleString("id-ID")}`}
                 </span>
               </div>
 
               {branch && (
                 <div
                   role="group"
-                  aria-label="Cabang pengambilan"
+                  aria-label={fulfillmentMethod === "delivery" ? "Cabang asal" : "Cabang pengambilan"}
                   className="mt-4 flex items-start gap-2 rounded-lg border border-border/80 bg-card p-3 text-xs shadow-sm"
                 >
                   <MapPin className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />

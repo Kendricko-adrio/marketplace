@@ -31,6 +31,13 @@ export interface BranchFormData {
   operatingHours: OperatingHours;
   googleMapsUrl: string;
   status: "aktif" | "nonaktif";
+  // Local shipping-origin complement (ticket 02) — FORM representation is
+  // always a string; "" means empty and the API normalizes it to NULL
+  // (never presented as a readiness flag; biarkan kosong = belum diatur).
+  shippingPhone: string;
+  shippingAddress: string;
+  shippingPostalCode: string;
+  shippingAreaId: string;
 }
 
 interface BranchFormProps {
@@ -73,6 +80,10 @@ export default function BranchForm({
       },
       googleMapsUrl: "",
       status: "aktif",
+      shippingPhone: "",
+      shippingAddress: "",
+      shippingPostalCode: "",
+      shippingAreaId: "",
     }
   );
   const [submitting, setSubmitting] = useState(false);
@@ -238,6 +249,62 @@ export default function BranchForm({
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="space-y-4">
+        <h3 className="text-lg font-semibold">Asal Pengiriman</h3>
+        {/* Local origin complement (ticket 02): edited here ONCE; the Jubelio
+            sync never overwrites it. Everything is optional — kosong ("")
+            normalizes to NULL on the API, bukan penanda kesiapan. */}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="shippingPhone">Telepon Pengirim</Label>
+            <Input
+              id="shippingPhone"
+              type="tel"
+              inputMode="tel"
+              placeholder="021999888777"
+              value={formData.shippingPhone}
+              onChange={(e) => updateField("shippingPhone", e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="shippingPostalCode">Kode Pos Asal Kirim</Label>
+            <Input
+              id="shippingPostalCode"
+              type="text"
+              inputMode="numeric"
+              placeholder="10110"
+              value={formData.shippingPostalCode}
+              onChange={(e) => updateField("shippingPostalCode", e.target.value)}
+            />
+          </div>
+          <div className="space-y-2 sm:col-span-2">
+            <Label htmlFor="shippingAddress">Alamat Asal Kirim</Label>
+            <Textarea
+              id="shippingAddress"
+              rows={2}
+              placeholder="Alamat lengkap pengirim untuk pickup kurir"
+              value={formData.shippingAddress}
+              onChange={(e) => updateField("shippingAddress", e.target.value)}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="shippingAreaId">Area ID Shipment (opsional)</Label>
+            <Input
+              id="shippingAreaId"
+              type="text"
+              inputMode="numeric"
+              placeholder="01010101"
+              value={formData.shippingAreaId}
+              onChange={(e) => updateField("shippingAreaId", e.target.value)}
+            />
+          </div>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Nama cabang dipakai sebagai nama pengirim. Biarkan kosong bila cabang
+          belum mengatur asal kirim.
+        </p>
       </div>
 
       <div className="space-y-4">

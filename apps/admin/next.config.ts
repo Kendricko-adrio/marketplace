@@ -3,7 +3,8 @@ import { config } from "dotenv";
 
 // Load shared root .env first, then app-local .env.local overrides.
 config({ path: "../../.env" });
-config({ path: ".env.local", override: true });
+// Isolated E2E runs supply loopback URLs; preserve those explicit overrides.
+config({ path: ".env.local", override: process.env.E2E_PROVIDER_MOCKS !== "true" });
 
 const storeUrl = process.env.NEXT_PUBLIC_STORE_URL || "http://localhost:3000";
 let storeHost = "";

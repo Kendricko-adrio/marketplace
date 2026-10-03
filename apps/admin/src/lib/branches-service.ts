@@ -43,6 +43,109 @@ export interface BranchMutationContext {
   policyVersion: number | null;
 }
 
+// =========================================================================
+// Shipping-origin complement (ticket 02, spec "Asal dan parcel")
+// =========================================================================
+// The sender block a delivery shipment departs from: sender phone/address/
+// postal code + optional Shipment area id (string, leading zeros preserved).
+// It is owned LOCALLY by the Branch admin menu — the Jubelio sync never
+// writes these columns — and every supplied value is validated fail-closed.
+//
+// Wire semantics (parseBranchOrigin):
+// - omitted (undefined)  → caller decides: PUT preserves the stored value
+//   (backward-compatible clients), POST defaults to NULL;
+// - explicit null / ""   → null (clear; empty form fields normalize);
+// - supplied value       → trimmed + validated, else { ok:false } (400).
+
+export interface BranchOriginInput {
+  shippingPhone: string | null;
+  shippingAddress: string | null;
+  shippingPostalCode: string | null;
+  shippingAreaId: string | null;
+}
+
+export type BranchOriginRaw = {
+  shippingPhone?: string | null;
+  shippingAddress?: string | null;
+  shippingPostalCode?: string | null;
+  shippingAreaId?: string | null;
+};
+
+export type BranchOriginParsed = {
+  [K in keyof BranchOriginRaw]: string | null | undefined;
+};
+
+export type BranchOriginParseResult =
+  | { ok: true; origin: BranchOriginParsed }
+  | { ok: false; error: string };
+
+const ORIGIN_FIELDS = [
+  "shippingPhone",
+  "shippingAddress",
+  "shippingPostalCode",
+  "shippingAreaId",
+] as const;
+
+/**
+ * Normalizes + validates the supplied shipping-origin fields. Fails closed as
+ * ONE unit: any invalid supplied value rejects the whole mutation before any
+ * write happens (route maps { ok:false } to 400).
+ */
+export function parseBranchOrigin(raw: BranchOriginRaw): BranchOriginParseResult {
+  const origin: BranchOriginParsed = {};
+
+  for (const field of ORIGIN_FIELDS) {
+    const rawValue = raw[field];
+    if (rawValue === undefined) {
+      // Omitted on the wire: PUT skips SET under the row lock; POST
+      // defaults to null.
+      continue;
+    }
+    if (rawValue === null) {
+      origin[field] = null;
+      continue;
+    }
+    const value = rawValue.trim();
+    if (value === "") {
+      origin[field] = null; // empty form field → null
+      continue;
+    }
+    let error: string | null = null;
+    switch (field) {
+      case "shippingPhone":
+        // Punctuation alone is not a phone number: digits are REQUIRED.
+        if (
+          value.length < 5 ||
+          value.length > 25 ||
+          !/^[0-9+()\-\s]+$/.test(value) ||
+          !/\d/.test(value)
+        ) {
+          error = "Telepon pengirim tidak valid (5–25 karakter berisi angka)";
+        }
+        break;
+      case "shippingAddress":
+        if (value.length > 500) {
+          error = "Alamat asal kirim maksimal 500 karakter";
+        }
+        break;
+      case "shippingPostalCode":
+        if (!/^\d{3,10}$/.test(value)) {
+          error = "Kode pos asal kirim harus 3–10 digit";
+        }
+        break;
+      case "shippingAreaId":
+        if (!/^\d{1,16}$/.test(value)) {
+          error = "Area ID Shipment harus 1–16 digit";
+        }
+        break;
+    }
+    if (error) return { ok: false, error };
+    origin[field] = value;
+  }
+
+  return { ok: true, origin };
+}
+
 export interface CreateBranchData {
   id: string;
   name: string;
@@ -54,6 +157,13 @@ export interface CreateBranchData {
   operatingHours: OperatingHours;
   googleMapsUrl: string | null;
   status: "aktif" | "nonaktif";
+  // Shipping-origin complement: optional at the SERVICE boundary — an
+  // undefined field is omitted from the INSERT (NULL via column default);
+  // the route passes concrete values after parseBranchOrigin.
+  shippingPhone?: string | null;
+  shippingAddress?: string | null;
+  shippingPostalCode?: string | null;
+  shippingAreaId?: string | null;
 }
 
 export async function createBranch(
@@ -74,6 +184,11 @@ export async function createBranch(
         operatingHours: data.operatingHours,
         googleMapsUrl: data.googleMapsUrl,
         status: data.status,
+        // Undefined keys are omitted by Drizzle → column default (NULL).
+        shippingPhone: data.shippingPhone,
+        shippingAddress: data.shippingAddress,
+        shippingPostalCode: data.shippingPostalCode,
+        shippingAreaId: data.shippingAreaId,
       })
       .returning();
     const created = inserted[0];
@@ -102,6 +217,14 @@ export interface UpdateBranchData {
   operatingHours: OperatingHours;
   googleMapsUrl: string | null;
   status: "aktif" | "nonaktif";
+  // Shipping-origin complement: optional at the SERVICE boundary — an
+  // undefined field is skipped by Drizzle's SET mapping (the stored value is
+  // preserved under the row lock). The PUT route retains this omission
+  // instead of copying a potentially stale pre-check value.
+  shippingPhone?: string | null;
+  shippingAddress?: string | null;
+  shippingPostalCode?: string | null;
+  shippingAreaId?: string | null;
 }
 
 /**
@@ -139,9 +262,43 @@ export async function updateBranch(
         operatingHours: data.operatingHours,
         googleMapsUrl: data.googleMapsUrl,
         status: data.status,
+        shippingPhone: data.shippingPhone,
+        shippingAddress: data.shippingAddress,
+        shippingPostalCode: data.shippingPostalCode,
+        shippingAreaId: data.shippingAreaId,
         updatedAt: new Date(),
       })
       .where(eq(branches.id, id));
+
+    // Complete before/after for the origin complement — but ONLY the fields
+    // this mutation actually carried: an omitted field (undefined) is a
+    // preserve, never a "changed to null" transition, and must stay out of
+    // the audit diff. A rejected origin edit never reaches this write.
+    const originChanges: Record<string, unknown> = {};
+    if (data.shippingPhone !== undefined) {
+      originChanges.shippingPhone = {
+        from: existing.shippingPhone ?? null,
+        to: data.shippingPhone,
+      };
+    }
+    if (data.shippingAddress !== undefined) {
+      originChanges.shippingAddress = {
+        from: existing.shippingAddress ?? null,
+        to: data.shippingAddress,
+      };
+    }
+    if (data.shippingPostalCode !== undefined) {
+      originChanges.shippingPostalCode = {
+        from: existing.shippingPostalCode ?? null,
+        to: data.shippingPostalCode,
+      };
+    }
+    if (data.shippingAreaId !== undefined) {
+      originChanges.shippingAreaId = {
+        from: existing.shippingAreaId ?? null,
+        to: data.shippingAreaId,
+      };
+    }
 
     await writeAuditEvent(tx, {
       actorId: ctx.actorId,
@@ -151,6 +308,7 @@ export async function updateBranch(
       changes: {
         name: { from: existing.name, to: data.name },
         status: { from: existing.status, to: data.status },
+        ...originChanges,
       },
       policyVersion: ctx.policyVersion,
       branchScope: "single_branch",

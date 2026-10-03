@@ -7,7 +7,8 @@ export default function nextConfig(phase: string): NextConfig {
   // NODE_ENV from Next's phase afterwards: dotenv must never turn `next dev`
   // into a live-write production runtime.
   config({ path: "../../.env" });
-  config({ path: ".env.local", override: true });
+  // Isolated E2E runs supply loopback URLs; app-local defaults must not stomp them.
+  config({ path: ".env.local", override: process.env.E2E_PROVIDER_MOCKS !== "true" });
   Reflect.set(
     process.env,
     "NODE_ENV",

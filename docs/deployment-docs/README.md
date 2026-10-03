@@ -7,6 +7,8 @@ Docker), Caddy sebagai reverse proxy dengan auto-HTTPS.
 Dokumentasi ini dipecah menjadi banyak file kecil (satu topik per file) supaya
 mudah dicari. Mulai dari sini, lalu ikuti urutan di bawah.
 
+Shipment quote credentials and operational prerequisites: [shipment-readiness.md](shipment-readiness.md). Mock verification does not authorize deployment or live provider requests.
+
 ## Struktur folder `deployment/`
 
 ```

@@ -9,6 +9,37 @@ Unit and E2E test infrastructure for the marketplace monorepo.
 
 Run everything from the repo root.
 
+## Mock-only pickup lifecycle (delivery implementation ticket 01)
+
+Run `npx playwright test --config=playwright.mock.config.ts` against a disposable,
+seeded local database. This isolated config starts fresh store/admin/mock servers
+on ports 3110/3111/3112, refuses server reuse, disables live Sales test-account
+opt-in, uses fake provider credentials and suppresses real SMTP. Do not run it
+concurrently with another checkout suite sharing the same customer cart.
+
+`E2E_PROVIDER_MOCKS=true` plus `JUBELIO_SALES_MOCK_API_BASE_URL` enable an
+explicit **bare HTTP loopback-only** Sales gateway seam. Invalid URLs fail closed
+without a live fallback. The seam is forbidden when APP_ENV or NODE_ENV is
+production; never set these E2E variables in staging/production deployments.
+Normal production and isolated live-test write gates are unchanged. During this
+E2E run, Next config preserves externally supplied app URLs instead of overriding
+them from `.env.local`.
+
+`e2e/store/pickup-mock.spec.ts` exercises real local HTTP + browser checkout,
+verified Midtrans/SO settlement and single-use Home Branch pickup; invoice timeout
+remains paid-but-blocked without a pickup code. Independent amounts are goods
+Rp100,000, website/Midtrans Rp111,000 (11% PPN), SO/invoice/Jubelio payment
+Rp100,000 (zero SO tax/discount). This verifies application behavior with mocks,
+not live provider behavior or operational delivery activation. The legacy
+`playwright.config.ts` checkout suite still uses the real isolated Jubelio account
+and must not be run without separate write authorization.
+
+## Mock-only delivery acceptance
+
+The same isolated config includes address/default ownership, branch origin, server quote and reprice approval, immutable placement/repayment, packing/ambiguous booking, handoff/signed tracking/customer privacy and scoped follow-up/manual resolution. Final implementation verification: **22/22** browser/HTTP cases; full serial unit run **106 files / 953 passed / 2 skipped**. The two skips are `skipIf(schemaState.ready)` infrastructure-failure sentinels; PostgreSQL-dependent acceptance tests ran, not skipped.
+
+Use `npm run test:unit -- --no-file-parallelism` to avoid shared RBAC-fixture races. Tracking has an independently computed fixed HMAC fixture, concurrent event regressions and real-PG lifecycle assertions. Follow-up covers current Home/ledger guards, zero create on release, one proof-approved attempt-2 create and system-only known-ID GET settlement recovery. Never treat mock success as courier/dashboard/deployment activation. See [delivery lifecycle](../features/home-delivery.md).
+
 ## Prerequisites
 
 - **Focused SO gateway and stock-sync unit tests**: no database needed (`npm exec --workspace=apps/store -- vitest run src/lib/jubelio-sales-client.test.ts` and `npm exec --workspace=packages/db -- vitest run src/jubelio-sync.test.ts`). The Sales gateway tests stub the external HTTP boundary; they never start a mock server or contact Jubelio. The separate **legacy/candidate mock** tests are `npm exec --workspace=apps/jubelio-mock -- vitest run src/server.test.ts`; they are not used by the new Sales gateway. **The full `npm run test:unit` suite is not entirely infrastructure-free**: `apps/admin/src/lib/rbac/users-service-db.test.ts`, `packages/db/src/migrations/migration-0018-rehearsal.test.ts`, and `apps/store/src/lib/jubelio-sales-operations.db.test.ts` need local PostgreSQL. Without port 5432, the first two fail with `ECONNREFUSED`; the new ledger suite skips five race tests and **fails its explicit environment-blocker test**. The ledger claim is not DB-verified until those tests run against a prepared schema. Do not mistake that infrastructure failure for an SO regression.
@@ -93,9 +124,9 @@ packages/db/vitest.config.ts
 
 - `npm run dev:store` starts both the storefront and Jubelio mock for the
   **still-active legacy adjustment flow**. Playwright starts them as separate
-  managed processes. The new Sales gateway has **no mock mode**: outside
-  production it fails closed unless explicitly opted into a pinned real
-  test-account host; it has no checkout caller yet. Legacy non-production
+  managed processes. The Sales gateway outside
+  production fails closed unless explicitly opted into a pinned real
+  test-account host or the isolated loopback-only E2E seam above. Legacy non-production
   stock writes still use the local mock.
 - Mock controls: `POST http://127.0.0.1:3002/__control/reset`, then
   `PUT /__control/scenario` with one of `success`, `insufficient-stock`,
@@ -111,8 +142,9 @@ packages/db/vitest.config.ts
   **hypotheses**, not verified Jubelio behavior. No test may interpret a green
   mock as approval for real invoice/payment writes or checkout activation.
 - The Sales Order gateway (`apps/store/src/lib/jubelio-sales-client.ts`) now
-  backs the live checkout (Sales-Order cutover). It never uses the local mock
-  server; its ~65 focused tests stub the external HTTP boundary and assert
+  backs the live checkout (Sales-Order cutover). Normal runtime never falls back
+  to the local mock; the explicit loopback-only E2E seam above is separate.
+  Its focused tests stub the external HTTP boundary and assert
   one POST per write, independent GET confirmations, pre-invoice
 cancellation, fail-closed ambiguous outcomes, and the sandbox-observed
   invoice/payment response shapes (`{status,id}` responses, numeric

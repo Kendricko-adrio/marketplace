@@ -1,0 +1,1 @@
+ALTER TABLE "product_variant" ADD COLUMN "parcel_dimensions" jsonb;

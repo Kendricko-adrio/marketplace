@@ -8,6 +8,7 @@ import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import {
   BranchServiceError,
   deleteBranch,
+  parseBranchOrigin,
   updateBranch,
 } from "@/lib/branches-service";
 import { serializeError } from "@/lib/logger";
@@ -108,6 +109,13 @@ const updateBranchSchema = z.object({
   }),
   googleMapsUrl: z.string().url().optional().or(z.literal("")),
   status: z.enum(["aktif", "nonaktif"]),
+  // Shipping-origin complement (ticket 02): OPTIONAL — an omitted field keeps
+  // the stored origin (backward-compatible clients), ""/null clear. The
+  // fail-closed value validation lives in parseBranchOrigin (single unit).
+  shippingPhone: z.string().nullable().optional(),
+  shippingAddress: z.string().nullable().optional(),
+  shippingPostalCode: z.string().nullable().optional(),
+  shippingAreaId: z.string().nullable().optional(),
 });
 
 // PUT /api/admin/branches/[id]   [branches:edit]
@@ -172,6 +180,22 @@ export async function PUT(
 
     const data = parsed.data;
 
+    // Shipping-origin complement (ticket 02): every SUPPLIED value is
+    // validated fail-closed as one unit BEFORE any mutation; an invalid
+    // origin rejects the edit without touching the branch or the audit log.
+    const origin = parseBranchOrigin(data);
+    if (!origin.ok) {
+      branchLog.error("branches.update.origin_invalid", {
+        outcome: "denied",
+        error: origin.error,
+        branchId: id,
+      });
+      return NextResponse.json(
+        { success: false, error: origin.error },
+        { status: 400 }
+      );
+    }
+
     // Mutation + audit run in one local DB transaction (branches-service).
     // The branch row is locked and its existence re-checked inside the tx;
     // a NOT_FOUND from the recheck maps to the same 404 as the pre-check.
@@ -188,6 +212,9 @@ export async function PUT(
           operatingHours: data.operatingHours,
           googleMapsUrl: data.googleMapsUrl || null,
           status: data.status,
+          // Omitted fields stay undefined so Drizzle skips them under the
+          // service's row lock. Never copy a stale route pre-check value.
+          ...origin.origin,
         },
         { actorId: ctx.user.id, policyVersion: ctx.policy.policyVersion }
       );

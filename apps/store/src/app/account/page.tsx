@@ -249,6 +249,9 @@ export default function AccountPage() {
             >
               <Package className="h-4 w-4" /> Pesanan Saya
             </Button>
+            <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => router.push("/account/addresses")}>
+              <PackageOpen className="h-4 w-4" /> Buku Alamat
+            </Button>
             <div className="pt-4 mt-4 border-t">
               <Button
                 variant="ghost"

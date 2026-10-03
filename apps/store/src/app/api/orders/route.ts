@@ -61,6 +61,12 @@ export async function GET() {
 
         return {
           ...order,
+          // Ticket 07 — the internal manual/actor evidence never leaves the
+          // admin surface; the failure CODE stays (a safe customer state).
+          deliveryManualReason: undefined,
+          deliveryManualAt: undefined,
+          deliveryManualBy: undefined,
+          deliveryFailureBy: undefined,
           branch,
           items: itemsWithImages,
         };

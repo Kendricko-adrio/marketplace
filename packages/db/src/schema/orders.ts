@@ -5,6 +5,7 @@
   boolean,
   numeric,
   integer,
+  jsonb,
   index,
   check,
   uniqueIndex,
@@ -14,12 +15,96 @@ import { clients, users } from "./auth";
 import { productVariants } from "./products";
 import { branches } from "./branches";
 
-// Addresses table (belongs to store clients)
+// =========================================================
+// Ticket 04 — the immutable delivery snapshot payload (JSONB).
+// Exactly the five quote blocks: the canonical destination address (Shipment
+// region ids stay STRINGS incl. leading zeros), the origin sender block, the
+// parcel envelope (grams/cm), the chosen service and the approved order-
+// pricing strings. No quote id/ttl/readiness flag — an immutable plain
+// payload that re-payment and the settlement gate read exclusively.
+// =========================================================
+export interface DeliveryAddressBlock {
+  recipientName: string;
+  phone: string;
+  fullAddress: string;
+  provinceId: string;
+  province: string;
+  cityId: string;
+  city: string;
+  districtId: string;
+  district: string;
+  areaId: string;
+  area: string;
+  postalCode: string;
+}
+
+export interface DeliveryOriginBlock {
+  branchId: string;
+  name: string;
+  phone: string;
+  address: string;
+  zipcode: string;
+  areaId: string | null;
+}
+
+export interface DeliveryParcelBlock {
+  weight: number;
+  items: Array<{
+    item_name: string;
+    quantity: number;
+    value?: number;
+    weight: number;
+    length: number;
+    width: number;
+    height: number;
+  }>;
+}
+
+export interface DeliveryServiceBlock {
+  courierId: number;
+  serviceId: number;
+  name: string;
+  shippingCost: string | number;
+  validEta?: { from: string; to: string };
+}
+
+export interface DeliveryPricingBlock {
+  subtotal: string;
+  discount: string;
+  taxableBase: string;
+  shippingCost: string;
+  serviceFee: string;
+  ppnRatePercent: string;
+  ppnAmount: string;
+  total: string;
+}
+
+export interface DeliverySnapshotPayload {
+  address: DeliveryAddressBlock;
+  origin: DeliveryOriginBlock;
+  parcel: DeliveryParcelBlock;
+  service: DeliveryServiceBlock;
+  pricing: DeliveryPricingBlock;
+}
+
+// Addresses table (belongs to store clients).
+// Ticket 02 (Jubelio Shipment): the origin/destination region chain is stored
+// as STRING IDs incl. leading zeros (never numbers, e.g. "01", "3174021004")
+// plus province/area labels; city/district labels reuse the existing
+// city/district columns. All new columns are nullable so legacy rows and the
+// seeded address stay valid; rows written by the new address-book seam always
+// carry the region chain that the gateway verified server-side.
 export const addresses = pgTable("address", {
   id: text("id").primaryKey(),
   userId: text("user_id")
     .notNull()
     .references(() => clients.id, { onDelete: "cascade" }),
+  provinceId: text("province_id"),
+  cityId: text("city_id"),
+  districtId: text("district_id"),
+  areaId: text("area_id"),
+  province: text("province"),
+  area: text("area"),
   firstName: text("first_name").notNull(),
   lastName: text("last_name").notNull(),
   phone: text("phone").notNull(),
@@ -30,7 +115,13 @@ export const addresses = pgTable("address", {
   isDefault: boolean("is_default").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
-});
+}, (t) => [
+  // Ticket 02: at most ONE default address per client. Partial unique index —
+  // legacy rows (is_default = false) are unaffected by this rule.
+  uniqueIndex("address_default_per_client_unique")
+    .on(t.userId)
+    .where(sql`${t.isDefault} = true`),
+]);
 
 // Orders table (belongs to store clients).
 // Phase 1 (pickup-in-store) uses English statuses and pickup fields.
@@ -42,7 +133,12 @@ export const orders = pgTable("orders", {
     .notNull()
     .references(() => clients.id, { onDelete: "cascade" }),
   branchId: text("branch_id").references(() => branches.id),
-  addressId: text("address_id").references(() => addresses.id),
+  // Ticket 02: removing a book address must not block on this FK. The order
+  // carries its own immutable address snapshot (ticket 04) — the reference
+  // nulls out on book deletion instead of cascading or rejecting.
+  addressId: text("address_id").references(() => addresses.id, {
+    onDelete: "set null",
+  }),
   voucherId: text("voucher_id"),
   // pending_payment | processing | ready_for_pickup | completed | cancelled | failed_payment
   // - cancelled: manual cancellation (by user or admin)
@@ -114,6 +210,23 @@ export const orders = pgTable("orders", {
   // blocked. A non-null value keeps the order paid but never exposes a pickup
   // code; the case is visible in the admin review queue.
   fulfillmentBlockedReason: text("fulfillment_blocked_reason"),
+  // Ticket 04 — fulfillment method: `pickup` (Phase 1) or `delivery`
+  // (Jubelio Shipment, quote → SO goods-only → Midtrans incl. ongkir/PPN).
+  // Delivery orders are settled into `processing` forever without a pickup
+  // code (no ready_for_pickup transition); ticket 05 owns the booking stage.
+  fulfillmentMethod: text("fulfillment_method").notNull().default("pickup"),
+  // Ticket 04 — immutable delivery snapshot (JSONB): canonical destination
+  // address, origin sender block, parcel envelope, chosen service and the
+  // approved order-pricing strings. Deep-independent: later edits to the
+  // address book, branch origin, master parcel, config or pricing can never
+  // rewrite it; re-payment and settlement read ONLY this persisted payload.
+  deliverySnapshot: jsonb("delivery_snapshot").$type<DeliverySnapshotPayload>(),
+  deliveryFailureCode: text("delivery_failure_code"),
+  deliveryFailureAt: timestamp("delivery_failure_at", { withTimezone: true }),
+  deliveryFailureBy: text("delivery_failure_by").references(() => users.id),
+  deliveryManualReason: text("delivery_manual_reason"),
+  deliveryManualAt: timestamp("delivery_manual_at", { withTimezone: true }),
+  deliveryManualBy: text("delivery_manual_by").references(() => users.id),
   // Phase 2 shipping fields (nullable, unused in Phase 1)
   shippingCarrier: text("shipping_carrier"),
   trackingNumber: text("tracking_number"),
@@ -151,6 +264,29 @@ export const orders = pgTable("orders", {
   ppnRateCheck: check(
     "orders_ppn_rate_valid",
     sql`${t.ppnRate} >= 0 and ${t.ppnRate} <= 100`
+  ),
+  // Ticket 04: the fulfillment method gates the delivery pipeline; pickup
+  // rows keep the legacy default.
+  fulfillmentMethodCheck: check(
+    "orders_fulfillment_method_valid",
+    sql`${t.fulfillmentMethod} in ('pickup', 'delivery')`
+  ),
+  // Ticket 07 — the failure marker is code-whitelisted; the manual finish
+  // evidence is complete when present; the two never coexist (a packing-fail
+  // is itself a resolution, not a finishable state).
+  failureCodeCheck: check(
+    "orders_delivery_failure_code_valid",
+    sql`${t.deliveryFailureCode} is null or ${t.deliveryFailureCode} in
+        ('physical_stock_unavailable', 'damaged_goods', 'paid_service_limits_exceeded')`
+  ),
+  manualFinishCheck: check(
+    "orders_delivery_manual_fields_complete",
+    sql`(${t.deliveryManualReason} is null or (${t.deliveryManualReason} <> ''
+         and ${t.deliveryManualAt} is not null and ${t.deliveryManualBy} is not null))`
+  ),
+  failureManualExclusiveCheck: check(
+    "orders_delivery_failure_manual_exclusive",
+    sql`not (${t.deliveryFailureCode} is not null and ${t.deliveryManualReason} is not null)`
   ),
   pickupAttemptsCheck: check(
     "orders_pickup_attempts_nonnegative",
@@ -210,5 +346,235 @@ export const orderItemsRelations = relations(orderItems, ({ one }) => ({
   variant: one(productVariants, {
     fields: [orderItems.variantId],
     references: [productVariants.id],
+  }),
+}));
+
+// =========================================================
+// Ticket 05 — the durable delivery-shipment ledger (packing → booking).
+// Per-order-unique; the state machine is packed → booking_dispatched (one
+// committed conditional dispatch claim) → booked, or booking_unknown from
+// booking_dispatched after a failed/timeout POST — the ambiguity is durable
+// and a repeated book must never POST again without certainty.
+//
+// `stored_request` is the ORIGINAL create request, built ONLY from the
+// order's `delivery_snapshot` at packing time and NEVER re-read from the
+// address book, the branch fields, the master parcel or the IT config:
+//   - ref_no = the order id, purely as a correlation (no idempotency claim);
+//   - is_cod stays false; insurance stays off (never invented);
+//   - NO package_detail/carton is invented before a real carton exists;
+//   - region ids and zipcodes are STRINGS (leading zeros preserved).
+//
+// Money columns are STORE-BOURNE cost records (no customer charge ever
+// derives from them): `quote_rates` = the approved ongkir from the snapshot,
+// `booked_price` = the provider `price`, `billed_price` = the provider
+// `price_bill` when it exists — NULL stays unknown (never 0); the true
+// billed value arrives via the ticket-06 AWB-detail verification.
+// =========================================================
+export interface ShipmentCreateRequestItemBlock {
+  item_name: string;
+  quantity: number;
+  value: number;
+  weight: number;
+  length: number;
+  width: number;
+  height: number;
+}
+
+export interface ShipmentCreateRequestPartyBlock {
+  name: string;
+  phone: string;
+  address: string;
+  zipcode: string;
+  area_id?: string;
+}
+
+export interface ShipmentCreateRequestPayload {
+  ref_no: string;
+  courier_id: number;
+  courier_service_id: number;
+  is_cod: boolean;
+  shipping_insurance?: number;
+  origin: ShipmentCreateRequestPartyBlock;
+  destination: ShipmentCreateRequestPartyBlock;
+  items: ShipmentCreateRequestItemBlock[];
+}
+
+export const deliveryShipments = pgTable("delivery_shipment", {
+  id: text("id").primaryKey(),
+  orderId: text("order_id")
+    .notNull()
+    .unique()
+    .references(() => orders.id, { onDelete: "cascade" }),
+  // packed | booking_dispatched | booked | booking_unknown
+  state: text("state").notNull().default("packed"),
+  storedRequest: jsonb("stored_request")
+    .$type<ShipmentCreateRequestPayload>()
+    .notNull(),
+  attemptCount: integer("attempt_count").notNull().default(0),
+  packedBy: text("packed_by").notNull().references(() => users.id),
+  dispatchedBy: text("dispatched_by").references(() => users.id),
+  bookedBy: text("booked_by").references(() => users.id),
+  dispatchedAt: timestamp("dispatched_at", { withTimezone: true }),
+  bookedAt: timestamp("booked_at", { withTimezone: true }),
+  shipmentId: integer("shipment_id"),
+  awb: text("awb"),
+  trackingUrl: text("tracking_url"),
+  quoteRates: numeric("quote_rates", { precision: 15, scale: 2 }).notNull(),
+  bookedPrice: numeric("booked_price", { precision: 15, scale: 2 }),
+  billedPrice: numeric("billed_price", { precision: 15, scale: 2 }),
+  // Ticket 06 — the physical serah-terima stamp + the verified tracking.
+  handedOverBy: text("handed_over_by").references(() => users.id),
+  handedOverAt: timestamp("handed_over_at", { withTimezone: true }),
+  // The NORMALIZED latest_status vocabulary (never the carrier's raw codes).
+  latestStatus: text("latest_status"),
+  latestEventAt: timestamp("latest_event_at", { withTimezone: true }),
+  deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+  // The POD link, stored only when the provider sent a safe http(s) URL.
+  podUrl: text("pod_url"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  check(
+    "delivery_shipment_state_valid",
+    sql`${t.state} in ('packed', 'booking_dispatched', 'booked', 'booking_unknown')`
+  ),
+  // Before ticket 07's release flow this ledger allowed at most one POST;
+  // ticket 07's proof-release keeps the count MONOTONIC across attempts and
+  // re-closes exactly once per claim — the lifetime cap is now >= 0.
+  check(
+    "delivery_shipment_attempt_at_most_one",
+    sql`${t.attemptCount} >= 0`
+  ),
+  check(
+    "delivery_shipment_shipment_id_positive",
+    sql`${t.shipmentId} is null or ${t.shipmentId} > 0`
+  ),
+  check(
+    "delivery_shipment_costs_finite_nonnegative",
+    sql`(${t.quoteRates} >= 0 and ${t.quoteRates}::text not in ('NaN','Infinity','-Infinity')) and
+        (${t.bookedPrice} is null or (${t.bookedPrice} >= 0 and ${t.bookedPrice}::text not in ('NaN','Infinity','-Infinity'))) and
+        (${t.billedPrice} is null or (${t.billedPrice} >= 0 and ${t.billedPrice}::text not in ('NaN','Infinity','-Infinity')))`
+  ),
+  check(
+    "delivery_shipment_booked_fields_present",
+    sql`(${t.state} <> 'booked' or (${t.awb} is not null and ${t.shipmentId} is not null
+         and ${t.bookedPrice} is not null and ${t.bookedBy} is not null and ${t.dispatchedAt} is not null))`
+  ),
+  check(
+    "delivery_shipment_ambiguity_fields_absent",
+    sql`(${t.state} not in ('packed', 'booking_dispatched', 'booking_unknown') or
+         (${t.awb} is null and ${t.shipmentId} is null and
+          ${t.bookedPrice} is null and ${t.billedPrice} is null and ${t.bookedAt} is null))`
+  ),
+  // Ticket 06 — one external identity binds EXACTLY ONE order (never two).
+  uniqueIndex("delivery_shipment_awb_global_unique").on(t.awb),
+  uniqueIndex("delivery_shipment_shipment_id_global_unique").on(t.shipmentId),
+  // The physical handoff needs a booked shipment and an acting admin.
+  check(
+    "delivery_shipment_handoff_fields_present",
+    sql`(${t.handedOverAt} is null or (${t.bookedAt} is not null and ${t.handedOverBy} is not null))`
+  ),
+]);
+
+export const deliveryShipmentsRelations = relations(deliveryShipments, ({ one, many }) => ({
+  order: one(orders, {
+    fields: [deliveryShipments.orderId],
+    references: [orders.id],
+  }),
+  events: many(deliveryTrackingEvents),
+}));
+
+// =========================================================
+// Ticket 06 — tracking receipts per shipment. ONE row per distinct webhook
+// body (the sha256 `fingerprint` is GLOBALLY unique — an exact replay is a
+// duplicate and never re-applies). Only the NORMALIZED `latest_status`
+// vocabulary is ever applied; out-of-order/unknown/late-after-completed
+// bodies are RECEIVED (stored, `applied = false`, with an `ignored_reason`)
+// but NEVER regress the order or its shipment ledger.
+// =========================================================
+export const deliveryTrackingEvents = pgTable("delivery_tracking_event", {
+  id: text("id").primaryKey(),
+  // The INTERNAL ledger id — NOT the provider's integer (kept separately).
+  shipmentId: text("shipment_id")
+    .notNull()
+    .references(() => deliveryShipments.id, { onDelete: "cascade" }),
+  externalShipmentId: integer("external_shipment_id"),
+  refNo: text("ref_no"),
+  awb: text("awb").notNull(),
+  latestStatus: text("latest_status"),
+  statusDetail: text("status_detail"),
+  fingerprint: text("fingerprint").notNull(),
+  source: text("source").notNull().default("webhook"), // webhook | reconcile
+  applied: boolean("applied").notNull().default(false),
+  ignoredReason: text("ignored_reason"),
+  providerEventAt: timestamp("provider_event_at", { withTimezone: true }),
+  receivedAt: timestamp("received_at", { withTimezone: true }).notNull().defaultNow(),
+  appliedAt: timestamp("applied_at", { withTimezone: true }),
+}, (t) => [
+  uniqueIndex("delivery_tracking_event_fingerprint_unique").on(t.fingerprint),
+  index("idx_delivery_tracking_event_shipment").on(t.shipmentId),
+]);
+
+export const deliveryTrackingEventsRelations = relations(deliveryTrackingEvents, ({ one }) => ({
+  shipment: one(deliveryShipments, {
+    fields: [deliveryTrackingEvents.shipmentId],
+    references: [deliveryShipments.id],
+  }),
+}));
+
+// =========================================================
+// Ticket 07 — the archived booking-release history. Every booking release of
+// an ambiguous ledger attempt archives the ORIGINAL dispatch (actor/time/
+// stored request) together with the AUTHORIZED HUMAN's attestation that
+// Jubelio confirmed the first operation is CLOSED and NO booking exists
+// (source 'jubelio_confirmation' + both literal booleans). This is an
+// audited trusted-staff attestation, never automatic system evidence (a
+// timeout/404/elapsed time/"dash not found" proves nothing). Per ledger +
+// attempt unique: one release per attempt; a new attempt needs NEW proof.
+// =========================================================
+export const deliveryBookingReviews = pgTable("delivery_booking_reviews", {
+  id: text("id").primaryKey(),
+  orderId: text("order_id")
+    .notNull()
+    .references(() => orders.id, { onDelete: "cascade" }),
+  shipmentId: text("shipment_id")
+    .notNull()
+    .references(() => deliveryShipments.id, { onDelete: "cascade" }),
+  attemptNumber: integer("attempt_number").notNull(),
+  originalDispatchedBy: text("original_dispatched_by"),
+  originalDispatchedAt: timestamp("original_dispatched_at", { withTimezone: true }),
+  archivedRequest: jsonb("archived_request").$type<ShipmentCreateRequestPayload>().notNull(),
+  proofSource: text("proof_source").notNull(),
+  proofReference: text("proof_reference").notNull(),
+  proofReason: text("proof_reason").notNull(),
+  absenceConfirmed: boolean("absence_confirmed").notNull(),
+  operationClosed: boolean("operation_closed").notNull(),
+  releasedBy: text("released_by").notNull().references(() => users.id),
+  releasedAt: timestamp("released_at", { withTimezone: true }).notNull().defaultNow(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  uniqueIndex("delivery_booking_review_shipment_attempt_unique").on(
+    t.shipmentId,
+    t.attemptNumber
+  ),
+  check(
+    "delivery_booking_review_attempt_positive",
+    sql`${t.attemptNumber} >= 1`
+  ),
+  check(
+    "delivery_booking_review_proof_valid",
+    sql`${t.proofSource} = 'jubelio_confirmation' and
+        ${t.absenceConfirmed} is true and ${t.operationClosed} is true`
+  ),
+]);
+
+export const deliveryBookingReviewsRelations = relations(deliveryBookingReviews, ({ one }) => ({
+  order: one(orders, {
+    fields: [deliveryBookingReviews.orderId],
+    references: [orders.id],
+  }),
+  shipment: one(deliveryShipments, {
+    fields: [deliveryBookingReviews.shipmentId],
+    references: [deliveryShipments.id],
   }),
 }));

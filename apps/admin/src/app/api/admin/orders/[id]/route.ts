@@ -9,10 +9,14 @@ import {
   products,
   jubelioStockOperations,
 } from "@/db";
-import { asc, eq } from "drizzle-orm";
+import {
+  asc,
+  eq,
+} from "drizzle-orm";
 import { serializeError } from "@/lib/logger";
 import { guard, crossBranchNotFound } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
+import { deliveryShipments, deliveryTrackingEvents } from "@/db";
 
 export const dynamic = "force-dynamic";
 
@@ -76,6 +80,18 @@ export async function GET(
           jubelioInvoiceId: orders.jubelioInvoiceId,
           jubelioPaymentId: orders.jubelioPaymentId,
           fulfillmentBlockedReason: orders.fulfillmentBlockedReason,
+          // Ticket 04/05 — the fulfillment method + the immutable delivery
+          // snapshot (delivery rows never expose a pickup code instead).
+          fulfillmentMethod: orders.fulfillmentMethod,
+          deliverySnapshot: orders.deliverySnapshot,
+          // Ticket 07 — the failure/manual evidence (the admin-only display
+          // + the gated panels).
+          deliveryFailureCode: orders.deliveryFailureCode,
+          deliveryFailureAt: orders.deliveryFailureAt,
+          deliveryFailureBy: orders.deliveryFailureBy,
+          deliveryManualReason: orders.deliveryManualReason,
+          deliveryManualAt: orders.deliveryManualAt,
+          deliveryManualBy: orders.deliveryManualBy,
           shippingCarrier: orders.shippingCarrier,
           trackingNumber: orders.trackingNumber,
           createdAt: orders.createdAt,
@@ -87,10 +103,29 @@ export async function GET(
           email: clients.email,
         },
         branch: branches,
+        // Ticket 06 — the handoff stamp + the verified tracking + POD.
+        shipment: {
+          state: deliveryShipments.state,
+          awb: deliveryShipments.awb,
+          trackingUrl: deliveryShipments.trackingUrl,
+          quoteRates: deliveryShipments.quoteRates,
+          bookedPrice: deliveryShipments.bookedPrice,
+          billedPrice: deliveryShipments.billedPrice,
+          attemptCount: deliveryShipments.attemptCount,
+          dispatchedAt: deliveryShipments.dispatchedAt,
+          bookedAt: deliveryShipments.bookedAt,
+          handedOverAt: deliveryShipments.handedOverAt,
+          handedOverBy: deliveryShipments.handedOverBy,
+          latestStatus: deliveryShipments.latestStatus,
+          latestEventAt: deliveryShipments.latestEventAt,
+          deliveredAt: deliveryShipments.deliveredAt,
+          podUrl: deliveryShipments.podUrl,
+        },
       })
       .from(orders)
       .innerJoin(clients, eq(orders.userId, clients.id))
       .leftJoin(branches, eq(orders.branchId, branches.id))
+      .leftJoin(deliveryShipments, eq(deliveryShipments.orderId, orders.id))
       .where(eq(orders.id, id))
       .limit(1);
 
@@ -138,6 +173,25 @@ export async function GET(
       ...item,
       imageUrl: item.thumbnail ?? null,
     }));
+
+    // Ticket 06 — the tracking timeline: receipts in order, with the applied
+    // state and the ignore reason so the operator sees the diagnostics (the
+    // statusDetail is only shown inside the orders:view-scoped detail).
+    const trackingTimeline = await db
+      .select({
+        id: deliveryTrackingEvents.id,
+        latestStatus: deliveryTrackingEvents.latestStatus,
+        statusDetail: deliveryTrackingEvents.statusDetail,
+        receivedAt: deliveryTrackingEvents.receivedAt,
+        providerEventAt: deliveryTrackingEvents.providerEventAt,
+        applied: deliveryTrackingEvents.applied,
+        ignoredReason: deliveryTrackingEvents.ignoredReason,
+        source: deliveryTrackingEvents.source,
+      })
+      .from(deliveryTrackingEvents)
+      .innerJoin(deliveryShipments, eq(deliveryTrackingEvents.shipmentId, deliveryShipments.id))
+      .where(eq(deliveryShipments.orderId, id))
+      .orderBy(asc(deliveryTrackingEvents.receivedAt));
     const stockOperations = await db
       .select({
         id: jubelioStockOperations.id,
@@ -158,12 +212,23 @@ export async function GET(
       scope: authorization.mode,
       stockOperationCount: stockOperations.length,
     });
+    // Ticket 05 — actor-allowed projection: the server-pinned Home Branch
+    // match (the CTAs also require the client-side orders:edit hint, but the
+    // routes enforce the real grants); an unpacked order ships shipment null
+    // (the left-join's all-null row is normalized away).
+    const shipmentRow = order[0].shipment?.state ? order[0].shipment : null;
+    const homeBranchMatch =
+      !!ctx.policy.user.homeBranchId &&
+      ctx.policy.user.homeBranchId === order[0].order.branchId;
     return NextResponse.json({
       success: true,
       data: {
         ...order[0].order,
         customer: order[0].customer,
         branch: order[0].branch,
+        shipment: shipmentRow,
+        actor: { allowed: homeBranchMatch },
+        trackingTimeline,
         items: itemsWithImages,
         stockOperations,
       },

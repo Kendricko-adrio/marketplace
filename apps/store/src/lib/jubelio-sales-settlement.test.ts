@@ -275,3 +275,56 @@ describe("settleJubelioSalesOrder — ticket #04 Menunggu Verifikasi mirror trig
     expect(channelMirror.reconcileJubelioChannelStatusForOrder).not.toHaveBeenCalled();
   });
 });
+
+describe("settleJubelioSalesOrder — ticket #04 delivery fulfillment gate", () => {
+  it("keeps a verified-paid DELIVERY order in processing with no pickup code and no pickup fulfillment", async () => {
+    // The paid delivery order: settlement verified, but delivery NEVER
+    // becomes ready_for_pickup — no pickup code, no pickup email, no pickup
+    // fulfillment claim. The fulfillment gate for delivery completes the
+    // order as `processing` only.
+    h.orderRows = [
+      {
+        ...paidOrder,
+        pickupDate: null,
+        pickupTime: null,
+        fulfillmentMethod: "delivery",
+      },
+    ];
+    vi.mocked(ensureJubelioInvoice).mockResolvedValue({ status: "confirmed" });
+    vi.mocked(ensureJubelioPayment).mockResolvedValue({ status: "confirmed" });
+
+    const result = await settleJubelioSalesOrder("order-1");
+
+    expect(result.status).toBe("fulfilled");
+    expect((result as { pickupCode?: string | null }).pickupCode).toBe(null);
+    // The pickup fulfillment claim must NOT run for a delivery order.
+    expect(fulfillPaidOrder).not.toHaveBeenCalled();
+    // The Siap-Proses mirror trigger is pickup-specific — never delivery.
+    expect(channelMirror.reconcileJubelioChannelStatusForOrder).not.toHaveBeenCalled();
+  });
+
+  it("still blocks a paid DELIVERY order whose invoice conversion is ambiguous (paid-but-blocked, no code)", async () => {
+    h.orderRows = [
+      {
+        ...paidOrder,
+        pickupDate: null,
+        pickupTime: null,
+        fulfillmentMethod: "delivery",
+      },
+    ];
+    vi.mocked(ensureJubelioInvoice).mockResolvedValue({
+      status: "manual_review",
+      message: "invoice conversion timed out after apply",
+    });
+
+    const result = await settleJubelioSalesOrder("order-1");
+
+    expect(result.status).toBe("manual_review");
+    expect(ensureJubelioPayment).not.toHaveBeenCalled();
+    expect(fulfillPaidOrder).not.toHaveBeenCalled();
+    expect(blockOrderFulfillment).toHaveBeenCalledWith(
+      "order-1",
+      expect.stringContaining("invoice")
+    );
+  });
+});

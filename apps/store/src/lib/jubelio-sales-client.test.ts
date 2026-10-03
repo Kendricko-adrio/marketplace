@@ -142,6 +142,35 @@ function canceledSnapshot(
 }
 
 describe("resolveJubelioSalesRuntime (default-OFF fail-closed, pinned live hosts)", () => {
+  it("allows an explicit non-production E2E loopback seam without enabling live writes", () => {
+    const gateway = createJubelioSalesGateway({ env: {
+      NODE_ENV: "development", E2E_PROVIDER_MOCKS: "true",
+      JUBELIO_SALES_MOCK_API_BASE_URL: "http://127.0.0.1:3112",
+      JUBELIO_SALES_TEST_ACCOUNT_ENABLED: "false",
+    } });
+    expect(gateway).toBeDefined();
+  });
+
+  it.each([undefined, "", "invalid"])("reports the E2E origin contract for a missing/malformed URL %s", (baseUrl) => {
+    expect(() => createJubelioSalesGateway({ env: {
+      NODE_ENV: "development", E2E_PROVIDER_MOCKS: "true", JUBELIO_SALES_MOCK_API_BASE_URL: baseUrl,
+    } })).toThrow("E2E sales mock requires a bare HTTP loopback origin");
+  });
+
+  it.each(["https://api2.jubelio.com", "http://evil.test:3112", "http://127.0.0.1:3112/api", "http://user:pass@127.0.0.1:3112", "http://127.0.0.1:3112/?x=1"])("rejects unsafe E2E provider origin %s instead of falling back live", (baseUrl) => {
+    expect(() => createJubelioSalesGateway({ env: {
+      NODE_ENV: "development", E2E_PROVIDER_MOCKS: "true",
+      JUBELIO_SALES_MOCK_API_BASE_URL: baseUrl,
+      JUBELIO_SALES_TEST_ACCOUNT_ENABLED: "true", JUBELIO_API_BASE_URL: "https://api2.jubelio.com",
+    } })).toThrow();
+  });
+  it.each([{ NODE_ENV: "production", APP_ENV: "production" }, { NODE_ENV: "development", APP_ENV: "production" }])("never unlocks E2E mocks in production %o", (environment) => {
+    expect(() => createJubelioSalesGateway({ env: {
+      ...environment, E2E_PROVIDER_MOCKS: "true", JUBELIO_SALES_MOCK_API_BASE_URL: "http://127.0.0.1:3112",
+      JUBELIO_STOCK_WRITES_ENABLED: "true", JUBELIO_API_BASE_URL: "https://api2.jubelio.com",
+    } })).toThrow(/forbidden in production/);
+  });
+
   it("drives the full create flow through the pinned live test-account runtime with environment credentials", async () => {
     let loginBody: unknown;
     const { fetchImpl, requests } = stubFetch((request) => {

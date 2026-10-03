@@ -19,6 +19,12 @@ interface ApiBranch {
   operatingHours: BranchFormData["operatingHours"];
   googleMapsUrl: string | null;
   status: string;
+  // Local shipping-origin complement (ticket 02): nullable in the API row,
+  // normalized to "" for the form (empty = belum dikonfigurasi).
+  shippingPhone: string | null;
+  shippingAddress: string | null;
+  shippingPostalCode: string | null;
+  shippingAreaId: string | null;
 }
 
 export default function EditBranchPage() {
@@ -62,6 +68,10 @@ export default function EditBranchPage() {
           operatingHours: branch.operatingHours ?? {},
           googleMapsUrl: branch.googleMapsUrl ?? "",
           status: branch.status as "aktif" | "nonaktif",
+          shippingPhone: branch.shippingPhone ?? "",
+          shippingAddress: branch.shippingAddress ?? "",
+          shippingPostalCode: branch.shippingPostalCode ?? "",
+          shippingAreaId: branch.shippingAreaId ?? "",
         });
       } catch {
         const msg = "Gagal memuat data cabang";

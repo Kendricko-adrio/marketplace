@@ -11,6 +11,7 @@ import {
   Clock,
   Loader2,
   ShoppingBag,
+  Truck,
   Copy,
   Check,
   AlertCircle,
@@ -20,6 +21,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { formatPaymentMethodLabel } from "@/lib/payment-method-label";
+import type { DeliverySnapshotPayload } from "@marketplace/db/src/schema";
 
 interface OrderItem {
   id: string;
@@ -64,6 +66,19 @@ interface OrderDetail {
   total: string;
   createdAt: string;
   snapRedirectUrl: string | null;
+  // Ticket 04 — the fulfillment method + the immutable delivery snapshot.
+  fulfillmentMethod: string;
+  deliverySnapshot: DeliverySnapshotPayload | null;
+  // Ticket 06 — the customer-safe tracking DTO (nullable until booked).
+  shipment: {
+    awb: string;
+    trackingUrl: string | null;
+    latestStatus: string | null;
+    delivered: boolean;
+    deliveredAt: string | null;
+    podUrl: string | null;
+    timeline: Array<{ status: string | null; detail: string | null; at: string | null }>;
+  } | null;
   branch: Branch | null;
   items: OrderItem[];
 }
@@ -198,7 +213,8 @@ export default function OrderDetailPage() {
     variant: "outline" as const,
   };
 
-  const currentStepIndex = STATUS_STEPS.findIndex(
+  const statusSteps = order.fulfillmentMethod === 'delivery' ? STATUS_STEPS.filter((step) => step.key !== 'ready_for_pickup') : STATUS_STEPS;
+  const currentStepIndex = statusSteps.findIndex(
     (s) => s.key === order.status
   );
   const isCancelled = order.status === "cancelled";
@@ -221,7 +237,7 @@ export default function OrderDetailPage() {
             {formatDateTime(order.createdAt)}
           </p>
         </div>
-        <Badge variant={status.variant} className="ml-auto text-sm">
+        <Badge variant={status.variant} className="ml-auto text-sm" aria-label="Status pesanan">
           {status.label}
         </Badge>
       </div>
@@ -244,7 +260,7 @@ export default function OrderDetailPage() {
         <Card className="mb-6">
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
-              {STATUS_STEPS.map((step, i) => {
+              {statusSteps.map((step, i) => {
                 const isComplete = currentStepIndex > i;
                 const isCurrent = currentStepIndex === i;
                 return (
@@ -276,7 +292,7 @@ export default function OrderDetailPage() {
                         {step.label}
                       </span>
                     </div>
-                    {i < STATUS_STEPS.length - 1 && (
+                    {i < statusSteps.length - 1 && (
                       <div
                         className={`flex-1 h-0.5 mx-2 ${
                           isComplete ? "bg-green-600" : "bg-muted"
@@ -359,6 +375,116 @@ export default function OrderDetailPage() {
             </CardContent>
           </Card>
         )}
+
+      {/* Delivery summary (ticket 04 — pickup codes belong to pickup only) */}
+      {order.fulfillmentMethod === "delivery" && order.deliverySnapshot && (
+        <Card className="mb-6">
+          <CardContent className="p-6 space-y-2.5 text-sm">
+            <div className="flex items-center gap-2 font-semibold">
+              <Truck className="h-4 w-4 text-primary" /> Pengiriman ke Alamat
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Penerima</span>
+              <span className="font-medium">
+                {order.deliverySnapshot.address.recipientName} · {
+                  order.deliverySnapshot.address.phone
+                }
+              </span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-muted-foreground">Alamat Tujuan</span>
+              <span className="font-medium text-right">
+                {order.deliverySnapshot.address.fullAddress}
+              </span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-muted-foreground">Wilayah (Shipment)</span>
+              <span className="font-medium text-right text-xs">
+                {order.deliverySnapshot.address.province} · {
+                  order.deliverySnapshot.address.city
+                } · {order.deliverySnapshot.address.district} · {
+                  order.deliverySnapshot.address.area
+                } · Kode Pos {order.deliverySnapshot.address.postalCode}
+              </span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-muted-foreground">Layanan</span>
+              <span className="font-medium">
+                {order.deliverySnapshot.service.name} — Ongkir Rp {Number(
+                  order.deliverySnapshot.service.shippingCost
+                ).toLocaleString("id-ID")}
+              </span>
+            </div>
+            <div className="flex justify-between gap-6">
+              <span className="text-muted-foreground">Cabang Asal</span>
+              <span className="font-medium">
+                {order.deliverySnapshot.origin.name}
+              </span>
+            </div>
+
+            {/* Ticket 06 — the tracking surface: the resi/link/timeline only
+                when available (the delivery-safe DTO from the API). */}
+            {order.shipment && (
+              <div className="mt-3 space-y-2 border-t pt-3">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-muted-foreground">Nomor Resi (AWB)</span>
+                  <span className="font-mono font-semibold">
+                    {order.shipment.awb}
+                  </span>
+                </div>
+                {order.shipment.trackingUrl && (
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-muted-foreground">Lacak paket</span>
+                    <a
+                      href={order.shipment.trackingUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Buka tautan pelacakan
+                    </a>
+                  </div>
+                )}
+                {(order.shipment.timeline?.length ?? 0) > 0 && (
+                  <div className="space-y-1">
+                    {order.shipment.timeline.map((event, index) => (
+                      <div
+                        key={`track-${index}`}
+                        className="flex items-center gap-2 text-xs"
+                      >
+                        <span className="font-medium">{event.status}</span>
+                        {event.detail && (
+                          <span className="text-muted-foreground">
+                            {event.detail}
+                          </span>
+                        )}
+                        <span className="ml-auto text-muted-foreground">
+                          {event.at
+                            ? new Date(event.at).toLocaleString("id-ID")
+                            : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {order.shipment.podUrl && (
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-muted-foreground">Bukti Serah Terima (POD)</span>
+                    <a
+                      href={order.shipment.podUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-primary hover:underline"
+                    >
+                      Buka bukti serah terima
+                    </a>
+                  </div>
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left: Items + Summary */}
@@ -459,8 +585,8 @@ export default function OrderDetailPage() {
 
         {/* Right: Pickup + Payment Info */}
         <div className="space-y-6">
-          {/* Pickup Info */}
-          <Card>
+          {/* Pickup-only information must never imply physical pickup for delivery. */}
+          {order.fulfillmentMethod !== "delivery" && <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-base flex items-center gap-2">
                 <MapPin className="h-4 w-4" />
@@ -498,7 +624,7 @@ export default function OrderDetailPage() {
                 </p>
               )}
             </CardContent>
-          </Card>
+          </Card>}
 
           {/* Payment Info */}
           <Card>

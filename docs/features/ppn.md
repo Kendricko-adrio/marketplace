@@ -19,13 +19,22 @@ and use 11%.
 
 ## Calculation
 
-PPN is calculated after discount and rounded upward to a whole Rupiah:
+PPN is calculated after discount and rounded upward to a whole Rupiah. For
+pickup the taxable base is goods only; the pricing helper also supports a
+future delivery calculation where quoted shipping enters the taxable base.
+Delivery checkout is **not active** yet.
 
 ```text
-taxableBase = max(0, subtotal - discount)
+goodsBase = max(0, subtotal - discount)
+taxableBase = goodsBase + (fulfillmentMethod == delivery ? shippingCost : 0)
 ppnAmount = ceil(taxableBase × ppnRatePercent / 100)
-total = taxableBase + shippingCost + serviceFee + ppnAmount
+total = goodsBase + shippingCost + serviceFee + ppnAmount
 ```
+
+For pickup with Rp100,000 goods at 11%, the website/Midtrans total is
+Rp111,000 (PPN Rp11,000), while its single Jubelio Sales Order, invoice and
+payment are Rp100,000 with zero SO tax and discount. A mismatched SO/invoice/
+payment must block pickup fulfillment; the two ledgers are not equal.
 
 `apps/store/src/lib/order-pricing.ts` performs fixed-point `BigInt` arithmetic,
 not binary floating-point arithmetic. Thus a raw result of `100000.21` becomes

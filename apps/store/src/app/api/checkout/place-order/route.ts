@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { createHash } from "node:crypto";
 import { db } from "@/db";
 import {
   carts,
@@ -9,6 +10,8 @@ import {
   orderItems,
   productVariants,
   products,
+  addresses,
+  clients,
 } from "@/db";
 import { eq, and, sql } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
@@ -25,6 +28,23 @@ import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
 import { claimAndFailOrder } from "@/lib/order-finalize";
 import { initializeReservedOrderPayment } from "@/lib/payment-initialization";
 import { verifyCheckoutStock } from "@marketplace/db/src/checkout-live-stock";
+import {
+  DeliveryQuoteDataError,
+  loadQuoteOriginBranch,
+  loadRevalidatedDestination,
+  loadRevalidatedNewDestination,
+  loadShipmentParcelConfig,
+} from "@/lib/delivery-quote-data";
+import { buildShipmentParcel } from "@/lib/shipment-parcel";
+import { clientAddressInputSchema } from "@/lib/client-addresses";
+import { QuoteDeliveryError, quoteDelivery } from "@/lib/delivery-quote";
+import {
+  compareDeliveryApproval,
+  createDeliverySnapshot,
+} from "@/lib/delivery-order";
+import type { DeliverySnapshotPayload } from "@marketplace/db/src/schema";
+import type { OrderPricing } from "@/lib/order-pricing";
+import { createJubelioShipmentGateway } from "@/lib/jubelio-shipment-client";
 import {
   dispatchJubelioSalesCreate,
 } from "@/lib/jubelio-sales-lifecycle";
@@ -58,6 +78,34 @@ const placeOrderSchema = z.object({
   // Cart item ids the customer chose to checkout in this order.
   selectedItemIds: z.array(z.string()).min(1, "Select at least one item to checkout"),
 });
+
+// Ticket 04 — the delivery approval body. ONLY an approval: every money
+// field is re-derived server-side (fresh quote) and compared; `pickupDate`/
+// `pickupTime` are deliberately absent from a delivery submission.
+const REPRICE_REQUIRED_MESSAGE =
+  "Ongkir telah berubah. Periksa kembali rincian pesanan sebelum melanjutkan.";
+
+const deliveryPlaceOrderBase = z
+  .object({
+    itemIds: z
+      .array(z.string())
+      .min(1, "Select at least one item to checkout"),
+    contactPhone: z
+      .string()
+      .min(8, "Phone number is required")
+      .max(20, "Phone number is too long"),
+    contactEmail: z.string().email("Valid email is required"),
+    fulfillmentMethod: z.literal("delivery"),
+    courierId: z.number().int(),
+    serviceId: z.number().int(),
+    approvedPricing: z.record(z.string(), z.union([z.string(), z.number()])),
+  });
+const deliveryPlaceOrderSchema = z.union([
+  deliveryPlaceOrderBase.extend({ addressId: z.string().min(1) }).strict(),
+  deliveryPlaceOrderBase.extend({ newAddress: clientAddressInputSchema, saveAddress: z.boolean(), saveRequestId: z.string().uuid() }).strict(),
+]);
+
+type DeliveryPlaceOrderData = z.infer<typeof deliveryPlaceOrderSchema>;
 
 /**
  * Emergency pause switch (plan feature 4): when `checkout.paused` is set,
@@ -100,7 +148,14 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const parsed = placeOrderSchema.safeParse(body);
+    const requestedMethod = (body as { fulfillmentMethod?: unknown } | null)?.fulfillmentMethod;
+
+    // ===== Method-aware body handling: pickup stays the legacy shape; a
+    // delivery submission carries ONLY the approval (never money/slots). =====
+    const isDelivery = requestedMethod === "delivery";
+    const parsed = isDelivery
+      ? deliveryPlaceOrderSchema.safeParse(body)
+      : placeOrderSchema.safeParse(body);
 
     if (!parsed.success) {
       log.warn("invalid request body", { issues: parsed.error.issues });
@@ -117,13 +172,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { phone, email, pickupDate, pickupTime, selectedItemIds } =
-      parsed.data;
+    const deliveryBody = isDelivery
+      ? (parsed.data as DeliveryPlaceOrderData)
+      : null;
+    const phone = isDelivery
+      ? deliveryBody!.contactPhone
+      : (parsed.data as { phone: string }).phone;
+    const email = isDelivery
+      ? deliveryBody!.contactEmail
+      : (parsed.data as { email: string }).email;
+    const selectedItemIds = isDelivery
+      ? deliveryBody!.itemIds
+      : (parsed.data as { selectedItemIds: string[] }).selectedItemIds;
+    const pickupDate = isDelivery ? null : (parsed.data as { pickupDate: string }).pickupDate;
+    const pickupTime = isDelivery ? null : (parsed.data as { pickupTime: string }).pickupTime;
     log = log.child({
       userId: session.user.id,
       itemCount: selectedItemIds.length,
-      pickupDate,
-      pickupTime,
+      ...(isDelivery
+        ? { fulfillmentMethod: "delivery", ...("addressId" in deliveryBody! ? { addressId: deliveryBody.addressId } : { addressType: "new" }) }
+        : { pickupDate: pickupDate!, pickupTime: pickupTime! }),
     });
 
     // ===== Load the user's cart =====
@@ -152,6 +220,7 @@ export async function POST(request: NextRequest) {
         variantColor: productVariants.color,
         variantSize: productVariants.size,
         variantPrice: productVariants.price,
+        parcelDimensions: productVariants.parcelDimensions,
         jubelioItemId: productVariants.jubelioItemId,
         productId: products.id,
         productName: products.name,
@@ -166,6 +235,21 @@ export async function POST(request: NextRequest) {
       selectedItemIds.includes(item.cartItemId)
     );
 
+    // Ticket 04: a delivery approval that references items outside the
+    // caller's cart (or none at all) is not the caller's data — presented as
+    // not found. The legacy pickup checkout keeps its 400 contract.
+    if (isDelivery && selectedItems.length !== selectedItemIds.length) {
+      log.warn("delivery checkout rejected — selected items not owned", {
+        selectedItemIds,
+      });
+      return withRequestId(
+        NextResponse.json(
+          { success: false, error: "Barang keranjang tidak ditemukan." },
+          { status: 404 }
+        ),
+        log
+      );
+    }
     if (selectedItems.length === 0) {
       log.warn("checkout rejected — no selected cart items", { selectedItemIds });
       return NextResponse.json(
@@ -241,16 +325,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const slotValidation = validatePickupSlot(
-      branch[0].operatingHours,
-      pickupDate,
-      pickupTime
-    );
-    if (!slotValidation.ok) {
-      return NextResponse.json(
-        { success: false, error: slotValidation.error },
-        { status: 400 }
+    // The delivery method needs NO pickup slot validation; the pickup flow
+    // keeps its client/server slot gates unchanged.
+    if (!isDelivery) {
+      const slotValidation = validatePickupSlot(
+        branch[0].operatingHours,
+        pickupDate!,
+        pickupTime!
       );
+      if (!slotValidation.ok) {
+        return withRequestId(
+          NextResponse.json(
+            { success: false, error: slotValidation.error },
+            { status: 400 }
+          ),
+          log
+        );
+      }
     }
 
     // Read the local mirror first, then verify ALL selected pairs against the
@@ -287,7 +378,7 @@ export async function POST(request: NextRequest) {
     }
     log.info("Jubelio stock verified before Sales Order", { itemCount: selectedItems.length });
 
-    // ===== Calculate totals =====
+    // ===== Calculate totals (method-aware) =====
     const subtotal = calculateLineItemSubtotal(
       selectedItems.map((item) => ({
         price: item.variantPrice,
@@ -295,13 +386,158 @@ export async function POST(request: NextRequest) {
       }))
     );
     const ppnRatePercent = await getPpnRatePercent();
-    const pricing = calculateOrderPricing({
-      subtotal,
-      discount: 0,
-      shippingCost: 0,
-      serviceFee: 0,
-      ppnRatePercent,
-    });
+    let pricing: ReturnType<typeof calculateOrderPricing>;
+    let deliverySnapshot: DeliverySnapshotPayload | null = null;
+    let verifiedNewAddress: Awaited<ReturnType<typeof loadRevalidatedNewDestination>> | null = null;
+    if (isDelivery) {
+      // Fresh authoritative requote BEFORE anything local (no order, no
+      // reservation, no SO, no Snap on a refused approval): ownership +
+      // origin + the region revalidation + the IT parcel config (read per
+      // quote, not from a cache) + the provider `rates`.
+      try {
+        const originBranch = await loadQuoteOriginBranch(branchId);
+        const destination = "addressId" in deliveryBody!
+          ? await loadRevalidatedDestination(session.user.id, deliveryBody.addressId)
+          : await loadRevalidatedNewDestination(deliveryBody!.newAddress);
+        if ("newAddress" in deliveryBody!) verifiedNewAddress = destination;
+        const parcelConfig = await loadShipmentParcelConfig();
+        const quote = await quoteDelivery(
+          {
+            branch: originBranch,
+            items: selectedItems.map((item) => ({
+              branchId: item.branchId as string,
+              itemName: `${item.productName}${
+                [item.variantColor, item.variantSize].filter(Boolean).join(" / ")
+                  ? ` ${[item.variantColor, item.variantSize].filter(Boolean).join(" / ")}`
+                  : ""
+              }`.trim(),
+              quantity: item.quantity,
+              value: item.variantPrice,
+              dimensions: item.parcelDimensions,
+            })),
+            destination: {
+              postalCode: destination.postalCode,
+              areaId: destination.areaId,
+            },
+            fallback: parcelConfig.fallback,
+            packagingWeight: parcelConfig.packagingWeightGrams,
+            ppnRatePercent,
+          },
+          createJubelioShipmentGateway()
+        );
+        const chosen = quote.services.find(
+          (service) =>
+            service.courierId === deliveryBody!.courierId &&
+            service.serviceId === deliveryBody!.serviceId
+        );
+        // Missing approved service → forces a step-2 reselect/retry; a moved
+        // approval → the user re-approves the NEW money. Either way NOTHING
+        // local has been created yet.
+        if (!chosen || !compareDeliveryApproval(
+          deliveryBody!.approvedPricing as unknown as OrderPricing,
+          chosen.pricing
+        ).approved) {
+          log.warn("delivery quote must be re-approved", {
+            changedService: !chosen,
+          });
+          return withRequestId(
+            NextResponse.json(
+              {
+                success: false,
+                error: REPRICE_REQUIRED_MESSAGE,
+                code: "DELIVERY_REPRICE_REQUIRED",
+                data: { services: quote.services },
+              },
+              { status: 409 }
+            ),
+            log
+          );
+        }
+        pricing = chosen.pricing;
+        const parcel = buildShipmentParcel({
+          items: selectedItems.map((item) => ({
+            itemName: item.productName,
+            quantity: item.quantity,
+            value: Number(item.variantPrice),
+            dimensions: item.parcelDimensions,
+          })),
+          fallback: parcelConfig.fallback,
+          packagingWeight: parcelConfig.packagingWeightGrams,
+        });
+        deliverySnapshot = createDeliverySnapshot({
+          address: {
+            ...destination.canonical,
+            recipientName: destination.recipientName,
+            phone: destination.phone,
+            fullAddress: destination.fullAddress,
+          },
+          origin: {
+            branchId: branch[0].id,
+            name: originBranch.name,
+            phone: originBranch.shippingPhone,
+            address: originBranch.shippingAddress,
+            zipcode: originBranch.shippingPostalCode,
+            areaId: originBranch.shippingAreaId,
+          },
+          parcel,
+          service: {
+            courierId: chosen.courierId,
+            serviceId: chosen.serviceId,
+            name: chosen.name,
+            shippingCost: chosen.shippingCost,
+            ...(chosen.validEta ? { validEta: chosen.validEta } : {}),
+          },
+          pricing,
+        });
+      } catch (requoteError) {
+        if (requoteError instanceof DeliveryQuoteDataError) {
+          const status =
+            requoteError.code === "NOT_FOUND"
+              ? 404
+              : requoteError.code === "UNAVAILABLE"
+                ? 502
+                : 400;
+          log.error("delivery placement data failed", {
+            code: requoteError.code,
+            error: serializeError(requoteError),
+          });
+          return withRequestId(
+            NextResponse.json(
+              { success: false, error: requoteError.message },
+              { status }
+            ),
+            log
+          );
+        }
+        const reprice = requoteError instanceof QuoteDeliveryError;
+        log.error("delivery placement quote failed", {
+          code: reprice ? requoteError.code : "PROVIDER",
+        });
+        // A failed/empty/no-service quote NEVER proceeds with a zero or stale
+        // ongkir: the same 409 reprice contract forces the fresh selection.
+        return withRequestId(
+          NextResponse.json(
+            {
+              success: false,
+              error: REPRICE_REQUIRED_MESSAGE,
+              code: "DELIVERY_REPRICE_REQUIRED",
+              data: { services: [] },
+            },
+            { status: 409 }
+          ),
+          log
+        );
+      }
+    } else {
+      pricing = calculateOrderPricing({
+        fulfillmentMethod: "pickup",
+        subtotal,
+        discount: 0,
+        shippingCost: 0,
+        serviceFee: 0,
+        ppnRatePercent,
+      });
+    }
     const total = Number(pricing.total);
     const paymentItemDetails = buildPaymentItemDetails({
       items: selectedItems.map((item) => ({
@@ -357,16 +593,66 @@ export async function POST(request: NextRequest) {
 
     try {
       await db.transaction(async (tx) => {
+        // Save only after the final quote has been approved, atomically with
+        // the order. A failed quote never mutates the address book.
+        let savedAddressId: string | null = null;
+        if (isDelivery && deliveryBody && "newAddress" in deliveryBody && deliveryBody.saveAddress && verifiedNewAddress) {
+          const [owner] = await tx.select({ id: clients.id }).from(clients)
+            .where(eq(clients.id, session.user.id)).for("update").limit(1);
+          if (!owner) throw new Error("Address owner no longer exists");
+          // A stable, scoped ID makes a repeated accepted save request reuse
+          // its own address instead of creating duplicate book entries.
+          savedAddressId = `checkout:${createHash("sha256")
+            .update(`${session.user.id}:${deliveryBody.saveRequestId}`).digest("hex")}`;
+          const canonical = verifiedNewAddress.canonical;
+          const [prior] = await tx.select().from(addresses).where(eq(addresses.id, savedAddressId)).limit(1);
+          if (prior) {
+            const identical = prior.userId === session.user.id && prior.firstName === verifiedNewAddress.recipientName &&
+              prior.phone === verifiedNewAddress.phone && prior.fullAddress === verifiedNewAddress.fullAddress &&
+              prior.provinceId === canonical.provinceId && prior.cityId === canonical.cityId &&
+              prior.districtId === canonical.districtId && prior.areaId === canonical.areaId &&
+              prior.postalCode === canonical.postalCode;
+            if (!identical) throw new Error("Checkout address save request reused with a different destination");
+          } else {
+            if (deliveryBody.newAddress.isDefault) {
+              await tx.update(addresses).set({ isDefault: false, updatedAt: new Date() })
+                .where(and(eq(addresses.userId, session.user.id), eq(addresses.isDefault, true)));
+            }
+            await tx.insert(addresses).values({
+              id: savedAddressId,
+              userId: session.user.id,
+              firstName: verifiedNewAddress.recipientName,
+              lastName: "",
+              phone: verifiedNewAddress.phone,
+              fullAddress: verifiedNewAddress.fullAddress,
+              provinceId: canonical.provinceId,
+              province: canonical.province,
+              cityId: canonical.cityId,
+              city: canonical.city,
+              districtId: canonical.districtId,
+              district: canonical.district,
+              areaId: canonical.areaId,
+              area: canonical.area,
+              postalCode: canonical.postalCode,
+              isDefault: deliveryBody.newAddress.isDefault,
+            });
+          }
+        }
         // ===== Create the order =====
         await tx.insert(orders).values({
           id: orderId,
           userId: session.user.id,
           branchId,
+          addressId: savedAddressId ?? (isDelivery && deliveryBody && "addressId" in deliveryBody ? deliveryBody.addressId : null),
           status: "pending_payment",
           paymentMethod: null,
           paymentStatus: "pending",
-          pickupDate: pickupDateToInstant(pickupDate),
-          pickupTime,
+          // Delivery rows carry NO pickup slots and their immutable snapshot;
+          // pickup rows keep the legacy columns (default method: pickup).
+          fulfillmentMethod: isDelivery ? "delivery" : "pickup",
+          deliverySnapshot: isDelivery ? deliverySnapshot : null,
+          pickupDate: isDelivery ? null : pickupDateToInstant(pickupDate!),
+          pickupTime: isDelivery ? null : pickupTime!,
           contactPhone: phone,
           contactEmail: email,
           subtotal: pricing.subtotal,

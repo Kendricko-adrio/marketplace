@@ -318,7 +318,7 @@ export const jubelioMockServer = createServer(async (request, response) => {
   if (method === "POST" && url.pathname === "/rates/all") {
     if (request.headers.authorization !== "Bearer mock-token") return json(response, 401, { error: "Unauthorized" });
     if (shipmentScenario === "rate-failure") return json(response, 500, { error: "Fixture rate failure" });
-    return json(response, 200, shipmentScenario === "rate-empty" ? [] : [{ courier_id: 13, courier_name: "JNE", courier_service_id: 1327, courier_service_code: "REG", courier_service_name: "JNE REG Fixture", rates: shipmentRates, final_rates: 10000, shipping_insurance: null, is_cod_supported: false }]);
+    return json(response, 200, shipmentScenario === "rate-empty" ? [] : [{ courier_id: 13, courier_name: "JNE", courier_service_id: 1327, courier_service_code: "REG", courier_service_name: "JNE REG Fixture", courier_service_category: 1, rates: shipmentRates, final_rates: 10000, shipping_insurance: null, is_cod_supported: false }]);
   }
 
   if (method === "GET" && url.pathname.startsWith("/shipments/awb/")) {

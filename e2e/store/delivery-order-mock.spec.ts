@@ -236,9 +236,6 @@ async function driveDeliveryToPlace(
   await page.getByRole("checkbox").first().check();
   await page.getByRole("button", { name: "Checkout" }).click();
   await page.waitForURL("**/checkout");
-  await page.getByLabel("Nomor Telepon *").fill("081234567890");
-  await page.getByLabel("Email *").fill(email);
-  await page.getByRole("button", { name: "Lanjut" }).click();
 
   // Method = delivery → address → quote → service selection.
   await page.getByText("Kirim ke alamat", { exact: true }).click();
@@ -252,7 +249,11 @@ async function driveDeliveryToPlace(
   await page.getByText("JNE REG Fixture").click();
   await expect(page.getByRole("region", { name: "Quote Pengiriman" }).getByText("Rp 20.000", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Lanjut" }).click();
-  await expect(page.getByText(street, { exact: true })).toBeVisible();
+  await page.getByLabel("Nomor Telepon *").fill("081234567890");
+  await page.getByLabel("Email *").fill(email);
+  await page.getByRole("button", { name: "Lanjut" }).click();
+  const review = page.getByRole("heading", { name: "Pembayaran", exact: true }).locator("..");
+  await expect(review.getByText(street, { exact: true })).toBeVisible();
 
   // The browser only ever posts the approval body — money re-derived server-side.
   const placeBody: Record<string, unknown>[] = [];
@@ -472,7 +473,8 @@ async function addressIdForStreet(street: string): Promise<string | null> {
 }
 
 test.describe("mock-only delivery order + settlement (ticket 04)", () => {
-  test.describe.configure({ mode: "serial" });
+  // Includes cold Next.js compilation and the three-step checkout journey.
+  test.describe.configure({ mode: "serial", timeout: 90_000 });
 
   test.beforeEach(async () => {
     // Restore only owned fixtures changed by the snapshot drift case.
@@ -512,9 +514,6 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     await page.getByRole("checkbox").first().check();
     await page.getByRole("button", { name: "Checkout" }).click();
     await page.waitForURL("**/checkout");
-    await page.getByLabel("Nomor Telepon *").fill("081234567890");
-    await page.getByLabel("Email *").fill(CONTACT_EMAIL);
-    await page.getByRole("button", { name: "Lanjut" }).click();
     await page.getByText("Kirim ke alamat", { exact: true }).click();
     await page.getByRole("button", { name: "Gunakan alamat baru" }).click();
     await page.getByLabel("Nama Penerima").fill("Penerima Baru Checkout");
@@ -526,6 +525,9 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     ]) await page.getByLabel(label, { exact: true }).selectOption({ label: option });
     await expect(page.getByText("JNE REG Fixture")).toBeVisible({ timeout: 20_000 });
     await page.getByText("JNE REG Fixture").click();
+    await page.getByRole("button", { name: "Lanjut" }).click();
+    await page.getByLabel("Nomor Telepon *").fill("081234567890");
+    await page.getByLabel("Email *").fill(CONTACT_EMAIL);
     await page.getByRole("button", { name: "Lanjut" }).click();
     await page.getByRole("checkbox").first().check();
     let body: { success: boolean; orderId: string } | undefined;
@@ -554,9 +556,6 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     await page.getByRole("checkbox").first().check();
     await page.getByRole("button", { name: "Checkout" }).click();
     await page.waitForURL("**/checkout");
-    await page.getByLabel("Nomor Telepon *").fill("081234567890");
-    await page.getByLabel("Email *").fill(CONTACT_EMAIL);
-    await page.getByRole("button", { name: "Lanjut" }).click();
     await page.getByText("Kirim ke alamat", { exact: true }).click();
     await page.getByRole("button", { name: "Gunakan alamat baru" }).click();
     await page.getByLabel("Nama Penerima").fill("Penerima Default Checkout");
@@ -571,6 +570,9 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     await page.getByLabel("Jadikan alamat utama").check();
     await expect(page.getByText("JNE REG Fixture")).toBeVisible({ timeout: 20_000 });
     await page.getByText("JNE REG Fixture").click();
+    await page.getByRole("button", { name: "Lanjut" }).click();
+    await page.getByLabel("Nomor Telepon *").fill("081234567890");
+    await page.getByLabel("Email *").fill(CONTACT_EMAIL);
     await page.getByRole("button", { name: "Lanjut" }).click();
     await page.getByRole("checkbox").first().check();
     let body: { success: boolean; orderId: string } | undefined;
@@ -808,15 +810,15 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     await page.getByRole("checkbox").first().check();
     await page.getByRole("button", { name: "Checkout" }).click();
     await page.waitForURL("**/checkout");
-    await page.getByLabel("Nomor Telepon *").fill("081234567890");
-    await page.getByLabel("Email *").fill(CONTACT_EMAIL);
-    await page.getByRole("button", { name: "Lanjut" }).click();
     await page.getByText("Kirim ke alamat", { exact: true }).click();
     await page.getByLabel("Alamat Pengiriman").click();
     await page
       .getByRole("option", { name: new RegExp(ADDRESS_STREETS[1].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")) })
       .click();
     await page.getByText("JNE REG Fixture").click();
+    await page.getByRole("button", { name: "Lanjut" }).click();
+    await page.getByLabel("Nomor Telepon *").fill("081234567890");
+    await page.getByLabel("Email *").fill(CONTACT_EMAIL);
     await page.getByRole("button", { name: "Lanjut" }).click();
 
     // The quote approved at 133.200; NOW the mock rates move to 30.000.
@@ -862,8 +864,10 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
 
     // …and the placement then requires a FRESH approval click (this second
     // click must still work with the re-derived 30.000 quote).
-    const confirm = page.locator('input[type="checkbox"]').first();
-    if (!(await confirm.isChecked())) await confirm.check();
+    const confirm = page.getByRole("checkbox");
+    await expect(confirm).not.toBeChecked();
+    await expect(page.getByRole("button", { name: "Bayar Sekarang" })).toBeDisabled();
+    await confirm.check();
     let payload2: Record<string, unknown>;
     await page.route("**/api/checkout/place-order", async (route) => {
       const response = await route.fetch();
@@ -893,10 +897,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
       grand_total: 100000,
     });
 
-    // A MISSING service between quote and place: forces a reselect — no order.
-    expect(
-      (await mockControl("PUT", "/__control/shipment", { scenario: "rate-empty" })).status
-    ).toBe("ok");
+    // A MISSING service between quote and place returns to fulfillment, not contact.
     const ordersAfterSecond = await countOrders();
     const emptyQuotePage = await orderContext!.newPage();
     const add2 = await johnContext!.request.post("/api/cart/items", {
@@ -907,9 +908,6 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     await emptyQuotePage.getByRole("checkbox").first().check();
     await emptyQuotePage.getByRole("button", { name: "Checkout" }).click();
     await emptyQuotePage.waitForURL("**/checkout");
-    await emptyQuotePage.getByLabel("Nomor Telepon *").fill("081234567890");
-    await emptyQuotePage.getByLabel("Email *").fill(CONTACT_EMAIL);
-    await emptyQuotePage.getByRole("button", { name: "Lanjut" }).click();
     await emptyQuotePage.getByText("Kirim ke alamat", { exact: true }).click();
     await emptyQuotePage.getByLabel("Alamat Pengiriman").click();
     await emptyQuotePage
@@ -917,9 +915,25 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
         name: new RegExp(ADDRESS_STREETS[2].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
       })
       .click();
-    await expect(
-      emptyQuotePage.getByRole("button", { name: /Coba lagi/ })
-    ).toBeVisible({ timeout: 20_000 });
+    await emptyQuotePage.getByRole("radio", { name: /JNE REG Fixture/ }).check();
+    await emptyQuotePage.getByRole("button", { name: "Lanjut", exact: true }).click();
+    await emptyQuotePage.getByLabel("Nomor Telepon *").fill("081234567890");
+    await emptyQuotePage.getByLabel("Email *").fill(CONTACT_EMAIL);
+    await emptyQuotePage.getByRole("button", { name: "Lanjut", exact: true }).click();
+    await emptyQuotePage.getByRole("checkbox").check();
+    expect(
+      (await mockControl("PUT", "/__control/shipment", { scenario: "rate-empty" })).status
+    ).toBe("ok");
+    const [missing] = await Promise.all([
+      emptyQuotePage.waitForResponse((response) => response.url().endsWith("/api/checkout/place-order")),
+      emptyQuotePage.getByRole("button", { name: "Bayar Sekarang" }).click(),
+    ]);
+    expect(missing.status()).toBe(409);
+    await expect(emptyQuotePage.getByRole("heading", { name: "Cara Pengiriman", exact: true })).toBeVisible();
+    await expect(emptyQuotePage.getByRole("heading", { name: "Informasi Kontak" })).toBeHidden();
+    await expect(emptyQuotePage.getByText(REPRICE_MESSAGE, { exact: true })).toBeVisible();
+    await expect(emptyQuotePage.getByRole("button", { name: /Coba lagi/ })).toBeVisible();
+    await expect(emptyQuotePage.getByRole("button", { name: "Lanjut", exact: true })).toBeDisabled();
     await expect(emptyQuotePage.getByText("JNE REG Fixture")).toHaveCount(0);
     // No order may be created from a dead quote.
     expect(await countOrders()).toBe(ordersAfterSecond);

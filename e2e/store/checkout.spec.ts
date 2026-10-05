@@ -265,12 +265,12 @@ async function reachCheckoutReview(
   await page.getByRole("checkbox").first().check();
   await page.getByRole("button", { name: "Checkout" }).click();
   await page.waitForURL("**/checkout");
-  await page.getByLabel("Nomor Telepon *").fill("081234567890");
-  await page.getByLabel("Email *").fill(email);
-  await page.getByRole("button", { name: "Lanjut" }).click();
   await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
   await page.getByRole("combobox").click();
   await page.getByRole("option", { name: "10:00" }).click();
+  await page.getByRole("button", { name: "Lanjut" }).click();
+  await page.getByLabel("Nomor Telepon *").fill("081234567890");
+  await page.getByLabel("Email *").fill(email);
   await page.getByRole("button", { name: "Lanjut" }).click();
   await expect(
     page.getByRole("heading", { name: "Pembayaran" })

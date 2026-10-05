@@ -82,6 +82,10 @@ export async function POST(request: NextRequest) {
       branchId: branch.id,
       destinationAreaId: destination.areaId,
       serviceCount: quote.services.length,
+      serviceCategoryCount: new Set(quote.services
+        .map((service) => service.serviceCategoryId)
+        .filter((categoryId) => categoryId !== null)).size,
+      uncategorizedServiceCount: quote.services.filter((service) => service.serviceCategoryId === null).length,
     });
     return NextResponse.json({
       success: true,

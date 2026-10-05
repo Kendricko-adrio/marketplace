@@ -75,6 +75,8 @@ export type DeliveryQuoteServicePricing = ReturnType<typeof calculateOrderPricin
 export interface DeliveryQuoteService {
   courierId: number;
   serviceId: number;
+  /** Provider category ID; null when metadata is absent or malformed. */
+  serviceCategoryId: number | null;
   name: string;
   shippingCost: number;
   pricing: OrderPricing;
@@ -106,6 +108,23 @@ function finitePositive(value: unknown): number | null {
     return null;
   }
   return value;
+}
+
+const shipmentCategoryNames = new Map<string, number>([
+  ["REGULER", 1], ["EKONOMI", 2], ["NEXTDAY", 3], ["INSTANT", 4],
+  ["SAMEDAY", 5], ["CARGO", 6], ["MUATAN TRUK PENUH", 7],
+]);
+
+/** Accept category IDs or exact official names, never carrier-name/ETA guesses. */
+function normalizeServiceCategoryId(value: unknown): number | null {
+  if (typeof value === "string") {
+    const category = value.trim().toUpperCase();
+    if (!/^\d+$/.test(category)) return shipmentCategoryNames.get(category) ?? null;
+    value = Number(category);
+  }
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : null;
 }
 
 /** Unknown insurance metadata: excluded when present AND non-empty. */
@@ -261,7 +280,15 @@ export async function quoteDelivery(
       Number.isFinite(Date.parse(etaTo))
         ? { from: etaFrom, to: etaTo }
         : undefined;
-    services.push({ courierId, serviceId, name, shippingCost: ratesAmount, pricing, validEta });
+    services.push({
+      courierId,
+      serviceId,
+      serviceCategoryId: normalizeServiceCategoryId(rate.courier_service_category),
+      name,
+      shippingCost: ratesAmount,
+      pricing,
+      validEta,
+    });
   }
   if (services.length === 0) {
     throw new QuoteDeliveryError(

@@ -52,6 +52,26 @@ async function observedStock(): Promise<number> {
   return body.data[0].location_stocks[0].on_hand;
 }
 
+describe("local Shipment rates boundary", () => {
+  it("includes official service-category metadata in its regular rate fixture", async () => {
+    const configured = await fetch(`${baseUrl}/__control/shipment`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scenario: "rate-normal" }),
+    });
+    expect(configured.status).toBe(200);
+    const rates = await fetch(`${baseUrl}/rates/all`, {
+      method: "POST",
+      headers: { authorization: "Bearer mock-token", "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(rates.status).toBe(200);
+    await expect(rates.json()).resolves.toEqual([expect.objectContaining({
+      courier_service_name: "JNE REG Fixture", courier_service_category: 1, rates: 20000,
+    })]);
+  });
+});
+
 describe("local Midtrans status boundary", () => {
   it("returns a configured authoritative settlement for E2E webhooks", async () => {
     resetMockState();

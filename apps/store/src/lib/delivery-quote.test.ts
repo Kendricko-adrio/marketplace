@@ -219,6 +219,28 @@ describe("quoteDelivery", () => {
     });
   });
 
+  it.each([
+    [1, 1], [2, 2], [3, 3], [4, 4], [5, 5], [6, 6], [7, 7],
+    ["3", 3], ["REGULER", 1], ["EKONOMI", 2], ["NEXTDAY", 3],
+    ["INSTANT", 4], ["SAMEDAY", 5], ["CARGO", 6], ["MUATAN TRUK PENUH", 7],
+    [99, 99], [undefined, null], [null, null], ["new-category", null],
+    [{ service_category_id: 3 }, null], [false, null], [1.5, null], [0, null],
+  ])("preserves only validated provider category metadata %j as %j without changing pricing", async (category, expected) => {
+    const quote = await quoteDelivery(BASE_INPUT, recordingGateway([{
+      ...JNE_REG,
+      // A service name/ETA must never be used to infer the category.
+      courier_service_name: "SAME DAY marketing name",
+      courier_service_category: category,
+      eta_from: "2026-10-04T01:00:00Z",
+      eta_to: "2026-10-04T03:00:00Z",
+    }]).gateway);
+    expect(quote.services[0]).toMatchObject({
+      serviceCategoryId: expected,
+      shippingCost: 20000,
+      pricing: { subtotal: "100000.00", ppnAmount: "13200.00", total: "133200.00" },
+    });
+  });
+
   it("excludes rate services carrying non-empty unknown insurance metadata (fail closed, opaque probe)", async () => {
     const recorder = recordingGateway([JNE_REG, INSURED_SERVICE]);
 

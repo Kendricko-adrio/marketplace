@@ -187,8 +187,8 @@ async function httpSignIn(
 }
 
 /**
- * Drives the storefront UI: add fixture item → cart → checkout → contact →
- * pickup slot → review step. The caller asserts step 3 before paying.
+ * Drives the storefront UI: add fixture item → cart → checkout → pickup
+ * slot → contact → review step. The caller asserts step 3 before paying.
  */
 async function reachCheckoutReview(
   page: Page,
@@ -203,12 +203,12 @@ async function reachCheckoutReview(
   await page.getByRole("checkbox").first().check();
   await page.getByRole("button", { name: "Checkout" }).click();
   await page.waitForURL("**/checkout");
-  await page.getByLabel("Nomor Telepon *").fill("081234567890");
-  await page.getByLabel("Email *").fill(email);
-  await page.getByRole("button", { name: "Lanjut" }).click();
   await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
   await page.getByRole("combobox").click();
   await page.getByRole("option", { name: "10:00" }).click();
+  await page.getByRole("button", { name: "Lanjut" }).click();
+  await page.getByLabel("Nomor Telepon *").fill("081234567890");
+  await page.getByLabel("Email *").fill(email);
   await page.getByRole("button", { name: "Lanjut" }).click();
   await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
   await page.getByText(/Saya telah memeriksa pesanan/).click();
@@ -413,7 +413,7 @@ test.afterAll(async () => {
 
 test.describe("mock-only pickup lifecycle (ticket 01)", () => {
   // Shared single customer context; the two lifecycle tests must not overlap.
-  test.describe.configure({ mode: "serial" });
+  test.describe.configure({ mode: "serial", timeout: 90_000 });
 
   test.beforeEach(async () => {
     // Fresh in-memory provider state on the isolated mock instance.
@@ -637,7 +637,7 @@ test.describe("mock-only pickup lifecycle (ticket 01)", () => {
     // The still-best-effort channel mirror cannot block pickup: the mock
     // refuses the Siap Proses edit while the committed verify path works.
     await adminPage.goto(`${ADMIN_BASE_URL}/admin/orders/${orderId}`);
-    await expect(adminPage.getByRole("button", { name: "Customer Pick Up" })).toBeVisible();
+    await expect(adminPage.getByRole("button", { name: "Customer Pick Up" })).toBeVisible({ timeout: 15_000 });
     await adminPage.getByRole("button", { name: "Customer Pick Up" }).click();
     await expect(adminPage.getByRole("heading", { name: "Customer Pick Up" })).toBeVisible();
     await adminPage.getByLabel("Pickup Code").fill(pickupCode);

@@ -95,24 +95,23 @@ export default function CheckoutPage() {
     new Set()
   );
 
-  // Step 1 — Contact
+  // Step 2 — Contact
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [contactError, setContactError] = useState("");
 
-  // Step 2 — Pickup
+  // Step 1 — Pickup
   const [pickupDate, setPickupDate] = useState("");
   const [pickupTime, setPickupTime] = useState("");
   const [pickupError, setPickupError] = useState("");
+  // Only the latest validation of unchanged fulfillment inputs may advance.
+  const pickupValidationGeneration = useRef(0);
 
   // Step 3 — Review
   const [confirmed, setConfirmed] = useState(false);
 
-  // ===== Fulfillment method (ticket 03) =====
-  // Step 2 opens with the METHOD choice: pickup (unchanged flow) or delivery
-  // (quote preview only — order creation lands in ticket 04). The delivery
-  // selection state is kept here ready for that hand-off; the pickup flow is
-  // never silently replaced by delivery.
+  // Step 1 chooses pickup or delivery before collecting the order contact.
+  // Method changes invalidate delivery selection and approval.
   const [fulfillmentMethod, setFulfillmentMethod] = useState<
     "pickup" | "delivery"
   >("pickup");
@@ -143,6 +142,7 @@ export default function CheckoutPage() {
 
   function handleFulfillmentMethodChange(method: "pickup" | "delivery") {
     if (method === fulfillmentMethod) return;
+    pickupValidationGeneration.current += 1;
     setFulfillmentMethod(method);
     setConfirmed(false);
     // Any method change invalidates the old service + money immediately.
@@ -226,12 +226,9 @@ export default function CheckoutPage() {
     };
   }, [selectedBranchId]);
 
-  // ===== Step 1 validation (contact) =====
-  // Phone and email are both required at pickup — the store asks for them
-  // when the customer collects the order — so we validate them strictly:
-  // phone must contain 8–15 digits (E.164 max), email must be a well-formed
-  // address. Values are trimmed so what gets submitted is what was validated.
-  const validateStep1 = (): boolean => {
+  // Order contact is required for both methods, independently of the
+  // delivery recipient. Submit the same trimmed values that were validated.
+  const validateContact = (): boolean => {
     const trimmedPhone = phone.trim();
     const phoneDigits = trimmedPhone.replace(/\D/g, "");
     if (
@@ -241,14 +238,14 @@ export default function CheckoutPage() {
       trimmedPhone.length > 20
     ) {
       setContactError(
-        "Masukkan nomor telepon yang valid (8–15 angka). Nomor ini wajib Anda sebutkan saat pengambilan pesanan di toko."
+        "Masukkan nomor telepon yang valid (8–15 angka)."
       );
       return false;
     }
     const trimmedEmail = email.trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
       setContactError(
-        "Masukkan alamat email yang valid. Kode pickup akan dikirim ke email ini dan wajib Anda sebutkan saat pengambilan pesanan."
+        "Masukkan alamat email yang valid."
       );
       return false;
     }
@@ -285,7 +282,7 @@ export default function CheckoutPage() {
     }
   }, [sessionUser, phone, email]);
 
-  // ===== Derived values for Step 2 (pickup) =====
+  // ===== Derived values for Step 1 (pickup) =====
   const todayStr = new Date().toISOString().split("T")[0];
 
   const selectedDate = useMemo(() => {
@@ -327,8 +324,8 @@ export default function CheckoutPage() {
   );
   const total = Number(pricing.total);
 
-  // ===== Step 2 validation (pickup — client-side; server re-validates on place-order) =====
-  const validateStep2 = (): boolean => {
+  // Pickup validation — the server also revalidates at order placement.
+  const validatePickup = (): boolean => {
     if (!pickupDate) {
       setPickupError("Please select a pickup date.");
       return false;
@@ -351,17 +348,17 @@ export default function CheckoutPage() {
     return true;
   };
 
-  // ===== Server-side validation for Step 2 (via validate-step-2 endpoint) =====
-  // Delivery keeps the SAME review step (confirmed), but skips the pickup
-  // slot validation entirely — no pickup slots are ever filled for delivery.
-  const handleNextFromStep2 = async () => {
+  // Step 1 validates fulfillment before opening contact. The existing pickup
+  // endpoint retains its name for compatibility; delivery never sends slots.
+  const handleNextFromFulfillment = async () => {
     if (fulfillmentMethod === "delivery") {
       if (deliveryPending || !deliveryService) return;
       setConfirmed(false);
-      setStep(3);
+      setStep(2);
       return;
     }
-    if (!validateStep2() || !branch) return;
+    if (!validatePickup() || !branch) return;
+    const generation = ++pickupValidationGeneration.current;
     try {
       const res = await fetch("/api/checkout/validate-step-2", {
         method: "POST",
@@ -373,15 +370,28 @@ export default function CheckoutPage() {
         }),
       });
       const data = await res.json();
+      if (generation !== pickupValidationGeneration.current) return;
       if (data.success) {
-        setStep(3);
+        setConfirmed(false);
+        setStep(2);
       } else {
         setPickupError(data.error || "Invalid pickup slot.");
       }
     } catch {
+      if (generation !== pickupValidationGeneration.current) return;
       setPickupError("Failed to validate pickup slot. Please try again.");
     }
   };
+
+  function handleNextFromContact() {
+    if (fulfillmentMethod === "delivery" && (deliveryPending || !deliveryService)) {
+      setStep(1);
+      return;
+    }
+    if (!validateContact()) return;
+    setConfirmed(false);
+    setStep(3);
+  }
 
   // ===== Place order =====
   const handlePlaceOrder = async () => {
@@ -430,7 +440,7 @@ export default function CheckoutPage() {
           setRepriceSync({ services: fresh, selected: matched });
           setConfirmed(false);
           setRepriceShown(true);
-          if (!matched) setStep(2);
+          if (!matched) setStep(1);
           // No toast: the inline banner carries the exact reprice message for
           // the customer (a second surface would duplicate the locator).
           return;
@@ -530,8 +540,8 @@ export default function CheckoutPage() {
       <div className="mb-8">
         <div className="flex items-center justify-between">
           {[
-            { num: 1, label: "Kontak", icon: User },
-            { num: 2, label: fulfillmentMethod === "delivery" ? "Pengiriman" : "Ambil di Toko", icon: MapPin },
+            { num: 1, label: "Cara Pengiriman", icon: MapPin },
+            { num: 2, label: "Kontak", icon: User },
             { num: 3, label: "Bayar & Pesan", icon: CreditCard },
           ].map((s, i) => (
             <div key={s.num} className="flex items-center flex-1 last:flex-none">
@@ -572,66 +582,29 @@ export default function CheckoutPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main step content */}
         <div className="lg:col-span-2">
-          {/* Step 1 — Contact + Select items to checkout */}
-          {step === 1 && (
+          {/* Step 2 — Order contact, distinct from delivery recipient */}
+          {step === 2 && (
             <Card>
               <CardContent className="p-6">
                 <h2 className="text-xl font-bold mb-1">Informasi Kontak</h2>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Kode pickup dan konfirmasi pesanan akan dikirim ke email
-                  Anda.
+                  {fulfillmentMethod === "pickup"
+                    ? "Isi kontak yang aktif untuk pesanan dan pengambilan di cabang."
+                    : "Isi kontak pemesan yang aktif untuk keperluan pesanan dan pembayaran."}
                 </p>
 
-                {/* Pickup requirement warning */}
-                <div className="mb-6 flex items-start gap-3 rounded-lg border border-amber-200 border-l-4 border-l-amber-500 bg-amber-50 p-4 dark:border-amber-800 dark:border-l-amber-500 dark:bg-amber-950/50">
-                  <TriangleAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                  <div className="text-sm leading-relaxed text-amber-900 dark:text-amber-100">
-                    <span className="font-semibold">Penting!</span>{" "}
-                    Saat mengambil pesanan di toko, Anda{" "}
-                    <span className="font-semibold">
-                      wajib menyebutkan email dan nomor telepon
-                    </span>{" "}
-                    yang terdaftar. Pastikan keduanya{" "}
-                    <span className="font-semibold">benar dan aktif</span>{" "}
-                    agar pesanan Anda dapat diterima.
+                {fulfillmentMethod === "pickup" ? (
+                  <div className="mb-6 flex items-start gap-3 rounded-lg border border-amber-200 border-l-4 border-l-amber-500 bg-amber-50 p-4 dark:border-amber-800 dark:border-l-amber-500 dark:bg-amber-950/50">
+                    <TriangleAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
+                    <p className="text-sm leading-relaxed text-amber-900 dark:text-amber-100">
+                      Sebutkan email dan nomor telepon ini kepada staf saat mengambil pesanan.
+                    </p>
                   </div>
-                </div>
-
-                {/* Selected items summary (read-only) */}
-                <div className="mb-6 rounded-lg border bg-muted/30 p-4">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium">
-                      Barang yang akan di-checkout
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {selectedItems.length} barang ·{" "}
-                      <Link
-                        href="/cart"
-                        className="text-primary hover:underline"
-                      >
-                        Ubah
-                      </Link>
-                    </span>
+                ) : (
+                  <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm leading-relaxed">
+                    Kontak ini adalah kontak pemesan. Pengiriman menggunakan nama dan nomor penerima pada alamat yang Anda pilih.
                   </div>
-                  <div className="space-y-1.5">
-                    {selectedItems.map((item) => (
-                      <div
-                        key={item.id}
-                        className="flex justify-between text-sm"
-                      >
-                        <span className="text-muted-foreground line-clamp-1 pr-2">
-                          {item.product.name} ×{item.quantity}
-                        </span>
-                        <span className="flex-shrink-0">
-                          Rp{" "}
-                          {(
-                            parseFloat(item.variant.price) * item.quantity
-                          ).toLocaleString("id-ID")}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                )}
 
                 {/* Contact fields */}
                 <div className="space-y-4">
@@ -646,10 +619,8 @@ export default function CheckoutPage() {
                       value={phone}
                       onChange={(e) => setPhone(e.target.value)}
                     />
-                    <p className="mt-1.5 flex items-start gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-300">
-                      <TriangleAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-                      Nomor ini wajib Anda sebutkan saat pengambilan pesanan di
-                      toko.
+                    <p className="mt-1.5 text-xs text-muted-foreground">
+                      Gunakan nomor telepon yang aktif.
                     </p>
                   </div>
                   <div>
@@ -663,10 +634,10 @@ export default function CheckoutPage() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                     />
-                    <p className="mt-1.5 flex items-start gap-1.5 text-xs font-medium text-amber-700 dark:text-amber-300">
-                      <TriangleAlert className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
-                      Kode pickup dikirim ke email ini. Email juga wajib Anda
-                      sebutkan saat pengambilan pesanan di toko.
+                    <p className="mt-1.5 text-xs text-muted-foreground">
+                      {fulfillmentMethod === "pickup"
+                        ? "Kode pickup akan dikirim ke email ini setelah pesanan siap diambil."
+                        : "Gunakan email pemesan yang aktif."}
                     </p>
                   </div>
                 </div>
@@ -689,10 +660,14 @@ export default function CheckoutPage() {
                   </Button>
                 )}
 
-                <div className="mt-6 flex justify-end">
+                <div className="mt-6 flex justify-between">
+                  <Button variant="outline" onClick={() => setStep(1)}>
+                    Kembali
+                  </Button>
                   <Button
-                    onClick={() => validateStep1() && setStep(2)}
+                    onClick={handleNextFromContact}
                     className="gap-2"
+                    disabled={fulfillmentMethod === "delivery" && (deliveryPending || !deliveryService)}
                   >
                     Lanjut <ArrowRight className="h-4 w-4" />
                   </Button>
@@ -701,20 +676,42 @@ export default function CheckoutPage() {
             </Card>
           )}
 
-          {/* Step 2 — Method choice: pickup (unchanged) or delivery quote */}
-          {step === 2 && (
+          {/* Keep fulfillment mounted across steps: hiding preserves the
+              delivery draft, quote, selection and pending request identity. */}
+          <div hidden={step !== 1}>
             <Card>
               <CardContent className="p-6">
-                <h2 className="text-xl font-bold mb-1">
-                  {fulfillmentMethod === "delivery" ? "Kirim ke Alamat" : "Ambil di Toko"}
-                </h2>
+                <h2 className="text-xl font-bold mb-1">Cara Pengiriman</h2>
                 <p className="text-sm text-muted-foreground mb-4">
                   {fulfillmentMethod === "delivery"
                     ? "Pilih alamat pengiriman, lalu periksa ongkir untuk melihat layanan yang tersedia."
                     : "Pilih perkiraan tanggal dan waktu kedatangan Anda untuk mengambil pesanan."}
                 </p>
 
-                {/* Fulfillment method (ticket 03) — delivery is a quote preview only */}
+                {/* Selected items summary (read-only) */}
+                <div className="mb-6 rounded-lg border bg-muted/30 p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium">Barang yang akan di-checkout</span>
+                    <span className="text-xs text-muted-foreground">
+                      {selectedItems.length} barang ·{" "}
+                      <Link href="/cart" className="text-primary hover:underline">Ubah</Link>
+                    </span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {selectedItems.map((item) => (
+                      <div key={item.id} className="flex justify-between text-sm">
+                        <span className="text-muted-foreground line-clamp-1 pr-2">
+                          {item.product.name} ×{item.quantity}
+                        </span>
+                        <span className="flex-shrink-0">
+                          Rp {(parseFloat(item.variant.price) * item.quantity).toLocaleString("id-ID")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Fulfillment method */}
                 <div className="mb-6 grid gap-3 sm:grid-cols-2">
                   <button
                     type="button"
@@ -726,7 +723,7 @@ export default function CheckoutPage() {
                     }`}
                   >
                     <span className="block font-medium">Ambil di cabang</span>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
                       Ambil pesanan di cabang — Gratis (Pickup)
                     </span>
                   </button>
@@ -739,18 +736,17 @@ export default function CheckoutPage() {
                         : "hover:bg-muted/40"
                     }`}
                   >
-                    <span className="font-medium">Kirim ke alamat</span>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="block font-medium">Kirim ke alamat</span>
+                    <span className="mt-1 block text-xs leading-relaxed text-muted-foreground">
                       Cek layanan dan ongkir ke alamat Anda dahulu
                     </span>
                   </button>
                 </div>
 
-                {/* Delivery quote (ticket 03) — browser only sends {itemIds,
-                    addressId}; money is re-derived server-side. */}
+                {/* Quote uses cart IDs + destination; money is server-derived. */}
                 {fulfillmentMethod === "delivery" && (
                   <>
-                    {repriceShown && (
+                    {step === 1 && repriceShown && (
                       <p className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium text-amber-900 dark:bg-amber-950/50 dark:text-amber-100">
                         {REPRICE_MESSAGE}
                       </p>
@@ -816,6 +812,7 @@ export default function CheckoutPage() {
                       min={todayStr}
                       value={pickupDate}
                       onChange={(e) => {
+                        pickupValidationGeneration.current += 1;
                         setPickupDate(e.target.value);
                         setPickupTime(""); // reset time when date changes
                       }}
@@ -834,7 +831,10 @@ export default function CheckoutPage() {
                     {pickupDate && dayHours ? (
                       <Select
                         value={pickupTime}
-                        onValueChange={setPickupTime}
+                        onValueChange={(value) => {
+                          pickupValidationGeneration.current += 1;
+                          setPickupTime(value);
+                        }}
                       >
                         <SelectTrigger>
                           <SelectValue placeholder="Pilih waktu" />
@@ -896,12 +896,9 @@ export default function CheckoutPage() {
                   <p className="mt-4 text-sm text-destructive">{pickupError}</p>
                 )}
 
-                <div className="mt-6 flex justify-between">
-                  <Button variant="outline" onClick={() => setStep(1)}>
-                    Kembali
-                  </Button>
+                <div className="mt-6 flex justify-end">
                   <Button
-                    onClick={handleNextFromStep2}
+                    onClick={handleNextFromFulfillment}
                     className="gap-2"
                     disabled={
                       fulfillmentMethod === "delivery" &&
@@ -913,7 +910,7 @@ export default function CheckoutPage() {
                 </div>
               </CardContent>
             </Card>
-          )}
+          </div>
 
           {/* Step 3 — Review & Place Order */}
           {step === 3 && (
@@ -985,6 +982,7 @@ export default function CheckoutPage() {
                   {fulfillmentMethod === "delivery" ? (
                     <div className="space-y-2">
                       {deliveryAddressPreview && <div className="rounded-lg border p-3 text-sm">
+                        <p className="mb-1 font-semibold">Penerima Pengiriman</p>
                         <p className="font-medium">{deliveryAddressPreview.recipientName} · {deliveryAddressPreview.phone}</p>
                         <p>{deliveryAddressPreview.fullAddress}</p>
                         <p className="text-muted-foreground">Kode pos {deliveryAddressPreview.postalCode}</p>
@@ -1004,6 +1002,7 @@ export default function CheckoutPage() {
                       </span>
                     </div>
                   )}
+                  <p className="pt-2 font-semibold">Kontak Pemesan</p>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Telepon</span>
                     <span className="font-medium">{phone}</span>
@@ -1089,7 +1088,10 @@ export default function CheckoutPage() {
                 </label>
 
                 <div className="flex justify-between">
-                  <Button variant="outline" onClick={() => setStep(2)}>
+                  <Button variant="outline" onClick={() => {
+                    setConfirmed(false);
+                    setStep(2);
+                  }}>
                     Kembali
                   </Button>
                   <Button

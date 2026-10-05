@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, Loader2, Truck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -12,23 +12,31 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { DeliveryQuoteService } from "@/lib/delivery-quote";
+import {
+  DELIVERY_CATEGORY_FILTERS,
+  formatDeliveryEta,
+  getDeliveryOptionsPage,
+  type DeliveryCategoryFilter,
+} from "@/lib/delivery-options";
 import type { ClientAddressInput } from "@/lib/client-addresses";
 import type { RegionLevel, ShipmentRegion } from "@/lib/shipment-regions";
 import { Input } from "@/components/ui/input";
 
 // =========================================================
-// DeliveryQuotePanel — the checkout step-2 delivery block (ticket 03):
+// DeliveryQuotePanel — the checkout step-1 delivery block:
 // address combobox + "Periksa ongkir" + service list (vendor `rates`,
-// never `final_rates`) + ongkir/PPN/total for the SELECTED service.
+// never `final_rates`). Selected-service PPN/total live in the page summary.
+// The page hides, rather than unmounts, this panel during contact/review.
 //
 // Fail-closed + stale-proof: changing the address/items key clears the
 // selection and the money immediately, then AUTO-fetches a new quote with an
 // AbortController + request generation (a late response never overwrites a
 // newer one). A failed or empty quote never shows money — it offers
 // "Coba lagi" (explicit retry) while the pickup method stays available.
-// Money is only for the SELECTED service; list rows show the service name
-// (the per-service ongkir belongs to the selected summary, per the ticket
-// contract that money clears with every change).
+// Display current per-service ongkir and arrival dates in a compact, five-row
+// paginated picker. Only an explicitly selected service updates the checkout
+// summary. Category/page navigation preserves selection; new quotes reset to
+// all categories, page one. Category groups come from provider metadata only.
 // =========================================================
 
 const QUOTE_ENDPOINT = "/api/checkout/delivery-quote";
@@ -134,6 +142,10 @@ export default function DeliveryQuotePanel({
   const userSelectedAddress = useRef(Boolean(initialAddressId));
   const [services, setServices] = useState<DeliveryQuoteService[] | null>(null);
   const [selected, setSelected] = useState<DeliveryQuoteService | null>(null);
+  const [page, setPage] = useState(1);
+  const [category, setCategory] = useState<DeliveryCategoryFilter>("all");
+  const serviceGroupName = useId();
+  const serviceOptionsId = useId();
   const [phase, setPhase] = useState<QuotePhase>("idle");
   const [error, setError] = useState<string | null>(null);
   // Request generation + AbortController so a slow/stale quote can never
@@ -201,6 +213,8 @@ export default function DeliveryQuotePanel({
       onServiceChange(null);
       onPendingChange(true);
       setPhase("loading");
+      setPage(1);
+      setCategory("all");
       setError(null);
       setSelected(null);
       const abort = new AbortController();
@@ -252,6 +266,8 @@ export default function DeliveryQuotePanel({
   // selection and the money (no stale pricing), then re-quotes.
   useEffect(() => {
     const destination = newMode ? readyNewAddress ? { newAddress } : null : addressId ? { addressId } : null;
+    setPage(1);
+    setCategory("all");
     if (!destination || itemIds.length === 0) {
       // Nothing quoted yet — clear money + selection for this fingerprint.
       generationRef.current += 1;
@@ -286,6 +302,8 @@ export default function DeliveryQuotePanel({
   useEffect(() => {
     if (!repriceSync) return;
     const freshList = repriceSync.services;
+    setPage(1);
+    setCategory("all");
     setServices(freshList.length > 0 ? freshList : null);
     setSelected(repriceSync.selected);
     if (repriceSync.selected) onServiceChange(repriceSync.selected);
@@ -298,6 +316,12 @@ export default function DeliveryQuotePanel({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sync only on the reprice push
   }, [repriceSync]);
+
+  const optionsPage = getDeliveryOptionsPage(services ?? [], page, category);
+  const selectedOnPage = optionsPage.options.some((service) =>
+    selected?.courierId === service.courierId && selected?.serviceId === service.serviceId
+  );
+
   return (
     <section aria-label="Quote Pengiriman" className="space-y-4">
       <div>
@@ -393,51 +417,132 @@ export default function DeliveryQuotePanel({
       )}
 
       {phase === "ready" && services !== null && (
-        <div className="space-y-2">
-          {services.map((service) => (
-            <button
-              key={`${service.courierId}-${service.serviceId}`}
-              type="button"
-              onClick={() => pickService(service)}
-              className={`w-full rounded-lg border p-3 text-left text-sm transition-colors ${
-                selected?.serviceId === service.serviceId
-                  ? "border-primary bg-primary/5"
-                  : "hover:bg-muted/40"
-              }`}
+        <div className="space-y-3">
+          <fieldset className="min-w-0" aria-label="Pilih pengiriman">
+            <legend className="mb-1 flex items-center gap-2 text-base font-semibold">
+              <Truck className="h-4 w-4 text-primary" aria-hidden="true" />
+              Pilih pengiriman
+            </legend>
+            <p className="mb-2 text-xs text-muted-foreground">
+              Diurutkan dari ongkir termurah{category !== "all" ? " di kategori ini" : ""}
+            </p>
+            <div
+              role="group"
+              aria-label="Kategori pengiriman"
+              className="mb-3 flex max-w-full gap-1.5 overflow-x-auto p-1"
             >
-              <span className="font-medium">{service.name}</span>
-              {service.validEta && (
-                <span className="ml-2 text-xs text-muted-foreground">
-                  ETA {service.validEta.from} – {service.validEta.to}
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
+              {DELIVERY_CATEGORY_FILTERS.map((filter) => {
+                const count = optionsPage.categoryCounts[filter.id];
+                const active = category === filter.id;
+                return (
+                  <button
+                    key={filter.id}
+                    type="button"
+                    aria-label={filter.label}
+                    aria-pressed={active}
+                    aria-controls={serviceOptionsId}
+                    disabled={count === 0}
+                    title={count === 0 ? "Tidak tersedia untuk alamat ini" : undefined}
+                    onClick={() => {
+                      setCategory(filter.id);
+                      setPage(1);
+                    }}
+                    className={`inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 py-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40 ${
+                      active
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                    }`}
+                  >
+                    {filter.label}
+                    <span aria-hidden="true" className={`tabular-nums ${active ? "opacity-80" : "opacity-60"}`}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <div id={serviceOptionsId} className="overflow-hidden rounded-xl border bg-background">
+              {optionsPage.options.map((service) => {
+                const isSelected = selected?.courierId === service.courierId &&
+                  selected?.serviceId === service.serviceId;
+                return (
+                  <label
+                    key={`${service.courierId}-${service.serviceId}`}
+                    className={`relative flex cursor-pointer items-start gap-3 border-b p-3.5 text-sm transition-colors last:border-b-0 focus-within:z-10 focus-within:ring-2 focus-within:ring-inset focus-within:ring-primary ${
+                      isSelected
+                        ? "bg-primary/5 shadow-[inset_3px_0_0_var(--primary)]"
+                        : "hover:bg-muted/40"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name={serviceGroupName}
+                      value={`${service.courierId}-${service.serviceId}`}
+                      checked={isSelected}
+                      onChange={() => pickService(service)}
+                      className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-start justify-between gap-3">
+                        <span className="min-w-0 break-words font-semibold">{service.name}</span>
+                        <span className="shrink-0 font-semibold tabular-nums">
+                          Rp {service.shippingCost.toLocaleString("id-ID")}
+                        </span>
+                      </span>
+                      <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                        <span className="text-xs leading-relaxed text-muted-foreground">
+                          {formatDeliveryEta(service.validEta)}
+                        </span>
+                        {service.shippingCost === optionsPage.cheapestCost && (
+                          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">
+                            Termurah
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </fieldset>
 
-      {selected && (
-        <div className="space-y-2 rounded-lg border bg-muted/30 p-4 text-sm">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Ongkos Kirim</span>
-            <span>
-              Rp {Number(selected.shippingCost).toLocaleString("id-ID")}
-            </span>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="text-xs text-muted-foreground" role="status">
+              {optionsPage.start}–{optionsPage.end} dari {optionsPage.total} layanan
+            </p>
+            {optionsPage.pageCount > 1 && (
+              <nav aria-label="Pagination kurir" className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="Halaman kurir sebelumnya"
+                  disabled={optionsPage.page === 1}
+                  onClick={() => setPage(optionsPage.page - 1)}
+                >
+                  <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+                </Button>
+                <span className="px-2 text-xs tabular-nums" aria-label={`Halaman ${optionsPage.page} dari ${optionsPage.pageCount}`}>
+                  {optionsPage.page} / {optionsPage.pageCount}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="Halaman kurir berikutnya"
+                  disabled={optionsPage.page === optionsPage.pageCount}
+                  onClick={() => setPage(optionsPage.page + 1)}
+                >
+                  <ChevronRight className="h-4 w-4" aria-hidden="true" />
+                </Button>
+              </nav>
+            )}
           </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">
-              PPN ({selected.pricing.ppnRatePercent}%)
-            </span>
-            <span>
-              Rp {Number(selected.pricing.ppnAmount).toLocaleString("id-ID")}
-            </span>
-          </div>
-          <div className="flex justify-between font-medium">
-            <span>Total ( barang + ongkir + PPN )</span>
-            <span>
-              Rp {Number(selected.pricing.total).toLocaleString("id-ID")}
-            </span>
-          </div>
+          {selected && !selectedOnPage && (
+            <p className="rounded-lg bg-primary/5 px-3 py-2 text-xs font-medium text-primary" role="status">
+              Terpilih: {selected.name}
+            </p>
+          )}
         </div>
       )}
 

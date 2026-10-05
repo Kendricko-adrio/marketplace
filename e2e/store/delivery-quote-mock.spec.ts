@@ -13,7 +13,8 @@
  *   Rp100.000 item, mock rates Rp20.000 (final_rates Rp10.000 as a trap) →
  *   ongkir "Rp 20.000", delivery PPN "Rp 13.200" (11% over goods+ongkir,
  *   per-Rupiah ceil), total "Rp 133.200" — pickup stays untouched at its own
- *   math and is never replaced by a zero fallback.
+ *   math and is never replaced by a zero fallback. The picker displays each
+ *   quote's ongkir; only the selected service updates the checkout summary.
  * - The browser POST is only {itemIds, addressId} — money is re-derived
  *   server-side (the quote endpoint loads the owned cart/address/branch/SKU/
  *   config itself).
@@ -245,6 +246,13 @@ test.beforeAll(async ({ browser }) => {
     ]
   );
 
+  // Own fixture branch is open every day, independently of seeded hours.
+  await pool.query("UPDATE branch SET operating_hours = $1 WHERE id = $2", [
+    JSON.stringify(Object.fromEntries([
+      "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    ].map((day) => [day, { open: "09:00", close: "18:00" }]))), ORIGIN_BRANCH_ID,
+  ]);
+
   // Fixture goods at the origin branch: one Rp100.000 variant with REAL per-SKU
   // master parcel dims (250 g / 30×20×10 cm) — synced-style normalized master.
   await pool.query("DELETE FROM product WHERE id = $1", [FIXTURE_PRODUCT_ID]);
@@ -343,6 +351,408 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     ).toBe("ok");
   });
 
+  test("checkout starts with fulfillment and validates pickup before contact", async () => {
+    test.setTimeout(90_000);
+    const add = await johnContext.request.post("/api/cart/items", {
+      data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
+    });
+    expect(add.ok()).toBe(true);
+    const page = await johnContext.newPage();
+    try {
+      await page.goto("/cart");
+      await page.getByRole("checkbox").first().check();
+      await page.getByRole("button", { name: "Checkout" }).click();
+      await page.waitForURL("**/checkout");
+      await expect(page.getByRole("heading", { name: "Cara Pengiriman", exact: true })).toBeVisible();
+      await expect(page.getByText("Barang yang akan di-checkout", { exact: true })).toBeVisible();
+      await expect(page.getByLabel("Nomor Telepon *")).toBeHidden();
+      await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "Informasi Kontak" })).toBeHidden();
+      const date = new Date();
+      date.setDate(date.getDate() + 1);
+      const pickupDate = date.toISOString().slice(0, 10);
+      await page.getByLabel("Tanggal Pickup *").fill(pickupDate);
+      await page.getByRole("combobox").click();
+      await page.getByRole("option", { name: "10:00", exact: true }).click();
+      await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "Informasi Kontak" })).toBeVisible();
+      await expect(page.getByText("Isi kontak yang aktif untuk pesanan dan pengambilan di cabang.", { exact: true })).toBeVisible();
+      await expect(page.getByText("Kode pickup akan dikirim ke email ini setelah pesanan siap diambil.", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Isi dari Profil" })).toBeVisible();
+      await page.getByLabel("Nomor Telepon *").fill("123");
+      await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+      await expect(page.getByText("Masukkan nomor telepon yang valid (8–15 angka).", { exact: true })).toBeVisible();
+      await page.getByLabel("Nomor Telepon *").fill("081234567890");
+      await page.getByLabel("Email *").fill("invalid");
+      await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+      await expect(page.getByText("Masukkan alamat email yang valid.", { exact: true })).toBeVisible();
+      await page.getByLabel("Email *").fill(TEST_USERS.store.email);
+      await page.getByRole("button", { name: "Kembali", exact: true }).click();
+      await expect(page.getByLabel("Tanggal Pickup *")).toHaveValue(pickupDate);
+      await expect(page.getByRole("combobox")).toContainText("10:00");
+      await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+      await expect(page.getByLabel("Nomor Telepon *")).toHaveValue("081234567890");
+      await expect(page.getByLabel("Email *")).toHaveValue(TEST_USERS.store.email);
+      await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
+      await page.getByRole("checkbox").check();
+      await page.getByRole("button", { name: "Kembali", exact: true }).click();
+      await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+      await expect(page.getByRole("checkbox")).not.toBeChecked();
+      await expect(page.getByRole("button", { name: "Bayar Sekarang" })).toBeDisabled();
+    } finally {
+      await page.close();
+    }
+  });
+
+  test("a late pickup validation cannot skip delivery selection after switching methods", async () => {
+    test.setTimeout(90_000);
+    const add = await johnContext.request.post("/api/cart/items", {
+      data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
+    });
+    expect(add.ok()).toBe(true);
+    const page = await johnContext.newPage();
+    let releaseValidation!: () => void;
+    let validationStarted!: () => void;
+    const release = new Promise<void>((resolve) => { releaseValidation = resolve; });
+    const started = new Promise<void>((resolve) => { validationStarted = resolve; });
+    await page.route("**/api/checkout/validate-step-2", async (route) => {
+      const response = await route.fetch();
+      expect(response.ok()).toBe(true);
+      validationStarted();
+      await release;
+      await route.fulfill({ response });
+    });
+    try {
+      await page.goto("/cart");
+      await page.getByRole("checkbox").first().check();
+      await page.getByRole("button", { name: "Checkout" }).click();
+      await page.waitForURL("**/checkout");
+      const date = new Date();
+      date.setDate(date.getDate() + 1);
+      await page.getByLabel("Tanggal Pickup *").fill(date.toISOString().slice(0, 10));
+      await page.getByRole("combobox").click();
+      await page.getByRole("option", { name: "10:00", exact: true }).click();
+      await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+      await started;
+      await pickDeliveryMethodAndAddress(page, ADDRESS_STREETS[0]);
+      const completed = page.waitForResponse((response) => response.url().endsWith("/api/checkout/validate-step-2"));
+      releaseValidation();
+      await completed;
+      // The next user action must still be possible on the fulfillment step,
+      // rather than being stranded on contact with no approved service.
+      await page.getByRole("radio", { name: /JNE REG Fixture/ }).check();
+      await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "Informasi Kontak" })).toBeVisible();
+    } finally {
+      releaseValidation();
+      await page.close();
+    }
+  });
+
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+    test(`delivery contact distinguishes the recipient and preserves choices across steps (${viewport.width}px)`, async () => {
+      test.setTimeout(90_000);
+      const add = await johnContext.request.post("/api/cart/items", {
+        data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
+      });
+      expect(add.ok()).toBe(true);
+      const page = await johnContext.newPage();
+      await page.setViewportSize(viewport);
+      try {
+        await page.goto("/cart");
+        await page.getByRole("checkbox").first().check();
+        await page.getByRole("button", { name: "Checkout" }).click();
+        await page.waitForURL("**/checkout");
+        await pickDeliveryMethodAndAddress(page, ADDRESS_STREETS[0]);
+        const next = page.getByRole("button", { name: "Lanjut", exact: true });
+        await expect(next).toBeDisabled();
+        await page.getByRole("radio", { name: /JNE REG Fixture/ }).check();
+        await next.click();
+        await expect(page.getByRole("heading", { name: "Informasi Kontak" })).toBeVisible();
+        await expect(page.getByText("Isi kontak pemesan yang aktif untuk keperluan pesanan dan pembayaran.", { exact: true })).toBeVisible();
+        await expect(page.getByText("Kontak ini adalah kontak pemesan. Pengiriman menggunakan nama dan nomor penerima pada alamat yang Anda pilih.", { exact: true })).toBeVisible();
+        await expect(page.getByText(/kode pickup|mengambil pesanan/i)).toHaveCount(0);
+        await page.getByLabel("Nomor Telepon *").fill("123");
+        await next.click();
+        await expect(page.getByText("Masukkan nomor telepon yang valid (8–15 angka).", { exact: true })).toBeVisible();
+        await page.getByLabel("Nomor Telepon *").fill("081234567890");
+        await page.getByLabel("Email *").fill("pemesan@example.test");
+        await next.click();
+        const review = page.getByRole("heading", { name: "Pembayaran", exact: true }).locator("..");
+        await expect(review.getByText("Kontak Pemesan", { exact: true })).toBeVisible();
+        await expect(review.getByText("Penerima Pengiriman", { exact: true })).toBeVisible();
+        await expect(review.getByText("081234567890", { exact: true })).toBeVisible();
+        await expect(review.getByText("E2E Quote Penerima 1 · 081300000001", { exact: true })).toBeVisible();
+        await expect(review.getByText(TOTAL_CASE1, { exact: true })).toBeVisible();
+        await page.getByRole("checkbox").check();
+        await page.getByRole("button", { name: "Kembali", exact: true }).click();
+        await expect(page.getByLabel("Email *")).toHaveValue("pemesan@example.test");
+        await page.getByRole("button", { name: "Kembali", exact: true }).click();
+        await expect(page.getByRole("radio", { name: /JNE REG Fixture/ })).toBeChecked();
+        await expect(page.getByLabel(ADDRESS_SELECT_LABEL)).toContainText(ADDRESS_STREETS[0]);
+        const summary = page.getByRole("heading", { name: "Ringkasan", exact: true }).locator("..");
+        await expect(summary.getByText(TOTAL_CASE1, { exact: true })).toBeVisible();
+        await next.click();
+        await next.click();
+        await expect(page.getByRole("checkbox")).not.toBeChecked();
+        await expect(page.getByRole("button", { name: "Bayar Sekarang" })).toBeDisabled();
+        await page.getByRole("button", { name: "Kembali", exact: true }).click();
+        await page.getByRole("button", { name: "Kembali", exact: true }).click();
+        await page.getByText(OPTION_PICKUP, { exact: true }).click();
+        await expect(summary.getByText(TOTAL_CASE1, { exact: true })).toHaveCount(0);
+        const date = new Date();
+        date.setDate(date.getDate() + 1);
+        await page.getByLabel("Tanggal Pickup *").fill(date.toISOString().slice(0, 10));
+        await page.getByRole("combobox").click();
+        await page.getByRole("option", { name: "10:00", exact: true }).click();
+        await next.click();
+        await expect(page.getByText("Sebutkan email dan nomor telepon ini kepada staf saat mengambil pesanan.", { exact: true })).toBeVisible();
+        await expect(page.getByLabel("Nomor Telepon *")).toHaveValue("081234567890");
+        await page.getByRole("button", { name: "Kembali", exact: true }).click();
+        await page.getByText(OPTION_DELIVERY, { exact: true }).click();
+        await expect(next).toBeDisabled();
+        await expect(page.getByRole("radio", { checked: true })).toHaveCount(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      } finally {
+        await page.close();
+      }
+    });
+
+    test(`fulfillment cards separate titles from descriptions (${viewport.width}px)`, async () => {
+      test.setTimeout(60_000);
+      const add = await johnContext!.request.post("/api/cart/items", {
+        data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
+      });
+      expect(add.ok()).toBe(true);
+      const page = await johnContext!.newPage();
+      await page.setViewportSize(viewport);
+      try {
+        await page.goto("/cart");
+        await page.getByRole("checkbox").first().check();
+        await page.getByRole("button", { name: "Checkout" }).click();
+        await page.waitForURL("**/checkout");
+
+        // Both selected and unselected cards keep their title above their
+        // description, with at least a 4px gap, on desktop and mobile.
+        for (const method of [OPTION_PICKUP, OPTION_DELIVERY]) {
+          await page.getByText(method, { exact: true }).click();
+          for (const [title, description] of [
+            [OPTION_DELIVERY, "Cek layanan dan ongkir ke alamat Anda dahulu"],
+            [OPTION_PICKUP, "Ambil pesanan di cabang — Gratis (Pickup)"],
+          ]) {
+            const card = page.getByRole("button").filter({ has: page.getByText(title, { exact: true }) });
+            const heading = card.getByText(title, { exact: true });
+            const detail = card.getByText(description, { exact: true });
+            await expect(heading).toBeVisible();
+            await expect(detail).toBeVisible();
+            const headingBox = (await heading.boundingBox())!;
+            const detailBox = (await detail.boundingBox())!;
+            const cardBox = (await card.boundingBox())!;
+            expect(detailBox.y - (headingBox.y + headingBox.height), `${title}: description must be below the title`).toBeGreaterThanOrEqual(4);
+            expect(Math.abs(detailBox.x - headingBox.x)).toBeLessThanOrEqual(1);
+            expect(detailBox.x + detailBox.width).toBeLessThanOrEqual(cardBox.x + cardBox.width);
+            expect(detailBox.y + detailBox.height).toBeLessThanOrEqual(cardBox.y + cardBox.height);
+          }
+        }
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      } finally {
+        await page.close();
+      }
+    });
+
+    test(`courier categories filter before pagination without changing selection (${viewport.width}px)`, async () => {
+      test.setTimeout(120_000);
+      const add = await johnContext!.request.post("/api/cart/items", {
+        data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
+      });
+      expect(add.ok(), `fixture cart add failed (${add.status()}): ${await add.text()}`).toBe(true);
+      const page = await johnContext!.newPage();
+      await page.setViewportSize(viewport);
+      // Only the browser/server network boundary is controlled; the real quote
+      // backend's metadata projection is covered separately by quoteDelivery.
+      let quoteRequests = 0;
+      await page.route("**/api/checkout/delivery-quote", async (route) => {
+        quoteRequests += 1;
+        const response = await route.fetch();
+        expect(response.ok()).toBe(true);
+        const body = await response.json();
+        const base = body.data.services[0];
+        // Known goods subtotal Rp100.000 and literal vendor-category/price cases.
+        const options = [
+          ["Reguler F", 1, 25000, "13750.00", "138750.00"],
+          ["Same Day Mahal", 5, 40000, "15400.00", "155400.00"],
+          ["Ekonomi A", 2, 9000, "11990.00", "120990.00"],
+          ["Next Day Mahal", 3, 35000, "14850.00", "149850.00"],
+          ["Reguler B", 1, 12000, "12320.00", "124320.00"],
+          ["Ekonomi C", 2, 15000, "12650.00", "127650.00"],
+          ["Reguler D", 1, 18000, "12980.00", "130980.00"],
+          ["Ekonomi E", 2, 20000, "13200.00", "133200.00"],
+          ["Same Day Murah", 5, 30000, "14300.00", "144300.00"],
+          ["Next Day Murah", 3, 28000, "14080.00", "142080.00"],
+          ["Same Day tanpa kategori", null, 8000, "11880.00", "119880.00"],
+          ["Kategori baru", 99, 10000, "12100.00", "122100.00"],
+          ["Cargo", 6, 50000, "16500.00", "166500.00"],
+          ["Truk", 7, 60000, "17600.00", "177600.00"],
+        ] as const;
+        await route.fulfill({ response, json: {
+          ...body,
+          data: { services: options.map(([name, serviceCategoryId, shippingCost, ppnAmount, total], index) => ({
+            ...base, courierId: index + 1, serviceId: index + 1, name, serviceCategoryId, shippingCost,
+            validEta: { from: "2026-10-06T09:18:03.751Z", to: "2026-10-11T09:18:03.751Z" },
+            pricing: { ...base.pricing, shippingCost: `${shippingCost}.00`,
+              taxableBase: `${100000 + shippingCost}.00`, ppnAmount, total },
+          })) },
+        } });
+      });
+      try {
+        await page.goto("/cart");
+        await page.getByRole("checkbox").first().check();
+        await page.getByRole("button", { name: "Checkout" }).click();
+        await page.waitForURL("**/checkout");
+        await pickDeliveryMethodAndAddress(page, ADDRESS_STREETS[0]);
+        const filters = page.getByRole("group", { name: "Kategori pengiriman", exact: true });
+        const filter = (name: string) => filters.getByRole("button", { name, exact: true });
+        const picker = page.getByRole("group", { name: "Pilih pengiriman", exact: true });
+        const summary = page.getByRole("heading", { name: "Ringkasan", exact: true }).locator("..");
+        const next = page.getByRole("button", { name: "Halaman kurir berikutnya" });
+        await expect(filter("Semua · Termurah")).toHaveAttribute("aria-pressed", "true", { timeout: 60_000 });
+        await expect(filters.getByRole("button")).toHaveCount(6);
+        await expect(filter("Instant")).toBeDisabled();
+        await expect(filter("Instant")).toHaveAttribute("title", "Tidak tersedia untuk alamat ini");
+        await expect(page.getByText("1–5 dari 14 layanan", { exact: true })).toBeVisible();
+        await expect(picker.getByRole("radio", { checked: true })).toHaveCount(0);
+        const requestsBeforeFiltering = quoteRequests;
+        await next.click();
+        await filter("Reguler/Ekonomi").click();
+        await expect(page.getByText("1–5 dari 6 layanan", { exact: true })).toBeVisible();
+        await expect(picker.locator("label")).toHaveText([
+          /Ekonomi A.*Rp 9.000.*Termurah/, /Reguler B.*Rp 12.000/,
+          /Ekonomi C.*Rp 15.000/, /Reguler D.*Rp 18.000/, /Ekonomi E.*Rp 20.000/,
+        ]);
+        await next.click();
+        await expect(picker.locator("label")).toHaveText([/Reguler F.*Rp 25.000/]);
+        await expect(page.getByText("6–6 dari 6 layanan", { exact: true })).toBeVisible();
+        await filter("Same Day").click();
+        await expect(picker.locator("label")).toHaveText([
+          /Same Day Murah.*Rp 30.000.*Estimasi tiba 6–11 Okt 2026.*Termurah/,
+          /Same Day Mahal.*Rp 40.000/,
+        ]);
+        await expect(next).toHaveCount(0);
+        await picker.getByRole("radio", { name: /Same Day Murah/ }).check();
+        await expect(summary.getByText("Rp 144.300", { exact: true })).toBeVisible();
+        await filter("Next Day").click();
+        await expect(picker.locator("label")).toHaveText([
+          /Next Day Murah.*Rp 28.000.*Estimasi tiba 6–11 Okt 2026.*Termurah/, /Next Day Mahal.*Rp 35.000/,
+        ]);
+        await expect(page.getByText("Terpilih: Same Day Murah", { exact: true })).toBeVisible();
+        await expect(continueButton(page)).toBeEnabled();
+        await expect(summary.getByText("Rp 144.300", { exact: true })).toBeVisible();
+        await filter("Lainnya").click();
+        await expect(picker.locator("label")).toHaveText([
+          /Same Day tanpa kategori.*Rp 8.000.*Termurah/, /Kategori baru.*Rp 10.000/, /Cargo.*Rp 50.000/, /Truk.*Rp 60.000/,
+        ]);
+        await filter("Same Day").click();
+        await expect(picker.getByRole("radio", { name: /Same Day Murah/ })).toBeChecked();
+        expect(quoteRequests).toBe(requestsBeforeFiltering);
+        // A changed destination restores the default category/page and clears money.
+        await pickDeliveryMethodAndAddress(page, ADDRESS_STREETS[1]);
+        await expect(filter("Semua · Termurah")).toHaveAttribute("aria-pressed", "true");
+        await expect(page.getByText("1–5 dari 14 layanan", { exact: true })).toBeVisible();
+        await expect(continueButton(page)).toBeDisabled();
+        await expect(picker.getByRole("radio", { checked: true })).toHaveCount(0);
+        await expect(summary.getByText("Rp 144.300", { exact: true })).toHaveCount(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      } finally {
+        await page.close();
+      }
+    });
+
+    test(`courier picker compares prices and preserves selection across five-option pages (${viewport.width}px)`, async () => {
+      const add = await johnContext!.request.post("/api/cart/items", {
+        data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
+      });
+      expect(add.ok()).toBe(true);
+      const page = await johnContext!.newPage();
+      await page.setViewportSize(viewport);
+      // Browser/server boundary: retain the real verified quote shape, replacing
+      // only options with controlled display fixtures. No order is placed.
+      await page.route("**/api/checkout/delivery-quote", async (route) => {
+        const response = await route.fetch();
+        expect(response.ok()).toBe(true);
+        const body = await response.json();
+        const base = body.data.services[0];
+        const options = [
+          [7, 1, "Express", 40000, "15400.00", "155400.00"],
+          [7, 2, "Economy", 9000, "11990.00", "120990.00"],
+          [8, 2, "Regular A", 20000, "13200.00", "133200.00"],
+          [9, 3, "Regular B", 12000, "12320.00", "124320.00"],
+          [10, 4, "Regular C", 15000, "12650.00", "127650.00"],
+          [11, 5, "Priority", 30000, "14300.00", "144300.00"],
+          [12, 6, "Regular D", 18000, "12980.00", "130980.00"],
+        ];
+        await route.fulfill({ response, json: {
+          ...body,
+          data: { services: options.map(([courierId, serviceId, name, shippingCost, ppnAmount, total]) => ({
+            ...base, courierId, serviceId, name, shippingCost,
+            validEta: name === "Priority" ? undefined : {
+              from: "2026-10-06T09:18:03.751Z", to: "2026-10-11T09:18:03.751Z",
+            },
+            pricing: { ...base.pricing, shippingCost: `${shippingCost}.00`,
+              taxableBase: `${100000 + Number(shippingCost)}.00`, ppnAmount, total },
+          })) },
+        } });
+      });
+      try {
+        await page.goto("/cart");
+        await page.getByRole("checkbox").first().check();
+        await page.getByRole("button", { name: "Checkout" }).click();
+        await page.waitForURL("**/checkout");
+        await pickDeliveryMethodAndAddress(page, ADDRESS_STREETS[0]);
+        const picker = page.getByRole("group", { name: "Pilih pengiriman", exact: true });
+        const summary = page.getByRole("heading", { name: "Ringkasan", exact: true }).locator("..");
+        const next = page.getByRole("button", { name: "Halaman kurir berikutnya" });
+        const previous = page.getByRole("button", { name: "Halaman kurir sebelumnya" });
+        await expect(picker.getByRole("radio")).toHaveCount(5);
+        await expect(picker.locator("label")).toHaveText([
+          /Economy.*Rp 9.000.*Estimasi tiba 6–11 Okt 2026.*Termurah/,
+          /Regular B.*Rp 12.000/, /Regular C.*Rp 15.000/,
+          /Regular D.*Rp 18.000/, /Regular A.*Rp 20.000/,
+        ]);
+        await expect(page.getByText("1–5 dari 7 layanan", { exact: true })).toBeVisible();
+        await expect(previous).toBeDisabled();
+        await expect(picker.getByRole("radio", { checked: true })).toHaveCount(0);
+        await expect(continueButton(page)).toBeDisabled();
+        await picker.getByRole("radio", { name: /Economy/ }).check();
+        await expect(summary.getByText("Rp 120.990", { exact: true })).toBeVisible();
+        await next.click();
+        await expect(picker.getByRole("radio")).toHaveCount(2);
+        await expect(picker.locator("label")).toHaveText([/Priority.*Rp 30.000.*Estimasi tiba belum tersedia/, /Express.*Rp 40.000/]);
+        await expect(page.getByText("6–7 dari 7 layanan", { exact: true })).toBeVisible();
+        await expect(next).toBeDisabled();
+        await expect(page.getByText("Terpilih: Economy", { exact: true })).toBeVisible();
+        await expect(continueButton(page)).toBeEnabled();
+        await expect(summary.getByText("Rp 120.990", { exact: true })).toBeVisible();
+        await previous.click();
+        await expect(picker.getByRole("radio", { name: /Economy/ })).toBeChecked();
+        // Two couriers sharing a service id must not both appear selected.
+        await picker.getByRole("radio", { name: /Regular A/ }).check();
+        await expect(picker.getByRole("radio", { name: /Economy/ })).not.toBeChecked();
+        await expect(summary.getByText("Rp 133.200", { exact: true })).toBeVisible();
+        await next.click();
+        await pickDeliveryMethodAndAddress(page, ADDRESS_STREETS[1]);
+        await expect(page.getByText("1–5 dari 7 layanan", { exact: true })).toBeVisible();
+        await expect(picker.getByRole("radio", { checked: true })).toHaveCount(0);
+        await expect(continueButton(page)).toBeDisabled();
+        await expect(summary.getByText("Rp 133.200", { exact: true })).toHaveCount(0);
+        await expect(page.getByText("Terpilih: Regular A", { exact: true })).toHaveCount(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      } finally {
+        await page.close();
+      }
+    });
+  }
+
   test("quote accepts a verified new address without adding it to the address book", async () => {
     const before = await (await johnContext!.request.get("/api/addresses")).json();
     const cartAdd = await johnContext!.request.post("/api/cart/items", {
@@ -358,6 +768,10 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       } },
     });
     expect(quote.ok(), await quote.text()).toBe(true);
+    const quoteBody = await quote.json();
+    expect(quoteBody.data.services[0]).toMatchObject({
+      serviceCategoryId: 1, shippingCost: 20000,
+    });
     const invalid = await johnContext!.request.post("/api/checkout/delivery-quote", {
       data: { itemIds: [itemId], newAddress: {
         recipientName: "Penerima Baru", phone: "081300000009", fullAddress: "Jl. Alamat Baru No. 10",
@@ -396,9 +810,6 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       await page.getByRole("checkbox").first().check();
       await page.getByRole("button", { name: "Checkout" }).click();
       await page.waitForURL("**/checkout");
-      await page.getByLabel("Nomor Telepon *").fill("081300000009");
-      await page.getByLabel("Email *").fill(email);
-      await page.getByRole("button", { name: "Lanjut" }).click();
       await page.getByText(OPTION_DELIVERY, { exact: true }).click();
       await expect(page.getByText("Belum ada alamat tersimpan.")).toBeVisible();
       await page.getByRole("button", { name: "Gunakan alamat baru" }).click();
@@ -427,9 +838,6 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     await page.getByRole("checkbox").first().check();
     await page.getByRole("button", { name: "Checkout" }).click();
     await page.waitForURL("**/checkout");
-    await page.getByLabel("Nomor Telepon *").fill("081234567890");
-    await page.getByLabel("Email *").fill(TEST_USERS.store.email);
-    await page.getByRole("button", { name: "Lanjut" }).click();
     await page.getByText(OPTION_DELIVERY, { exact: true }).click();
     await page.getByRole("button", { name: "Gunakan alamat baru" }).click();
     await expect(page.getByLabel("Nama Penerima")).toBeVisible();
@@ -445,8 +853,23 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     await page.getByRole("button", { name: "Periksa ongkir" }).click();
     await expect(page.getByText(SERVICE_LABEL)).toBeVisible();
     await page.getByText(SERVICE_LABEL).click();
-    const quotePanel = page.getByRole("region", { name: "Quote Pengiriman" });
+    const quotePanel = page.getByRole("heading", { name: "Ringkasan", exact: true }).locator("..");
     await expect(quotePanel.getByText(TOTAL_CASE1, { exact: true })).toBeVisible();
+    await page.getByLabel("Simpan alamat", { exact: true }).check();
+    await page.getByLabel("Jadikan alamat utama").check();
+    await expect(page.getByRole("button", { name: "Lanjut", exact: true })).toBeDisabled();
+    await page.getByRole("radio", { name: /JNE REG Fixture/ }).check();
+    // Navigation preserves the complete inline draft and its save intent.
+    await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "Informasi Kontak" })).toBeVisible();
+    await page.getByRole("button", { name: "Kembali", exact: true }).click();
+    await expect(page.getByLabel("Nama Penerima")).toHaveValue("Penerima Checkout");
+    await expect(page.getByLabel("Telepon Penerima")).toHaveValue("081300000009");
+    await expect(page.getByLabel("Alamat Lengkap")).toHaveValue("Jl. Checkout Baru No. 10");
+    await expect(page.getByLabel("Kelurahan/Area", { exact: true })).toHaveValue("01010101");
+    await expect(page.getByLabel("Simpan alamat", { exact: true })).toBeChecked();
+    await expect(page.getByLabel("Jadikan alamat utama")).toBeChecked();
+    await expect(page.getByRole("radio", { name: /JNE REG Fixture/ })).toBeChecked();
     await page.getByLabel("Alamat Lengkap").fill("Jl. Checkout Baru No. 11");
     await expect(quotePanel.getByText(TOTAL_CASE1, { exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Lanjut" }).last()).toBeDisabled();
@@ -469,9 +892,6 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     await page.getByRole("checkbox").first().check();
     await page.getByRole("button", { name: "Checkout" }).click();
     await page.waitForURL("**/checkout");
-    await page.getByLabel("Nomor Telepon *").fill("081234567890");
-    await page.getByLabel("Email *").fill(TEST_USERS.store.email);
-    await page.getByRole("button", { name: "Lanjut" }).click();
     await page.getByText(OPTION_DELIVERY, { exact: true }).click();
     await expect(page.getByRole("alert").getByText("Alamat belum dapat dimuat.")).toBeVisible();
     await expect(page.getByText("Belum ada alamat tersimpan.")).toHaveCount(0);
@@ -502,9 +922,6 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       await page.getByRole("checkbox").first().check();
       await page.getByRole("button", { name: "Checkout" }).click();
       await page.waitForURL("**/checkout");
-      await page.getByLabel("Nomor Telepon *").fill("081234567890");
-      await page.getByLabel("Email *").fill(TEST_USERS.store.email);
-      await page.getByRole("button", { name: "Lanjut" }).click();
       await page.getByText(OPTION_DELIVERY, { exact: true }).click();
       await page.getByLabel("Alamat Pengiriman").click();
       await expect(page.getByRole("option", { name: /Delivery Quote E2E Legacy/ })).toBeDisabled();
@@ -526,9 +943,6 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     await page.getByRole("checkbox").first().check();
     await page.getByRole("button", { name: "Checkout" }).click();
     await page.waitForURL("**/checkout");
-    await page.getByLabel("Nomor Telepon *").fill("081234567890");
-    await page.getByLabel("Email *").fill(TEST_USERS.store.email);
-    await page.getByRole("button", { name: "Lanjut" }).click();
     await page.getByText(OPTION_DELIVERY, { exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Alamat Pengiriman" })).toContainText(ADDRESS_STREETS[0]);
     await page.close();
@@ -546,14 +960,11 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     const cartItemId = current.data.items.find((row: { variantId: string }) => row.variantId === FIXTURE_VARIANT_ID)?.id;
     expect(typeof cartItemId).toBe("string");
 
-    // Cart → select → checkout → contact → step 2 (same pickup flow).
+    // Cart → select → checkout → fulfillment (before contact).
     await page.goto("/cart");
     await page.getByRole("checkbox").first().check();
     await page.getByRole("button", { name: "Checkout" }).click();
     await page.waitForURL("**/checkout");
-    await page.getByLabel("Nomor Telepon *").fill("081234567890");
-    await page.getByLabel("Email *").fill(TEST_USERS.store.email);
-    await page.getByRole("button", { name: "Lanjut" }).click();
 
     // NEVER an actual delivery order/payment in this ticket — the flow stops
     // at the method + quote step; Bayar Sekarang is untouched.
@@ -574,10 +985,12 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     await page.getByRole("button", { name: CHECK_ONGKIR }).click();
     await expect(page.getByText(SERVICE_LABEL)).toBeVisible({ timeout: 20_000 });
     await page.getByText(SERVICE_LABEL).click();
-    const money = page.getByRole("region", { name: "Quote Pengiriman" });
+    const money = page.getByRole("heading", { name: "Ringkasan", exact: true }).locator("..");
     await expect(money.getByText(ONGKIR_LABEL, { exact: true })).toBeVisible();
     await expect(money.getByText(PPN_CASE1, { exact: true })).toBeVisible();
     await expect(money.getByText(TOTAL_CASE1, { exact: true })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Pagination kurir" })).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Quote Pengiriman" }).getByText(TOTAL_CASE1, { exact: true })).toHaveCount(0);
 
     // The browser POST stays a plain {itemIds, addressId} — money is re-
     // derived server-side (never trusted from the browser).
@@ -599,20 +1012,19 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       await periksaAgain.click();
     }
     await expect(continueBtn).toBeDisabled({ timeout: 5_000 }); // during the pending quote
-    await expect(page.getByText(ONGKIR_LABEL, { exact: true })).toHaveCount(0, { timeout: 15_000 });
+    await expect(money.getByText(ONGKIR_LABEL, { exact: true })).toHaveCount(0, { timeout: 15_000 });
     await expect(continueBtn).toBeDisabled(); // no selection yet after requote
     await page.getByText(SERVICE_LABEL).click();
     await expect(continueBtn).toBeEnabled({ timeout: 10_000 });
     await expect(money.getByText(TOTAL_CASE1, { exact: true })).toBeVisible();
 
-    // A server price change must be reflected in BOTH summaries, not the
-    // stale cart price held by the page: 112000+20000+14520=146520.
+    // A server price change must reach the checkout summary, not the stale
+    // cart price held by the page: 112000+20000+14520=146520.
     try {
       await pool.query("UPDATE product_variant SET price='112000.00' WHERE id=$1", [FIXTURE_VARIANT_ID]);
       await page.getByRole("button", { name: CHECK_ONGKIR }).click();
       await page.getByText(SERVICE_LABEL).click();
       await expect(money.getByText("Rp 146.520", { exact: true })).toBeVisible();
-      await expect(page.getByRole("heading", { name: "Ringkasan", exact: true }).locator("..").getByText("Rp 146.520", { exact: true })).toBeVisible();
     } finally {
       await pool.query("UPDATE product_variant SET price='100000.00' WHERE id=$1", [FIXTURE_VARIANT_ID]);
     }
@@ -645,9 +1057,6 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     await page.getByRole("checkbox").first().check();
     await page.getByRole("button", { name: "Checkout" }).click();
     await page.waitForURL("**/checkout");
-    await page.getByLabel("Nomor Telepon *").fill("081234567890");
-    await page.getByLabel("Email *").fill(TEST_USERS.store.email);
-    await page.getByRole("button", { name: "Lanjut" }).click();
 
     // NO stale money from the previous quote may render before the new one.
     await page.getByText(OPTION_DELIVERY, { exact: true }).click();
@@ -656,7 +1065,7 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     await page.getByRole("button", { name: CHECK_ONGKIR }).click();
     await expect(page.getByText(SERVICE_LABEL)).toBeVisible({ timeout: 20_000 });
     await page.getByText(SERVICE_LABEL).click();
-    const money = page.getByRole("region", { name: "Quote Pengiriman" });
+    const money = page.getByRole("heading", { name: "Ringkasan", exact: true }).locator("..");
     await expect(money.getByText(ONGKIR_LABEL, { exact: true })).toBeVisible();
     await expect(money.getByText(PPN_CASE2, { exact: true })).toBeVisible();
     await expect(money.getByText(TOTAL_CASE2, { exact: true })).toBeVisible();

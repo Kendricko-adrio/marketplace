@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { branches, users } from "@/db";
+import { branches } from "@/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { guard, crossBranchNotFound } from "@/lib/rbac/guard";
@@ -12,6 +12,7 @@ import {
   updateBranch,
 } from "@/lib/branches-service";
 import { serializeError } from "@/lib/logger";
+import { branchRegionSchema, verifyBranchRegion } from "@/lib/shipment-regions";
 
 // GET /api/admin/branches/[id]   [branches:view]
 //
@@ -109,13 +110,9 @@ const updateBranchSchema = z.object({
   }),
   googleMapsUrl: z.string().url().optional().or(z.literal("")),
   status: z.enum(["aktif", "nonaktif"]),
-  // Shipping-origin complement (ticket 02): OPTIONAL — an omitted field keeps
-  // the stored origin (backward-compatible clients), ""/null clear. The
-  // fail-closed value validation lives in parseBranchOrigin (single unit).
   shippingPhone: z.string().nullable().optional(),
   shippingAddress: z.string().nullable().optional(),
-  shippingPostalCode: z.string().nullable().optional(),
-  shippingAreaId: z.string().nullable().optional(),
+  ...branchRegionSchema,
 });
 
 // PUT /api/admin/branches/[id]   [branches:edit]
@@ -170,10 +167,10 @@ export async function PUT(
     if (!parsed.success) {
       branchLog.warn("branches.update.invalid_input", {
         outcome: "denied",
-        issues: parsed.error.issues,
+        issues: parsed.error.issues.map(({ path, code }) => ({ path, code })),
       });
       return NextResponse.json(
-        { success: false, error: "Invalid request body", details: parsed.error },
+        { success: false, error: "Invalid request body", details: parsed.error.issues.map(({ path, code }) => ({ path, code })) },
         { status: 400 }
       );
     }
@@ -196,6 +193,15 @@ export async function PUT(
       );
     }
 
+    let region;
+    try {
+      region = await verifyBranchRegion(data);
+    } catch (error) {
+      const invalid = error instanceof Error && error.message === "REGION_INPUT_INVALID";
+      branchLog.error("branches.update.region_rejected", { outcome: "denied", reason: invalid ? "invalid_region" : "provider_unavailable" });
+      return NextResponse.json({ success: false, error: invalid ? "Wilayah pengiriman atau kode pos tidak valid" : "Wilayah Shipment tidak tersedia. Silakan coba lagi." }, { status: invalid ? 400 : 503 });
+    }
+
     // Mutation + audit run in one local DB transaction (branches-service).
     // The branch row is locked and its existence re-checked inside the tx;
     // a NOT_FOUND from the recheck maps to the same 404 as the pre-check.
@@ -215,6 +221,7 @@ export async function PUT(
           // Omitted fields stay undefined so Drizzle skips them under the
           // service's row lock. Never copy a stale route pre-check value.
           ...origin.origin,
+          ...region,
         },
         { actorId: ctx.user.id, policyVersion: ctx.policy.policyVersion }
       );

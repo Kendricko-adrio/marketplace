@@ -52,8 +52,10 @@ const BRANCH = {
   status: "aktif",
   shippingPhone: "021999888777",
   shippingAddress: "Jl. Origin E2E No. 7, Gudang B",
-  shippingPostalCode: "10110",
+  shippingPostalCode: "01234",
   shippingAreaId: "01010101",
+  shippingProvinceId: "01", shippingCityId: "0101", shippingDistrictId: "010101",
+  shippingProvince: "Fixture Province", shippingCity: "Fixture City", shippingDistrict: "Fixture District", shippingArea: "Fixture Area",
 } as const;
 
 const FALLBACK: ShipmentDimensions = {
@@ -163,6 +165,27 @@ const INSURED_SERVICE = {
 } as const;
 
 describe("quoteDelivery", () => {
+  it("binds services to the configured origin even when rates and postcode stay equal", async () => {
+    const first = await quoteDelivery(BASE_INPUT, recordingGateway([JNE_REG]).gateway);
+    const moved = await quoteDelivery({ ...BASE_INPUT, branch: { ...BRANCH, shippingAreaId: "01010102", shippingArea: "Other Area" } }, recordingGateway([JNE_REG]).gateway);
+    expect(first.services[0]).toHaveProperty("originFingerprint");
+    expect(first.services[0].originFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(moved.services[0].originFingerprint).not.toBe(first.services[0].originFingerprint);
+    expect(moved.services[0].pricing).toEqual(first.services[0].pricing);
+  });
+
+  it.each(["", "abc", " 01010101", "12345678901234567"])("rejects malformed origin Area ID %s before rates", async (shippingAreaId) => {
+    const recorder = recordingGateway([JNE_REG]);
+    await expect(quoteDelivery({ ...BASE_INPUT, branch: { ...BRANCH, shippingAreaId } }, recorder.gateway)).rejects.toThrow(/wilayah pengiriman/i);
+    expect(recorder.calls).toHaveLength(0);
+  });
+
+  it.each(["shippingProvinceId", "shippingCityId", "shippingDistrictId", "shippingAreaId", "shippingPostalCode", "shippingProvince", "shippingCity", "shippingDistrict", "shippingArea"])("rejects an incomplete %s before calling rates", async (field) => {
+    const recorder = recordingGateway([JNE_REG]);
+    await expect(quoteDelivery({ ...BASE_INPUT, branch: { ...BRANCH, [field]: null } }, recorder.gateway)).rejects.toThrow(/wilayah pengiriman/i);
+    expect(recorder.calls).toHaveLength(0);
+  });
+
   it("builds the server-side rates request and selects vendor `rates` (never final_rates), pricing goods+ongkir as order-pricing strings", async () => {
     const recorder = recordingGateway([JNE_REG, NEUTRAL_SERVICE, INSURED_SERVICE]);
 
@@ -172,7 +195,7 @@ describe("quoteDelivery", () => {
     // from the verified canonical address, worked weight 2×250 + 1×100 + 40.
     expect(recorder.calls).toHaveLength(1);
     expect(recorder.calls[0]).toMatchObject({
-      origin: { name: "Cabang Jakarta Pusat", zipcode: "10110" },
+      origin: { name: "Cabang Jakarta Pusat", zipcode: "01234", area_id: "01010101" },
       destination: { zipcode: "01234", area_id: "01010101" },
       weight: 640,
     });

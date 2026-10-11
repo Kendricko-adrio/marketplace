@@ -115,7 +115,7 @@ const ORIGIN_BRANCH = {
   // The configured local origin complement (branch-edit slice contract).
   shippingPhone: "021999888777",
   shippingAddress: "Jl. Origin E2E No. 7, Gudang B",
-  shippingPostalCode: "10110",
+  shippingPostalCode: "01234",
   shippingAreaId: "01010101",
 } as const;
 
@@ -245,6 +245,8 @@ test.beforeAll(async ({ browser }) => {
       ORIGIN_BRANCH.shippingAreaId,
     ]
   );
+
+  await pool.query("UPDATE branch SET shipping_province_id='01', shipping_city_id='0101', shipping_district_id='010101', shipping_province='Fixture Province', shipping_city='Fixture City', shipping_district='Fixture District', shipping_area='Fixture Area' WHERE id=$1", [ORIGIN_BRANCH_ID]);
 
   // Own fixture branch is open every day, independently of seeded hours.
   await pool.query("UPDATE branch SET operating_hours = $1 WHERE id = $2", [

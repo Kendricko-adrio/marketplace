@@ -146,7 +146,19 @@ export function parseBranchOrigin(raw: BranchOriginRaw): BranchOriginParseResult
   return { ok: true, origin };
 }
 
-export interface CreateBranchData {
+export interface BranchRegionData {
+  shippingProvinceId?: string | null;
+  shippingCityId?: string | null;
+  shippingDistrictId?: string | null;
+  shippingProvince?: string | null;
+  shippingCity?: string | null;
+  shippingDistrict?: string | null;
+  shippingArea?: string | null;
+}
+
+const REGION_FIELDS = ["shippingProvinceId", "shippingCityId", "shippingDistrictId", "shippingProvince", "shippingCity", "shippingDistrict", "shippingArea", "shippingAreaId", "shippingPostalCode"] as const;
+
+export interface CreateBranchData extends BranchRegionData {
   id: string;
   name: string;
   code: string;
@@ -189,6 +201,13 @@ export async function createBranch(
         shippingAddress: data.shippingAddress,
         shippingPostalCode: data.shippingPostalCode,
         shippingAreaId: data.shippingAreaId,
+        shippingProvinceId: data.shippingProvinceId,
+        shippingCityId: data.shippingCityId,
+        shippingDistrictId: data.shippingDistrictId,
+        shippingProvince: data.shippingProvince,
+        shippingCity: data.shippingCity,
+        shippingDistrict: data.shippingDistrict,
+        shippingArea: data.shippingArea,
       })
       .returning();
     const created = inserted[0];
@@ -198,7 +217,7 @@ export async function createBranch(
       action: "CREATE_BRANCH",
       entityType: "branch",
       entityId: data.id,
-      changes: { name: { from: null, to: data.name } },
+      changes: { name: { from: null, to: data.name }, ...Object.fromEntries(REGION_FIELDS.filter((field) => data[field] !== undefined).map((field) => [field, { from: null, to: data[field] }])) },
       policyVersion: ctx.policyVersion,
       branchScope: "global",
     });
@@ -207,7 +226,7 @@ export async function createBranch(
   });
 }
 
-export interface UpdateBranchData {
+export interface UpdateBranchData extends BranchRegionData {
   name: string;
   code: string;
   city: string;
@@ -266,6 +285,13 @@ export async function updateBranch(
         shippingAddress: data.shippingAddress,
         shippingPostalCode: data.shippingPostalCode,
         shippingAreaId: data.shippingAreaId,
+        shippingProvinceId: data.shippingProvinceId,
+        shippingCityId: data.shippingCityId,
+        shippingDistrictId: data.shippingDistrictId,
+        shippingProvince: data.shippingProvince,
+        shippingCity: data.shippingCity,
+        shippingDistrict: data.shippingDistrict,
+        shippingArea: data.shippingArea,
         updatedAt: new Date(),
       })
       .where(eq(branches.id, id));
@@ -298,6 +324,10 @@ export async function updateBranch(
         from: existing.shippingAreaId ?? null,
         to: data.shippingAreaId,
       };
+    }
+
+    for (const field of REGION_FIELDS) {
+      if (data[field] !== undefined) originChanges[field] = { from: existing[field] ?? null, to: data[field] };
     }
 
     await writeAuditEvent(tx, {

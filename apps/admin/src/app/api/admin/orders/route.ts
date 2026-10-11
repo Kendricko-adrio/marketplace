@@ -7,11 +7,13 @@ import {
   branches,
   jubelioStockOperations,
 } from "@/db";
-import { eq, and, desc, sql, ilike, or, gte, lte } from "drizzle-orm";
+import { eq, and, asc, sql, ilike, or, gte, lte } from "drizzle-orm";
 import { serializeError } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import { parsePagination } from "@/lib/pagination";
+import { listDeliveryWork, DELIVERY_QUEUES, type DeliveryQueue } from "@/lib/delivery-work-list";
+import { DELIVERY_STAGE_LABELS } from "@/lib/delivery-workflow";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +42,24 @@ export async function GET(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
+    const fulfillment = searchParams.get("fulfillment");
+    if (fulfillment && !["delivery", "pickup"].includes(fulfillment)) return NextResponse.json({ success: false, error: "Invalid fulfillment" }, { status: 400 });
+    if (fulfillment === "delivery") {
+      const queue = searchParams.get("queue") ?? "actionable";
+      const stage = searchParams.get("stage");
+      const dates = [searchParams.get("from"), searchParams.get("to")];
+      if (!DELIVERY_QUEUES.includes(queue as DeliveryQueue) || (stage && !DELIVERY_STAGE_LABELS.includes(stage)) || dates.some((date) => date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date))))) {
+        logger.warn("orders.list.invalid_filters", { outcome: "denied" });
+        return NextResponse.json({ success: false, error: "Invalid delivery filters" }, { status: 400 });
+      }
+      const result = await listDeliveryWork(db, {
+        scope: authorization, queue: queue as DeliveryQueue, stage,
+        branchId: searchParams.get("branchId"), search: searchParams.get("search"),
+        from: dates[0], to: dates[1], page: parsePagination(searchParams.get("page"), "20").page,
+      });
+      logger.info("orders.list.delivery", { outcome: "success", scope: authorization.mode, ...result.pagination });
+      return NextResponse.json({ success: true, ...result });
+    }
     const status = searchParams.get("status");
     const branchIdParam = searchParams.get("branchId");
     const from = searchParams.get("from");
@@ -47,14 +67,12 @@ export async function GET(request: NextRequest) {
     const pickupFrom = searchParams.get("pickupFrom");
     const pickupTo = searchParams.get("pickupTo");
     const search = searchParams.get("search");
-    const { page, limit } = parsePagination(
-      searchParams.get("page"),
-      searchParams.get("limit")
-    );
-    const offset = (page - 1) * limit;
+    const { page: requestedPage, limit } = parsePagination(searchParams.get("page"), "20");
 
     // Build the where conditions array
     const conditions = [];
+    const dateConditions = [];
+    if (fulfillment === "pickup") conditions.push(eq(orders.fulfillmentMethod, "pickup"));
 
     // Branch scoping: own-branch view is pinned to the Home Branch regardless
     // of any client-supplied branchId; all-branch view may filter by param.
@@ -69,13 +87,13 @@ export async function GET(request: NextRequest) {
     }
 
     if (from) {
-      conditions.push(gte(orders.createdAt, new Date(from)));
+      dateConditions.push(gte(orders.createdAt, new Date(from)));
     }
     if (to) {
       // Add 1 day to include the full "to" date
       const toDate = new Date(to);
       toDate.setDate(toDate.getDate() + 1);
-      conditions.push(lte(orders.createdAt, toDate));
+      dateConditions.push(lte(orders.createdAt, toDate));
     }
 
     if (pickupFrom) {
@@ -100,7 +118,14 @@ export async function GET(request: NextRequest) {
     }
 
     const whereClause =
-      conditions.length > 0 ? and(...conditions) : undefined;
+      conditions.length + dateConditions.length > 0 ? and(...conditions, ...dateConditions) : undefined;
+
+    const countResult = await db.select({ count: sql<number>`count(*)` }).from(orders).innerJoin(clients, eq(orders.userId, clients.id)).where(whereClause);
+    const total = Number(countResult[0]?.count ?? 0);
+    const baseResult = await db.select({ count: sql<number>`count(*)` }).from(orders).innerJoin(clients, eq(orders.userId, clients.id)).where(conditions.length ? and(...conditions) : undefined);
+    const baseTotal = Number(baseResult[0]?.count ?? 0);
+    const page = Math.min(requestedPage, Math.max(1, Math.ceil(total / limit)));
+    const offset = (page - 1) * limit;
 
     // ===== Main query =====
     let query = db
@@ -129,7 +154,7 @@ export async function GET(request: NextRequest) {
       .from(orders)
       .innerJoin(clients, eq(orders.userId, clients.id))
       .leftJoin(branches, eq(orders.branchId, branches.id))
-      .orderBy(desc(orders.createdAt))
+      .orderBy(asc(orders.createdAt), asc(orders.id))
       .limit(limit)
       .offset(offset);
 
@@ -147,19 +172,6 @@ export async function GET(request: NextRequest) {
       stockNeedsReview: Boolean(row.stockNeedsReview),
     }));
 
-    // ===== Total count (with the same filters) =====
-    let countQuery = db
-      .select({ count: sql<number>`count(*)` })
-      .from(orders)
-      .innerJoin(clients, eq(orders.userId, clients.id));
-
-    if (whereClause) {
-      countQuery = countQuery.where(whereClause) as typeof countQuery;
-    }
-
-    const countResult = await countQuery;
-    const total = Number(countResult[0]?.count || 0);
-
     logger.info("orders.list", {
       outcome: "success",
       total,
@@ -173,6 +185,7 @@ export async function GET(request: NextRequest) {
         page,
         limit,
         total,
+        baseTotal,
         totalPages: Math.ceil(total / limit),
       },
     });

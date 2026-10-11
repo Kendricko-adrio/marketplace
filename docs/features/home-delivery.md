@@ -24,6 +24,10 @@ Two financial ledgers remain separate: goods 100000 + shipping 20000 + website P
 
 Store/client and admin/user authentication remain separate. Branch Scope grants visibility, never permission for physical actions outside current Home Branch. Customer DTOs exclude provider fees, raw callback data, internal notes and admin attribution. Provider request intents are durable; ambiguous outcomes are held, not blindly retried. Proof-approved booking release is audited and requires a separate booking click.
 
+## Branch origin configuration
+
+Admin branch create/edit now requires verified Shipment dropdown selection for every branch, including pickup-only/inactive ones. Nullable legacy/import origins require completion before editing or new delivery usage; pickup remains available and accepted orders retain immutable snapshots. Locally configured region IDs/names/postcode survive master sync. Sender phone/address, status and parcels remain additional readiness prerequisites. See [verified branch regions](branch-shipping-regions.md).
+
 ## Verification and activation boundary
 
 All seven implementation tickets passed main-owned review and isolated local validation: 106 unit files, 953 passed (two infrastructure-failure sentinel tests skipped because PostgreSQL is ready), 22 mock-only browser/HTTP cases, both app typechecks, focused lint, schema check and diff check. Tests for real database behavior ran against local PostgreSQL; skipped sentinels are not skipped delivery acceptance tests.

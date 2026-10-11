@@ -742,5 +742,21 @@ export function createShipmentTracking(
     });
   }
 
-  return { handoff, reconcile, ingestWebhook };
+  // Read-only affordance check through the same existing trackability guard.
+  // No provider lookup, audit or mutation. Actions still recheck independently.
+  async function inspect(orderId: string, actor: ShipmentTrackingActor) {
+    try {
+      return await db.transaction(async (tx) => {
+        const order = await requireTrackableOrder(tx, orderId, actor, options);
+        const rows = await tx.select().from(deliveryShipments).where(eq(deliveryShipments.orderId, orderId)).limit(1);
+        const ledger = rows[0];
+        const reconcile = !!ledger && ledger.state === "booked" && !!nonBlank(ledger.awb) && ledger.shipmentId !== null;
+        return { reconcile, handoff: reconcile && order.status !== "completed" && !!ledger.bookedAt && !!nonBlank(ledger.bookedBy) && !ledger.handedOverAt };
+      });
+    } catch (error) {
+      if (error instanceof ShipmentTrackingError) return { reconcile: false, handoff: false };
+      throw error;
+    }
+  }
+  return { handoff, reconcile, ingestWebhook, inspect };
 }

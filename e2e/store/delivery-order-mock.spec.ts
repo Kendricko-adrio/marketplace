@@ -111,7 +111,7 @@ const ORIGIN_BRANCH = {
   status: "aktif",
   shippingPhone: "021999888777",
   shippingAddress: "Jl. Origin E2E No. 8, Gudang C",
-  shippingPostalCode: "10110",
+  shippingPostalCode: "01234",
   shippingAreaId: "01010101",
 } as const;
 
@@ -383,6 +383,7 @@ test.beforeAll(async ({ browser }) => {
       MOCK_JUBELIO_LOCATION_ID,
     ]
   );
+  await pool.query("UPDATE branch SET shipping_province_id='01', shipping_city_id='0101', shipping_district_id='010101', shipping_province='Fixture Province', shipping_city='Fixture City', shipping_district='Fixture District', shipping_area='Fixture Area' WHERE id=$1", [ORIGIN_BRANCH_ID]);
   await pool.query("DELETE FROM product WHERE id = $1", [FIXTURE_PRODUCT_ID]);
   await pool.query(
     `INSERT INTO product (id, name, slug, base_price, status)
@@ -503,6 +504,48 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     }
   });
 
+  test("incomplete origin blocks new quote and checkout without creating an order", async () => {
+    expect((await johnContext.request.post("/api/cart/items", { data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 } })).ok()).toBe(true);
+    const cart = (await (await johnContext.request.get("/api/cart")).json()).data;
+    const itemIds = [cart.items.find((item: { variantId: string }) => item.variantId === FIXTURE_VARIANT_ID).id];
+    const preview = await orderContext.request.post("/api/checkout/delivery-quote", { data: { itemIds, addressId: addressIdOne } });
+    expect(preview.ok()).toBe(true);
+    const service = (await preview.json()).data.services[0];
+    const before = (await pool.query("SELECT count(*)::int AS n FROM orders WHERE contact_email=$1", [CONTACT_EMAIL])).rows[0].n;
+    try {
+      await pool.query("UPDATE branch SET shipping_province_id=NULL WHERE id=$1", [ORIGIN_BRANCH_ID]);
+      const quote = await orderContext.request.post("/api/checkout/delivery-quote", { data: { itemIds, addressId: addressIdOne } });
+      expect(quote.status()).toBe(400);
+      expect((await quote.json()).error).toContain("Lengkapi wilayah pengiriman");
+      const placed = await orderContext.request.post("/api/checkout/place-order", { data: {
+        fulfillmentMethod: "delivery", itemIds, addressId: addressIdOne, contactPhone: "081234567890", contactEmail: CONTACT_EMAIL,
+        courierId: service.courierId, serviceId: service.serviceId, approvedPricing: service.pricing, originFingerprint: service.originFingerprint,
+      } });
+      expect(placed.status()).toBe(400);
+      expect((await pool.query("SELECT count(*)::int AS n FROM orders WHERE contact_email=$1", [CONTACT_EMAIL])).rows[0].n).toBe(before);
+    } finally { await pool.query("UPDATE branch SET shipping_province_id='01' WHERE id=$1", [ORIGIN_BRANCH_ID]); }
+  });
+
+  test("rejects stale origin approval even when rates and postcode are unchanged", async () => {
+    expect((await johnContext!.request.post("/api/cart/items", { data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 } })).ok()).toBe(true);
+    const cart = (await (await johnContext!.request.get("/api/cart")).json()).data;
+    const itemIds = [cart.items.find((item: { variantId: string }) => item.variantId === FIXTURE_VARIANT_ID).id];
+    const quote = await orderContext!.request.post("/api/checkout/delivery-quote", { data: { itemIds, addressId: addressIdOne } });
+    expect(quote.ok(), await quote.text()).toBe(true);
+    const service = (await quote.json()).data.services[0];
+    try {
+      await pool.query("UPDATE branch SET shipping_area_id='01010102', shipping_area='Other Fixture Area' WHERE id=$1", [ORIGIN_BRANCH_ID]);
+      const rejected = await orderContext!.request.post("/api/checkout/place-order", { data: {
+        fulfillmentMethod: "delivery", itemIds, addressId: addressIdOne, contactPhone: "081234567890", contactEmail: CONTACT_EMAIL,
+        courierId: service.courierId, serviceId: service.serviceId, approvedPricing: service.pricing, originFingerprint: service.originFingerprint,
+      } });
+      expect(rejected.status()).toBe(409);
+      expect((await rejected.json()).code).toBe("DELIVERY_REPRICE_REQUIRED");
+    } finally {
+      await pool.query("UPDATE branch SET shipping_area_id='01010101', shipping_area='Fixture Area' WHERE id=$1", [ORIGIN_BRANCH_ID]);
+    }
+  });
+
   test("places delivery to an unsaved checkout address with an immutable snapshot", async () => {
     const add = await johnContext!.request.post("/api/cart/items", {
       data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
@@ -601,10 +644,10 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
       data: { itemIds: [itemId], newAddress: submitted!.newAddress },
     });
     expect(quote.ok()).toBe(true);
-    const services = (await quote.json()).data.services as Array<{ courierId: number; serviceId: number; pricing: unknown }>;
+    const services = (await quote.json()).data.services as Array<{ courierId: number; serviceId: number; pricing: unknown; originFingerprint: string }>;
     const retried = await orderContext!.request.post("/api/checkout/place-order", {
       data: { ...submitted, itemIds: [itemId], courierId: services[0].courierId,
-        serviceId: services[0].serviceId, approvedPricing: services[0].pricing },
+        serviceId: services[0].serviceId, approvedPricing: services[0].pricing, originFingerprint: services[0].originFingerprint },
     });
     expect(retried.ok(), await retried.text()).toBe(true);
     const repeatedRows = (await (await orderContext!.request.get("/api/addresses")).json()).data as Array<{ id: string; fullAddress: string }>;
@@ -627,7 +670,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     const otherOrder = await orderContext!.request.post("/api/checkout/place-order", {
       data: { ...submitted, itemIds: [nextItemId], newAddress: otherAddress,
         saveRequestId: crypto.randomUUID(), courierId: otherService.courierId,
-        serviceId: otherService.serviceId, approvedPricing: otherService.pricing },
+        serviceId: otherService.serviceId, approvedPricing: otherService.pricing, originFingerprint: otherService.originFingerprint },
     });
     expect(otherOrder.ok(), await otherOrder.text()).toBe(true);
     const finalRows = (await (await orderContext!.request.get("/api/addresses")).json()).data as Array<{ fullAddress: string; isDefault: boolean }>;
@@ -735,7 +778,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     expect(snapshot.origin).toMatchObject({
       name: ORIGIN_BRANCH.name,
       phone: "021999888777",
-      zipcode: "10110",
+      zipcode: "01234",
       areaId: "01010101",
     });
     expect(snapshot.parcel).toMatchObject({

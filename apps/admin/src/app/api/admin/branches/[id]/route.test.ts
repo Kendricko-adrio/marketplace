@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { NextResponse } from "next/server";
 
 // =========================================================
 // PUT + DELETE /api/admin/branches/[id] — route seam over the
@@ -13,7 +12,6 @@ import {
   jsonRequest,
   loggerModuleMock,
   makeLogger,
-  type RouteLogger,
 } from "@/test-support/route-test";
 
 const state = vi.hoisted(() => ({
@@ -41,6 +39,7 @@ vi.mock("@/lib/rbac/guard", async () => {
 vi.mock("@/lib/logger", () => loggerModuleMock());
 
 import { DELETE, PUT } from "./route";
+import { branchRegion, mockShipmentRegions } from "@/test-support/shipment-regions";
 
 const logger = makeLogger();
 const branchId = "b-1";
@@ -53,6 +52,7 @@ const existingRow = {
 };
 
 const updateBody = {
+  ...branchRegion,
   name: "Baru",
   code: "BRX",
   city: "Jakarta",
@@ -74,12 +74,58 @@ function setupDb(
 }
 
 beforeEach(() => {
+  mockShipmentRegions();
   guardMock.mockReset();
   guardAllow(logger);
   setupDb();
 });
 
 describe("PUT /api/admin/branches/[id]", () => {
+  it("requires region completion on every edit without mutation or audit", async () => {
+    const fake = setupDb({ selectQueue: [[existingRow]] });
+    const body: Record<string, unknown> = { ...updateBody };
+    delete body.shippingProvinceId;
+    const response = await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", body), routeParams());
+    expect(response.status).toBe(400);
+    expect(fake.ops.filter((op) => op.kind !== "select")).toHaveLength(0);
+  });
+  it.each(Object.keys(branchRegion).flatMap((field) => [undefined, null, "", "abc", "9999"].map((value) => ({ field, value }))))("rejects $field=$value without mutation or audit", async ({ field, value }) => {
+    const fake = setupDb({ selectQueue: [[existingRow]] });
+    const response = await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", { ...updateBody, [field]: value }), routeParams());
+    expect(response.status).toBe(400);
+    expect(fake.ops.filter((op) => op.kind !== "select")).toHaveLength(0);
+  });
+
+  it("own-branch editing conceals another branch before region lookup", async () => {
+    guardAllow(logger, { scope: "own_branch", homeBranchId: "other" });
+    const fake = setupDb({ selectQueue: [[existingRow]] });
+    expect((await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams())).status).toBe(404);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(fake.ops.filter((op) => op.kind !== "select")).toHaveLength(0);
+  });
+
+  it("own-branch editing can complete its Home Branch", async () => {
+    guardAllow(logger, { scope: "own_branch", homeBranchId: branchId });
+    setupDb({ selectQueue: [[existingRow], [existingRow]] });
+    expect((await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams())).status).toBe(200);
+  });
+
+  it("provider failure leaves mutation and audit untouched", async () => {
+    const fake = setupDb({ selectQueue: [[existingRow]] });
+    vi.mocked(fetch).mockRejectedValueOnce(new Error("Timeout"));
+    const response = await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams());
+    expect(response.status).toBe(503);
+    expect(fake.ops.filter((op) => op.kind !== "select")).toHaveLength(0);
+  });
+
+  it("audits region changes from the locked row, preserving omitted sender values", async () => {
+    const fake = setupDb({ selectQueue: [[existingRow], [{ ...existingRow, shippingProvinceId: "09", shippingProvince: "Before", shippingPhone: "0219999" }]] });
+    expect((await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams())).status).toBe(200);
+    const audit = fake.ops.find((op) => op.kind === "insert")!.values;
+    expect(audit).toMatchObject({ changes: { shippingProvinceId: { from: "09", to: "01" }, shippingProvince: { from: "Before", to: "Provinsi Fixture" }, shippingAreaId: { from: null, to: "0102030004" } } });
+    expect((audit as { changes: Record<string, unknown> }).changes).not.toHaveProperty("shippingPhone");
+  });
+
   it("returns 200 and runs the mutation + audit in one tx", async () => {
     const fake = setupDb({
       // 1) route pre-check, 2) service locked recheck
@@ -105,7 +151,7 @@ describe("PUT /api/admin/branches/[id]", () => {
     expect(inserts[0].values).toMatchObject({ action: "UPDATE_BRANCH" });
   });
 
-  it("does not overwrite a concurrent origin edit when legacy PUT omits origin fields", async () => {
+  it("does not overwrite concurrent sender fields when PUT omits them", async () => {
     const fake = setupDb({ selectQueue: [
       [{ ...existingRow, shippingPhone: "021111111", shippingAddress: "Old origin", shippingPostalCode: "01234", shippingAreaId: null }],
       [{ ...existingRow, shippingPhone: "021222222", shippingAddress: "New origin", shippingPostalCode: "54321", shippingAreaId: "01010101" }],
@@ -113,7 +159,7 @@ describe("PUT /api/admin/branches/[id]", () => {
     const response = await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams());
     expect(response.status).toBe(200);
     const mutation = fake.ops.find((op) => op.kind === "update")!.set as Record<string, unknown>;
-    for (const field of ["shippingPhone", "shippingAddress", "shippingPostalCode", "shippingAreaId"]) expect(mutation[field]).toBeUndefined();
+    for (const field of ["shippingPhone", "shippingAddress"]) expect(mutation[field]).toBeUndefined();
   });
 
   it("maps a vanished-mid-request branch to the stable 404", async () => {

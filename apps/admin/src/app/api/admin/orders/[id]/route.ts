@@ -8,6 +8,7 @@ import {
   productVariants,
   products,
   jubelioStockOperations,
+  jubelioSalesOperations,
 } from "@/db";
 import {
   asc,
@@ -16,7 +17,14 @@ import {
 import { serializeError } from "@/lib/logger";
 import { guard, crossBranchNotFound } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
-import { deliveryShipments, deliveryTrackingEvents } from "@/db";
+import { deliveryShipments, deliveryTrackingEvents, deliveryBookingReviews } from "@/db";
+
+import { authorizeLoaded } from "@/lib/rbac/resolver";
+import { projectDeliveryAccess, projectDeliveryStage } from "@/lib/delivery-workflow";
+import { deliverySettlementVerified } from "@/lib/delivery-settlement";
+import { inspectDeliveryEligibility } from "@/lib/shipment-fulfillment";
+import { createShipmentTracking } from "@marketplace/db/src/shipment-tracking";
+import { createDeliveryFollowUp } from "@/lib/delivery-follow-up";
 
 export const dynamic = "force-dynamic";
 
@@ -114,6 +122,9 @@ export async function GET(
           attemptCount: deliveryShipments.attemptCount,
           dispatchedAt: deliveryShipments.dispatchedAt,
           bookedAt: deliveryShipments.bookedAt,
+          packedAt: deliveryShipments.createdAt,
+          packedBy: deliveryShipments.packedBy,
+          bookedBy: deliveryShipments.bookedBy,
           handedOverAt: deliveryShipments.handedOverAt,
           handedOverBy: deliveryShipments.handedOverBy,
           latestStatus: deliveryShipments.latestStatus,
@@ -207,11 +218,6 @@ export async function GET(
       .where(eq(jubelioStockOperations.orderId, id))
       .orderBy(asc(jubelioStockOperations.createdAt));
 
-    orderLog.info("orders.detail", {
-      outcome: "success",
-      scope: authorization.mode,
-      stockOperationCount: stockOperations.length,
-    });
     // Ticket 05 — actor-allowed projection: the server-pinned Home Branch
     // match (the CTAs also require the client-side orders:edit hint, but the
     // routes enforce the real grants); an unpacked order ships shipment null
@@ -220,6 +226,34 @@ export async function GET(
     const homeBranchMatch =
       !!ctx.policy.user.homeBranchId &&
       ctx.policy.user.homeBranchId === order[0].order.branchId;
+    const bookingReviews = order[0].order.fulfillmentMethod === "delivery" ? await db.select({
+      attemptNumber: deliveryBookingReviews.attemptNumber,
+      reference: deliveryBookingReviews.proofReference,
+      reason: deliveryBookingReviews.proofReason,
+      createdAt: deliveryBookingReviews.createdAt,
+    }).from(deliveryBookingReviews).where(eq(deliveryBookingReviews.orderId, id)).orderBy(asc(deliveryBookingReviews.createdAt)) : [];
+    let workflow = null;
+    if (order[0].order.fulfillmentMethod === "delivery") {
+      const canEditOrders = authorizeLoaded(ctx.policy, "orders", "edit").allowed;
+      const homeBranchId = ctx.policy.user.homeBranchId;
+      const homeBranch = homeBranchId ? await db.select({ name: branches.name }).from(branches).where(eq(branches.id, homeBranchId)).limit(1) : [];
+      const access = projectDeliveryAccess({
+        canEditOrders, homeBranchId, homeBranchName: homeBranch[0]?.name,
+        orderBranchId: order[0].order.branchId, orderBranchName: order[0].branch?.name,
+      });
+      const settlement = await db.select().from(jubelioSalesOperations).where(eq(jubelioSalesOperations.orderId, id));
+      const stage = projectDeliveryStage({
+        ...order[0].order, shipment: shipmentRow,
+        settlementVerified: deliverySettlementVerified(order[0].order, settlement),
+      });
+      const eligibility = access.allowed
+        ? await inspectDeliveryEligibility(db, id, { id: ctx.user.id, homeBranchId, canEditOrders })
+        : { eligible: false, known: true };
+      const tracking = access.allowed ? await createShipmentTracking(db).inspect(id, { id: ctx.user.id, homeBranchId, canEditOrders }) : { reconcile: false, handoff: false };
+      const special = access.allowed ? await createDeliveryFollowUp(db).inspect(id, { id: ctx.user.id, homeBranchId, canEditOrders }) : { failure: false, release: false, finish: false };
+      workflow = { stage, access, eligibility, tracking, special };
+    }
+    orderLog.info("orders.detail", { outcome: "success", scope: authorization.mode, stockOperationCount: stockOperations.length });
     return NextResponse.json({
       success: true,
       data: {
@@ -228,6 +262,8 @@ export async function GET(
         branch: order[0].branch,
         shipment: shipmentRow,
         actor: { allowed: homeBranchMatch },
+        workflow,
+        bookingReviews,
         trackingTimeline,
         items: itemsWithImages,
         stockOperations,

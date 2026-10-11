@@ -1,176 +1,53 @@
 "use client";
-
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-
-// =========================================================
-// Ticket 07 — the delivery follow-up AREA: one scoped list (orders:view +
-// the Branch Scope from Current Policy) with the "Jenis Kendala" filter,
-// covering the settlement (paid-but-blocked), the packing failures, the
-// settled ambiguous bookings and the RETURNED/SHIPMENT_ISSUE shipments — all
-// BEFORE the order completes. The resolutions live on the order DETAIL page
-// (the linked cards below); this page never mutates anything by itself.
-// =========================================================
-
-const KIND_LABELS: Record<string, string> = {
-  all: "Semua kendala",
-  settlement: "Settlement tertahan",
-  packing: "Packing gagal",
-  booking: "Booking ambigu",
-  shipment: "Kendala pengiriman",
-};
-
-const FAILURE_CODE_LABELS: Record<string, string> = {
-  physical_stock_unavailable: "Stok fisik habis",
-  damaged_goods: "Barang rusak",
-  paid_service_limits_exceeded: "Melebihi batas layanan yang dibayar",
-};
-
-interface FollowUpRow {
-  orderId: string;
-  kind: string;
-  status: string;
-  paymentStatus: string;
-  deliveryFailureCode: string | null;
-  fulfillmentBlockedReason: string | null;
-  shipmentState: string | null;
-  latestStatus: string | null;
-  serviceName: string | null;
-  destinationSummary: string | null;
-}
-
-export default function DeliveryFollowUpPage() {
-  const [kind, setKind] = useState("all");
-  const [rows, setRows] = useState<FollowUpRow[] | null>(null);
+import { DELIVERY_STAGE_LABELS, type DeliveryStage } from "@/lib/delivery-workflow";
+import { useAuth } from "@/providers/auth-provider";
+const KINDS = { all: "Semua kendala", settlement: "Settlement tertahan", packing: "Packing gagal", booking: "Booking ambigu", shipment: "Kendala pengiriman" };
+type Row = { orderId: string; kind: string; stage: DeliveryStage; paymentStatus: string; serviceName?: string | null; destinationSummary?: string | null };
+export default function DeliveryFollowUpPage() { return <Suspense fallback={<p>Memuat tindak lanjut…</p>}><FollowUp /></Suspense>; }
+function FollowUp() {
+  const router = useRouter(); const query = useSearchParams();
+  const { policyStatus, hasPermission } = useAuth();
+  const [rows, setRows] = useState<Row[]>([]);
+  const [pagination, setPagination] = useState({ page: 1, total: 0, baseTotal: 0, totalPages: 0 });
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async (currentKind: string) => {
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/admin/orders/follow-up?kind=${currentKind}`);
-      const data = (await res.json()) as { data?: FollowUpRow[] };
-      setRows(data.data ?? []);
-    } catch {
-      setRows([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  const currentUrl = `/admin/orders/follow-up?${query}`;
+  function change(key: string, value: string) {
+    const next = new URLSearchParams(query.toString()); if (value) next.set(key, value); else next.delete(key);
+    if (key !== "page") next.delete("page"); router.replace(`/admin/orders/follow-up?${next}`);
+  }
   useEffect(() => {
-    void load(kind);
-  }, [kind, load]);
-
-  return (
-    <div className="space-y-6 max-w-5xl">
-      <div className="flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={() => history.back()}>
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-        <h1 className="text-2xl font-bold tracking-tight">Tindak lanjut pengiriman</h1>
-      </div>
-
-      <div className="flex items-center gap-3">
-        <span className="text-sm text-muted-foreground shrink-0">Jenis Kendala</span>
-        <Select
-          value={kind}
-          onValueChange={(value) => setKind(value)}
-        >
-          <SelectTrigger
-            id="jenisKendala"
-            aria-label="Jenis Kendala"
-            className="w-72"
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {Object.entries(KIND_LABELS).map(([value, label]) => (
-              <SelectItem key={value} value={value}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {loading && (
-        <div className="flex items-center justify-center py-16">
-          <Loader2 className="h-6 w-6 animate-spin text-primary" />
-        </div>
-      )}
-
-      {!loading && rows && rows.length === 0 && (
-        <Card>
-          <CardContent className="p-6 text-center text-muted-foreground">
-            Tidak ada tindak lanjut pengiriman untuk scope Anda.
-          </CardContent>
-        </Card>
-      )}
-
-      {!loading &&
-        (rows ?? []).map((row) => (
-          <Card key={`${row.kind}-${row.orderId}`}>
-            <CardContent className="p-5">
-              <div className="flex items-center gap-3 flex-wrap">
-                <span className="rounded-full border bg-muted px-3 py-0.5 text-xs font-medium">
-                  {KIND_LABELS[row.kind] ?? row.kind}
-                </span>
-                {row.deliveryFailureCode && (
-                  <span className="text-sm font-medium text-destructive">
-                    Tidak dapat dipenuhi: {
-                      FAILURE_CODE_LABELS[row.deliveryFailureCode] ??
-                      row.deliveryFailureCode
-                    }
-                  </span>
-                )}
-                {row.fulfillmentBlockedReason && (
-                  <span className="text-sm text-amber-700">
-                    Settlement belum terverifikasi
-                  </span>
-                )}
-                {row.latestStatus && (
-                  <span className="text-sm text-muted-foreground">
-                    Status pengiriman: {row.latestStatus}
-                  </span>
-                )}
-                {row.shipmentState === "booking_unknown" && (
-                  <span className="text-sm text-amber-700">Booking ambigu (ditahan)</span>
-                )}
-                <span className="ml-auto text-xs font-mono text-muted-foreground">
-                  {row.status} · {row.paymentStatus}
-                </span>
-              </div>
-              {row.destinationSummary && (
-                <p className="mt-2 text-sm text-muted-foreground line-clamp-1">
-                  {row.destinationSummary}
-                </p>
-              )}
-              {row.serviceName && (
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Layanan: {row.serviceName}
-                </p>
-              )}
-              <div className="mt-3">
-                <Link
-                  href={`/admin/orders/${row.orderId}`}
-                  className="text-sm text-primary hover:underline"
-                >
-                  Buka detail pesanan
-                </Link>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+    let active = true;
+    async function load() {
+      setLoading(true); setError("");
+      try {
+        const response = await fetch(`/api/admin/orders/follow-up?${query}`); const body = await response.json();
+        if (!response.ok || !body.success) throw new Error("read failed");
+        if (active) {
+          setRows(body.data); setPagination(body.pagination);
+          if (Number(query.get("page") ?? 1) !== body.pagination.page) { const next = new URLSearchParams(query.toString()); next.set("page", String(body.pagination.page)); router.replace(`/admin/orders/follow-up?${next}`); }
+        }
+      } catch { if (active) { setRows([]); setError("Daftar tindak lanjut belum berhasil dimuat."); } }
+      finally { if (active) setLoading(false); }
+    }
+    void load(); return () => { active = false; };
+  }, [query, router]);
+  if (policyStatus !== "ready" || !hasPermission("orders", "view")) return null;
+  return <div className="min-w-0 max-w-5xl space-y-4">
+    <Button variant="ghost" onClick={() => { const previous = query.get("returnTo"); router.push(previous && /^\/admin\/orders(?:\?|$)/.test(previous) ? previous : "/admin/orders"); }}>Back to Orders</Button>
+    <h1 className="text-2xl font-bold">Tindak lanjut pengiriman</h1>
+    <div className="flex flex-wrap gap-3">
+      <label className="grid gap-1 text-sm">Jenis Kendala<select aria-label="Jenis Kendala" className="h-9 rounded-md border px-3" value={query.get("kind") ?? "all"} onChange={(event) => change("kind", event.target.value)}>{Object.entries(KINDS).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+      <label className="grid gap-1 text-sm">Tahap delivery<select aria-label="Tahap delivery" className="h-9 rounded-md border px-3" value={query.get("stage") ?? ""} onChange={(event) => change("stage", event.target.value)}><option value="">Semua tahap</option>{DELIVERY_STAGE_LABELS.map((label) => <option key={label}>{label}</option>)}</select></label>
     </div>
-  );
+    <p role="status">{loading ? "Memuat tindak lanjut…" : `${pagination.total} hasil dari ${pagination.baseTotal} tanpa batas tanggal`}</p>
+    {error && <p role="alert">{error}</p>}
+    {!loading && rows.length === 0 && <p>Tidak ada tindak lanjut yang cocok. Sesuaikan jenis kendala atau tahap.</p>}
+    {rows.map((row) => <article key={row.orderId} className="space-y-2 rounded-lg border bg-card p-4"><p className="text-xs text-muted-foreground">{KINDS[row.kind as keyof typeof KINDS]} · {row.paymentStatus}</p><h2 className="font-semibold">{row.stage.label}</h2><p>{row.stage.guidance}</p>{row.serviceName && <p className="text-sm text-muted-foreground">{row.serviceName}</p>}{row.destinationSummary && <p className="text-sm text-muted-foreground">{row.destinationSummary}</p>}<Link className="text-teal-800 underline" href={`/admin/orders/${row.orderId}?returnTo=${encodeURIComponent(currentUrl)}#special-handling`}>Buka detail pesanan</Link></article>)}
+    <div className="flex flex-wrap items-center gap-3"><Button variant="outline" disabled={pagination.page <= 1 || loading} onClick={() => change("page", String(pagination.page - 1))}>Previous</Button><span>Halaman {pagination.page} / {Math.max(1, pagination.totalPages)}</span><Button variant="outline" disabled={pagination.page >= pagination.totalPages || loading} onClick={() => change("page", String(pagination.page + 1))}>Next</Button></div>
+  </div>;
 }

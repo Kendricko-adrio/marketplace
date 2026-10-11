@@ -75,6 +75,8 @@ lasting design/invariant/flow content is distilled into the appropriate
 | Delivery follow-up | [`docs/features/delivery-follow-up.md`](features/delivery-follow-up.md) |
 | Delivery handoff and tracking | [`docs/features/delivery-tracking.md`](features/delivery-tracking.md) |
 | Delivery packing and booking | [`docs/features/delivery-fulfillment.md`](features/delivery-fulfillment.md) |
+| Guided admin delivery workflow | [`docs/features/admin-delivery-workflow.md`](features/admin-delivery-workflow.md) |
 | Delivery orders and settlement | [`docs/features/delivery-orders.md`](features/delivery-orders.md) |
 | Delivery checkout quotes | [`docs/features/delivery-quotes.md`](features/delivery-quotes.md) |
+| Mandatory verified branch Shipment regions | [`docs/features/branch-shipping-regions.md`](features/branch-shipping-regions.md) |
 | Client address book, branch shipping origin and parcel master | [`docs/features/client-addresses.md`](features/client-addresses.md) |

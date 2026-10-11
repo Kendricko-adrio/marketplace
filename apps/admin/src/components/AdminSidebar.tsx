@@ -89,6 +89,12 @@ export default function AdminSidebar() {
     return hasPermission(link.module, "view");
   });
 
+  // Choose one most-specific visible route, with segment boundaries so
+  // /orders/reviews does not also activate /orders (or match /reviews-extra).
+  const activeHref = visibleLinks
+    .filter((link) => pathname === link.href || (link.href !== "/admin" && pathname.startsWith(`${link.href}/`)))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
+
   const handleLogout = async () => {
     setLoggingOut(true);
     // Clear the must-reset edge cookie first so the login page (which now
@@ -136,22 +142,18 @@ export default function AdminSidebar() {
     : "";
 
   return (
-    <aside className="w-64 h-screen bg-card text-muted-foreground flex flex-col sticky top-0 border-r">
+    <aside className="w-full md:w-64 md:shrink-0 md:h-screen bg-card text-muted-foreground flex flex-col md:sticky md:top-0 border-r">
       <div className="p-6 text-xl font-bold text-foreground border-b">
         Admin<span className="text-primary">Panel</span>
       </div>
 
-      <nav className="flex-1 p-4 flex flex-col gap-2">
+      <nav className="flex-1 p-4 flex flex-wrap md:flex-col gap-2">
         {visibleLinks.map((link) => {
           const Icon = link.icon;
-          // Exact match for /admin, startsWith for sub-routes
-          const isActive =
-            link.href === "/admin"
-              ? pathname === "/admin"
-              : pathname.startsWith(link.href);
+          const isActive = link.href === activeHref;
 
           return (
-            <Link key={link.href} href={link.href}>
+            <Link key={link.href} href={link.href} aria-current={isActive ? "page" : undefined}>
               <Button
                 variant="ghost"
                 className={cn(

@@ -530,6 +530,23 @@ describe('proof-approved booking reattempt', () => {
 });
 
 describe("createDeliveryFollowUp — finishManually", () => {
+  it("read affordances reuse special-action guards: AWB/hold/cancel alone do not grant closure and dispatch cannot release", async () => {
+    const followup = createDeliveryFollowUp(db);
+    const order = FIXTURE_IDS.plainBooked;
+    await seedOrder(order);
+    expect(await followup.inspect(order, ACTOR_HOME)).toEqual({ failure: true, release: false, finish: false });
+    for (const latestStatus of ["WAITING", "ON_HOLD", "CANCELED"]) {
+      await seedOrder(order, { shipmentState: "booked", latestStatus });
+      expect(await followup.inspect(order, ACTOR_HOME)).toEqual({ failure: false, release: false, finish: false });
+    }
+    await seedOrder(order, { shipmentState: "booked", latestStatus: "RETURNED" });
+    expect(await followup.inspect(order, ACTOR_HOME)).toEqual({ failure: false, release: false, finish: true });
+    expect(await followup.inspect(order, ACTOR_WRONG_BRANCH)).toEqual({ failure: false, release: false, finish: false });
+    await seedOrder(order, { shipmentState: "booking_unknown" });
+    expect(await followup.inspect(order, ACTOR_HOME)).toEqual({ failure: false, release: true, finish: false });
+    await seedOrder(order, { shipmentState: "booking_dispatched" });
+    expect(await followup.inspect(order, ACTOR_HOME)).toEqual({ failure: false, release: false, finish: false });
+  });
   it.skipIf(!dbReady)(
     "manual finish completes only the RETURNED/ISSUE booked or the evidenced-stuck orders with a mandatory reason + audit; everything else is denied",
     async () => {

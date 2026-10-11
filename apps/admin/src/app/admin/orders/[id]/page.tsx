@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import {
@@ -37,11 +37,12 @@ import { toStoreUrl } from "@/lib/store-url";
 import {
   PACKING_FAILURE_REASONS,
 } from "@/lib/delivery-follow-up-contract";
+import type { DeliveryAccess, DeliveryStage } from "@/lib/delivery-workflow";
 
  const PACKING_FAILURE_REASON_LABELS: Record<string, string> = {
-  physical_stock_unavailable: "Stok fisik habis",
+  physical_stock_unavailable: "Stok tidak tersedia",
   damaged_goods: "Barang rusak",
-  paid_service_limits_exceeded: "Melebihi batas layanan yang dibayar",
+  paid_service_limits_exceeded: "Batas layanan terlampaui",
 };
 
 interface OrderItem {
@@ -75,6 +76,9 @@ interface ShipmentLedgerRow {
   attemptCount: number;
   dispatchedAt: string | null;
   bookedAt: string | null;
+  packedAt?: string | null;
+  packedBy?: string | null;
+  bookedBy?: string | null;
   // Ticket 06 — the handoff stamp + the verified tracking.
   handedOverAt: string | null;
   handedOverBy: string | null;
@@ -132,7 +136,9 @@ interface OrderDetail {
   } | null;
   shipment: ShipmentLedgerRow | null;
   actor?: { allowed: boolean };
+  workflow?: { stage: DeliveryStage; access: DeliveryAccess; eligibility: { eligible: boolean; known: boolean; blocker?: string }; tracking?: { reconcile: boolean; handoff: boolean }; special?: { failure: boolean; release: boolean; finish: boolean } };
   trackingTimeline?: TrackingTimelineRow[];
+  bookingReviews?: Array<{ attemptNumber: number; reference: string; reason: string; createdAt: string }>;
   pickupDate: string | null;
   pickupTime: string | null;
   contactPhone: string;
@@ -197,7 +203,7 @@ export default function AdminOrderDetailPage() {
   const params = useParams();
   const router = useRouter();
   const orderId = params.id as string;
-  const { hasPermission } = useAuth();
+  const { hasPermission, policyStatus, refreshPolicy } = useAuth();
 
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -210,6 +216,11 @@ export default function AdminOrderDetailPage() {
   const [recheckingOperationId, setRecheckingOperationId] = useState<string | null>(null);
   // Ticket 05 — packing/booking state for DELIVERY orders.
   const [shippingActionPending, setShippingActionPending] = useState(false);
+  const shippingSubmission = useRef(false);
+  const normalOpener = useRef<HTMLButtonElement | null>(null);
+  const specialOpener = useRef<HTMLButtonElement | null>(null);
+  const [shippingStale, setShippingStale] = useState(false);
+  const [normalConfirmation, setNormalConfirmation] = useState<"packing" | "book" | "handoff" | null>(null);
   const [shippingError, setShippingError] = useState<string>("");
   // Ticket 07 — the guided manual-action forms (the reason/reference) state.
   const [shippingFormKind, setShippingFormOpenKind] = useState<
@@ -217,13 +228,20 @@ export default function AdminOrderDetailPage() {
   >(null);
   const [shippingReasonInput, setShippingReasonInput] = useState("");
   const [shippingReferenceInput, setShippingReferenceInput] = useState("");
+  const [proofAttempt, setProofAttempt] = useState<number | null>(null);
+  const [absenceConfirmed, setAbsenceConfirmed] = useState(false);
+  const [operationClosed, setOperationClosed] = useState(false);
 
   const isDeliveryOrder = order?.fulfillmentMethod === "delivery";
   const deliveryFailed = !!order?.deliveryFailureCode;
   const canFulfillDelivery =
     !!order &&
+    !shippingStale &&
+    !shippingActionPending &&
     isDeliveryOrder &&
-    order.actor?.allowed === true &&
+    order.workflow?.access.allowed === true &&
+    order.workflow?.eligibility.known === true &&
+    order.workflow?.eligibility.eligible === true &&
     hasPermission("orders", "edit") &&
     order.paymentStatus === "paid" &&
     order.status === "processing" &&
@@ -235,36 +253,46 @@ export default function AdminOrderDetailPage() {
   // disabled) for an already-packed shipment; book exactly once (a packed
   // order with no outstanding action); an ambiguous booking NEVER offers an
   // enabled repeat (the UI holds and shows the banner instead).
-  const canPackDelivery = canFulfillDelivery && (shipmentState === null || shipmentState === "packed");
+  const canPackDelivery = canFulfillDelivery && shipmentState === null;
   const packLocked = shipmentState === "packed";
   const canBookDelivery =
     canFulfillDelivery && shipmentState === "packed" && !shippingActionPending;
   // Ticket 07 — the packing failure is only markable BEFORE a booking
   // (no ledger yet, or the merely-packed shipment).
-  const canMarkPackingFailure =
-    canFulfillDelivery && (shipmentState === null || shipmentState === "packed");
+  const canUseSpecial = !shippingStale && !shippingActionPending && order?.workflow?.eligibility.known === true && order?.workflow?.access.allowed === true && hasPermission("orders", "edit");
+  const canMarkPackingFailure = canUseSpecial && order?.workflow?.special?.failure === true;
   const bookingAmbiguous =
     shipmentState === "booking_unknown" || shipmentState === "booking_dispatched";
   // Manual finish: a known BOOKED order whose tracking shows RETURNED/
   // SHIPMENT_ISSUE, or with the physical handoff recorded; the AWB alone is
   // not evidence; the ambiguous bookings are never the finish surface.
-  const canFinishManually =
-    canFulfillDelivery &&
-    shipmentState === "booked" &&
-    (["RETURNED", "SHIPMENT_ISSUE", "PICKED_UP", "ON_DELIVERY"].includes(order?.shipment?.latestStatus ?? "") ||
-      !!order?.shipment?.handedOverAt);
+  const canFinishManually = canUseSpecial && order?.workflow?.special?.finish === true;
   const deliverySnapshot = order?.deliverySnapshot ?? null;
   const shippingFormOpen = shippingFormKind !== null;
 
+  function openNormalConfirmation(action: "packing" | "book" | "handoff") {
+    normalOpener.current = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
+    setNormalConfirmation(action);
+  }
+  function restoreDeliveryFocus(opener: HTMLButtonElement | null) {
+    if (opener?.isConnected) opener.focus();
+    else document.querySelector<HTMLButtonElement>("[data-detail-reload]")?.focus();
+  }
   function openShippingForm(kind: "packing-failure" | "release-booking" | "finish-manually") {
+    specialOpener.current = document.activeElement instanceof HTMLButtonElement ? document.activeElement : null;
     setShippingFormOpenKind(kind);
     setShippingReasonInput("");
     setShippingReferenceInput("");
+    setProofAttempt(order?.shipment?.attemptCount ?? null);
+    setAbsenceConfirmed(false);
+    setOperationClosed(false);
     setShippingError("");
   }
 
   async function runShipmentAction(action: "packing" | "book" | "handoff" | "reconcile" | "packing-failure" | "release-booking" | "finish-manually") {
-    if (!order) return;
+    if (!order || shippingSubmission.current || shippingStale) return;
+    shippingSubmission.current = true;
+    setShippingStale(true);
     setShippingActionPending(true);
     setShippingError("");
     try {
@@ -281,9 +309,9 @@ export default function AdminOrderDetailPage() {
             source: "jubelio_confirmation",
             reference: shippingReferenceInput.trim(),
             reason: shippingReasonInput.trim(),
-            attemptNumber: order.shipment?.attemptCount ?? 0,
-            absenceConfirmed: true,
-            operationClosed: true,
+            attemptNumber: proofAttempt,
+            absenceConfirmed,
+            operationClosed,
           },
         },
         "finish-manually": { reason: shippingReasonInput.trim() },
@@ -293,24 +321,32 @@ export default function AdminOrderDetailPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(bodies[action] ?? {}),
       });
-      const data = (await res.json()) as { success?: boolean; error?: string };
-      if (!data.success) {
-        setShippingError(data.error || "Gagal memproses pemenuhan pengiriman.");
-        return;
+      if (res.status === 401 || res.status === 403) await refreshPolicy();
+      const data = (await res.json()) as { success?: boolean; error?: string; code?: string; data?: { status?: string } };
+      if (!res.ok || !data.success) {
+        setShippingError(data.code === "BOOKING_AMBIGUOUS" ? "Hasil booking belum pasti. Jangan pesan ulang." : res.status === 409 ? "Kondisi order telah berubah. Muat ulang detail sebelum melanjutkan." : "Hasil tindakan belum dapat dipastikan. Muat ulang detail sebelum melanjutkan.");
+      } else {
+        setShippingFormOpenKind(null);
+        setNormalConfirmation(null);
+        const results: Record<string, string> = { packing: "Barang ditandai siap.", book: "Pengiriman berhasil dipesan.", handoff: "Serah terima dicatat.", "packing-failure": "Kendala barang dicatat.", "release-booking": "Tahanan booking dilepas.", "finish-manually": "Order ditutup manual." };
+        if (results[action] && (action !== "book" || data.data?.status === "booked")) toast.success(results[action]);
       }
-      setShippingFormOpenKind(null);
     } catch {
-      setShippingError("Gagal memproses pemenuhan pengiriman.");
+      setShippingError(action === "book" ? "Hasil booking belum pasti. Jangan pesan ulang." : "Hasil tindakan belum dapat dipastikan. Muat ulang detail sebelum melanjutkan.");
     } finally {
-      setShippingActionPending(false);
-      // The ledger/metadata re-reads after packing/booking actions.
+      setNormalConfirmation(null);
+      setShippingFormOpenKind(null);
       try {
         const fresh = await fetch(`/api/admin/orders/${orderId}`);
         const freshData = await fresh.json();
-        if (freshData.success) setOrder(freshData.data);
+        if (!fresh.ok || !freshData.success) throw new Error("reload");
+        setOrder(freshData.data);
+        setShippingStale(false);
       } catch {
-        // leave the stale view; the next navigation re-reads
+        setShippingError("Detail belum berhasil diperbarui. Muat ulang detail untuk memastikan hasil.");
       }
+      shippingSubmission.current = false;
+      setShippingActionPending(false);
     }
   }
 
@@ -346,6 +382,13 @@ export default function AdminOrderDetailPage() {
     }
     fetchOrder();
   }, [orderId]);
+
+  useEffect(() => {
+    if (order && window.location.hash === "#special-handling") {
+      const section = document.getElementById("special-handling");
+      if (section instanceof HTMLDetailsElement) section.open = true;
+    }
+  }, [order]);
 
   const isBranchAdmin =
     userRole === "admin" && !!userBranchId;
@@ -416,6 +459,8 @@ export default function AdminOrderDetailPage() {
     });
   };
 
+  if (policyStatus !== "ready" || !hasPermission("orders", "view")) return null;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -445,19 +490,22 @@ export default function AdminOrderDetailPage() {
   const isFailedPayment = order.status === "failed_payment";
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="min-w-0 space-y-5 max-w-5xl break-words">
       {/* Back link */}
       <Button
         variant="ghost"
         size="sm"
         className="gap-1"
-        onClick={() => router.push("/admin/orders")}
+        onClick={() => {
+          const previous = new URLSearchParams(window.location.search).get("returnTo");
+          router.push(previous && /^\/admin\/orders(?:\/follow-up)?(?:\?|$)/.test(previous) ? previous : "/admin/orders");
+        }}
       >
         <ArrowLeft className="h-4 w-4" /> Back to Orders
       </Button>
 
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">
             Order #{order.id.slice(0, 8).toUpperCase()}
@@ -479,6 +527,7 @@ export default function AdminOrderDetailPage() {
               Customer Pick Up
             </Button>
           )}
+          {isDeliveryOrder && order.workflow && <Badge className="border-teal-200 bg-teal-50 text-teal-900">{order.workflow.stage.label}</Badge>}
           <Badge aria-label="Status pesanan" className={STATUS_BADGES[order.status]}>
             {STATUS_LABELS[order.status] || order.status}
           </Badge>
@@ -487,6 +536,42 @@ export default function AdminOrderDetailPage() {
           </Badge>
         </div>
       </div>
+
+      {isDeliveryOrder && (
+        <section aria-label="Langkah berikutnya" className="rounded-lg border border-teal-200 bg-teal-50/60 p-4 text-sm text-slate-900">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 space-y-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-teal-800">Langkah berikutnya</h3>
+              <p className="font-semibold">{order.workflow?.stage.guidance}</p>
+              {order.workflow?.stage.label === "Siapkan barang" && <p>Periksa barang, jumlah, kondisi, dan kemasan sesuai layanan yang dipilih.</p>}
+              {order.workflow?.stage.label === "Verifikasi tertunda" && <p>Barang belum dapat diproses karena verifikasi transaksi Jubelio belum selesai. Koordinasikan dengan Jubelio support; jangan meminta pembayaran ulang hanya karena blocker ini. Pemulihan dilakukan sistem, bukan verifikasi manual oleh admin.</p>}
+              {order.deliveryFailureCode && <p>Kendala ini memblokir proses pemenuhan berikutnya. Koordinasikan penyelesaian bisnis dan komunikasi pelanggan bersama staff cabang di luar aplikasi.</p>}
+              {shipmentState === "booking_unknown" && <p>Booking mungkin sudah terbentuk. Memesan ulang dapat membuat pengiriman ganda. Konfirmasi ke Jubelio apakah booking terbentuk dan operasi awal sudah ditutup. Jika belum pasti atau booking ada, tetap tahan; koordinasikan di luar aplikasi.</p>}
+              {shipmentState === "booking_dispatched" && <p>Permintaan sudah dikirim; hasilnya belum tercatat. Koordinasikan dengan Jubelio support. Tidak ada retry, pelepasan, atau pemulihan otomatis berdasarkan waktu tunggu.</p>}
+              {!order.workflow?.stage.terminal && order.shipment?.latestStatus === "CANCELED" && <p>Pembatalan pengiriman bukan pembatalan order. Konfirmasi ke kurir dan koordinasikan penyelesaian bisnis di luar aplikasi.</p>}
+              {order.workflow?.stage.label === "Selesai manual" && <p>Penutupan manual bukan konfirmasi barang diterima pelanggan.</p>}
+              {order.workflow?.access.reasons.map((reason) => <p key={reason}>{reason}</p>)}
+              {order.workflow?.eligibility.blocker && !order.workflow.stage.terminal && <p>{order.workflow.eligibility.blocker}</p>}
+              {(shippingStale || !order.workflow || !order.workflow.eligibility.known) && <p>Kelayakan tindakan belum dapat dipastikan. Muat ulang detail sebelum melanjutkan.</p>}
+            </div>
+            <Button data-detail-reload variant="outline" disabled={shippingActionPending} onClick={async () => {
+              try {
+                const response = await fetch(`/api/admin/orders/${orderId}`);
+                if (response.status === 401 || response.status === 403) await refreshPolicy();
+                const body = await response.json();
+                if (!response.ok || !body.success) throw new Error("reload");
+                setOrder(body.data);
+                setShippingStale(false);
+                setShippingError("");
+              } catch {
+                setShippingStale(true);
+                setOrder((current) => current ? { ...current, workflow: current.workflow ? { ...current.workflow, eligibility: { known: false, eligible: false } } : undefined } : null);
+                setShippingError("Detail belum berhasil diperbarui. Muat ulang detail untuk memastikan hasil.");
+              }
+            }}>Muat ulang detail</Button>
+          </div>
+        </section>
+      )}
 
       {/* Delivery fulfillment panel (ticket 05 — packing + booking; NOT a
           physical handoff: the order stays Processing until ticket 06). */}
@@ -512,7 +597,7 @@ export default function AdminOrderDetailPage() {
                     ? "Sudah di-book"
                     : shipmentState === "packed"
                       ? "Sudah di-pack"
-                      : "Booking tidak pasti"}
+                      : order.workflow?.stage.label ?? "Kelayakan belum tersedia"}
                 </span>
               )}
             </div>
@@ -559,21 +644,21 @@ export default function AdminOrderDetailPage() {
             <Button
               className="gap-2"
               disabled={shippingActionPending || packLocked}
-              onClick={() => runShipmentAction("packing")}
+              onClick={() => openNormalConfirmation("packing")}
             >
               {shippingActionPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
                 <PackageCheck className="h-4 w-4" />
               )}
-              Tandai selesai packing
+              Tandai siap
             </Button>
           )}
           {canBookDelivery && (
             <Button
               className="gap-2 ml-2"
               disabled={shippingActionPending}
-              onClick={() => runShipmentAction("book")}
+              onClick={() => openNormalConfirmation("book")}
             >
               {shippingActionPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -584,6 +669,7 @@ export default function AdminOrderDetailPage() {
             </Button>
           )}
 
+          <details id="special-handling" className="mt-4 rounded-lg border p-3"><summary className="cursor-pointer font-semibold">Penanganan khusus</summary>
           {/* Ticket 07 — the manual resolutions. A packing failure is
               markable BEFORE a booking exists; the failure blocks the normal
               CTAs (they require the unflagged state). */}
@@ -599,15 +685,16 @@ export default function AdminOrderDetailPage() {
               disabled={shippingActionPending}
               onClick={() => openShippingForm("packing-failure")}
             >
-              <TriangleAlert className="h-4 w-4" /> Tandai tidak dapat dipenuhi
+              <TriangleAlert className="h-4 w-4" /> Laporkan kendala barang
             </Button>
           )}
           {shippingFormOpen && shippingFormKind === "packing-failure" && (
-            <div className="mt-3 space-y-2 rounded-lg border p-4 text-sm">
+            <Dialog open onOpenChange={(open) => { if (!open && !shippingActionPending) setShippingFormOpenKind(null); }}><DialogContent className="max-h-[90vh] overflow-y-auto" onCloseAutoFocus={(event) => { event.preventDefault(); restoreDeliveryFocus(specialOpener.current); }}><DialogHeader><DialogTitle>Laporkan kendala barang?</DialogTitle><DialogDescription>Alasan baku dan konsekuensi pemenuhan.</DialogDescription></DialogHeader>
+            <div className="space-y-2 text-sm">
               <p className="text-xs text-muted-foreground">
-                Pilih alasan baku (wajib) — pesanan tetap processing/paid dan
-                masuk daftar tindak lanjut.
+                Laporkan kendala barang? Pilih alasan baku (wajib).
               </p>
+              <p>Kendala ini memblokir proses pemenuhan berikutnya.</p><p>Order tetap dalam proses dan pembayaran tetap lunas.</p><p>Tindakan ini tidak melakukan refund, membatalkan SO, mengembalikan stok, atau mengirim komunikasi otomatis. Koordinasikan penyelesaian dan komunikasi pelanggan bersama staff cabang di luar aplikasi.</p>
               <div role="listbox" aria-label="Alasan pemenuhan" className="flex flex-wrap gap-2">
                 {PACKING_FAILURE_REASONS.map((reasonCode) => (
                   <button
@@ -638,17 +725,17 @@ export default function AdminOrderDetailPage() {
                   disabled={shippingActionPending || !shippingReasonInput}
                   onClick={() => runShipmentAction("packing-failure")}
                 >
-                  Konfirmasi penandai gagal
+                  Laporkan kendala
                 </Button>
               </div>
             </div>
+            </DialogContent></Dialog>
           )}
 
-          {bookingAmbiguous && canFulfillDelivery && shipmentState === "booking_unknown" && (
+          {canUseSpecial && order.workflow?.special?.release && shipmentState === "booking_unknown" && (
             <div className="mt-3 space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
-              <p className="font-medium">
-                Booking ambigu — lepaskan hanya dengan konfirmasi Jubelio.
-              </p>
+              <p className="font-medium">Booking belum pasti — lepaskan hanya dengan konfirmasi Jubelio.</p>
+              <p>Percobaan: {order.shipment?.attemptCount ?? "Belum tersedia"} · Dikirim: {order.shipment?.dispatchedAt ? new Date(order.shipment.dispatchedAt).toLocaleString("id-ID") : "Belum tercatat"}</p>
               <p className="text-xs">
                 Saya telah mengonfirmasi ke Jubelio bahwa operasi pertama
                 DITUTUP dan TIDAK ADA booking terbentuk untuk attempt saat ini
@@ -656,7 +743,7 @@ export default function AdminOrderDetailPage() {
                 jangan lepaskan — tahan dan eskalasi di luar aplikasi.
               </p>
               {shippingFormKind === "release-booking" ? (
-                <div className="space-y-2">
+                <Dialog open onOpenChange={(open) => { if (!open && !shippingActionPending) setShippingFormOpenKind(null); }}><DialogContent className="max-h-[90vh] overflow-y-auto" onCloseAutoFocus={(event) => { event.preventDefault(); restoreDeliveryFocus(specialOpener.current); }}><DialogHeader><DialogTitle>Lepas tahanan booking?</DialogTitle><DialogDescription>Bukti untuk percobaan saat ini, bukan izin booking otomatis.</DialogDescription></DialogHeader><div className="space-y-2 text-sm">
                   <div>
                     <Label htmlFor="releaseReference">Referensi konfirmasi</Label>
                     <Input
@@ -667,7 +754,7 @@ export default function AdminOrderDetailPage() {
                     />
                   </div>
                   <div>
-                    <Label htmlFor="releaseReason">Alasan</Label>
+                    <Label htmlFor="releaseReason">Alasan / ringkasan konfirmasi</Label>
                     <Input
                       id="releaseReason"
                       value={shippingReasonInput}
@@ -675,6 +762,11 @@ export default function AdminOrderDetailPage() {
                       placeholder="Alasan singkat rilis"
                     />
                   </div>
+                  <p>Order: {order.id} · Percobaan bukti: {proofAttempt ?? "Belum tersedia"} · Sumber bukti: Konfirmasi Jubelio</p>
+                  <label className="flex items-start gap-2"><input type="checkbox" checked={absenceConfirmed} onChange={(event) => setAbsenceConfirmed(event.target.checked)} />Jubelio mengonfirmasi booking tidak terbentuk untuk percobaan ini.</label>
+                  <label className="flex items-start gap-2"><input type="checkbox" checked={operationClosed} onChange={(event) => setOperationClosed(event.target.checked)} />Jubelio mengonfirmasi operasi permintaan awal untuk percobaan ini sudah ditutup.</label>
+                  <p>Timeout, 404, hasil pencarian kosong, dan waktu tunggu bukan bukti bahwa booking tidak terbentuk. Jika belum ada kepastian, jangan lepaskan tahanan.</p>
+                  <p>Tindakan ini mencatat bukti dan mengembalikan pengiriman ke tahap Barang siap. Tidak memesan pengiriman baru. Booking berikutnya memerlukan review dan persetujuan terpisah.</p>
                   <div className="flex justify-end gap-2">
                     <Button
                       variant="outline"
@@ -689,14 +781,14 @@ export default function AdminOrderDetailPage() {
                       disabled={
                         shippingActionPending ||
                         !shippingReferenceInput.trim() ||
-                        !shippingReasonInput.trim()
+                        !shippingReasonInput.trim() || !absenceConfirmed || !operationClosed || proofAttempt !== order.shipment?.attemptCount
                       }
                       onClick={() => runShipmentAction("release-booking")}
                     >
                       Konfirmasi rilis
                     </Button>
                   </div>
-                </div>
+                </div></DialogContent></Dialog>
               ) : (
                 <Button
                   variant="outline"
@@ -718,9 +810,13 @@ export default function AdminOrderDetailPage() {
                 otomatis.
               </p>
               {shippingFormKind === "finish-manually" ? (
-                <div className="space-y-2">
+                <Dialog open onOpenChange={(open) => { if (!open && !shippingActionPending) setShippingFormOpenKind(null); }}><DialogContent className="max-h-[90vh] overflow-y-auto" onCloseAutoFocus={(event) => { event.preventDefault(); restoreDeliveryFocus(specialOpener.current); }}><DialogHeader><DialogTitle>Selesaikan order secara manual?</DialogTitle><DialogDescription>Penutupan khusus, bukan bukti penerimaan pelanggan.</DialogDescription></DialogHeader><div className="space-y-2 text-sm">
+                  <h3 className="font-semibold">Selesaikan order secara manual?</h3><p>Order: {order.id} · Resi: {order.shipment?.awb ?? "Belum tersedia"}</p><p>Bukti saat ini: {order.shipment?.latestStatus ?? "Belum tersedia"} · Serah terima: {order.shipment?.handedOverAt ? new Date(order.shipment.handedOverAt).toLocaleString("id-ID") : "Belum tercatat"}</p>
+                  <p>Order akan ditutup dengan hasil Selesai manual. Pembayaran tetap lunas.</p>
+                  <ul className="list-disc space-y-1 pl-5"><li>Tidak mengonfirmasi barang diterima pelanggan dan tidak membuat status DELIVERED atau bukti penerimaan.</li><li>Tidak melakukan refund.</li><li>Tidak menyesuaikan stok.</li><li>Tidak membatalkan Sales Order (SO).</li><li>Tidak mengirim komunikasi otomatis.</li></ul>
+                  <p>Penyelesaian bisnis dan komunikasi pelanggan, jika masih diperlukan, tetap dilakukan di luar aplikasi.</p>
                   <div>
-                    <Label htmlFor="manualReason">Alasan</Label>
+                    <Label htmlFor="manualReason">Alasan penutupan</Label>
                     <Input
                       id="manualReason"
                       value={shippingReasonInput}
@@ -745,7 +841,7 @@ export default function AdminOrderDetailPage() {
                       Konfirmasi selesai manual
                     </Button>
                   </div>
-                </div>
+                </div></DialogContent></Dialog>
               ) : (
                 <Button
                   variant="outline"
@@ -759,12 +855,14 @@ export default function AdminOrderDetailPage() {
             </div>
           )}
 
+          {order.deliveryManualReason && <p className="mt-3 text-sm">Alasan penutupan manual: {order.deliveryManualReason} · Actor: {order.deliveryManualBy ?? "Belum tersedia"} · Waktu: {order.deliveryManualAt ? new Date(order.deliveryManualAt).toLocaleString("id-ID") : "Belum tercatat"}</p>}
+          {(order.bookingReviews ?? []).map((review) => <p key={`${review.attemptNumber}-${review.reference}`} className="mt-3 text-sm">Bukti Jubelio disimpan · Percobaan {review.attemptNumber} · Referensi {review.reference} · {review.reason} · Waktu disimpan: {new Date(review.createdAt).toLocaleString("id-ID")}</p>)}
+          </details>
           {/* Ambiguity banner: the booking is uncertain — the repeat CTA is
               withheld entirely (no enabled Pesan pengiriman repeat). */}
           {bookingAmbiguous && (
             <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-              Status booking tidak pasti (dispatch terkirim tanpa AWB
-              terkonfirmasi). Menunggu rekonsiliasi — tidak ada POST ulang.
+              {order.workflow?.stage.guidance} Tidak ada POST ulang.
             </div>
           )}
 
@@ -777,29 +875,29 @@ export default function AdminOrderDetailPage() {
                 <span className="text-sm font-medium text-emerald-700">
                   Serah terima dicatat: {new Date(order.shipment.handedOverAt).toLocaleString("id-ID")}
                 </span>
-              ) : (
+              ) : canUseSpecial && order.workflow?.tracking?.handoff && !["PICKED_UP", "ON_DELIVERY", "DELIVERED", "ON_HOLD", "RETURNED", "CANCELED", "SHIPMENT_ISSUE"].includes(order.shipment?.latestStatus ?? "") ? (
                 <Button
                   className="gap-2"
-                  disabled={shippingActionPending || !canFulfillDelivery}
-                  onClick={() => runShipmentAction("handoff")}
+                  disabled={shippingActionPending}
+                  onClick={() => openNormalConfirmation("handoff")}
                 >
                   {shippingActionPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <PackageCheck className="h-4 w-4" />
                   )}
-                  Catat serah-terima
+                  Catat serah terima
                 </Button>
-              )}
+              ) : null}
               {order.shipment?.latestStatus && (
                 <span className="rounded-full border bg-muted px-3 py-0.5 text-xs font-medium">
                   Status pengiriman: {order.shipment.latestStatus}
                 </span>
               )}
-              <Button
+              {canUseSpecial && order.workflow?.tracking?.reconcile && <Button
                 variant="outline"
                 className="gap-2 ml-auto"
-                disabled={shippingActionPending || !canFulfillDelivery}
+                disabled={shippingActionPending}
                 onClick={() => runShipmentAction("reconcile")}
               >
                 {shippingActionPending ? (
@@ -808,16 +906,24 @@ export default function AdminOrderDetailPage() {
                   <PackageCheck className="h-4 w-4" />
                 )}
                 Perbarui tracking
-              </Button>
+              </Button>}
             </div>
           )}
 
           {/* The applied tracking timeline (orders:view scope) — the ignored
               late receipts stay internal diagnostics with their reason. */}
-          {(order.trackingTimeline?.length ?? 0) > 0 && (
-            <div className="mt-3 space-y-1 rounded-lg border bg-muted/30 p-3 text-sm">
-              {(order.trackingTimeline ?? []).map((event) => (
-                <div key={event.id} className="flex gap-2">
+          <section aria-label="Activity delivery" className="mt-3 space-y-2 rounded-lg border bg-muted/30 p-3 text-sm">
+            <h3 className="font-semibold">Activity delivery</h3>
+            {[
+              { label: "Barang siap", at: order.shipment?.packedAt, actor: order.shipment?.packedBy },
+              { label: "Booking dicatat", at: order.shipment?.bookedAt, actor: order.shipment?.bookedBy },
+              { label: "Serah terima manual", at: order.shipment?.handedOverAt, actor: order.shipment?.handedOverBy },
+              { label: "Kendala barang dicatat", at: order.deliveryFailureAt, actor: order.deliveryFailureBy },
+              { label: "Order ditutup manual", at: order.deliveryManualAt, actor: order.deliveryManualBy },
+            ].filter((fact) => fact.at).map((fact) => <p key={fact.label}>{fact.label} · Sumber: Admin · Actor: {fact.actor ?? "Belum tersedia"} · Waktu tercatat: {new Date(fact.at!).toLocaleString("id-ID")}</p>)}
+            <p>Serah terima manual: {order.shipment?.handedOverAt ? new Date(order.shipment.handedOverAt).toLocaleString("id-ID") : "Belum tercatat"}</p>
+            {(order.trackingTimeline ?? []).filter((event) => event.applied).map((event) => (
+                <div key={event.id} className="flex flex-wrap gap-2">
                   <span className="font-medium">{
                     event.latestStatus ?? "—"
                   }</span>
@@ -829,45 +935,31 @@ export default function AdminOrderDetailPage() {
                       dilewati ({event.ignoredReason ?? "—"})
                     </span>
                   )}
-                  <span className="ml-auto text-xs text-muted-foreground">
-                    {event.receivedAt ? new Date(event.receivedAt).toLocaleString("id-ID") : ""}
-                  </span>
+                  <div className="text-xs text-muted-foreground">Sumber: Kurir ({event.source})<p>Waktu kejadian: {event.providerEventAt ? new Date(event.providerEventAt).toLocaleString("id-ID") : "Belum tersedia"}</p><p>Update diterima sistem: {event.receivedAt ? new Date(event.receivedAt).toLocaleString("id-ID") : "Belum tersedia"}</p></div>
                 </div>
               ))}
-            </div>
-          )}
+          </section>
+          <details className="mt-3 rounded-lg border p-3 text-sm"><summary className="cursor-pointer font-medium">Diagnostik tracking</summary>{(order.trackingTimeline ?? []).filter((event) => !event.applied).map((event) => <p key={event.id}>Receipt diabaikan · {event.ignoredReason ?? "Belum tersedia"} · Diterima: {event.receivedAt ? new Date(event.receivedAt).toLocaleString("id-ID") : "Belum tersedia"}</p>)}</details>
 
           {/* Booked: the AWB + the THREE cost figures (billed stays unknown
               until ticket 06 verifies the AWB detail — never rendered 0). */}
-          {shipmentState === "booked" && order.shipment && (
-            <div className="mt-3 space-y-1.5 rounded-lg border bg-muted/30 p-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">No. AWB</span>
-                <span className="font-mono font-medium">{order.shipment.awb}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Ongkir Quote (rates)</span>
-                <span>Rp {Number(order.shipment.quoteRates ?? 0).toLocaleString("id-ID")}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Harga Booking (price)</span>
-                <span>Rp {Number(order.shipment.bookedPrice ?? 0).toLocaleString("id-ID")}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Harga Tagihan</span>
-                {order.shipment.billedPrice == null ? (
-                  <span className="text-muted-foreground">Belum ada tagihan (menunggu verifikasi)</span>
-                ) : (
-                  <span>Rp {Number(order.shipment.billedPrice).toLocaleString("id-ID")}</span>
-                )}
-              </div>
-            </div>
-          )}
+          <section aria-label="Resi dan tracking" className="mt-3 space-y-2 rounded-lg border p-3 text-sm">
+            <h3 className="font-semibold">Resi dan tracking</h3><p>No. AWB: <span className="font-mono font-medium">{order.shipment?.awb ?? "Belum tersedia"}</span></p>
+            <p>Tracking: {order.shipment?.trackingUrl && /^https?:\/\//i.test(order.shipment.trackingUrl) ? <a className="text-teal-800 underline" href={order.shipment.trackingUrl} target="_blank" rel="noopener noreferrer">Lihat tracking kurir</a> : "Belum tersedia"}</p>
+            <p>Bukti penerimaan: {order.shipment?.podUrl && /^https?:\/\//i.test(order.shipment.podUrl) ? <a className="text-teal-800 underline" href={order.shipment.podUrl} target="_blank" rel="noopener noreferrer">Lihat bukti penerimaan</a> : "Belum tersedia"}</p>
+          </section>
+          <section aria-label="Keuangan pengiriman" className="mt-3 space-y-2 rounded-lg border bg-muted/30 p-3 text-sm">
+            <h3 className="font-semibold">Keuangan pengiriman</h3>
+            <div className="flex flex-wrap justify-between gap-2"><span>Ongkir checkout</span><span>Rp {Number(order.shippingCost).toLocaleString("id-ID")}</span></div>
+            <div className="flex flex-wrap justify-between gap-2"><span>Biaya booking</span><span>{order.shipment?.bookedPrice == null ? "Belum tersedia" : `Rp ${Number(order.shipment.bookedPrice).toLocaleString("id-ID")}`}</span></div>
+            <div className="flex flex-wrap justify-between gap-2"><span>Tagihan courier</span><span>{order.shipment?.billedPrice == null ? "Belum ada tagihan" : `Rp ${Number(order.shipment.billedPrice).toLocaleString("id-ID")}`}</span></div>
+            <details><summary className="cursor-pointer font-medium">Rincian selisih</summary><p>Selisih biaya tidak menambah pembayaran pelanggan dan tidak memblokir pemenuhan.</p>{order.shipment?.bookedPrice != null && <p>Selisih booking terhadap checkout: Rp {(Number(order.shipment.bookedPrice) - Number(order.shippingCost)).toLocaleString("id-ID")}</p>}{order.shipment?.billedPrice != null && <p>Selisih tagihan terhadap checkout: Rp {(Number(order.shipment.billedPrice) - Number(order.shippingCost)).toLocaleString("id-ID")}</p>}</details>
+          </section>
         </section>
       )}
 
       {/* Status Stepper */}
-      {!isCancelled && !isFailedPayment && (
+      {!isDeliveryOrder && !isCancelled && !isFailedPayment && (
         <Card>
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
@@ -954,6 +1046,7 @@ export default function AdminOrderDetailPage() {
       )}
 
       {order.stockOperations.length > 0 && (
+        <details open={!isDeliveryOrder} className="rounded-lg border p-3"><summary className="cursor-pointer font-medium">Diagnostik stok Jubelio</summary>
         <Card className={
           order.stockOperations.some((operation) => operation.status === "manual_review")
             ? "overflow-hidden border-red-300 bg-red-50/40"
@@ -990,7 +1083,7 @@ export default function AdminOrderDetailPage() {
                           {operation.status.replaceAll("_", " ")}
                         </Badge>
                       </div>
-                      {operation.lastError && (
+                      {operation.lastError && !isDeliveryOrder && (
                         <p className="mt-2 text-sm text-red-800">{operation.lastError}</p>
                       )}
                       <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
@@ -1002,7 +1095,7 @@ export default function AdminOrderDetailPage() {
                       <p>
                         Adjustment: {operation.remoteAdjustmentId ?? "not confirmed"}
                       </p>
-                      {needsReview && hasPermission("orders", "edit") && (
+                      {needsReview && hasPermission("orders", "edit") && (!isDeliveryOrder || canFulfillDelivery) && (
                         <Button
                           size="sm"
                           variant="outline"
@@ -1022,7 +1115,7 @@ export default function AdminOrderDetailPage() {
               })}
             </div>
           </CardContent>
-        </Card>
+        </Card></details>
       )}
 
       {/* Status info for non-interactive states */}
@@ -1034,7 +1127,7 @@ export default function AdminOrderDetailPage() {
           </CardContent>
         </Card>
       )}
-      {order.status === "processing" && (
+      {!isDeliveryOrder && order.status === "processing" && (
         <Card>
           <CardContent className="p-6 text-center text-muted-foreground">
             <Package className="h-8 w-8 mx-auto mb-2" />
@@ -1065,7 +1158,7 @@ export default function AdminOrderDetailPage() {
         {/* Branch + Pickup Info */}
         <Card>
           <CardContent className="p-6">
-            <h3 className="font-semibold mb-4">Pickup Location</h3>
+            <h3 className="font-semibold mb-4">{isDeliveryOrder ? "Asal kirim" : "Pickup Location"}</h3>
             {order.branch ? (
               <div className="space-y-2 text-sm">
                 <div className="flex items-start gap-2">
@@ -1170,7 +1263,7 @@ export default function AdminOrderDetailPage() {
       </Card>
 
       {/* Jubelio Sales-Order settlement status (remote ids + block reason) */}
-      <Card>
+      <details open={!isDeliveryOrder} className="rounded-lg border p-3"><summary className="cursor-pointer font-medium">Diagnostik transaksi Jubelio</summary><Card>
         <CardHeader>
           <CardTitle className="text-base">Status Jubelio (Sales Order)</CardTitle>
           <CardDescription>
@@ -1198,7 +1291,74 @@ export default function AdminOrderDetailPage() {
             </div>
           )}
         </CardContent>
-      </Card>
+      </Card></details>
+
+      <Dialog open={normalConfirmation !== null} onOpenChange={(open) => { if (!open && !shippingActionPending) setNormalConfirmation(null); }}>
+        <DialogContent className={normalConfirmation === "book" ? "max-h-[90vh] w-[calc(100%-2rem)] overflow-y-auto rounded-xl sm:max-w-xl" : "max-h-[90vh] overflow-y-auto sm:max-w-lg"} onCloseAutoFocus={(event) => { event.preventDefault(); restoreDeliveryFocus(normalOpener.current); }}>
+          <DialogHeader><DialogTitle>{normalConfirmation === "packing" ? "Tandai barang siap?" : normalConfirmation === "handoff" ? "Catat serah terima?" : "Pesan pengiriman?"}</DialogTitle><DialogDescription>{normalConfirmation === "packing" ? "Pastikan barang, jumlah, kondisi, dan kemasan sudah diperiksa sesuai layanan yang dipilih." : normalConfirmation === "handoff" ? "Konfirmasi serah terima fisik kepada kurir." : "Data mengikuti order saat checkout."}</DialogDescription></DialogHeader>
+          {normalConfirmation === "packing" ? <p className="text-sm">Tindakan ini mencatat barang siap. Pengiriman belum dipesan.</p> : normalConfirmation === "handoff" ? <div className="space-y-3 text-sm"><p>Kurir / service: {deliverySnapshot?.service.name ?? "Belum tersedia"}</p><p>Resi: {order.shipment?.awb ?? "Belum tersedia"}</p><p>Lakukan hanya setelah barang benar-benar Anda serahkan kepada kurir.</p><p>Ini bukan bukti barang diterima pelanggan.</p></div> : <div className="space-y-3 text-sm">
+            <section aria-labelledby="booking-goods-title" className="overflow-hidden rounded-lg border">
+              <h3 id="booking-goods-title" className="flex items-center gap-2 border-b bg-muted/50 px-4 py-2.5 font-semibold">
+                <Package className="h-4 w-4 text-muted-foreground" aria-hidden="true" /> Barang
+              </h3>
+              <ul className="divide-y px-4">
+                {order.items.map((item) => (
+                  <li key={item.id} className="flex items-start justify-between gap-3 py-3">
+                    <div className="min-w-0 break-words">
+                      <p className="font-medium leading-5">{item.productName}</p>
+                      {item.variantInfo && <p className="mt-1 text-xs text-muted-foreground">{item.variantInfo}</p>}
+                    </div>
+                    <span className="shrink-0 rounded-md bg-muted px-2 py-1 text-xs font-medium tabular-nums">Jumlah {item.quantity}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            <section aria-labelledby="booking-destination-title" className="overflow-hidden rounded-lg border">
+              <h3 id="booking-destination-title" className="flex items-center gap-2 border-b bg-muted/50 px-4 py-2.5 font-semibold">
+                <MapPin className="h-4 w-4 text-muted-foreground" aria-hidden="true" /> Tujuan pengiriman
+              </h3>
+              <div className="space-y-2 break-words px-4 py-3">
+                <p className="font-medium">{deliverySnapshot?.address.recipientName}</p>
+                <p className="flex items-center gap-2 text-muted-foreground">
+                  <Phone className="h-3.5 w-3.5 shrink-0" aria-hidden="true" /> {deliverySnapshot?.address.phone}
+                </p>
+                <div className="border-t pt-2 leading-relaxed">
+                  <p>{deliverySnapshot?.address.fullAddress}</p>
+                  <p className="text-muted-foreground">{deliverySnapshot?.address.province} · {deliverySnapshot?.address.city} · {deliverySnapshot?.address.district} · {deliverySnapshot?.address.area}</p>
+                  <p className="text-muted-foreground">Kode pos {deliverySnapshot?.address.postalCode}</p>
+                </div>
+              </div>
+            </section>
+
+            <section aria-label="Layanan pengiriman" className="rounded-lg border bg-muted/30 px-4 py-3">
+              <dl className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <div className="min-w-0">
+                  <dt className="flex items-center gap-2 text-xs text-muted-foreground"><Truck className="h-4 w-4" aria-hidden="true" /> Kurir / service</dt>
+                  <dd className="mt-1.5 break-words font-medium">{deliverySnapshot?.service.name ?? "Belum tersedia"}</dd>
+                </div>
+                <div className="border-t pt-3 sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0 sm:text-right">
+                  <dt className="text-xs text-muted-foreground">Ongkir checkout</dt>
+                  <dd className="mt-1 text-lg font-semibold tabular-nums">Rp {Number(order.shippingCost).toLocaleString("id-ID")}</dd>
+                </div>
+              </dl>
+            </section>
+
+            <div role="note" aria-labelledby="booking-caution-title" className="flex gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden="true" />
+              <div className="min-w-0">
+                <h3 id="booking-caution-title" className="font-semibold">Sebelum memesan</h3>
+                <p className="mt-1 text-xs leading-relaxed">Konfirmasi mengirim permintaan booking ke provider.</p>
+                <ul className="mt-2 list-disc space-y-1 pl-4 text-xs leading-relaxed">
+                  <li>Booking belum berarti barang diserahkan ke kurir.</li>
+                  <li>Jika hasil belum pasti, jangan pesan ulang.</li>
+                </ul>
+              </div>
+            </div>
+          </div>}
+          <DialogFooter className={normalConfirmation === "book" ? "gap-2 border-t pt-4 sm:gap-0" : undefined}><Button variant="outline" disabled={shippingActionPending} onClick={() => setNormalConfirmation(null)}>Batal</Button><Button disabled={shippingActionPending || shippingStale} onClick={() => normalConfirmation && runShipmentAction(normalConfirmation)}>{shippingActionPending ? "Memproses…" : normalConfirmation === "packing" ? "Tandai siap" : normalConfirmation === "handoff" ? "Barang sudah diserahkan" : "Pesan pengiriman"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Customer Pick Up Modal */}
       <Dialog

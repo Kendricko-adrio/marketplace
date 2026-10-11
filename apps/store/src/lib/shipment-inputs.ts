@@ -1,6 +1,7 @@
+import { hasConfiguredBranchRegion, type BranchShippingRegion } from "@marketplace/db/src/branch-shipping-region";
 import { buildShipmentParcel, type ShipmentParcelInput } from "./shipment-parcel";
 
-export interface ShipmentOriginBranch {
+export interface ShipmentOriginBranch extends BranchShippingRegion {
   name: string; status: string;
   shippingPhone: string | null; shippingAddress: string | null;
   shippingPostalCode: string | null; shippingAreaId: string | null;
@@ -14,6 +15,6 @@ export function buildShipmentInputs(input: ShipmentParcelInput & { branch: Shipm
   const address = branch.shippingAddress?.trim() ?? "";
   const zipcode = branch.shippingPostalCode?.trim() ?? "";
   const area = branch.shippingAreaId?.trim();
-  if (branch.status !== "aktif" || !name || !/^[0-9+()\s-]{5,25}$/.test(phone) || !/\d/.test(phone) || !address || address.length > 500 || !/^\d{3,10}$/.test(zipcode) || (area !== undefined && !/^\d{1,16}$/.test(area))) throw new Error("Shipment origin unavailable");
-  return { origin: { name, phone, address, zipcode, ...(area ? { area_id: area } : {}) }, ...buildShipmentParcel(input) };
+  if (!hasConfiguredBranchRegion(branch) || branch.status !== "aktif" || !name || !/^[0-9+()\s-]{5,25}$/.test(phone) || !/\d/.test(phone) || !address || address.length > 500 || !/^\d{3,10}$/.test(zipcode) || (area !== undefined && !/^\d{1,16}$/.test(area))) throw new Error("Shipment origin unavailable");
+  return { origin: { name, phone, address, zipcode, area_id: area }, ...buildShipmentParcel(input) };
 }

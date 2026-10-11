@@ -46,6 +46,7 @@ import type {
 } from "@marketplace/db/src/schema";
 import { writeAuditEvent } from "@/lib/rbac/audit-writer";
 import { createLogger, serializeError } from "@/lib/logger";
+import { deliverySettlementBlocker } from "@/lib/delivery-settlement";
 
 const log = createLogger({ module: "shipment-fulfillment" });
 
@@ -94,6 +95,24 @@ export interface ShipmentCreateGateway {
     price: number;
     price_bill?: number;
   }>;
+}
+
+// Read-only preflight reuses the exact mutation guards, with no audit, ledger
+// update or provider request. Writes still recheck under their own transaction.
+export async function inspectDeliveryEligibility(
+  database: typeof appDb,
+  orderId: string,
+  actor: ShipmentFulfillmentActor,
+): Promise<{ eligible: boolean; known: boolean; blocker?: string }> {
+  try {
+    await database.transaction(async (tx) => {
+      await requirePackableOrder(tx, orderId, actor);
+    });
+    return { eligible: true, known: true };
+  } catch (error) {
+    if (error instanceof ShipmentFulfillmentError) return { eligible: false, known: true, blocker: error.message };
+    throw error;
+  }
 }
 
 export interface PackedShipment {
@@ -219,38 +238,15 @@ async function requirePackableOrder(
     })
     .from(jubelioSalesOperations)
     .where(eq(jubelioSalesOperations.orderId, orderId));
-  const cancelOp = ops.find((op) => op.type === "cancel");
-  if (cancelOp && ["intent", "dispatched_unknown", "confirmed", "manual_review"].includes(cancelOp.status)) {
-    throw new ShipmentFulfillmentError(
-      "NOT_ELIGIBLE",
-      "Pembatalan Sales Order aktif — penanganan manual diperlukan."
-    );
-  }
-  const invoiceOp = ops.find((op) => op.type === "invoice");
-  if (
-    !invoiceOp ||
-    invoiceOp.status !== "confirmed" ||
-    invoiceOp.invoiceId === null ||
-    invoiceOp.invoiceId !== order.jubelioInvoiceId ||
-    invoiceOp.salesOrderId !== order.jubelioSalesOrderId
-  ) {
-    throw new ShipmentFulfillmentError("NOT_ELIGIBLE", "Invoice Jubelio belum terverifikasi.");
-  }
-  const paymentOp = ops.find((op) => op.type === "payment");
-  if (
-    !paymentOp ||
-    paymentOp.status !== "confirmed" ||
-    paymentOp.paymentId === null ||
-    paymentOp.paymentId !== order.jubelioPaymentId ||
-    paymentOp.invoiceId !== order.jubelioInvoiceId ||
-    paymentOp.salesOrderId !== order.jubelioSalesOrderId ||
-    order.jubelioSalesOrderId === null
-  ) {
-    throw new ShipmentFulfillmentError("NOT_ELIGIBLE", "Pembayaran Jubelio belum terverifikasi.");
-  }
+  const settlementBlocker = deliverySettlementBlocker(order, ops);
+  if (settlementBlocker) throw new ShipmentFulfillmentError("NOT_ELIGIBLE", settlementBlocker);
 
   requireStrictSnapshot(order.deliverySnapshot);
   return order;
+}
+
+export function deliverySnapshotValid(snapshot: DeliverySnapshotPayload | null): boolean {
+  try { requireStrictSnapshot(snapshot); return true; } catch { return false; }
 }
 
 /** The delivery snapshot must be complete + strict (fail closed). */

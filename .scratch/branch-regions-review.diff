@@ -1,0 +1,1433 @@
+diff --git a/apps/admin/src/app/admin/branches/[id]/edit/page.tsx b/apps/admin/src/app/admin/branches/[id]/edit/page.tsx
+index 5ad2d32..a8a5de1 100644
+--- a/apps/admin/src/app/admin/branches/[id]/edit/page.tsx
++++ b/apps/admin/src/app/admin/branches/[id]/edit/page.tsx
+@@ -7,8 +7,9 @@ import { toast } from "sonner";
+ import BranchForm from "@/components/admin/BranchForm";
+ import type { BranchFormData } from "@/components/admin/BranchForm";
+ import { useAuth } from "@/providers/auth-provider";
++import { hasConfiguredBranchRegion, type BranchShippingRegion } from "@marketplace/db/src/branch-shipping-region";
+ 
+-interface ApiBranch {
++interface ApiBranch extends BranchShippingRegion {
+   id: string;
+   name: string;
+   code: string;
+@@ -25,6 +26,9 @@ interface ApiBranch {
+   shippingAddress: string | null;
+   shippingPostalCode: string | null;
+   shippingAreaId: string | null;
++  shippingProvinceId: string | null;
++  shippingCityId: string | null;
++  shippingDistrictId: string | null;
+ }
+ 
+ export default function EditBranchPage() {
+@@ -35,6 +39,7 @@ export default function EditBranchPage() {
+ 
+   const [initialData, setInitialData] = useState<BranchFormData | null>(null);
+   const [loading, setLoading] = useState(true);
++  const [regionConfigured, setRegionConfigured] = useState(false);
+   const [error, setError] = useState<string | null>(null);
+ 
+   useEffect(() => {
+@@ -57,6 +62,7 @@ export default function EditBranchPage() {
+         }
+ 
+         const branch: ApiBranch = data.data;
++        setRegionConfigured(hasConfiguredBranchRegion(branch));
+ 
+         setInitialData({
+           name: branch.name,
+@@ -72,6 +78,9 @@ export default function EditBranchPage() {
+           shippingAddress: branch.shippingAddress ?? "",
+           shippingPostalCode: branch.shippingPostalCode ?? "",
+           shippingAreaId: branch.shippingAreaId ?? "",
++          shippingProvinceId: branch.shippingProvinceId ?? "",
++          shippingCityId: branch.shippingCityId ?? "",
++          shippingDistrictId: branch.shippingDistrictId ?? "",
+         });
+       } catch {
+         const msg = "Gagal memuat data cabang";
+@@ -132,7 +141,7 @@ export default function EditBranchPage() {
+   return (
+     <div className="max-w-4xl space-y-6">
+       <h2 className="text-2xl font-bold tracking-tight">Edit Cabang</h2>
+-      <BranchForm mode="edit" initialData={initialData} onSubmit={handleSubmit} />
++      <BranchForm mode="edit" initialData={initialData} regionConfigured={regionConfigured} onSubmit={handleSubmit} />
+     </div>
+   );
+ }
+diff --git a/apps/admin/src/app/api/admin/branches/[id]/route.test.ts b/apps/admin/src/app/api/admin/branches/[id]/route.test.ts
+index 7039ca4..deeda17 100644
+--- a/apps/admin/src/app/api/admin/branches/[id]/route.test.ts
++++ b/apps/admin/src/app/api/admin/branches/[id]/route.test.ts
+@@ -41,6 +41,7 @@ vi.mock("@/lib/rbac/guard", async () => {
+ vi.mock("@/lib/logger", () => loggerModuleMock());
+ 
+ import { DELETE, PUT } from "./route";
++import { branchRegion, mockShipmentRegions } from "@/test-support/shipment-regions";
+ 
+ const logger = makeLogger();
+ const branchId = "b-1";
+@@ -53,6 +54,7 @@ const existingRow = {
+ };
+ 
+ const updateBody = {
++  ...branchRegion,
+   name: "Baru",
+   code: "BRX",
+   city: "Jakarta",
+@@ -74,12 +76,57 @@ function setupDb(
+ }
+ 
+ beforeEach(() => {
++  mockShipmentRegions();
+   guardMock.mockReset();
+   guardAllow(logger);
+   setupDb();
+ });
+ 
+ describe("PUT /api/admin/branches/[id]", () => {
++  it("requires region completion on every edit without mutation or audit", async () => {
++    const fake = setupDb({ selectQueue: [[existingRow]] });
++    const { shippingProvinceId: _omitted, ...body } = updateBody;
++    const response = await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", body), routeParams());
++    expect(response.status).toBe(400);
++    expect(fake.ops.filter((op) => op.kind !== "select")).toHaveLength(0);
++  });
++  it.each(Object.keys(branchRegion).flatMap((field) => [undefined, null, "", "abc", "9999"].map((value) => ({ field, value }))))("rejects $field=$value without mutation or audit", async ({ field, value }) => {
++    const fake = setupDb({ selectQueue: [[existingRow]] });
++    const response = await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", { ...updateBody, [field]: value }), routeParams());
++    expect(response.status).toBe(400);
++    expect(fake.ops.filter((op) => op.kind !== "select")).toHaveLength(0);
++  });
++
++  it("own-branch editing conceals another branch before region lookup", async () => {
++    guardAllow(logger, { scope: "own_branch", homeBranchId: "other" });
++    const fake = setupDb({ selectQueue: [[existingRow]] });
++    expect((await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams())).status).toBe(404);
++    expect(fetch).not.toHaveBeenCalled();
++    expect(fake.ops.filter((op) => op.kind !== "select")).toHaveLength(0);
++  });
++
++  it("own-branch editing can complete its Home Branch", async () => {
++    guardAllow(logger, { scope: "own_branch", homeBranchId: branchId });
++    setupDb({ selectQueue: [[existingRow], [existingRow]] });
++    expect((await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams())).status).toBe(200);
++  });
++
++  it("provider failure leaves mutation and audit untouched", async () => {
++    const fake = setupDb({ selectQueue: [[existingRow]] });
++    vi.mocked(fetch).mockRejectedValueOnce(new Error("Timeout"));
++    const response = await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams());
++    expect(response.status).toBe(503);
++    expect(fake.ops.filter((op) => op.kind !== "select")).toHaveLength(0);
++  });
++
++  it("audits region changes from the locked row, preserving omitted sender values", async () => {
++    const fake = setupDb({ selectQueue: [[existingRow], [{ ...existingRow, shippingProvinceId: "09", shippingProvince: "Before", shippingPhone: "0219999" }]] });
++    expect((await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams())).status).toBe(200);
++    const audit = fake.ops.find((op) => op.kind === "insert")!.values;
++    expect(audit).toMatchObject({ changes: { shippingProvinceId: { from: "09", to: "01" }, shippingProvince: { from: "Before", to: "Provinsi Fixture" }, shippingAreaId: { from: null, to: "0102030004" } } });
++    expect((audit as { changes: Record<string, unknown> }).changes).not.toHaveProperty("shippingPhone");
++  });
++
+   it("returns 200 and runs the mutation + audit in one tx", async () => {
+     const fake = setupDb({
+       // 1) route pre-check, 2) service locked recheck
+@@ -105,7 +152,7 @@ describe("PUT /api/admin/branches/[id]", () => {
+     expect(inserts[0].values).toMatchObject({ action: "UPDATE_BRANCH" });
+   });
+ 
+-  it("does not overwrite a concurrent origin edit when legacy PUT omits origin fields", async () => {
++  it("does not overwrite concurrent sender fields when PUT omits them", async () => {
+     const fake = setupDb({ selectQueue: [
+       [{ ...existingRow, shippingPhone: "021111111", shippingAddress: "Old origin", shippingPostalCode: "01234", shippingAreaId: null }],
+       [{ ...existingRow, shippingPhone: "021222222", shippingAddress: "New origin", shippingPostalCode: "54321", shippingAreaId: "01010101" }],
+@@ -113,7 +160,7 @@ describe("PUT /api/admin/branches/[id]", () => {
+     const response = await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams());
+     expect(response.status).toBe(200);
+     const mutation = fake.ops.find((op) => op.kind === "update")!.set as Record<string, unknown>;
+-    for (const field of ["shippingPhone", "shippingAddress", "shippingPostalCode", "shippingAreaId"]) expect(mutation[field]).toBeUndefined();
++    for (const field of ["shippingPhone", "shippingAddress"]) expect(mutation[field]).toBeUndefined();
+   });
+ 
+   it("maps a vanished-mid-request branch to the stable 404", async () => {
+diff --git a/apps/admin/src/app/api/admin/branches/[id]/route.ts b/apps/admin/src/app/api/admin/branches/[id]/route.ts
+index 48139c4..a6e7d57 100644
+--- a/apps/admin/src/app/api/admin/branches/[id]/route.ts
++++ b/apps/admin/src/app/api/admin/branches/[id]/route.ts
+@@ -12,6 +12,7 @@ import {
+   updateBranch,
+ } from "@/lib/branches-service";
+ import { serializeError } from "@/lib/logger";
++import { branchRegionSchema, verifyBranchRegion } from "@/lib/shipment-regions";
+ 
+ // GET /api/admin/branches/[id]   [branches:view]
+ //
+@@ -109,13 +110,9 @@ const updateBranchSchema = z.object({
+   }),
+   googleMapsUrl: z.string().url().optional().or(z.literal("")),
+   status: z.enum(["aktif", "nonaktif"]),
+-  // Shipping-origin complement (ticket 02): OPTIONAL — an omitted field keeps
+-  // the stored origin (backward-compatible clients), ""/null clear. The
+-  // fail-closed value validation lives in parseBranchOrigin (single unit).
+   shippingPhone: z.string().nullable().optional(),
+   shippingAddress: z.string().nullable().optional(),
+-  shippingPostalCode: z.string().nullable().optional(),
+-  shippingAreaId: z.string().nullable().optional(),
++  ...branchRegionSchema,
+ });
+ 
+ // PUT /api/admin/branches/[id]   [branches:edit]
+@@ -170,10 +167,10 @@ export async function PUT(
+     if (!parsed.success) {
+       branchLog.warn("branches.update.invalid_input", {
+         outcome: "denied",
+-        issues: parsed.error.issues,
++        issues: parsed.error.issues.map(({ path, code }) => ({ path, code })),
+       });
+       return NextResponse.json(
+-        { success: false, error: "Invalid request body", details: parsed.error },
++        { success: false, error: "Invalid request body", details: parsed.error.issues.map(({ path, code }) => ({ path, code })) },
+         { status: 400 }
+       );
+     }
+@@ -196,6 +193,15 @@ export async function PUT(
+       );
+     }
+ 
++    let region;
++    try {
++      region = await verifyBranchRegion(data);
++    } catch (error) {
++      const invalid = error instanceof Error && error.message === "REGION_INPUT_INVALID";
++      branchLog.error("branches.update.region_rejected", { outcome: "denied", reason: invalid ? "invalid_region" : "provider_unavailable" });
++      return NextResponse.json({ success: false, error: invalid ? "Wilayah pengiriman atau kode pos tidak valid" : "Wilayah Shipment tidak tersedia. Silakan coba lagi." }, { status: invalid ? 400 : 503 });
++    }
++
+     // Mutation + audit run in one local DB transaction (branches-service).
+     // The branch row is locked and its existence re-checked inside the tx;
+     // a NOT_FOUND from the recheck maps to the same 404 as the pre-check.
+@@ -215,6 +221,7 @@ export async function PUT(
+           // Omitted fields stay undefined so Drizzle skips them under the
+           // service's row lock. Never copy a stale route pre-check value.
+           ...origin.origin,
++          ...region,
+         },
+         { actorId: ctx.user.id, policyVersion: ctx.policy.policyVersion }
+       );
+diff --git a/apps/admin/src/app/api/admin/branches/route.test.ts b/apps/admin/src/app/api/admin/branches/route.test.ts
+index d969fcf..cae5a54 100644
+--- a/apps/admin/src/app/api/admin/branches/route.test.ts
++++ b/apps/admin/src/app/api/admin/branches/route.test.ts
+@@ -42,10 +42,12 @@ vi.mock("@/lib/rbac/guard", async () => {
+ vi.mock("@/lib/logger", () => loggerModuleMock());
+ 
+ import { POST } from "./route";
++import { branchRegion, mockShipmentRegions } from "@/test-support/shipment-regions";
+ 
+ const logger = makeLogger();
+ 
+ const validBody = {
++  ...branchRegion,
+   name: "Branch Baru",
+   code: "BRX",
+   city: "Jakarta",
+@@ -60,12 +62,46 @@ const validBody = {
+ const createdRow = { id: "b-new", name: "Branch Baru", code: "BRX" };
+ 
+ beforeEach(() => {
++  mockShipmentRegions();
+   guardMock.mockReset();
+   guardAllow(logger);
+   state.current = createFakeDb({ mutationRows: [createdRow] });
+ });
+ 
+ describe("POST /api/admin/branches", () => {
++  it("rejects missing mandatory hierarchy without mutation or audit", async () => {
++    const { shippingProvinceId: _omitted, ...body } = validBody;
++    const response = await POST(jsonRequest("/api/admin/branches", "POST", body));
++    expect(response.status).toBe(400);
++    expect(state.current!.ops).toHaveLength(0);
++  });
++  it("stores canonical hierarchy labels and leading-zero IDs, ignoring submitted labels", async () => {
++    const response = await POST(jsonRequest("/api/admin/branches", "POST", { ...validBody, shippingProvince: "Forged label" }));
++    expect(response.status).toBe(201);
++    const insert = state.current!.ops.find((op) => op.kind === "insert")!.values;
++    expect(insert).toMatchObject({ ...branchRegion, shippingProvince: "Provinsi Fixture", shippingCity: "Kota Fixture", shippingDistrict: "Kecamatan Fixture", shippingArea: "Kelurahan Fixture" });
++  });
++
++  it.each(Object.keys(branchRegion).flatMap((field) => [undefined, null, "", "abc"].map((value) => ({ field, value }))))("rejects required $field=$value without writes", async ({ field, value }) => {
++    const response = await POST(jsonRequest("/api/admin/branches", "POST", { ...validBody, [field]: value }));
++    expect(response.status).toBe(400);
++    expect(state.current!.ops).toHaveLength(0);
++  });
++
++  it.each(["shippingProvinceId", "shippingCityId", "shippingDistrictId", "shippingAreaId", "shippingPostalCode"])("rejects unknown/mismatched %s", async (field) => {
++    const response = await POST(jsonRequest("/api/admin/branches", "POST", { ...validBody, [field]: "9999" }));
++    expect(response.status).toBe(400);
++    expect(state.current!.ops).toHaveLength(0);
++  });
++
++  it.each(["failure", "timeout", "malformed"])("provider %s leaves branch and audit unchanged", async (kind) => {
++    if (kind === "malformed") vi.mocked(fetch).mockResolvedValueOnce(Response.json({ data: [] }));
++    else vi.mocked(fetch).mockRejectedValueOnce(new Error(kind));
++    const response = await POST(jsonRequest("/api/admin/branches", "POST", validBody));
++    expect(response.status).toBe(503);
++    expect(state.current!.ops).toHaveLength(0);
++  });
++
+   it("requires the all-branches edit scope", async () => {
+     await POST(jsonRequest("/api/admin/branches", "POST", validBody));
+ 
+diff --git a/apps/admin/src/app/api/admin/branches/route.ts b/apps/admin/src/app/api/admin/branches/route.ts
+index 5938d76..a260dc3 100644
+--- a/apps/admin/src/app/api/admin/branches/route.ts
++++ b/apps/admin/src/app/api/admin/branches/route.ts
+@@ -8,6 +8,7 @@ import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
+ import { createBranch, parseBranchOrigin, BranchServiceError } from "@/lib/branches-service";
+ import { serializeError } from "@/lib/logger";
+ import { parsePagination } from "@/lib/pagination";
++import { branchRegionSchema, verifyBranchRegion } from "@/lib/shipment-regions";
+ // GET /api/admin/branches   [branches:view]
+ //
+ // Own-branch view reaches only the Home Branch; all-branch view lists every
+@@ -111,13 +112,9 @@ const createBranchSchema = z.object({
+     .default({}),
+   googleMapsUrl: z.string().url().optional().or(z.literal("")),
+   status: z.enum(["aktif", "nonaktif"]).default("aktif"),
+-  // Shipping-origin complement (ticket 02): optional on create — omitted/
+-  // empty → NULL (never invent ready origin data); fail-closed value
+-  // validation lives in parseBranchOrigin (single unit).
+   shippingPhone: z.string().nullable().optional(),
+   shippingAddress: z.string().nullable().optional(),
+-  shippingPostalCode: z.string().nullable().optional(),
+-  shippingAreaId: z.string().nullable().optional(),
++  ...branchRegionSchema,
+ });
+ 
+ // POST /api/admin/branches   [branches:edit:all]
+@@ -140,13 +137,13 @@ export async function POST(request: NextRequest) {
+     if (!parsed.success) {
+       logger.warn("branches.create.invalid_input", {
+         outcome: "denied",
+-        issues: parsed.error.issues,
++        issues: parsed.error.issues.map(({ path, code }) => ({ path, code })),
+       });
+       return NextResponse.json(
+         {
+           success: false,
+           error: "Invalid request body",
+-          details: parsed.error,
++          details: parsed.error.issues.map(({ path, code }) => ({ path, code })),
+         },
+         { status: 400 }
+       );
+@@ -171,6 +168,15 @@ export async function POST(request: NextRequest) {
+       );
+     }
+ 
++    let region;
++    try {
++      region = await verifyBranchRegion(data);
++    } catch (error) {
++      const invalid = error instanceof Error && error.message === "REGION_INPUT_INVALID";
++      logger.error("branches.create.region_rejected", { outcome: "denied", reason: invalid ? "invalid_region" : "provider_unavailable" });
++      return NextResponse.json({ success: false, error: invalid ? "Wilayah pengiriman atau kode pos tidak valid" : "Wilayah Shipment tidak tersedia. Silakan coba lagi." }, { status: invalid ? 400 : 503 });
++    }
++
+     // Mutation + audit run in one local DB transaction (branches-service);
+     // a failed audit write aborts the insert and vice versa.
+     let created;
+@@ -189,8 +195,7 @@ export async function POST(request: NextRequest) {
+           status: data.status,
+           shippingPhone: origin.origin.shippingPhone ?? null,
+           shippingAddress: origin.origin.shippingAddress ?? null,
+-          shippingPostalCode: origin.origin.shippingPostalCode ?? null,
+-          shippingAreaId: origin.origin.shippingAreaId ?? null,
++          ...region,
+         },
+         { actorId: ctx.user.id, policyVersion: ctx.policy.policyVersion }
+       );
+diff --git a/apps/admin/src/components/admin/BranchForm.tsx b/apps/admin/src/components/admin/BranchForm.tsx
+index 53deb82..e0af46b 100644
+--- a/apps/admin/src/components/admin/BranchForm.tsx
++++ b/apps/admin/src/components/admin/BranchForm.tsx
+@@ -1,6 +1,7 @@
+ "use client";
+ 
+-import { useState } from "react";
++import { useEffect, useState } from "react";
++import type { RegionLevel, ShipmentRegion } from "@marketplace/db/src/shipment-regions";
+ import { Loader2 } from "lucide-react";
+ import { toast } from "sonner";
+ import { Button } from "@/components/ui/button";
+@@ -31,18 +32,20 @@ export interface BranchFormData {
+   operatingHours: OperatingHours;
+   googleMapsUrl: string;
+   status: "aktif" | "nonaktif";
+-  // Local shipping-origin complement (ticket 02) — FORM representation is
+-  // always a string; "" means empty and the API normalizes it to NULL
+-  // (never presented as a readiness flag; biarkan kosong = belum diatur).
++  // Shipment hierarchy is required; sender details remain optional on save.
+   shippingPhone: string;
+   shippingAddress: string;
+   shippingPostalCode: string;
+   shippingAreaId: string;
++  shippingProvinceId: string;
++  shippingCityId: string;
++  shippingDistrictId: string;
+ }
+ 
+ interface BranchFormProps {
+   mode: "create" | "edit";
+   initialData?: BranchFormData;
++  regionConfigured?: boolean;
+   onSubmit: (data: BranchFormData) => Promise<void>;
+ }
+ 
+@@ -56,9 +59,44 @@ const DAY_KEYS = [
+   { key: "sunday", label: "Minggu" },
+ ] as const;
+ 
++const REGION_SELECTORS = [
++  { level: "provinces", field: "shippingProvinceId", label: "Provinsi Pengiriman" },
++  { level: "cities", field: "shippingCityId", label: "Kota/Kabupaten Pengiriman" },
++  { level: "districts", field: "shippingDistrictId", label: "Kecamatan Pengiriman" },
++  { level: "areas", field: "shippingAreaId", label: "Kelurahan/Desa Pengiriman" },
++] as const;
++
++function useRegionOptions(level: RegionLevel, parentId?: string, generation = 0) {
++  const [retry, setRetry] = useState(0);
++  const key = `${level}:${parentId ?? ""}:${generation}:${retry}`;
++  const enabled = level === "provinces" || !!parentId;
++  const [result, setResult] = useState<{ key: string; options: ShipmentRegion[]; error: boolean } | null>(null);
++  useEffect(() => {
++    if (!enabled) return;
++    let ignore = false;
++    const controller = new AbortController();
++    async function load() {
++      try {
++        const query = new URLSearchParams({ level, ...(parentId ? { parentId } : {}) });
++        const response = await fetch(`/api/admin/shipment/regions?${query}`, { signal: controller.signal });
++        const body = await response.json();
++        if (!response.ok || !body.success || !Array.isArray(body.data)) throw new Error("Unavailable");
++        if (!ignore) setResult({ key, options: body.data, error: false });
++      } catch {
++        if (!ignore) setResult({ key, options: [], error: true });
++      }
++    }
++    void load();
++    return () => { ignore = true; controller.abort(); };
++  }, [enabled, level, parentId, key]);
++  const current = result?.key === key ? result : null;
++  return { options: enabled ? current?.options ?? [] : [], loading: enabled && !current, error: enabled && !!current?.error, retry: () => setRetry((n) => n + 1) };
++}
++
+ export default function BranchForm({
+   mode,
+   initialData,
++  regionConfigured,
+   onSubmit,
+ }: BranchFormProps) {
+   const [formData, setFormData] = useState<BranchFormData>(
+@@ -84,10 +122,35 @@ export default function BranchForm({
+       shippingAddress: "",
+       shippingPostalCode: "",
+       shippingAreaId: "",
++      shippingProvinceId: "",
++      shippingCityId: "",
++      shippingDistrictId: "",
+     }
+   );
+   const [submitting, setSubmitting] = useState(false);
+   const [error, setError] = useState<string | null>(null);
++  const [regionGenerations, setRegionGenerations] = useState([0, 0, 0, 0]);
++  const provinces = useRegionOptions("provinces");
++  const cities = useRegionOptions("cities", formData.shippingProvinceId, regionGenerations[1]);
++  const districts = useRegionOptions("districts", formData.shippingCityId, regionGenerations[2]);
++  const areas = useRegionOptions("areas", formData.shippingDistrictId, regionGenerations[3]);
++  const lookups = [provinces, cities, districts, areas];
++  const selectedArea = areas.options.find((area) => area.id === formData.shippingAreaId);
++  const regionReady = REGION_SELECTORS.every(({ field }, i) =>
++    !lookups[i].loading && !lookups[i].error && lookups[i].options.some((option) => option.id === formData[field])
++  ) && !!selectedArea?.postalCode && selectedArea.postalCode === formData.shippingPostalCode;
++  const legacy = mode === "edit" && (regionConfigured === false || !initialData?.shippingProvinceId || !initialData.shippingCityId || !initialData.shippingDistrictId || !initialData.shippingAreaId || !initialData.shippingPostalCode);
++
++  function changeRegion(index: number, value: string) {
++    // A → B → A is a new request, not permission to reuse A's cached options.
++    setRegionGenerations((previous) => previous.map((generation, i) => i > index ? generation + 1 : generation));
++    setFormData((previous) => {
++      const next = { ...previous, [REGION_SELECTORS[index].field]: value, shippingPostalCode: "" };
++      for (let i = index + 1; i < REGION_SELECTORS.length; i++) next[REGION_SELECTORS[i].field] = "";
++      if (index === 3) next.shippingPostalCode = areas.options.find((option) => option.id === value)?.postalCode ?? "";
++      return next;
++    });
++  }
+ 
+   function updateField<K extends keyof BranchFormData>(
+     key: K,
+@@ -126,6 +189,7 @@ export default function BranchForm({
+ 
+   async function handleSubmit(e: React.FormEvent) {
+     e.preventDefault();
++    if (!regionReady || submitting) return;
+     setError(null);
+     setSubmitting(true);
+     try {
+@@ -253,9 +317,28 @@ export default function BranchForm({
+ 
+       <div className="space-y-4">
+         <h3 className="text-lg font-semibold">Asal Pengiriman</h3>
+-        {/* Local origin complement (ticket 02): edited here ONCE; the Jubelio
+-            sync never overwrites it. Everything is optional — kosong ("")
+-            normalizes to NULL on the API, bukan penanda kesiapan. */}
++        <p className="text-sm text-muted-foreground">Wilayah Shipment wajib dipilih untuk semua cabang. Tidak mengubah kota atau alamat umum cabang.</p>
++        {legacy && <p role="status" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Wilayah pengiriman cabang belum lengkap. Lengkapi pilihan sebelum menyimpan perubahan.</p>}
++        <div className="grid gap-4 sm:grid-cols-2">
++          {REGION_SELECTORS.map(({ field, label }, index) => {
++            const lookup = lookups[index];
++            const value = formData[field];
++            const parentExists = index === 0 || !!formData[REGION_SELECTORS[index - 1].field];
++            const missing = !!value && !lookup.loading && !lookup.error && !lookup.options.some((option) => option.id === value);
++            return <div key={field} className="space-y-2">
++              <Label htmlFor={field}>{label}</Label>
++              <select id={field} required value={value} disabled={submitting || !parentExists || lookup.loading || lookup.error}
++                className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm disabled:opacity-50"
++                onChange={(event) => changeRegion(index, event.target.value)}>
++                <option value="">{lookup.loading ? "Memuat wilayah…" : "Pilih wilayah"}</option>
++                {value && !lookup.options.some((option) => option.id === value) && <option value={value}>Pilihan tersimpan perlu diverifikasi</option>}
++                {lookup.options.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
++              </select>
++              {missing && <p role="alert" className="text-destructive text-sm">Wilayah tersimpan tidak tersedia. Pilih ulang wilayah ini.</p>}
++              {lookup.error && <div role="alert" className="text-destructive text-sm">Gagal memuat wilayah. <Button type="button" variant="outline" size="sm" onClick={lookup.retry}>Coba lagi — {label}</Button></div>}
++            </div>;
++          })}
++        </div>
+         <div className="grid gap-4 sm:grid-cols-2">
+           <div className="space-y-2">
+             <Label htmlFor="shippingPhone">Telepon Pengirim</Label>
+@@ -276,7 +359,7 @@ export default function BranchForm({
+               inputMode="numeric"
+               placeholder="10110"
+               value={formData.shippingPostalCode}
+-              onChange={(e) => updateField("shippingPostalCode", e.target.value)}
++              readOnly
+             />
+           </div>
+           <div className="space-y-2 sm:col-span-2">
+@@ -289,21 +372,12 @@ export default function BranchForm({
+               onChange={(e) => updateField("shippingAddress", e.target.value)}
+             />
+           </div>
+-          <div className="space-y-2">
+-            <Label htmlFor="shippingAreaId">Area ID Shipment (opsional)</Label>
+-            <Input
+-              id="shippingAreaId"
+-              type="text"
+-              inputMode="numeric"
+-              placeholder="01010101"
+-              value={formData.shippingAreaId}
+-              onChange={(e) => updateField("shippingAreaId", e.target.value)}
+-            />
+-          </div>
++
+         </div>
+         <p className="text-sm text-muted-foreground">
+-          Nama cabang dipakai sebagai nama pengirim. Biarkan kosong bila cabang
+-          belum mengatur asal kirim.
++          Kode pos berasal dari kelurahan Shipment. Nama cabang dipakai sebagai nama pengirim.
++          Telepon dan alamat pengirim boleh kosong saat menyimpan, tetapi wajib untuk delivery.
++          {selectedArea && selectedArea.postalCode !== formData.shippingPostalCode && " Kode pos tersimpan sudah tidak cocok. Pilih ulang kelurahan sebelum menyimpan."}
+         </p>
+       </div>
+ 
+@@ -355,7 +429,7 @@ export default function BranchForm({
+       </div>
+ 
+       <div className="flex items-center justify-end gap-2">
+-        <Button type="submit" disabled={submitting}>
++        <Button type="submit" disabled={submitting || !regionReady}>
+           {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+           {mode === "create" ? "Buat Cabang" : "Simpan Perubahan"}
+         </Button>
+diff --git a/apps/admin/src/lib/branches-service.ts b/apps/admin/src/lib/branches-service.ts
+index 8eb5072..6a74b4e 100644
+--- a/apps/admin/src/lib/branches-service.ts
++++ b/apps/admin/src/lib/branches-service.ts
+@@ -146,7 +146,19 @@ export function parseBranchOrigin(raw: BranchOriginRaw): BranchOriginParseResult
+   return { ok: true, origin };
+ }
+ 
+-export interface CreateBranchData {
++export interface BranchRegionData {
++  shippingProvinceId?: string | null;
++  shippingCityId?: string | null;
++  shippingDistrictId?: string | null;
++  shippingProvince?: string | null;
++  shippingCity?: string | null;
++  shippingDistrict?: string | null;
++  shippingArea?: string | null;
++}
++
++const REGION_FIELDS = ["shippingProvinceId", "shippingCityId", "shippingDistrictId", "shippingProvince", "shippingCity", "shippingDistrict", "shippingArea", "shippingAreaId", "shippingPostalCode"] as const;
++
++export interface CreateBranchData extends BranchRegionData {
+   id: string;
+   name: string;
+   code: string;
+@@ -189,6 +201,13 @@ export async function createBranch(
+         shippingAddress: data.shippingAddress,
+         shippingPostalCode: data.shippingPostalCode,
+         shippingAreaId: data.shippingAreaId,
++        shippingProvinceId: data.shippingProvinceId,
++        shippingCityId: data.shippingCityId,
++        shippingDistrictId: data.shippingDistrictId,
++        shippingProvince: data.shippingProvince,
++        shippingCity: data.shippingCity,
++        shippingDistrict: data.shippingDistrict,
++        shippingArea: data.shippingArea,
+       })
+       .returning();
+     const created = inserted[0];
+@@ -198,7 +217,7 @@ export async function createBranch(
+       action: "CREATE_BRANCH",
+       entityType: "branch",
+       entityId: data.id,
+-      changes: { name: { from: null, to: data.name } },
++      changes: { name: { from: null, to: data.name }, ...Object.fromEntries(REGION_FIELDS.filter((field) => data[field] !== undefined).map((field) => [field, { from: null, to: data[field] }])) },
+       policyVersion: ctx.policyVersion,
+       branchScope: "global",
+     });
+@@ -207,7 +226,7 @@ export async function createBranch(
+   });
+ }
+ 
+-export interface UpdateBranchData {
++export interface UpdateBranchData extends BranchRegionData {
+   name: string;
+   code: string;
+   city: string;
+@@ -266,6 +285,13 @@ export async function updateBranch(
+         shippingAddress: data.shippingAddress,
+         shippingPostalCode: data.shippingPostalCode,
+         shippingAreaId: data.shippingAreaId,
++        shippingProvinceId: data.shippingProvinceId,
++        shippingCityId: data.shippingCityId,
++        shippingDistrictId: data.shippingDistrictId,
++        shippingProvince: data.shippingProvince,
++        shippingCity: data.shippingCity,
++        shippingDistrict: data.shippingDistrict,
++        shippingArea: data.shippingArea,
+         updatedAt: new Date(),
+       })
+       .where(eq(branches.id, id));
+@@ -300,6 +326,10 @@ export async function updateBranch(
+       };
+     }
+ 
++    for (const field of REGION_FIELDS) {
++      if (data[field] !== undefined) originChanges[field] = { from: existing[field] ?? null, to: data[field] };
++    }
++
+     await writeAuditEvent(tx, {
+       actorId: ctx.actorId,
+       action: "UPDATE_BRANCH",
+diff --git a/apps/admin/vitest.config.mts b/apps/admin/vitest.config.mts
+index 823f8bb..3f2050f 100644
+--- a/apps/admin/vitest.config.mts
++++ b/apps/admin/vitest.config.mts
+@@ -15,6 +15,7 @@ export default defineConfig({
+         import.meta.dirname,
+         "../../packages/db/src/rbac"
+       ),
++      "@marketplace/db/src": path.resolve(import.meta.dirname, "../../packages/db/src"),
+       "@marketplace/db": path.resolve(import.meta.dirname, "../../packages/db/src"),
+       "@marketplace/ui": path.resolve(import.meta.dirname, "../../packages/ui/src"),
+     },
+diff --git a/apps/store/src/app/api/checkout/place-order/route.ts b/apps/store/src/app/api/checkout/place-order/route.ts
+index 2cd12f8..0d0fad0 100644
+--- a/apps/store/src/app/api/checkout/place-order/route.ts
++++ b/apps/store/src/app/api/checkout/place-order/route.ts
+@@ -99,6 +99,7 @@ const deliveryPlaceOrderBase = z
+     courierId: z.number().int(),
+     serviceId: z.number().int(),
+     approvedPricing: z.record(z.string(), z.union([z.string(), z.number()])),
++    originFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+   });
+ const deliveryPlaceOrderSchema = z.union([
+   deliveryPlaceOrderBase.extend({ addressId: z.string().min(1) }).strict(),
+@@ -433,7 +434,7 @@ export async function POST(request: NextRequest) {
+         // Missing approved service → forces a step-2 reselect/retry; a moved
+         // approval → the user re-approves the NEW money. Either way NOTHING
+         // local has been created yet.
+-        if (!chosen || !compareDeliveryApproval(
++        if (!chosen || chosen.originFingerprint !== deliveryBody!.originFingerprint || !compareDeliveryApproval(
+           deliveryBody!.approvedPricing as unknown as OrderPricing,
+           chosen.pricing
+         ).approved) {
+diff --git a/apps/store/src/app/checkout/page.tsx b/apps/store/src/app/checkout/page.tsx
+index 6e8b638..9667e1c 100644
+--- a/apps/store/src/app/checkout/page.tsx
++++ b/apps/store/src/app/checkout/page.tsx
+@@ -414,6 +414,7 @@ export default function CheckoutPage() {
+             courierId: deliveryService.courierId,
+             serviceId: deliveryService.serviceId,
+             approvedPricing: deliveryService.pricing,
++            originFingerprint: deliveryService.originFingerprint,
+           }),
+         });
+         const data = (await res.json()) as {
+diff --git a/apps/store/src/lib/delivery-quote-data.ts b/apps/store/src/lib/delivery-quote-data.ts
+index 8297c6f..1290f00 100644
+--- a/apps/store/src/lib/delivery-quote-data.ts
++++ b/apps/store/src/lib/delivery-quote-data.ts
+@@ -12,6 +12,7 @@
+  * zero pricing is never produced through any of them.
+  */
+ import { and, eq, inArray } from "drizzle-orm";
++import { hasConfiguredBranchRegion } from "@marketplace/db/src/branch-shipping-region";
+ import { db } from "@/db";
+ import { addresses, branches, cartItems, carts, productVariants, products } from "@/db";
+ import { getPpnRatePercent } from "@/lib/config";
+@@ -163,6 +164,13 @@ export async function loadQuoteOriginBranch(branchId: string): Promise<ShipmentQ
+       shippingAddress: branches.shippingAddress,
+       shippingPostalCode: branches.shippingPostalCode,
+       shippingAreaId: branches.shippingAreaId,
++      shippingProvinceId: branches.shippingProvinceId,
++      shippingCityId: branches.shippingCityId,
++      shippingDistrictId: branches.shippingDistrictId,
++      shippingProvince: branches.shippingProvince,
++      shippingCity: branches.shippingCity,
++      shippingDistrict: branches.shippingDistrict,
++      shippingArea: branches.shippingArea,
+     })
+     .from(branches)
+     .where(eq(branches.id, branchId))
+@@ -174,6 +182,9 @@ export async function loadQuoteOriginBranch(branchId: string): Promise<ShipmentQ
+   if (branch.status !== "aktif") {
+     throw new DeliveryQuoteDataError("NOT_READY", "Cabang asal kirim tidak aktif.");
+   }
++  if (!hasConfiguredBranchRegion(branch)) {
++    throw new DeliveryQuoteDataError("NOT_READY", "Lengkapi wilayah pengiriman cabang sebelum delivery.");
++  }
+   if (
+     !(branch.shippingPhone ?? "").trim() ||
+     !(branch.shippingAddress ?? "").trim() ||
+diff --git a/apps/store/src/lib/delivery-quote.test.ts b/apps/store/src/lib/delivery-quote.test.ts
+index 79d0c1f..9077309 100644
+--- a/apps/store/src/lib/delivery-quote.test.ts
++++ b/apps/store/src/lib/delivery-quote.test.ts
+@@ -54,6 +54,8 @@ const BRANCH = {
+   shippingAddress: "Jl. Origin E2E No. 7, Gudang B",
+   shippingPostalCode: "10110",
+   shippingAreaId: "01010101",
++  shippingProvinceId: "01", shippingCityId: "0101", shippingDistrictId: "010101",
++  shippingProvince: "Fixture Province", shippingCity: "Fixture City", shippingDistrict: "Fixture District", shippingArea: "Fixture Area",
+ } as const;
+ 
+ const FALLBACK: ShipmentDimensions = {
+@@ -163,6 +165,21 @@ const INSURED_SERVICE = {
+ } as const;
+ 
+ describe("quoteDelivery", () => {
++  it("binds services to the configured origin even when rates and postcode stay equal", async () => {
++    const first = await quoteDelivery(BASE_INPUT, recordingGateway([JNE_REG]).gateway);
++    const moved = await quoteDelivery({ ...BASE_INPUT, branch: { ...BRANCH, shippingAreaId: "01010102", shippingArea: "Other Area" } }, recordingGateway([JNE_REG]).gateway);
++    expect(first.services[0]).toHaveProperty("originFingerprint");
++    expect((first.services[0] as unknown as { originFingerprint: string }).originFingerprint).toMatch(/^[a-f0-9]{64}$/);
++    expect((moved.services[0] as unknown as { originFingerprint: string }).originFingerprint).not.toBe((first.services[0] as unknown as { originFingerprint: string }).originFingerprint);
++    expect(moved.services[0].pricing).toEqual(first.services[0].pricing);
++  });
++
++  it.each(["shippingProvinceId", "shippingCityId", "shippingDistrictId", "shippingAreaId", "shippingPostalCode", "shippingProvince", "shippingCity", "shippingDistrict", "shippingArea"])("rejects an incomplete %s before calling rates", async (field) => {
++    const recorder = recordingGateway([JNE_REG]);
++    await expect(quoteDelivery({ ...BASE_INPUT, branch: { ...BRANCH, [field]: null } }, recorder.gateway)).rejects.toThrow(/wilayah pengiriman/i);
++    expect(recorder.calls).toHaveLength(0);
++  });
++
+   it("builds the server-side rates request and selects vendor `rates` (never final_rates), pricing goods+ongkir as order-pricing strings", async () => {
+     const recorder = recordingGateway([JNE_REG, NEUTRAL_SERVICE, INSURED_SERVICE]);
+ 
+diff --git a/apps/store/src/lib/delivery-quote.ts b/apps/store/src/lib/delivery-quote.ts
+index a191559..b422149 100644
+--- a/apps/store/src/lib/delivery-quote.ts
++++ b/apps/store/src/lib/delivery-quote.ts
+@@ -22,6 +22,8 @@
+  *   zero ongkir. The quote carries NO id and NO TTL: the result is exactly
+  *   `{ services }`.
+  */
++import { createHash } from "node:crypto";
++import { hasConfiguredBranchRegion, type BranchShippingRegion } from "@marketplace/db/src/branch-shipping-region";
+ import {
+   calculateLineItemSubtotal,
+   calculateOrderPricing,
+@@ -29,7 +31,7 @@ import {
+ } from "./order-pricing";
+ import { buildShipmentParcel, type ShipmentDimensions } from "./shipment-parcel";
+ 
+-export type ShipmentQuoteOriginBranch = {
++export type ShipmentQuoteOriginBranch = BranchShippingRegion & {
+   id: string;
+   name: string;
+   status: string;
+@@ -73,6 +75,8 @@ export interface ShipmentQuoteGateway {
+ export type DeliveryQuoteServicePricing = ReturnType<typeof calculateOrderPricing>;
+ 
+ export interface DeliveryQuoteService {
++  /** Opaque binding to canonical origin; carries no sender PII. */
++  originFingerprint: string;
+   courierId: number;
+   serviceId: number;
+   /** Provider category ID; null when metadata is absent or malformed. */
+@@ -154,6 +158,7 @@ export function buildShipmentRatesRequest(
+   input: ShipmentQuoteInput,
+   destinationAreaId: string
+ ) {
++  if (!hasConfiguredBranchRegion(input.branch)) throw new QuoteDeliveryError("INVALID_INPUT", "Lengkapi wilayah pengiriman cabang sebelum delivery.");
+   const parcel = buildShipmentParcel({
+     items: input.items.map((item) => ({
+       itemName: item.itemName,
+@@ -171,8 +176,7 @@ export function buildShipmentRatesRequest(
+       phone: (input.branch.shippingPhone ?? "").trim(),
+       address: (input.branch.shippingAddress ?? "").trim(),
+       zipcode: (input.branch.shippingPostalCode ?? "").trim(),
+-      // Shipment area_id is optional per the contract (v1.8).
+-      ...(originAreaId && /^\d{1,16}$/.test(originAreaId) ? { area_id: originAreaId } : {}),
++      area_id: originAreaId,
+     },
+     destination: {
+       zipcode: (input.destination.postalCode ?? "").trim(),
+@@ -191,6 +195,7 @@ export async function quoteDelivery(
+   if (input.branch.status !== "aktif") {
+     throw new QuoteDeliveryError("INVALID_INPUT", "Cabang asal kirim belum aktif");
+   }
++  if (!hasConfiguredBranchRegion(input.branch)) throw new QuoteDeliveryError("INVALID_INPUT", "Lengkapi wilayah pengiriman cabang sebelum delivery.");
+   const originPhone = nonBlank(input.branch.shippingPhone, "Asal kirim belum memiliki telepon pengirim yang valid");
+   nonBlank(input.branch.shippingAddress, "Asal kirim belum memiliki alamat pengirim yang valid");
+   const originZipcode = nonBlank(input.branch.shippingPostalCode, "Asal kirim belum memiliki kode pos pengirim yang valid");
+@@ -281,6 +286,11 @@ export async function quoteDelivery(
+         ? { from: etaFrom, to: etaTo }
+         : undefined;
+     services.push({
++      originFingerprint: createHash("sha256").update(JSON.stringify([
++        input.branch.id, input.branch.shippingProvinceId, input.branch.shippingCityId,
++        input.branch.shippingDistrictId, input.branch.shippingAreaId, input.branch.shippingPostalCode,
++        input.branch.shippingProvince, input.branch.shippingCity, input.branch.shippingDistrict, input.branch.shippingArea,
++      ])).digest("hex"),
+       courierId,
+       serviceId,
+       serviceCategoryId: normalizeServiceCategoryId(rate.courier_service_category),
+diff --git a/apps/store/src/lib/shipment-inputs.test.ts b/apps/store/src/lib/shipment-inputs.test.ts
+index d439662..e970cee 100644
+--- a/apps/store/src/lib/shipment-inputs.test.ts
++++ b/apps/store/src/lib/shipment-inputs.test.ts
+@@ -52,6 +52,8 @@ const READY_BRANCH = {
+   shippingAddress: "Jl. Origin E2E No. 7, Gudang B",
+   shippingPostalCode: "10110",
+   shippingAreaId: "01010101",
++  shippingProvinceId: "01", shippingCityId: "0101", shippingDistrictId: "010101",
++  shippingProvince: "Fixture Province", shippingCity: "Fixture City", shippingDistrict: "Fixture District", shippingArea: "Fixture Area",
+ } as const;
+ 
+ const ONE_ITEM = [
+@@ -75,21 +77,11 @@ describe("buildShipmentInputs", () => {
+     });
+   });
+ 
+-  it("omits area_id (never a fake/empty string) when the branch has none", () => {
+-    const inputs = buildShipmentInputs({
++  it("rejects missing Area ID for a new origin", () => {
++    expect(() => buildShipmentInputs({
+       branch: { ...READY_BRANCH, shippingAreaId: null },
+-      items: ONE_ITEM,
+-      fallback: FALLBACK,
+-      packagingWeight: 40,
+-    });
+-    // toEqual ignores undefined-valued keys: the seam may leave the key out
+-    // entirely or carry it as undefined — a fabricated "" would fail.
+-    expect(inputs.origin).toEqual({
+-      name: "Cabang Jakarta Pusat",
+-      phone: "021999888777",
+-      address: "Jl. Origin E2E No. 7, Gudang B",
+-      zipcode: "10110",
+-    });
++      items: ONE_ITEM, fallback: FALLBACK, packagingWeight: 40,
++    })).toThrow("Shipment origin unavailable");
+   });
+ 
+   it("combines per-SKU master dims and the fallback dims per quantity (independent worked total)", () => {
+diff --git a/apps/store/src/lib/shipment-inputs.ts b/apps/store/src/lib/shipment-inputs.ts
+index cdee1c5..4c46b4c 100644
+--- a/apps/store/src/lib/shipment-inputs.ts
++++ b/apps/store/src/lib/shipment-inputs.ts
+@@ -1,6 +1,7 @@
++import { hasConfiguredBranchRegion, type BranchShippingRegion } from "@marketplace/db/src/branch-shipping-region";
+ import { buildShipmentParcel, type ShipmentParcelInput } from "./shipment-parcel";
+ 
+-export interface ShipmentOriginBranch {
++export interface ShipmentOriginBranch extends BranchShippingRegion {
+   name: string; status: string;
+   shippingPhone: string | null; shippingAddress: string | null;
+   shippingPostalCode: string | null; shippingAreaId: string | null;
+@@ -14,6 +15,6 @@ export function buildShipmentInputs(input: ShipmentParcelInput & { branch: Shipm
+   const address = branch.shippingAddress?.trim() ?? "";
+   const zipcode = branch.shippingPostalCode?.trim() ?? "";
+   const area = branch.shippingAreaId?.trim();
+-  if (branch.status !== "aktif" || !name || !/^[0-9+()\s-]{5,25}$/.test(phone) || !/\d/.test(phone) || !address || address.length > 500 || !/^\d{3,10}$/.test(zipcode) || (area !== undefined && !/^\d{1,16}$/.test(area))) throw new Error("Shipment origin unavailable");
+-  return { origin: { name, phone, address, zipcode, ...(area ? { area_id: area } : {}) }, ...buildShipmentParcel(input) };
++  if (!hasConfiguredBranchRegion(branch) || branch.status !== "aktif" || !name || !/^[0-9+()\s-]{5,25}$/.test(phone) || !/\d/.test(phone) || !address || address.length > 500 || !/^\d{3,10}$/.test(zipcode) || (area !== undefined && !/^\d{1,16}$/.test(area))) throw new Error("Shipment origin unavailable");
++  return { origin: { name, phone, address, zipcode, area_id: area }, ...buildShipmentParcel(input) };
+ }
+diff --git a/docs/README.md b/docs/README.md
+index 29b7761..903844e 100644
+--- a/docs/README.md
++++ b/docs/README.md
+@@ -77,4 +77,5 @@ lasting design/invariant/flow content is distilled into the appropriate
+ | Delivery packing and booking | [`docs/features/delivery-fulfillment.md`](features/delivery-fulfillment.md) |
+ | Delivery orders and settlement | [`docs/features/delivery-orders.md`](features/delivery-orders.md) |
+ | Delivery checkout quotes | [`docs/features/delivery-quotes.md`](features/delivery-quotes.md) |
++| Mandatory verified branch Shipment regions | [`docs/features/branch-shipping-regions.md`](features/branch-shipping-regions.md) |
+ | Client address book, branch shipping origin and parcel master | [`docs/features/client-addresses.md`](features/client-addresses.md) |
+diff --git a/docs/api-reference.md b/docs/api-reference.md
+index 0aa64d8..96c4984 100644
+--- a/docs/api-reference.md
++++ b/docs/api-reference.md
+@@ -104,7 +104,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
+ | GET | `/api/admin/categories` | admin-session (products:view) | List active categories |
+ | GET | `/api/admin/brands` | admin-session (products:view) | List all product brands (dimension) for the homepage ProductFilterEditor dropdown |
+ | GET | `/api/admin/branches` | admin-session (branches:view) | List branches (paginated) |
+-| POST | `/api/admin/branches` | admin-session (branches:edit) | Create branch |
++| POST | `/api/admin/branches` | admin-session (branches:edit:all) | Create branch with verified Shipment hierarchy |
++| GET | `/api/admin/shipment/regions` | admin-session (branches:edit) | Shipment hierarchy lookup |
+ | GET | `/api/admin/branches/{id}` | admin-session (branches:view) | Fetch a branch |
+ | PUT | `/api/admin/branches/{id}` | admin-session (branches:edit) | Update a branch |
+ | DELETE | `/api/admin/branches/{id}` | admin-session (branches:delete) | Delete a branch |
+@@ -194,11 +195,11 @@ Both actions require `orders:edit` AND the current Home Branch matching the orde
+ 
+ ## Store — Delivery placement
+ 
+-`POST /api/checkout/place-order` retains legacy pickup input and additionally accepts strict delivery input `{ itemIds, contactPhone, contactEmail, fulfillmentMethod: "delivery", addressId, courierId, serviceId, approvedPricing }` or the same delivery approval with `{ newAddress, saveAddress: boolean, saveRequestId: UUID }` instead of `addressId`. `newAddress` uses the client address input fields documented below, including `isDefault` (only applied when `saveAddress` is true). An approved saved address is inserted in the local order transaction; repeated saves with the same client-scoped `saveRequestId` reuse the same address row. A changed destination needs a new request ID. Unsaved destinations produce only an order snapshot (nullable `address_id`). Requires onboarded client session. Delivery omits pickup slots; backend re-derives current cart/address/origin/parcels/rates and compares approval. Changed/unavailable service or pricing returns 409 `{ success: false, code: "DELIVERY_REPRICE_REQUIRED", data: { services } }` before order/SO/Snap writes. Fresh service rows carry the same normalized `serviceCategoryId: number | null` as the delivery-quote response; category metadata is display-only and is not accepted as order approval input. Confirmed placement uses one goods-only SO and snapshot-priced Snap. Repayment `/api/payments/midtrans/create` uses persisted amounts, not a new quote. See [delivery orders](features/delivery-orders.md).
++`POST /api/checkout/place-order` retains legacy pickup input and additionally accepts strict delivery input `{ itemIds, contactPhone, contactEmail, fulfillmentMethod: "delivery", addressId, courierId, serviceId, approvedPricing, originFingerprint }` or the same delivery approval with `{ newAddress, saveAddress: boolean, saveRequestId: UUID }` instead of `addressId`. `newAddress` uses the client address input fields documented below, including `isDefault` (only applied when `saveAddress` is true). An approved saved address is inserted in the local order transaction; repeated saves with the same client-scoped `saveRequestId` reuse the same address row. A changed destination needs a new request ID. Unsaved destinations produce only an order snapshot (nullable `address_id`). Requires onboarded client session. Delivery omits pickup slots; backend re-derives current cart/address/origin/parcels/rates and compares approval. Changed/unavailable service, pricing, or stored origin fingerprint returns 409 `{ success: false, code: "DELIVERY_REPRICE_REQUIRED", data: { services } }` before order/SO/Snap writes. Fresh service rows carry the same normalized `serviceCategoryId: number | null` as the delivery-quote response; category metadata is display-only and is not accepted as order approval input. Confirmed placement uses one goods-only SO and snapshot-priced Snap. Repayment `/api/payments/midtrans/create` uses persisted amounts, not a new quote. See [delivery orders](features/delivery-orders.md).
+ 
+ ## Store — Delivery quotes
+ 
+-`POST /api/checkout/delivery-quote` — onboarded store client session; strict body `{ itemIds: string[], addressId: string }` or `{ itemIds: string[], newAddress: ClientAddressInput }`. New addresses are verified against the Shipment hierarchy but not persisted on quote. Loads owned cart/address and current server prices/parcels/origin, verifies Shipment hierarchy and returns `{ success: true, data: { services } }` with rates-based shipping and delivery PPN/total. Each service also includes `serviceCategoryId: number | null`, normalized from vendor `courier_service_category` (positive integer/numeric string or exact official category name). Missing/malformed metadata becomes null; unknown positive IDs are preserved. These services remain selectable under Lainnya. Browser filtering uses provider categories only and does not change request input or pricing. Success logs include category/uncategorized counts without raw provider data. 404 missing/foreign rows; 400 invalid/unready inputs; 502 unavailable/no-service quote. No order, payment, insurance purchase or booking. See [delivery quotes](features/delivery-quotes.md).
++`POST /api/checkout/delivery-quote` — onboarded store client session; strict body `{ itemIds: string[], addressId: string }` or `{ itemIds: string[], newAddress: ClientAddressInput }`. New addresses are verified against the Shipment hierarchy but not persisted on quote. Loads owned cart/address and current server prices/parcels/origin, verifies Shipment hierarchy and returns `{ success: true, data: { services } }` with rates-based shipping and delivery PPN/total. Each service also includes `originFingerprint` (opaque SHA-256 binding to canonical branch region IDs/names/postcode, required unchanged at delivery approval) and `serviceCategoryId: number | null`, normalized from vendor `courier_service_category` (positive integer/numeric string or exact official category name). Missing/malformed metadata becomes null; unknown positive IDs are preserved. These services remain selectable under Lainnya. Browser filtering uses provider categories only and does not change request input or pricing. Success logs include category/uncategorized counts without raw provider data. 404 missing/foreign rows; 400 invalid/unready inputs; 502 unavailable/no-service quote. No order, payment, insurance purchase or booking. See [delivery quotes](features/delivery-quotes.md).
+ 
+ ## Store — Client addresses and Shipment regions
+ 
+@@ -512,12 +513,19 @@ Admin branch POST/PUT additionally accepts nullable optional `shippingPhone`, `s
+ - **Response**: 200 `{ success, data: [...], pagination: { page, limit, total, totalPages } }`; 500 error
+ - **Notes**: Ordered by `createdAt` desc.
+ 
++#### `GET` `/api/admin/shipment/regions`
++- **Auth**: admin-session (guard: branches/edit), never a store session.
++- **Query**: `level=provinces|cities|districts|areas`; other than provinces, `parentId` is required (1–16 digit string).
++- **Response**: 200 `{ success: true, data: [{ id, name, parentId?, postalCode? }] }`; 400 invalid query; 503 timeout/failure/malformed provider data, with safe retry feedback.
++- **Notes**: Server-side credential-free Shipment GETs via `JUBELIO_SHIPMENT_URL`; no synthetic results. Lookup grants no extra mutation Branch Scope.
++
+ #### `POST` `/api/admin/branches`
+-- **Auth**: admin-session (guard: branches/edit)
++- **Auth**: admin-session (guard: branches/edit, all-branch scope)
+ - **Purpose**: Create a branch.
+ - **Params**: —
+ - **Body**: `{ name: string, code: string, city: string, address: string, latitude?: string, longitude?: string, operatingHours: { monday?: { open, close }|null, tuesday?, ..., sunday? } (default {}), googleMapsUrl?: string (valid URL or ""), status: "aktif"|"nonaktif" (default "aktif") }`
+-- **Response**: 201 `{ success: true, data: branch }` (the created branch row, incl. `id`); 400 invalid; 500 error
++- **Required region body**: `shippingProvinceId`, `shippingCityId`, `shippingDistrictId`, `shippingAreaId` (1–16 digit strings), `shippingPostalCode` (3–10 digits). `shippingPhone`/`shippingAddress` are optional nullable strings. Every hierarchy level and postcode is provider-verified; browser labels are ignored.
++- **Response**: 201 `{ success: true, data: branch }` (the created branch row, incl. `id`); 400 invalid/missing/mismatched region; 503 region provider unavailable (no branch/audit write); 500 error
+ - **Notes**: `latitude`/`longitude` stored null if empty; `googleMapsUrl` validated as URL or literal `""`, stored null if empty. `id` via `crypto.randomUUID()`. Created resources return 201 with the full row (same contract as the Roles/Users POST endpoints).
+ 
+ #### `GET` `/api/admin/branches/{id}`
+@@ -534,7 +542,8 @@ Admin branch POST/PUT additionally accepts nullable optional `shippingPhone`, `s
+ - **Params**: `{id}`
+ - **Body**: `{ name: string, code: string, city: string, address: string, latitude?: string, longitude?: string, operatingHours: { monday?: {open,close}|null, ... sunday? } (required), googleMapsUrl?: string (valid URL or ""), status: "aktif"|"nonaktif" }`
+ - **Response**: 200 `{ success, data: { id } }`; 400 invalid; 404 not found; 500 error
+-- **Notes**: Unlike POST, `operatingHours` has no default (required) and `status` is required. `latitude`/`longitude`/`googleMapsUrl` stored null when empty. `updatedAt` set.
++- **Required region body**: Same five mandatory region/postcode strings as POST, on every edit including legacy, inactive and pickup-only branches. Canonical names come from Shipment. Invalid/missing region is 400; provider failure is 503 without mutation/audit. Old clients cannot omit regions to preserve/bypass configuration.
++- **Notes**: Unlike POST, `operatingHours` has no default (required) and `status` is required. `latitude`/`longitude`/`googleMapsUrl` stored null when empty. `updatedAt` set. Omitted sender phone/address preserve current values under the transaction row lock; null/empty clears them. Foreign branches are 404 for own-branch scope before provider validation. Full origin before/after audit is transactional. See [branch regions](features/branch-shipping-regions.md).
+ 
+ #### `DELETE` `/api/admin/branches/{id}`
+ - **Auth**: admin-session (guard: branches/delete)
+diff --git a/docs/deployment-docs/shipment-readiness.md b/docs/deployment-docs/shipment-readiness.md
+index 0b4b0bd..0f47a2c 100644
+--- a/docs/deployment-docs/shipment-readiness.md
++++ b/docs/deployment-docs/shipment-readiness.md
+@@ -11,7 +11,7 @@ Staging/production Compose passes these server-only variables to store (quotes)
+ 
+ Use independent Shipment credentials. Empty credentials fail closed; they never reuse `JUBELIO_EMAIL/PASSWORD`. Never enable `E2E_PROVIDER_MOCKS` or point production at a loopback mock. The application rejects E2E mode when APP_ENV or NODE_ENV is production.
+ 
+-Before operational activation, configure each eligible branch's local shipping phone/address/postcode (optional Shipment area ID) through the existing Branch form. Verify per-SKU master grams/cm after catalog sync. IT must configure a measured fallback block if necessary and explicit packaging grams in `system_config`; see [origin and parcel configuration](../features/client-addresses.md#branch-origin-and-per-sku-parcels). Parcel parameters are re-read per quote; the general PPN rate remains process-cached.
++Apply generated migration `0033_wild_ben_grimm.sql` through the owner-authorized migration process. Existing rows remain nullable/unconfigured without backfill. Admin create/edit now requires verified Shipment province/city/district/village selection (including pickup-only/inactive branches); dropdown selection supplies mandatory Area ID and canonical read-only postcode. Before new delivery usage, complete this hierarchy plus local sender phone/address for each eligible branch. Legacy pickup and historical accepted order snapshots remain unchanged. Existing `JUBELIO_SHIPMENT_URL` passthrough already covers admin region GETs, without new credentials/ports. See [branch regions](../features/branch-shipping-regions.md). Verify per-SKU master grams/cm after catalog sync. IT must configure a measured fallback block if necessary and explicit packaging grams in `system_config`; see [origin and parcel configuration](../features/client-addresses.md#branch-origin-and-per-sku-parcels). Parcel parameters are re-read per quote; the general PPN rate remains process-cached.
+ 
+ Generate/review migrations in development and use the existing authorized deployment migration process for schema changes. Do not run dev db:push on production. Local mock verification is not permission to deploy or perform real Shipment authentication/rates/booking requests. Quote tests use only isolated local endpoints; no live courier activation has been verified.
+ 
+diff --git a/docs/features/client-addresses.md b/docs/features/client-addresses.md
+index b6152e4..e48546c 100644
+--- a/docs/features/client-addresses.md
++++ b/docs/features/client-addresses.md
+@@ -18,7 +18,7 @@ The form clears all descendant selections and postcode when a parent changes. Sa
+ 
+ ## Branch origin and per-SKU parcels
+ 
+-The existing admin Branch form stores `shippingPhone`, `shippingAddress`, `shippingPostalCode`, and optional string `shippingAreaId`. Branch name is the sender. These nullable local fields are never overwritten by Jubelio location sync. `branches:edit` and existing branch scope apply; mutation and origin audit diff share one transaction. POST defaults omitted fields to null; PUT preserves omitted fields under the row lock, while explicit null/empty clears them. Supplied malformed values reject the whole write. Pickup-only branches may remain unconfigured.
++The admin Branch form requires verified Shipment province/city/district/village selection on every create/edit, including pickup-only branches. Canonical Area ID/postcode and region names are stored locally, never copied from Omnichannel or overwritten by location sync. Branch name is the sender. Phone/address remain optional on save but required for delivery; PUT omission preserves their locked-row values. Legacy rows stay nullable/unconfigured without backfill and remain usable for pickup, but edits require completion and new delivery rejects incomplete origins. See [verified branch regions](branch-shipping-regions.md) for API, authorization, form and rollout details.
+ 
+ Each synced SKU obtains parcel fields from `GET /inventory/items/{item_id}` separately, not from an assumed group dimension. Normalized integer grams and positive centimetre dimensions are stored in `product_variant.parcel_dimensions`; invalid master blocks become null. The documented master accepts numeric/string `package_weight/length/width/height` (see `docs/jubelio-api/dist.yaml`, `getProductResponse`; grams specified by the product input schema). Catalog sync now makes one additional sequential read per SKU; provider failures propagate through existing sync error handling rather than claiming successful master refresh.
+ 
+diff --git a/docs/features/delivery-quotes.md b/docs/features/delivery-quotes.md
+index ece2f20..36621d7 100644
+--- a/docs/features/delivery-quotes.md
++++ b/docs/features/delivery-quotes.md
+@@ -10,7 +10,7 @@ Back/forward navigation preserves contact inputs, pickup slots, saved/new destin
+ 
+ ## Quote contract
+ 
+-`POST /api/checkout/delivery-quote` requires an onboarded store session and strict body `{ itemIds: string[], addressId: string }` **or** `{ itemIds: string[], newAddress: ClientAddressInput }`. Quoting a new address never writes it to the book; `saveAddress` is only considered during final approved order placement. Successful response is `{ success: true, data: { services } }`; each service has courier/service IDs, `serviceCategoryId: number | null`, name, `shippingCost`, pricing strings, and optional valid ETA. Category metadata is normalized from vendor `courier_service_category` (positive safe-integer ID, numeric ID string, or an exact official category name); absent/malformed metadata becomes null. Unknown positive IDs are preserved but displayed in Lainnya. Missing metadata never excludes an otherwise usable service. Missing/foreign resources return 404, invalid/unready data 400, failed/no-service quote 502. No quote ID, TTL, background refresh or zero/stale fee fallback is invented.
++`POST /api/checkout/delivery-quote` requires an onboarded store session and strict body `{ itemIds: string[], addressId: string }` **or** `{ itemIds: string[], newAddress: ClientAddressInput }`. Quoting a new address never writes it to the book; `saveAddress` is only considered during final approved order placement. Successful response is `{ success: true, data: { services } }`; each service has courier/service IDs, `serviceCategoryId: number | null`, name, `shippingCost`, pricing strings, an opaque `originFingerprint`, and optional valid ETA. Category metadata is normalized from vendor `courier_service_category` (positive safe-integer ID, numeric ID string, or an exact official category name); absent/malformed metadata becomes null. Unknown positive IDs are preserved but displayed in Lainnya. Missing metadata never excludes an otherwise usable service. Missing/foreign resources return 404, invalid/unready data 400, failed/no-service quote 502. No quote ID, TTL, background refresh or zero/stale fee fallback is invented.
+ 
+ The separate server-side Shipment adapter uses `JUBELIO_SHIPMENT_URL`, `JUBELIO_SHIPMENT_CLIENT_ID`, and `JUBELIO_SHIPMENT_CLIENT_SECRET`. It obtains a token through `/auth/generate-token`, respects token expiry, and posts measured per-item quantities/grams/cm to `/rates/all`. Rates requests send zip/area and measurement fields only, not recipient contacts or an invented carton. There is no retry/live fallback. E2E mode requires a bare HTTP loopback origin and is prohibited by either APP_ENV or NODE_ENV production. Logs never contain tokens, addresses or raw provider responses.
+ 
+@@ -24,6 +24,8 @@ ETA is displayed as an Indonesian arrival date/range in `Asia/Jakarta` (WIB), wi
+ 
+ Address/cart fingerprint changes discard service selection and displayed quote money, reset the category to Semua and pagination to page one, disable continuation and request fresh options. Explicit requotes and order-reprice pushes also restore the default category/page. Late responses are discarded. The customer must select a service again after an address/cart change. Failure offers retry or pickup. Only the checkout Ringkasan displays the selected server PPN and total (there is no duplicate money summary under the picker), never stale cart prices; without a selected delivery service, totals are withheld. Display filtering/sorting/pagination does not change backend rates, pricing, order approval, revalidation or the persisted order snapshot. Quote-success logs include distinct category and uncategorized-service counts, never raw provider metadata. The local Shipment mock's regular fixture includes category ID 1.
+ 
++New quotes and checkout approval require a complete stored Shipment origin hierarchy, canonical names/postcode and digit-string Area ID, as well as existing active/sender/parcel prerequisites. Incomplete origins are rejected before rates calls with a request to complete branch shipping configuration. Every new rates request carries the selected origin `area_id`; no hierarchy lookup is added per origin quote. Services bind approval to the origin IDs/names/postcode through `originFingerprint`, which must be returned unchanged at order placement. Changing the origin forces 409 fresh approval even when rates and postcode are unchanged. Legacy pickup and accepted order snapshots remain unaffected. See [branch regions](branch-shipping-regions.md).
++
+ Delivery order placement revalidates the quote and freezes immutable snapshots; see [delivery orders](delivery-orders.md). Booking reconciliation is a subsequent slice. Pickup remains functional.
+ 
+ Verification: browser mock E2E additionally exercises fulfillment-before-contact ordering, pickup/delivery contact copy and validation, purchaser/recipient distinction, desktop/mobile back/forward state preservation, method switching and stale pickup-validation rejection, inline draft/save-intent retention, cleared review confirmation, reprice approval and return to step 1 when the selected service disappears. Existing coverage includes an inline unsaved address, default selection and the saved/unsaved order snapshot. delivery-quote.test.ts covers rates/final_rates, category normalization without name/ETA inference or pricing changes, insurance metadata, cross-branch rejection and bad/empty provider results. jubelio-shipment-client.test.ts covers runtime gates, expiry, documented request shape and no retry. delivery-options.test.ts covers filtering-before-pagination, category counts, per-category cheapest pricing, global cheapest-first pagination, page clamping and Indonesian/WIB ETA formatting. delivery-quote-mock.spec.ts covers category filter availability, five-option filtered pagination on desktop/mobile, per-option prices, ETA/fallback, explicit selection, off-category/off-page persistence without extra quotes, category/page reset after a changed destination, courier/service identity, address/quantity invalidation, failure, metadata in the real quote HTTP response and a server price change in the checkout summary. All provider traffic in these tests is loopback-only.
+diff --git a/docs/features/home-delivery.md b/docs/features/home-delivery.md
+index 27bc507..d250e2b 100644
+--- a/docs/features/home-delivery.md
++++ b/docs/features/home-delivery.md
+@@ -24,6 +24,10 @@ Two financial ledgers remain separate: goods 100000 + shipping 20000 + website P
+ 
+ Store/client and admin/user authentication remain separate. Branch Scope grants visibility, never permission for physical actions outside current Home Branch. Customer DTOs exclude provider fees, raw callback data, internal notes and admin attribution. Provider request intents are durable; ambiguous outcomes are held, not blindly retried. Proof-approved booking release is audited and requires a separate booking click.
+ 
++## Branch origin configuration
++
++Admin branch create/edit now requires verified Shipment dropdown selection for every branch, including pickup-only/inactive ones. Nullable legacy/import origins require completion before editing or new delivery usage; pickup remains available and accepted orders retain immutable snapshots. Locally configured region IDs/names/postcode survive master sync. Sender phone/address, status and parcels remain additional readiness prerequisites. See [verified branch regions](branch-shipping-regions.md).
++
+ ## Verification and activation boundary
+ 
+ All seven implementation tickets passed main-owned review and isolated local validation: 106 unit files, 953 passed (two infrastructure-failure sentinel tests skipped because PostgreSQL is ready), 22 mock-only browser/HTTP cases, both app typechecks, focused lint, schema check and diff check. Tests for real database behavior ran against local PostgreSQL; skipped sentinels are not skipped delivery acceptance tests.
+diff --git a/e2e/admin/branch-origin-mock.spec.ts b/e2e/admin/branch-origin-mock.spec.ts
+index ec3ab74..003f5b1 100644
+--- a/e2e/admin/branch-origin-mock.spec.ts
++++ b/e2e/admin/branch-origin-mock.spec.ts
+@@ -51,7 +51,7 @@
+  * parent selects this spec by updating playwright.mock.config.ts:
+  *   npx playwright test --config=playwright.mock.config.ts
+  */
+-import { test, expect, type BrowserContext } from "@playwright/test";
++import { test, expect, type BrowserContext, type Page } from "@playwright/test";
+ import { Pool } from "pg";
+ import dotenv from "dotenv";
+ dotenv.config({ path: ".env" });
+@@ -117,8 +117,11 @@ const FIXTURE_ADDRESS = "Jl. Fixture E2E Edit No. 1";
+ const ORIGIN = {
+   shippingPhone: "021999888777",
+   shippingAddress: "Jl. Origin E2E No. 7, Gudang B",
+-  shippingPostalCode: "10110",
++  shippingPostalCode: "01234",
+   shippingAreaId: "01010101",
++  shippingProvinceId: "01",
++  shippingCityId: "0101",
++  shippingDistrictId: "010101",
+ } as const;
+ 
+ // Proposed form copy for the NEW labeled inputs in the existing edit menu
+@@ -130,6 +133,12 @@ const ORIGIN_LABELS = {
+   shippingAreaId: "Area ID Shipment (opsional)",
+ } as const;
+ 
++async function selectRegion(page: Page) {
++  for (const [label, value] of [["Provinsi Pengiriman", "01"], ["Kota/Kabupaten Pengiriman", "0101"], ["Kecamatan Pengiriman", "010101"], ["Kelurahan/Desa Pengiriman", "01010101"]]) {
++    await page.getByLabel(label, { exact: true }).selectOption(value);
++  }
++}
++
+ let pool: Pool;
+ let hqContext: BrowserContext;
+ let branchId = "";
+@@ -183,6 +192,7 @@ function branchBody(overrides: Record<string, unknown> = {}) {
+     operatingHours: {},
+     googleMapsUrl: "",
+     status: "aktif",
++    ...ORIGIN,
+     ...overrides,
+   };
+ }
+@@ -245,6 +255,157 @@ test.describe("mock-only branch shipping origin (ticket 02)", () => {
+   // The whole spec shares one fixture branch: serial order, no extra workers.
+   test.describe.configure({ mode: "serial" });
+ 
++  test("a store-only session cannot look up admin regions or mutate branches", async ({ browser }) => {
++    const context = await browser.newContext({ baseURL: ADMIN_BASE_URL });
++    try {
++      const login = await context.request.post(`${process.env.E2E_MOCK_STORE_BASE_URL}/api/auth/sign-in/email`, { data: { email: process.env.E2E_STORE_EMAIL ?? "john@example.com", password: process.env.E2E_STORE_PASSWORD ?? "password123" } });
++      expect(login.ok()).toBe(true);
++      expect((await context.request.get("/api/admin/shipment/regions?level=provinces")).status()).toBe(401);
++      expect((await context.request.post("/api/admin/branches", { data: branchBody() })).status()).toBe(401);
++      expect((await context.request.put(`/api/admin/branches/${branchId}`, { data: branchBody() })).status()).toBe(401);
++    } finally { await context.close(); }
++  });
++
++  test("creation requires a complete picker and stores canonical labels", async () => {
++    const page = await hqContext.newPage();
++    let createdId = "";
++    try {
++      await page.goto("/admin/branches/new");
++      await page.getByLabel("Nama Cabang").fill("E2E Region Create");
++      await page.getByLabel("Kode Cabang").fill(`${FIXTURE_CODE}NEW`);
++      await page.getByLabel("Kota", { exact: true }).fill("General City");
++      await page.getByLabel("Alamat", { exact: true }).fill("General Address");
++      const save = page.getByRole("button", { name: "Buat Cabang", exact: true });
++      await expect(save).toBeDisabled();
++      await selectRegion(page);
++      await expect(save).toBeEnabled();
++      const response = page.waitForResponse((res) => res.url().endsWith("/api/admin/branches") && res.request().method() === "POST");
++      await save.click();
++      const created = await response;
++      expect(created.status()).toBe(201);
++      const row = (await created.json()).data;
++      createdId = row.id;
++      expect(row).toMatchObject({ shippingProvinceId: "01", shippingCityId: "0101", shippingDistrictId: "010101", shippingAreaId: "01010101", shippingPostalCode: "01234", shippingProvince: "Fixture Province", shippingArea: "Fixture Area", city: "General City", address: "General Address", shippingPhone: null, shippingAddress: null });
++    } finally {
++      if (createdId) await hqContext.request.delete(`/api/admin/branches/${createdId}`);
++      await page.close();
++    }
++  });
++
++  test("lookup failure blocks saving and explicit retry preserves unrelated inputs", async () => {
++    const page = await hqContext.newPage();
++    let fail = true;
++    await page.route("**/api/admin/shipment/regions?*", async (route) => {
++      if (fail && new URL(route.request().url()).searchParams.get("level") === "provinces") {
++        await route.fulfill({ status: 503, json: { success: false, error: "Unavailable" } });
++      } else await route.continue();
++    });
++    await page.goto(`/admin/branches/${branchId}/edit`);
++    await page.getByLabel("Nama Cabang").fill("Preserve my input");
++    await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeDisabled();
++    fail = false;
++    await page.getByRole("button", { name: "Coba lagi — Provinsi Pengiriman" }).click();
++    await expect(page.getByLabel("Nama Cabang")).toHaveValue("Preserve my input");
++    await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeEnabled();
++    await page.close();
++  });
++
++  test("unavailable saved village requires correction rather than substitution", async () => {
++    const page = await hqContext.newPage();
++    await page.route("**/api/admin/shipment/regions?level=areas*", (route) => route.fulfill({ json: { success: true, data: [] } }));
++    await page.goto(`/admin/branches/${branchId}/edit`);
++    await expect(page.getByText("Wilayah tersimpan tidak tersedia. Pilih ulang wilayah ini.")).toBeVisible();
++    await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeDisabled();
++    await expect(page.getByLabel("Kode Pos Asal Kirim")).toHaveValue("01234");
++    await expect(page.getByLabel("Kelurahan/Desa Pengiriman")).toHaveValue("01010101");
++    await page.close();
++  });
++
++  test("parent changes clear same-postcode villages and ignore delayed old responses", async () => {
++    const page = await hqContext.newPage();
++    let releaseOld!: () => void;
++    let oldStarted!: () => void;
++    const started = new Promise<void>((resolve) => { oldStarted = resolve; });
++    const oldDelay = new Promise<void>((resolve) => { releaseOld = resolve; });
++    await page.route("**/api/admin/shipment/regions?*", async (route) => {
++      const query = new URL(route.request().url()).searchParams;
++      const level = query.get("level");
++      const parent = query.get("parentId");
++      if (level === "provinces") return route.fulfill({ json: { success: true, data: [{ id: "01", name: "Fixture Province" }, { id: "02", name: "Delayed Province" }, { id: "03", name: "Current Province" }] } });
++      if (level === "areas" && parent === "010101") return route.fulfill({ json: { success: true, data: [{ id: "01010101", name: "Fixture Area", parentId: "010101", postalCode: "01234" }, { id: "01010102", name: "Same Postcode Area", parentId: "010101", postalCode: "01234" }] } });
++      if (level === "cities" && parent === "02") {
++        oldStarted();
++        await oldDelay;
++        await route.fulfill({ json: { success: true, data: [{ id: "0201", name: "Stale City", parentId: "02" }] } }).catch(() => {});
++        return;
++      }
++      if (level === "cities" && parent === "03") return route.fulfill({ json: { success: true, data: [{ id: "0301", name: "Current City", parentId: "03" }] } });
++      await route.continue();
++    });
++    try {
++      await page.goto(`/admin/branches/${branchId}/edit`);
++      await page.getByLabel("Kelurahan/Desa Pengiriman").selectOption("01010102");
++      await expect(page.getByLabel("Kode Pos Asal Kirim")).toHaveValue("01234");
++      await page.getByLabel("Kecamatan Pengiriman").selectOption("");
++      await expect(page.getByLabel("Kelurahan/Desa Pengiriman")).toHaveValue("");
++      await expect(page.getByLabel("Kode Pos Asal Kirim")).toHaveValue("");
++      await page.getByLabel("Provinsi Pengiriman").selectOption("02");
++      await started;
++      await expect(page.getByLabel("Kota/Kabupaten Pengiriman")).toBeDisabled();
++      await page.getByLabel("Provinsi Pengiriman").selectOption("03");
++      await expect(page.getByLabel("Kota/Kabupaten Pengiriman")).toBeEnabled();
++      releaseOld();
++      await expect(page.getByLabel("Kota/Kabupaten Pengiriman").locator("option")).toHaveText(["Pilih wilayah", "Current City"]);
++      await expect(page.getByLabel("Kecamatan Pengiriman")).toHaveValue("");
++      await expect(page.getByLabel("Kelurahan/Desa Pengiriman")).toHaveValue("");
++      await expect(page.getByLabel("Kode Pos Asal Kirim")).toHaveValue("");
++      await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeDisabled();
++    } finally { releaseOld?.(); await page.close(); }
++  });
++
++  test("returning to an earlier parent cannot reuse its loaded options during a new request", async () => {
++    const page = await hqContext.newPage();
++    let delay = false;
++    let release!: () => void;
++    let started!: () => void;
++    const pending = new Promise<void>((resolve) => { release = resolve; });
++    const requested = new Promise<void>((resolve) => { started = resolve; });
++    await page.route("**/api/admin/shipment/regions?*", async (route) => {
++      const query = new URL(route.request().url()).searchParams;
++      if (query.get("level") === "provinces") return route.fulfill({ json: { success: true, data: [{ id: "01", name: "Fixture Province" }, { id: "02", name: "Other Province" }] } });
++      if (delay && query.get("level") === "cities" && query.get("parentId") === "01") { started(); await pending; }
++      await route.continue().catch(() => {});
++    });
++    try {
++      await page.goto(`/admin/branches/${branchId}/edit`);
++      await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeEnabled();
++      await page.getByLabel("Provinsi Pengiriman").selectOption("02");
++      delay = true;
++      await page.getByLabel("Provinsi Pengiriman").selectOption("01");
++      await requested;
++      await expect(page.getByLabel("Kota/Kabupaten Pengiriman")).toBeDisabled();
++      await expect(page.getByLabel("Kode Pos Asal Kirim")).toHaveValue("");
++      release();
++      await expect(page.getByLabel("Kota/Kabupaten Pengiriman")).toBeEnabled();
++      await expect(page.getByLabel("Kota/Kabupaten Pengiriman")).toHaveValue("");
++    } finally { release?.(); await page.close(); }
++  });
++
++  test("legacy pickup-only edits require region completion", async () => {
++    await pool.query("UPDATE branch SET shipping_province_id=NULL, shipping_city_id=NULL, shipping_district_id=NULL WHERE id=$1", [branchId]);
++    const page = await hqContext.newPage();
++    try {
++      await page.goto(`/admin/branches/${branchId}/edit`);
++      await expect(page.getByText("Wilayah pengiriman cabang belum lengkap. Lengkapi pilihan sebelum menyimpan perubahan.")).toBeVisible();
++      await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeDisabled();
++      await selectRegion(page);
++      await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeEnabled();
++    } finally {
++      await pool.query("UPDATE branch SET shipping_province_id='01', shipping_city_id='0101', shipping_district_id='010101' WHERE id=$1", [branchId]);
++      await page.close();
++    }
++  });
++
+   test("the existing Branch edit menu sets the shipping origin once and persists it audited", async () => {
+     const page = await hqContext!.newPage();
+     await page.goto(`/admin/branches/${branchId}/edit`);
+@@ -255,8 +416,12 @@ test.describe("mock-only branch shipping origin (ticket 02)", () => {
+     // Fill the four origin inputs (proposed labels; see header doc).
+     await page.getByLabel(ORIGIN_LABELS.shippingPhone, { exact: true }).fill(ORIGIN.shippingPhone);
+     await page.getByLabel(ORIGIN_LABELS.shippingAddress, { exact: true }).fill(ORIGIN.shippingAddress);
+-    await page.getByLabel(ORIGIN_LABELS.shippingPostalCode, { exact: true }).fill(ORIGIN.shippingPostalCode);
+-    await page.getByLabel(ORIGIN_LABELS.shippingAreaId, { exact: true }).fill(ORIGIN.shippingAreaId);
++    await page.getByLabel("Provinsi Pengiriman", { exact: true }).selectOption("01");
++    await page.getByLabel("Kota/Kabupaten Pengiriman", { exact: true }).selectOption("0101");
++    await page.getByLabel("Kecamatan Pengiriman", { exact: true }).selectOption("010101");
++    await page.getByLabel("Kelurahan/Desa Pengiriman", { exact: true }).selectOption("01010101");
++    await expect(page.getByLabel(ORIGIN_LABELS.shippingPostalCode, { exact: true })).toHaveValue("01234");
++    await expect(page.getByLabel(ORIGIN_LABELS.shippingPostalCode, { exact: true })).toHaveAttribute("readonly", "");
+     await page.getByRole("button", { name: /Simpan Perubahan/ }).click();
+     await page.waitForURL("**/admin/branches");
+ 
+@@ -289,9 +454,8 @@ test.describe("mock-only branch shipping origin (ticket 02)", () => {
+     await expect(page.getByLabel(ORIGIN_LABELS.shippingPostalCode, { exact: true })).toHaveValue(
+       ORIGIN.shippingPostalCode
+     );
+-    await expect(page.getByLabel(ORIGIN_LABELS.shippingAreaId, { exact: true })).toHaveValue(
+-      ORIGIN.shippingAreaId
+-    );
++    await expect(page.getByLabel("Kelurahan/Desa Pengiriman", { exact: true })).toHaveValue(ORIGIN.shippingAreaId);
++    await expect(page.getByLabel("Kota", { exact: true })).toHaveValue(FIXTURE_CITY);
+ 
+     await page.close();
+   });
+diff --git a/e2e/admin/rbac-security.spec.ts b/e2e/admin/rbac-security.spec.ts
+index bcb068f..65718ac 100644
+--- a/e2e/admin/rbac-security.spec.ts
++++ b/e2e/admin/rbac-security.spec.ts
+@@ -501,9 +501,11 @@ test.describe("branch-aware security — all-branch HQ", () => {
+         status: "aktif",
+       },
+     });
+-    expect(create.status()).toBe(201);
+-    const { data } = await create.json();
+-    const createdId = data.id as string;
++    // Authorized but incomplete input is rejected before provider traffic.
++    // Verified successful creation is covered by branch-origin-mock.spec.ts.
++    expect(create.status()).toBe(400);
++    const createdId = `e2e-region-delete-${RUN}`;
++    await pool.query("INSERT INTO branch (id,name,code,city,address,status) VALUES ($1,$2,$3,'E2E City','Jl. E2E No. 1','aktif')", [createdId, `E2E Sec Branch ${RUN}`, `E2ESEC${RUN}`]);
+ 
+     // Cleanup the created branch in a finally block.
+     try {
+diff --git a/e2e/store/delivery-order-mock.spec.ts b/e2e/store/delivery-order-mock.spec.ts
+index 47f1267..68adc87 100644
+--- a/e2e/store/delivery-order-mock.spec.ts
++++ b/e2e/store/delivery-order-mock.spec.ts
+@@ -383,6 +383,7 @@ test.beforeAll(async ({ browser }) => {
+       MOCK_JUBELIO_LOCATION_ID,
+     ]
+   );
++  await pool.query("UPDATE branch SET shipping_province_id='01', shipping_city_id='0101', shipping_district_id='010101', shipping_province='Fixture Province', shipping_city='Fixture City', shipping_district='Fixture District', shipping_area='Fixture Area' WHERE id=$1", [ORIGIN_BRANCH_ID]);
+   await pool.query("DELETE FROM product WHERE id = $1", [FIXTURE_PRODUCT_ID]);
+   await pool.query(
+     `INSERT INTO product (id, name, slug, base_price, status)
+@@ -503,6 +504,48 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
+     }
+   });
+ 
++  test("incomplete origin blocks new quote and checkout without creating an order", async () => {
++    expect((await johnContext.request.post("/api/cart/items", { data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 } })).ok()).toBe(true);
++    const cart = (await (await johnContext.request.get("/api/cart")).json()).data;
++    const itemIds = [cart.items.find((item: { variantId: string }) => item.variantId === FIXTURE_VARIANT_ID).id];
++    const preview = await orderContext.request.post("/api/checkout/delivery-quote", { data: { itemIds, addressId: addressIdOne } });
++    expect(preview.ok()).toBe(true);
++    const service = (await preview.json()).data.services[0];
++    const before = (await pool.query("SELECT count(*)::int AS n FROM orders WHERE contact_email=$1", [CONTACT_EMAIL])).rows[0].n;
++    try {
++      await pool.query("UPDATE branch SET shipping_province_id=NULL WHERE id=$1", [ORIGIN_BRANCH_ID]);
++      const quote = await orderContext.request.post("/api/checkout/delivery-quote", { data: { itemIds, addressId: addressIdOne } });
++      expect(quote.status()).toBe(400);
++      expect((await quote.json()).error).toContain("Lengkapi wilayah pengiriman");
++      const placed = await orderContext.request.post("/api/checkout/place-order", { data: {
++        fulfillmentMethod: "delivery", itemIds, addressId: addressIdOne, contactPhone: "081234567890", contactEmail: CONTACT_EMAIL,
++        courierId: service.courierId, serviceId: service.serviceId, approvedPricing: service.pricing, originFingerprint: service.originFingerprint,
++      } });
++      expect(placed.status()).toBe(400);
++      expect((await pool.query("SELECT count(*)::int AS n FROM orders WHERE contact_email=$1", [CONTACT_EMAIL])).rows[0].n).toBe(before);
++    } finally { await pool.query("UPDATE branch SET shipping_province_id='01' WHERE id=$1", [ORIGIN_BRANCH_ID]); }
++  });
++
++  test("rejects stale origin approval even when rates and postcode are unchanged", async () => {
++    expect((await johnContext!.request.post("/api/cart/items", { data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 } })).ok()).toBe(true);
++    const cart = (await (await johnContext!.request.get("/api/cart")).json()).data;
++    const itemIds = [cart.items.find((item: { variantId: string }) => item.variantId === FIXTURE_VARIANT_ID).id];
++    const quote = await orderContext!.request.post("/api/checkout/delivery-quote", { data: { itemIds, addressId: addressIdOne } });
++    expect(quote.ok(), await quote.text()).toBe(true);
++    const service = (await quote.json()).data.services[0];
++    try {
++      await pool.query("UPDATE branch SET shipping_area_id='01010102', shipping_area='Other Fixture Area' WHERE id=$1", [ORIGIN_BRANCH_ID]);
++      const rejected = await orderContext!.request.post("/api/checkout/place-order", { data: {
++        fulfillmentMethod: "delivery", itemIds, addressId: addressIdOne, contactPhone: "081234567890", contactEmail: CONTACT_EMAIL,
++        courierId: service.courierId, serviceId: service.serviceId, approvedPricing: service.pricing, originFingerprint: service.originFingerprint,
++      } });
++      expect(rejected.status()).toBe(409);
++      expect((await rejected.json()).code).toBe("DELIVERY_REPRICE_REQUIRED");
++    } finally {
++      await pool.query("UPDATE branch SET shipping_area_id='01010101', shipping_area='Fixture Area' WHERE id=$1", [ORIGIN_BRANCH_ID]);
++    }
++  });
++
+   test("places delivery to an unsaved checkout address with an immutable snapshot", async () => {
+     const add = await johnContext!.request.post("/api/cart/items", {
+       data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
+@@ -601,10 +644,10 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
+       data: { itemIds: [itemId], newAddress: submitted!.newAddress },
+     });
+     expect(quote.ok()).toBe(true);
+-    const services = (await quote.json()).data.services as Array<{ courierId: number; serviceId: number; pricing: unknown }>;
++    const services = (await quote.json()).data.services as Array<{ courierId: number; serviceId: number; pricing: unknown; originFingerprint: string }>;
+     const retried = await orderContext!.request.post("/api/checkout/place-order", {
+       data: { ...submitted, itemIds: [itemId], courierId: services[0].courierId,
+-        serviceId: services[0].serviceId, approvedPricing: services[0].pricing },
++        serviceId: services[0].serviceId, approvedPricing: services[0].pricing, originFingerprint: services[0].originFingerprint },
+     });
+     expect(retried.ok(), await retried.text()).toBe(true);
+     const repeatedRows = (await (await orderContext!.request.get("/api/addresses")).json()).data as Array<{ id: string; fullAddress: string }>;
+@@ -627,7 +670,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
+     const otherOrder = await orderContext!.request.post("/api/checkout/place-order", {
+       data: { ...submitted, itemIds: [nextItemId], newAddress: otherAddress,
+         saveRequestId: crypto.randomUUID(), courierId: otherService.courierId,
+-        serviceId: otherService.serviceId, approvedPricing: otherService.pricing },
++        serviceId: otherService.serviceId, approvedPricing: otherService.pricing, originFingerprint: otherService.originFingerprint },
+     });
+     expect(otherOrder.ok(), await otherOrder.text()).toBe(true);
+     const finalRows = (await (await orderContext!.request.get("/api/addresses")).json()).data as Array<{ fullAddress: string; isDefault: boolean }>;
+diff --git a/e2e/store/delivery-quote-mock.spec.ts b/e2e/store/delivery-quote-mock.spec.ts
+index f32ed11..21bdc4c 100644
+--- a/e2e/store/delivery-quote-mock.spec.ts
++++ b/e2e/store/delivery-quote-mock.spec.ts
+@@ -246,6 +246,8 @@ test.beforeAll(async ({ browser }) => {
+     ]
+   );
+ 
++  await pool.query("UPDATE branch SET shipping_province_id='01', shipping_city_id='0101', shipping_district_id='010101', shipping_province='Fixture Province', shipping_city='Fixture City', shipping_district='Fixture District', shipping_area='Fixture Area' WHERE id=$1", [ORIGIN_BRANCH_ID]);
++
+   // Own fixture branch is open every day, independently of seeded hours.
+   await pool.query("UPDATE branch SET operating_hours = $1 WHERE id = $2", [
+     JSON.stringify(Object.fromEntries([
+diff --git a/packages/db/src/schema/branches.ts b/packages/db/src/schema/branches.ts
+index 860882a..badccbc 100644
+--- a/packages/db/src/schema/branches.ts
++++ b/packages/db/src/schema/branches.ts
+@@ -43,17 +43,20 @@ export const branches = pgTable("branch", {
+     .notNull()
+     .default({}),
+   googleMapsUrl: text("google_maps_url"),
+-  // Ticket 02 — local shipping-origin complement (spec "Asal dan parcel"):
+-  // sender phone/address/postal code + optional Shipment area id (STRING,
+-  // leading zeros preserved — never coerced to a number). Edited ONLY through
+-  // the Branch admin menu; the Jubelio sync never writes these columns (its
+-  // upsert SET allowlist excludes them, guarded by jubelio-sync.test.ts).
+-  // All four are nullable: a pickup-only branch stays NULL (not configured) —
+-  // NULL is never presented as ready and seeder/imports never invent values.
++  // Locally owned Shipment origin. Nullable for legacy rows and imports;
++  // admin create/edit requires verified hierarchy, including pickup branches.
++  // Jubelio master sync must never write any of these fields.
+   shippingPhone: text("shipping_phone"),
+   shippingAddress: text("shipping_address"),
+   shippingPostalCode: text("shipping_postal_code"),
+   shippingAreaId: text("shipping_area_id"),
++  shippingProvinceId: text("shipping_province_id"),
++  shippingCityId: text("shipping_city_id"),
++  shippingDistrictId: text("shipping_district_id"),
++  shippingProvince: text("shipping_province"),
++  shippingCity: text("shipping_city"),
++  shippingDistrict: text("shipping_district"),
++  shippingArea: text("shipping_area"),
+   status: text("status").notNull().default("aktif"), // aktif | nonaktif
+   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+diff --git a/packages/db/src/seed.ts b/packages/db/src/seed.ts
+index 2adac93..f3343c6 100644
+--- a/packages/db/src/seed.ts
++++ b/packages/db/src/seed.ts
+@@ -941,8 +941,17 @@ async function seed() {
+ 
+     branchIds.push(generateId(), generateId(), generateId());
+ 
++    // Deliberately legacy/unconfigured origins: never invent Shipment hierarchy
++    // from free-text cities or Omnichannel IDs. Admin editing requires completion.
++    const unconfiguredOrigin = {
++      shippingPhone: null, shippingAddress: null, shippingPostalCode: null,
++      shippingProvinceId: null, shippingCityId: null, shippingDistrictId: null,
++      shippingAreaId: null, shippingProvince: null, shippingCity: null,
++      shippingDistrict: null, shippingArea: null,
++    };
+     await db.insert(schema.branches).values([
+       {
++        ...unconfiguredOrigin,
+         id: branchIds[0],
+         name: "Cabang Jakarta Pusat",
+         code: "JKT-01",
+@@ -957,6 +966,7 @@ async function seed() {
+         status: "aktif",
+       },
+       {
++        ...unconfiguredOrigin,
+         id: branchIds[1],
+         name: "Cabang Surabaya",
+         code: "SRB-01",
+@@ -971,6 +981,7 @@ async function seed() {
+         status: "aktif",
+       },
+       {
++        ...unconfiguredOrigin,
+         id: branchIds[2],
+         name: "Cabang Bandung Dago",
+         code: "BDG-01",

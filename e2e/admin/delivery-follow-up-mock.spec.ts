@@ -375,12 +375,14 @@ test.describe("mock-only follow-up queue + manual resolutions (ticket 07)", () =
     // The order detail: a view-only actor sees rows without action CTAs; the
     // foreign editor cannot open this branch's detail (404 hidden surface).
     await page.goto(`/admin/orders/${orderIds[0]}`);
-    await expect(page.getByRole("button", { name: /Tandai selesai packing/i })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("button", { name: "Pesan pengiriman", exact: true })).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("button", { name: "Tandai siap", exact: true })).toHaveCount(0);
     await page.close();
 
     const viewerPage = await viewerContext!.newPage();
     await viewerPage.goto(`/admin/orders/${orderIds[0]}`);
-    await expect(viewerPage.getByRole("button", { name: /Tandai selesai packing/i })).toHaveCount(0);
+    await expect(viewerPage.getByRole("button", { name: "Tandai siap", exact: true })).toHaveCount(0);
+    await expect(viewerPage.getByRole("button", { name: "Pesan pengiriman", exact: true })).toHaveCount(0);
     await viewerPage.close();
 
     // The foreign editor (HQ all-view): the LIST shows the cases…
@@ -396,11 +398,12 @@ test.describe("mock-only follow-up queue + manual resolutions (ticket 07)", () =
     // audit; the order remains processing/paid; the normal CTAs disappear.
     const editorPage = await adminContext!.newPage();
     await editorPage.goto(`/admin/orders/${orderIds[0]}`);
-    await editorPage.getByRole("button", { name: /Tandai tidak dapat dipenuhi/i }).click();
+    await editorPage.getByText("Penanganan khusus", { exact: true }).click();
+    await editorPage.getByRole("button", { name: "Laporkan kendala barang", exact: true }).click();
     const reasonOption = editorPage.getByRole("option", { name: /Barang rusak/i });
     if (await reasonOption.isVisible().catch(() => false)) {
       await reasonOption.click();
-      await editorPage.getByRole("button", { name: /Tandai tidak dapat dipenuhi|Yakin|Konfirmasi/i }).last().click();
+      await editorPage.getByRole("dialog").getByRole("button", { name: "Laporkan kendala", exact: true }).click();
     }
     await expect(
       editorPage.getByText(new RegExp(`Tidak dapat dipenuhi:.*${PACKING_REASON_LABELS[PACKING_REASON]}`))
@@ -433,7 +436,7 @@ test.describe("mock-only follow-up queue + manual resolutions (ticket 07)", () =
     expect(JSON.stringify((await failedListed.json()).data ?? [])).toContain(orderIds[0]);
     const afterPage = await adminContext!.newPage();
     await afterPage.goto('/admin/orders/follow-up');
-    await expect(afterPage.getByText(/Barang rusak/i).first()).toBeVisible();
+    await expect(afterPage.getByRole("heading", { name: "Barang rusak", exact: true })).toBeVisible();
     await afterPage.goto(`/admin/orders/${orderIds[0]}`);
     await expect(afterPage.getByRole("button", { name: /Pesan pengiriman/i })).toHaveCount(0);
     await afterPage.close();
@@ -447,12 +450,15 @@ test.describe("mock-only follow-up queue + manual resolutions (ticket 07)", () =
     // attempt + the two absence flags). The UI form first appears with the
     // release CTA; the wrong/missing proof is refused without any change.
     await page.goto(`/admin/orders/${orderId}`);
+    await page.getByText("Penanganan khusus", { exact: true }).click();
     await page.getByRole("button", { name: /Lepas tahanan booking/i }).click();
     const referenceInput = page.getByLabel(/Referensi konfirmasi/i).first();
     if (await referenceInput.isVisible().catch(() => false)) {
       await referenceInput.fill("JUBELIO-CONF-E2E-001");
       await page.getByLabel(/Alasan/i).first().fill("Konfirmasi Jubelio: tidak ada booking pertama.");
-      await page.getByRole("button", { name: /Lepas tahanan|Konfirmasi/i }).last().click();
+      await page.getByLabel("Jubelio mengonfirmasi booking tidak terbentuk untuk percobaan ini.").check();
+      await page.getByLabel("Jubelio mengonfirmasi operasi permintaan awal untuk percobaan ini sudah ditutup.").check();
+      await page.getByRole("dialog").getByRole("button", { name: "Konfirmasi rilis", exact: true }).click();
     }
     // The state is RELEASED via the trusted proof — packed, no booking, no
     // second provider call.
@@ -490,7 +496,8 @@ test.describe("mock-only follow-up queue + manual resolutions (ticket 07)", () =
     // ticket-06 units).
     const finishPage = await adminContext!.newPage();
     await finishPage.goto(`/admin/orders/${orderIds[2]}`);
-    await finishPage.getByRole("button", { name: /Selesaikan manual/i }).click();
+    await finishPage.getByText("Penanganan khusus", { exact: true }).click();
+    await finishPage.getByRole("button", { name: "Selesaikan manual", exact: true }).click();
     const reasonInput = finishPage.getByLabel(/Alasan/i).first();
     await expect(reasonInput).toBeVisible();
     await reasonInput.fill('Barang kembali; penyelesaian disepakati staf dan customer di luar aplikasi.');

@@ -8,6 +8,9 @@ import {
   type FollowUpViewActor,
 } from "@/lib/delivery-follow-up";
 import { db } from "@/db";
+import { listDeliveryWork } from "@/lib/delivery-work-list";
+import { DELIVERY_STAGE_LABELS } from "@/lib/delivery-workflow";
+import { parsePagination } from "@/lib/pagination";
 
 // GET /api/admin/orders/follow-up?kind=settlement|packing|booking|shipment|all
 //   [orders:view + Branch Scope]
@@ -68,9 +71,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const data = await createDeliveryFollowUp(db).list(viewActor, kind);
-    listLog.info("follow-up list served", { kind, rows: data.length });
-    return NextResponse.json({ success: true, data });
+    const cases = await createDeliveryFollowUp(db).list(viewActor, kind);
+    const stage = searchParams.get("stage");
+    const from = searchParams.get("from");
+    const to = searchParams.get("to");
+    if ((stage && !DELIVERY_STAGE_LABELS.includes(stage)) || [from, to].some((date) => date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date))))) return NextResponse.json({ success: false, error: "Invalid delivery filters" }, { status: 400 });
+    const result = await listDeliveryWork(db, {
+      scope: authorization, queue: "all", orderIds: cases.map((row) => row.orderId), stage,
+      branchId: searchParams.get("branchId"), search: searchParams.get("search"), from, to,
+      page: parsePagination(searchParams.get("page"), "20").page,
+    });
+    const byId = new Map(cases.map((row) => [row.orderId, row]));
+    const data = result.data.map((row) => ({ ...byId.get(row.id), stage: row.stage, createdAt: row.createdAt }));
+    listLog.info("follow-up list served", { kind, rows: data.length, ...result.pagination });
+    return NextResponse.json({ success: true, data, pagination: result.pagination });
   } catch (error) {
     listLog.error("follow-up list failed", {
       outcome: "error",

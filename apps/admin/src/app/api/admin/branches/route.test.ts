@@ -9,7 +9,7 @@ import { NextResponse } from "next/server";
 // requirements, stable responses, and failure logging — with the real
 // service running against a fake executor.
 
-import { createFakeDb, type FakeDb } from "@/test-support/fake-db";
+import { createFakeDb } from "@/test-support/fake-db";
 import {
   guardAllow,
   guardDeny,
@@ -42,10 +42,12 @@ vi.mock("@/lib/rbac/guard", async () => {
 vi.mock("@/lib/logger", () => loggerModuleMock());
 
 import { POST } from "./route";
+import { branchRegion, mockShipmentRegions } from "@/test-support/shipment-regions";
 
 const logger = makeLogger();
 
 const validBody = {
+  ...branchRegion,
   name: "Branch Baru",
   code: "BRX",
   city: "Jakarta",
@@ -60,12 +62,47 @@ const validBody = {
 const createdRow = { id: "b-new", name: "Branch Baru", code: "BRX" };
 
 beforeEach(() => {
+  mockShipmentRegions();
   guardMock.mockReset();
   guardAllow(logger);
   state.current = createFakeDb({ mutationRows: [createdRow] });
 });
 
 describe("POST /api/admin/branches", () => {
+  it("rejects missing mandatory hierarchy without mutation or audit", async () => {
+    const body: Record<string, unknown> = { ...validBody };
+    delete body.shippingProvinceId;
+    const response = await POST(jsonRequest("/api/admin/branches", "POST", body));
+    expect(response.status).toBe(400);
+    expect(state.current!.ops).toHaveLength(0);
+  });
+  it("stores canonical hierarchy labels and leading-zero IDs, ignoring submitted labels", async () => {
+    const response = await POST(jsonRequest("/api/admin/branches", "POST", { ...validBody, shippingProvince: "Forged label" }));
+    expect(response.status).toBe(201);
+    const insert = state.current!.ops.find((op) => op.kind === "insert")!.values;
+    expect(insert).toMatchObject({ ...branchRegion, shippingProvince: "Provinsi Fixture", shippingCity: "Kota Fixture", shippingDistrict: "Kecamatan Fixture", shippingArea: "Kelurahan Fixture" });
+  });
+
+  it.each(Object.keys(branchRegion).flatMap((field) => [undefined, null, "", "abc"].map((value) => ({ field, value }))))("rejects required $field=$value without writes", async ({ field, value }) => {
+    const response = await POST(jsonRequest("/api/admin/branches", "POST", { ...validBody, [field]: value }));
+    expect(response.status).toBe(400);
+    expect(state.current!.ops).toHaveLength(0);
+  });
+
+  it.each(["shippingProvinceId", "shippingCityId", "shippingDistrictId", "shippingAreaId", "shippingPostalCode"])("rejects unknown/mismatched %s", async (field) => {
+    const response = await POST(jsonRequest("/api/admin/branches", "POST", { ...validBody, [field]: "9999" }));
+    expect(response.status).toBe(400);
+    expect(state.current!.ops).toHaveLength(0);
+  });
+
+  it.each(["failure", "timeout", "malformed"])("provider %s leaves branch and audit unchanged", async (kind) => {
+    if (kind === "malformed") vi.mocked(fetch).mockResolvedValueOnce(Response.json({ data: [] }));
+    else vi.mocked(fetch).mockRejectedValueOnce(new Error(kind));
+    const response = await POST(jsonRequest("/api/admin/branches", "POST", validBody));
+    expect(response.status).toBe(503);
+    expect(state.current!.ops).toHaveLength(0);
+  });
+
   it("requires the all-branches edit scope", async () => {
     await POST(jsonRequest("/api/admin/branches", "POST", validBody));
 

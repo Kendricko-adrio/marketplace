@@ -941,8 +941,17 @@ async function seed() {
 
     branchIds.push(generateId(), generateId(), generateId());
 
+    // Deliberately legacy/unconfigured origins: never invent Shipment hierarchy
+    // from free-text cities or Omnichannel IDs. Admin editing requires completion.
+    const unconfiguredOrigin = {
+      shippingPhone: null, shippingAddress: null, shippingPostalCode: null,
+      shippingProvinceId: null, shippingCityId: null, shippingDistrictId: null,
+      shippingAreaId: null, shippingProvince: null, shippingCity: null,
+      shippingDistrict: null, shippingArea: null,
+    };
     await db.insert(schema.branches).values([
       {
+        ...unconfiguredOrigin,
         id: branchIds[0],
         name: "Cabang Jakarta Pusat",
         code: "JKT-01",
@@ -957,6 +966,7 @@ async function seed() {
         status: "aktif",
       },
       {
+        ...unconfiguredOrigin,
         id: branchIds[1],
         name: "Cabang Surabaya",
         code: "SRB-01",
@@ -971,6 +981,7 @@ async function seed() {
         status: "aktif",
       },
       {
+        ...unconfiguredOrigin,
         id: branchIds[2],
         name: "Cabang Bandung Dago",
         code: "BDG-01",

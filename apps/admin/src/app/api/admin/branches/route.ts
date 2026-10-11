@@ -8,6 +8,7 @@ import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import { createBranch, parseBranchOrigin, BranchServiceError } from "@/lib/branches-service";
 import { serializeError } from "@/lib/logger";
 import { parsePagination } from "@/lib/pagination";
+import { branchRegionSchema, verifyBranchRegion } from "@/lib/shipment-regions";
 // GET /api/admin/branches   [branches:view]
 //
 // Own-branch view reaches only the Home Branch; all-branch view lists every
@@ -111,13 +112,9 @@ const createBranchSchema = z.object({
     .default({}),
   googleMapsUrl: z.string().url().optional().or(z.literal("")),
   status: z.enum(["aktif", "nonaktif"]).default("aktif"),
-  // Shipping-origin complement (ticket 02): optional on create — omitted/
-  // empty → NULL (never invent ready origin data); fail-closed value
-  // validation lives in parseBranchOrigin (single unit).
   shippingPhone: z.string().nullable().optional(),
   shippingAddress: z.string().nullable().optional(),
-  shippingPostalCode: z.string().nullable().optional(),
-  shippingAreaId: z.string().nullable().optional(),
+  ...branchRegionSchema,
 });
 
 // POST /api/admin/branches   [branches:edit:all]
@@ -140,13 +137,13 @@ export async function POST(request: NextRequest) {
     if (!parsed.success) {
       logger.warn("branches.create.invalid_input", {
         outcome: "denied",
-        issues: parsed.error.issues,
+        issues: parsed.error.issues.map(({ path, code }) => ({ path, code })),
       });
       return NextResponse.json(
         {
           success: false,
           error: "Invalid request body",
-          details: parsed.error,
+          details: parsed.error.issues.map(({ path, code }) => ({ path, code })),
         },
         { status: 400 }
       );
@@ -171,6 +168,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    let region;
+    try {
+      region = await verifyBranchRegion(data);
+    } catch (error) {
+      const invalid = error instanceof Error && error.message === "REGION_INPUT_INVALID";
+      logger.error("branches.create.region_rejected", { outcome: "denied", reason: invalid ? "invalid_region" : "provider_unavailable" });
+      return NextResponse.json({ success: false, error: invalid ? "Wilayah pengiriman atau kode pos tidak valid" : "Wilayah Shipment tidak tersedia. Silakan coba lagi." }, { status: invalid ? 400 : 503 });
+    }
+
     // Mutation + audit run in one local DB transaction (branches-service);
     // a failed audit write aborts the insert and vice versa.
     let created;
@@ -189,8 +195,7 @@ export async function POST(request: NextRequest) {
           status: data.status,
           shippingPhone: origin.origin.shippingPhone ?? null,
           shippingAddress: origin.origin.shippingAddress ?? null,
-          shippingPostalCode: origin.origin.shippingPostalCode ?? null,
-          shippingAreaId: origin.origin.shippingAreaId ?? null,
+          ...region,
         },
         { actorId: ctx.user.id, policyVersion: ctx.policy.policyVersion }
       );

@@ -1,57 +1,12 @@
 /**
- * Ticket 02 — mock-only branch shipping origin (browser + HTTP + audit seams).
- *
- * ONE Playwright spec that proves the branch-origin slice of ticket 02 WITHOUT
- * any live provider traffic (spec Ready, "Asal dan parcel"; tracker 02):
- *
- *   the seeded HQ actor (hqmanager — the only seeded identity with
- *   branches:edit, all-branch scope) opens the EXISTING Branch edit menu, sets
- *   the local shipping-origin complement once — sender phone, sender address,
- *   sender postal code and the optional Shipment area id (string incl.
- *   leading zeros) — saves through the existing "Simpan Perubahan" flow, the
- *   values persist through the branches API and the edit form re-fill, the
- *   edit lands as ONE audited UPDATE_BRANCH transaction, and an INVALID origin
- *   (bad phone/postal/area id) fails closed with the stored origin untouched.
- *
- * Independent source of truth: the literal fixture origin below (area id
- * "01010101" from the ticket-02 mock region chain, postal "10110" as the
- * Jakarta-Pusat-style literal) — never recomputed from the implementation.
- *
- * The "survives Jubelio sync" invariant is proven at the unit level
- * (packages/db/src/jubelio-sync.test.ts asserts the sync upsert's insert
- * values and conflict SET never contain shipping* keys); triggering a real
- * sync flow in E2E would need provider fixtures this slice does not own.
- *
- * Seams (pre-agreed):
- * - Browser: /admin/branches/{id}/edit — the existing Branch edit form; four
- *   NEW labeled inputs (proposed copy): "Telepon Pengirim", "Alamat Asal
- *   Kirim", "Kode Pos Asal Kirim", "Area ID Shipment (opsional)".
- * - Public HTTP: Better Auth sign-in (username seam, same-origin on isolated
- *   ports), POST/GET/DELETE /api/admin/branches(/id) guarded by branches:edit
- *   (all) — hqmanager — and PUT with invalid origin failing closed.
- * - Database fixture seam: the spec creates ONE run-unique fixture branch via
- *   the API (never the seeded branches) and deletes it in afterAll; audit_log
- *   counts are asserted around the mutation; NO live writes anywhere.
- *
- * RED UNTIL THE PARENT IMPLEMENTS (in this order):
- * 1. The branch schema misses the nullable shipping columns
- *    (shipping_phone/shipping_address/shipping_postal_code/shipping_area_id).
- *    The implementer adds them ONLY in packages/db/src/schema/branches.ts +
- *    `npm run db:push` (main applies).
- * 2. The Branch edit form lacks the four labeled origin inputs → the UI test
- *    fails on the absent "Telepon Pengirim" field (that IS the red).
- * 3. PUT /api/admin/branches/{id} still strips/ignores unknown origin keys and
- *    accepts invalid ones (the current zod is not strict about origin input)
- *    → the fail-closed test fails on the 4xx assertion.
- * 4. The branch service UPDATE SET list lacks the origin fields and the
- *    audit diff omits them → the API-persistence assertions fail (the unit
- *    branches-service.test.ts reds pin the service contract precisely).
- *
- * Run with the isolated mock config (never alongside the live suite); the
- * parent selects this spec by updating playwright.mock.config.ts:
- *   npx playwright test --config=playwright.mock.config.ts
+ * Mandatory branch Shipment regions at browser, guarded API and audit seams.
+ * Independent loopback fixtures: 01 → 0101 → 010101 → 01010101 / 01234.
+ * Covers canonical create/edit/reopen, legacy completion, explicit retry,
+ * missing options, same-postcode reset, stale responses and store isolation.
+ * Local fixture rows only; sync ownership is covered by jubelio-sync.test.ts.
+ * Run: npx playwright test --config=playwright.mock.config.ts
  */
-import { test, expect, type BrowserContext } from "@playwright/test";
+import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { Pool } from "pg";
 import dotenv from "dotenv";
 dotenv.config({ path: ".env" });
@@ -111,24 +66,29 @@ const FIXTURE_NAME = "E2E Origin Mock Branch";
 const FIXTURE_CITY = "Jakarta Pusat";
 const FIXTURE_ADDRESS = "Jl. Fixture E2E Edit No. 1";
 
-// Local shipping-origin complement (spec line "asal"): phone/address/postal
-// required-valid, Shipment area_id optional. Values are independent literals
-// (area id reuses the ticket-02 mock region chain incl. leading zeros).
+// Independent canonical provider hierarchy; sender data stays locally owned.
 const ORIGIN = {
   shippingPhone: "021999888777",
   shippingAddress: "Jl. Origin E2E No. 7, Gudang B",
-  shippingPostalCode: "10110",
+  shippingPostalCode: "01234",
   shippingAreaId: "01010101",
+  shippingProvinceId: "01",
+  shippingCityId: "0101",
+  shippingDistrictId: "010101",
 } as const;
 
-// Proposed form copy for the NEW labeled inputs in the existing edit menu
-// (the implementer adds these four labels to BranchForm's edit mode).
+// Existing sender labels remain stable; manual Area ID entry is removed.
 const ORIGIN_LABELS = {
   shippingPhone: "Telepon Pengirim",
   shippingAddress: "Alamat Asal Kirim",
   shippingPostalCode: "Kode Pos Asal Kirim",
-  shippingAreaId: "Area ID Shipment (opsional)",
 } as const;
+
+async function selectRegion(page: Page) {
+  for (const [label, value] of [["Provinsi Pengiriman", "01"], ["Kota/Kabupaten Pengiriman", "0101"], ["Kecamatan Pengiriman", "010101"], ["Kelurahan/Desa Pengiriman", "01010101"]]) {
+    await page.getByLabel(label, { exact: true }).selectOption(value);
+  }
+}
 
 let pool: Pool;
 let hqContext: BrowserContext;
@@ -183,6 +143,7 @@ function branchBody(overrides: Record<string, unknown> = {}) {
     operatingHours: {},
     googleMapsUrl: "",
     status: "aktif",
+    ...ORIGIN,
     ...overrides,
   };
 }
@@ -241,9 +202,160 @@ test.afterAll(async () => {
   if (pool) await pool.end();
 });
 
-test.describe("mock-only branch shipping origin (ticket 02)", () => {
+test.describe("mock-only verified branch shipping regions", () => {
   // The whole spec shares one fixture branch: serial order, no extra workers.
   test.describe.configure({ mode: "serial" });
+
+  test("a store-only session cannot look up admin regions or mutate branches", async ({ browser }) => {
+    const context = await browser.newContext({ baseURL: ADMIN_BASE_URL });
+    try {
+      const login = await context.request.post(`${process.env.E2E_MOCK_STORE_BASE_URL}/api/auth/sign-in/email`, { data: { email: process.env.E2E_STORE_EMAIL ?? "john@example.com", password: process.env.E2E_STORE_PASSWORD ?? "password123" } });
+      expect(login.ok()).toBe(true);
+      expect((await context.request.get("/api/admin/shipment/regions?level=provinces")).status()).toBe(401);
+      expect((await context.request.post("/api/admin/branches", { data: branchBody() })).status()).toBe(401);
+      expect((await context.request.put(`/api/admin/branches/${branchId}`, { data: branchBody() })).status()).toBe(401);
+    } finally { await context.close(); }
+  });
+
+  test("creation requires a complete picker and stores canonical labels", async () => {
+    const page = await hqContext.newPage();
+    let createdId = "";
+    try {
+      await page.goto("/admin/branches/new");
+      await page.getByLabel("Nama Cabang").fill("E2E Region Create");
+      await page.getByLabel("Kode Cabang").fill(`${FIXTURE_CODE}NEW`);
+      await page.getByLabel("Kota", { exact: true }).fill("General City");
+      await page.getByLabel("Alamat", { exact: true }).fill("General Address");
+      const save = page.getByRole("button", { name: "Buat Cabang", exact: true });
+      await expect(save).toBeDisabled();
+      await selectRegion(page);
+      await expect(save).toBeEnabled();
+      const response = page.waitForResponse((res) => res.url().endsWith("/api/admin/branches") && res.request().method() === "POST");
+      await save.click();
+      const created = await response;
+      expect(created.status()).toBe(201);
+      const row = (await created.json()).data;
+      createdId = row.id;
+      expect(row).toMatchObject({ shippingProvinceId: "01", shippingCityId: "0101", shippingDistrictId: "010101", shippingAreaId: "01010101", shippingPostalCode: "01234", shippingProvince: "Fixture Province", shippingArea: "Fixture Area", city: "General City", address: "General Address", shippingPhone: null, shippingAddress: null });
+    } finally {
+      if (createdId) await hqContext.request.delete(`/api/admin/branches/${createdId}`);
+      await page.close();
+    }
+  });
+
+  test("lookup failure blocks saving and explicit retry preserves unrelated inputs", async () => {
+    const page = await hqContext.newPage();
+    let fail = true;
+    await page.route("**/api/admin/shipment/regions?*", async (route) => {
+      if (fail && new URL(route.request().url()).searchParams.get("level") === "provinces") {
+        await route.fulfill({ status: 503, json: { success: false, error: "Unavailable" } });
+      } else await route.continue();
+    });
+    await page.goto(`/admin/branches/${branchId}/edit`);
+    await page.getByLabel("Nama Cabang").fill("Preserve my input");
+    await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeDisabled();
+    fail = false;
+    await page.getByRole("button", { name: "Coba lagi — Provinsi Pengiriman" }).click();
+    await expect(page.getByLabel("Nama Cabang")).toHaveValue("Preserve my input");
+    await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeEnabled();
+    await page.close();
+  });
+
+  test("unavailable saved village requires correction rather than substitution", async () => {
+    const page = await hqContext.newPage();
+    await page.route("**/api/admin/shipment/regions?level=areas*", (route) => route.fulfill({ json: { success: true, data: [] } }));
+    await page.goto(`/admin/branches/${branchId}/edit`);
+    await expect(page.getByText("Wilayah tersimpan tidak tersedia. Pilih ulang wilayah ini.")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeDisabled();
+    await expect(page.getByLabel("Kode Pos Asal Kirim")).toHaveValue("01234");
+    await expect(page.getByLabel("Kelurahan/Desa Pengiriman")).toHaveValue("01010101");
+    await page.close();
+  });
+
+  test("parent changes clear same-postcode villages and ignore delayed old responses", async () => {
+    const page = await hqContext.newPage();
+    let releaseOld!: () => void;
+    let oldStarted!: () => void;
+    const started = new Promise<void>((resolve) => { oldStarted = resolve; });
+    const oldDelay = new Promise<void>((resolve) => { releaseOld = resolve; });
+    await page.route("**/api/admin/shipment/regions?*", async (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      const level = query.get("level");
+      const parent = query.get("parentId");
+      if (level === "provinces") return route.fulfill({ json: { success: true, data: [{ id: "01", name: "Fixture Province" }, { id: "02", name: "Delayed Province" }, { id: "03", name: "Current Province" }] } });
+      if (level === "areas" && parent === "010101") return route.fulfill({ json: { success: true, data: [{ id: "01010101", name: "Fixture Area", parentId: "010101", postalCode: "01234" }, { id: "01010102", name: "Same Postcode Area", parentId: "010101", postalCode: "01234" }] } });
+      if (level === "cities" && parent === "02") {
+        oldStarted();
+        await oldDelay;
+        await route.fulfill({ json: { success: true, data: [{ id: "0201", name: "Stale City", parentId: "02" }] } }).catch(() => {});
+        return;
+      }
+      if (level === "cities" && parent === "03") return route.fulfill({ json: { success: true, data: [{ id: "0301", name: "Current City", parentId: "03" }] } });
+      await route.continue();
+    });
+    try {
+      await page.goto(`/admin/branches/${branchId}/edit`);
+      await page.getByLabel("Kelurahan/Desa Pengiriman").selectOption("01010102");
+      await expect(page.getByLabel("Kode Pos Asal Kirim")).toHaveValue("01234");
+      await page.getByLabel("Kecamatan Pengiriman").selectOption("");
+      await expect(page.getByLabel("Kelurahan/Desa Pengiriman")).toHaveValue("");
+      await expect(page.getByLabel("Kode Pos Asal Kirim")).toHaveValue("");
+      await page.getByLabel("Provinsi Pengiriman").selectOption("02");
+      await started;
+      await expect(page.getByLabel("Kota/Kabupaten Pengiriman")).toBeDisabled();
+      await page.getByLabel("Provinsi Pengiriman").selectOption("03");
+      await expect(page.getByLabel("Kota/Kabupaten Pengiriman")).toBeEnabled();
+      releaseOld();
+      await expect(page.getByLabel("Kota/Kabupaten Pengiriman").locator("option")).toHaveText(["Pilih wilayah", "Current City"]);
+      await expect(page.getByLabel("Kecamatan Pengiriman")).toHaveValue("");
+      await expect(page.getByLabel("Kelurahan/Desa Pengiriman")).toHaveValue("");
+      await expect(page.getByLabel("Kode Pos Asal Kirim")).toHaveValue("");
+      await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeDisabled();
+    } finally { releaseOld?.(); await page.close(); }
+  });
+
+  test("returning to an earlier parent cannot reuse its loaded options during a new request", async () => {
+    const page = await hqContext.newPage();
+    let delay = false;
+    let release!: () => void;
+    let started!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const requested = new Promise<void>((resolve) => { started = resolve; });
+    await page.route("**/api/admin/shipment/regions?*", async (route) => {
+      const query = new URL(route.request().url()).searchParams;
+      if (query.get("level") === "provinces") return route.fulfill({ json: { success: true, data: [{ id: "01", name: "Fixture Province" }, { id: "02", name: "Other Province" }] } });
+      if (delay && query.get("level") === "cities" && query.get("parentId") === "01") { started(); await pending; }
+      await route.continue().catch(() => {});
+    });
+    try {
+      await page.goto(`/admin/branches/${branchId}/edit`);
+      await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeEnabled();
+      await page.getByLabel("Provinsi Pengiriman").selectOption("02");
+      delay = true;
+      await page.getByLabel("Provinsi Pengiriman").selectOption("01");
+      await requested;
+      await expect(page.getByLabel("Kota/Kabupaten Pengiriman")).toBeDisabled();
+      await expect(page.getByLabel("Kode Pos Asal Kirim")).toHaveValue("");
+      release();
+      await expect(page.getByLabel("Kota/Kabupaten Pengiriman")).toBeEnabled();
+      await expect(page.getByLabel("Kota/Kabupaten Pengiriman")).toHaveValue("");
+    } finally { release?.(); await page.close(); }
+  });
+
+  test("legacy pickup-only edits require region completion", async () => {
+    await pool.query("UPDATE branch SET shipping_province_id=NULL, shipping_city_id=NULL, shipping_district_id=NULL WHERE id=$1", [branchId]);
+    const page = await hqContext.newPage();
+    try {
+      await page.goto(`/admin/branches/${branchId}/edit`);
+      await expect(page.getByText("Wilayah pengiriman cabang belum lengkap. Lengkapi pilihan sebelum menyimpan perubahan.")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeDisabled();
+      await selectRegion(page);
+      await expect(page.getByRole("button", { name: "Simpan Perubahan" })).toBeEnabled();
+    } finally {
+      await pool.query("UPDATE branch SET shipping_province_id='01', shipping_city_id='0101', shipping_district_id='010101' WHERE id=$1", [branchId]);
+      await page.close();
+    }
+  });
 
   test("the existing Branch edit menu sets the shipping origin once and persists it audited", async () => {
     const page = await hqContext!.newPage();
@@ -255,8 +367,12 @@ test.describe("mock-only branch shipping origin (ticket 02)", () => {
     // Fill the four origin inputs (proposed labels; see header doc).
     await page.getByLabel(ORIGIN_LABELS.shippingPhone, { exact: true }).fill(ORIGIN.shippingPhone);
     await page.getByLabel(ORIGIN_LABELS.shippingAddress, { exact: true }).fill(ORIGIN.shippingAddress);
-    await page.getByLabel(ORIGIN_LABELS.shippingPostalCode, { exact: true }).fill(ORIGIN.shippingPostalCode);
-    await page.getByLabel(ORIGIN_LABELS.shippingAreaId, { exact: true }).fill(ORIGIN.shippingAreaId);
+    await page.getByLabel("Provinsi Pengiriman", { exact: true }).selectOption("01");
+    await page.getByLabel("Kota/Kabupaten Pengiriman", { exact: true }).selectOption("0101");
+    await page.getByLabel("Kecamatan Pengiriman", { exact: true }).selectOption("010101");
+    await page.getByLabel("Kelurahan/Desa Pengiriman", { exact: true }).selectOption("01010101");
+    await expect(page.getByLabel(ORIGIN_LABELS.shippingPostalCode, { exact: true })).toHaveValue("01234");
+    await expect(page.getByLabel(ORIGIN_LABELS.shippingPostalCode, { exact: true })).toHaveAttribute("readonly", "");
     await page.getByRole("button", { name: /Simpan Perubahan/ }).click();
     await page.waitForURL("**/admin/branches");
 
@@ -289,9 +405,8 @@ test.describe("mock-only branch shipping origin (ticket 02)", () => {
     await expect(page.getByLabel(ORIGIN_LABELS.shippingPostalCode, { exact: true })).toHaveValue(
       ORIGIN.shippingPostalCode
     );
-    await expect(page.getByLabel(ORIGIN_LABELS.shippingAreaId, { exact: true })).toHaveValue(
-      ORIGIN.shippingAreaId
-    );
+    await expect(page.getByLabel("Kelurahan/Desa Pengiriman", { exact: true })).toHaveValue(ORIGIN.shippingAreaId);
+    await expect(page.getByLabel("Kota", { exact: true })).toHaveValue(FIXTURE_CITY);
 
     await page.close();
   });

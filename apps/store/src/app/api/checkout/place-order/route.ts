@@ -99,6 +99,7 @@ const deliveryPlaceOrderBase = z
     courierId: z.number().int(),
     serviceId: z.number().int(),
     approvedPricing: z.record(z.string(), z.union([z.string(), z.number()])),
+    originFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   });
 const deliveryPlaceOrderSchema = z.union([
   deliveryPlaceOrderBase.extend({ addressId: z.string().min(1) }).strict(),
@@ -433,7 +434,7 @@ export async function POST(request: NextRequest) {
         // Missing approved service → forces a step-2 reselect/retry; a moved
         // approval → the user re-approves the NEW money. Either way NOTHING
         // local has been created yet.
-        if (!chosen || !compareDeliveryApproval(
+        if (!chosen || chosen.originFingerprint !== deliveryBody!.originFingerprint || !compareDeliveryApproval(
           deliveryBody!.approvedPricing as unknown as OrderPricing,
           chosen.pricing
         ).approved) {

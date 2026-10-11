@@ -135,6 +135,12 @@ function nonBlank(value: unknown): string {
 }
 
 const SHIPMENT_ISSUE_STATUSES = ["RETURNED", "SHIPMENT_ISSUE"] as const;
+function manualFinishBlocker(shipment: typeof deliveryShipments.$inferSelect | undefined): string | null {
+  if (!shipment || shipment.state !== "booked" || !nonBlank(shipment.awb) || !shipment.bookedAt || !nonBlank(shipment.bookedBy) || shipment.bookedPrice == null) return "Hanya pesanan terbook lengkap (AWB/booking tersimpan) yang dapat diselesaikan manual; AWB saja bukan bukti.";
+  const issue = SHIPMENT_ISSUE_STATUSES.includes((shipment.latestStatus ?? "") as typeof SHIPMENT_ISSUE_STATUSES[number]);
+  const physical = shipment.handedOverAt != null || ["PICKED_UP", "ON_DELIVERY"].includes(shipment.latestStatus ?? "");
+  return issue || physical ? null : "Selesai manual membutuhkan kendala RETURNED/SHIPMENT_ISSUE atau bukti serah-terima fisik; AWB saja tidak cukup.";
+}
 
 // The app's own drizzle instance type (the branches-service idiom): the
 // transaction executor type derives from it.
@@ -554,29 +560,8 @@ export function createDeliveryFollowUp(db: FollowUpDb) {
         .where(eq(deliveryShipments.orderId, orderId))
         .limit(1);
       const shipment = ledgerRows[0];
-      if (
-        !shipment ||
-        shipment.state !== "booked" ||
-        !nonBlank(shipment.awb) ||
-        !shipment.bookedAt ||
-        !nonBlank(shipment.bookedBy) ||
-        shipment.bookedPrice == null
-      ) {
-        throw new DeliveryFollowUpError(
-          "NOT_ELIGIBLE",
-          "Hanya pesanan terbook lengkap (AWB/booking tersimpan) yang dapat diselesaikan manual; AWB saja bukan bukti."
-        );
-      }
-      const issueTrack = SHIPMENT_ISSUE_STATUSES.includes(
-        (shipment.latestStatus ?? "") as (typeof SHIPMENT_ISSUE_STATUSES)[number]
-      );
-      const physicalEvidence = shipment.handedOverAt != null || ['PICKED_UP', 'ON_DELIVERY'].includes(shipment.latestStatus ?? '');
-      if (!issueTrack && !physicalEvidence) {
-        throw new DeliveryFollowUpError(
-          "NOT_ELIGIBLE",
-          "Selesai manual membutuhkan kendala RETURNED/SHIPMENT_ISSUE atau bukti serah-terima fisik; AWB saja tidak cukup."
-        );
-      }
+      const blocker = manualFinishBlocker(shipment);
+      if (blocker) throw new DeliveryFollowUpError("NOT_ELIGIBLE", blocker);
       await tx
         .update(orders)
         .set({
@@ -605,5 +590,18 @@ export function createDeliveryFollowUp(db: FollowUpDb) {
     });
   }
 
-  return { list, failPacking, releaseBooking, finishManually };
+  async function inspect(orderId: string, actor: FollowUpMutationActor) {
+    try {
+      return await db.transaction(async (tx) => {
+        await requireDeliveryActionable(tx, orderId, actor);
+        const rows = await tx.select().from(deliveryShipments).where(eq(deliveryShipments.orderId, orderId)).limit(1);
+        const ledger = rows[0];
+        return { failure: !ledger || ledger.state === "packed", release: ledger?.state === "booking_unknown" && ledger.attemptCount > 0, finish: manualFinishBlocker(ledger) === null };
+      });
+    } catch (error) {
+      if (error instanceof DeliveryFollowUpError) return { failure: false, release: false, finish: false };
+      throw error;
+    }
+  }
+  return { list, failPacking, releaseBooking, finishManually, inspect };
 }

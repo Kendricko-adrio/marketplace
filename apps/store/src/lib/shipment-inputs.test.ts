@@ -50,8 +50,10 @@ const READY_BRANCH = {
   status: "aktif",
   shippingPhone: "021999888777",
   shippingAddress: "Jl. Origin E2E No. 7, Gudang B",
-  shippingPostalCode: "10110",
+  shippingPostalCode: "01234",
   shippingAreaId: "01010101",
+  shippingProvinceId: "01", shippingCityId: "0101", shippingDistrictId: "010101",
+  shippingProvince: "Fixture Province", shippingCity: "Fixture City", shippingDistrict: "Fixture District", shippingArea: "Fixture Area",
 } as const;
 
 const ONE_ITEM = [
@@ -59,7 +61,7 @@ const ONE_ITEM = [
 ];
 
 describe("buildShipmentInputs", () => {
-  it("builds the origin block from the branch shipping complement (sender = branch name, optional Shipment area id keeps leading zeros)", () => {
+  it("builds the origin block from the configured branch (sender = branch name, required Area ID keeps leading zeros)", () => {
     const inputs = buildShipmentInputs({
       branch: READY_BRANCH,
       items: ONE_ITEM,
@@ -70,26 +72,16 @@ describe("buildShipmentInputs", () => {
       name: "Cabang Jakarta Pusat",
       phone: "021999888777",
       address: "Jl. Origin E2E No. 7, Gudang B",
-      zipcode: "10110",
+      zipcode: "01234",
       area_id: "01010101",
     });
   });
 
-  it("omits area_id (never a fake/empty string) when the branch has none", () => {
-    const inputs = buildShipmentInputs({
+  it("rejects missing Area ID for a new origin", () => {
+    expect(() => buildShipmentInputs({
       branch: { ...READY_BRANCH, shippingAreaId: null },
-      items: ONE_ITEM,
-      fallback: FALLBACK,
-      packagingWeight: 40,
-    });
-    // toEqual ignores undefined-valued keys: the seam may leave the key out
-    // entirely or carry it as undefined — a fabricated "" would fail.
-    expect(inputs.origin).toEqual({
-      name: "Cabang Jakarta Pusat",
-      phone: "021999888777",
-      address: "Jl. Origin E2E No. 7, Gudang B",
-      zipcode: "10110",
-    });
+      items: ONE_ITEM, fallback: FALLBACK, packagingWeight: 40,
+    })).toThrow("Shipment origin unavailable");
   });
 
   it("combines per-SKU master dims and the fallback dims per quantity (independent worked total)", () => {

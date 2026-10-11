@@ -12,6 +12,7 @@
  * zero pricing is never produced through any of them.
  */
 import { and, eq, inArray } from "drizzle-orm";
+import { hasConfiguredBranchRegion } from "@marketplace/db/src/branch-shipping-region";
 import { db } from "@/db";
 import { addresses, branches, cartItems, carts, productVariants, products } from "@/db";
 import { getPpnRatePercent } from "@/lib/config";
@@ -163,6 +164,13 @@ export async function loadQuoteOriginBranch(branchId: string): Promise<ShipmentQ
       shippingAddress: branches.shippingAddress,
       shippingPostalCode: branches.shippingPostalCode,
       shippingAreaId: branches.shippingAreaId,
+      shippingProvinceId: branches.shippingProvinceId,
+      shippingCityId: branches.shippingCityId,
+      shippingDistrictId: branches.shippingDistrictId,
+      shippingProvince: branches.shippingProvince,
+      shippingCity: branches.shippingCity,
+      shippingDistrict: branches.shippingDistrict,
+      shippingArea: branches.shippingArea,
     })
     .from(branches)
     .where(eq(branches.id, branchId))
@@ -173,6 +181,9 @@ export async function loadQuoteOriginBranch(branchId: string): Promise<ShipmentQ
   const branch = rows[0];
   if (branch.status !== "aktif") {
     throw new DeliveryQuoteDataError("NOT_READY", "Cabang asal kirim tidak aktif.");
+  }
+  if (!hasConfiguredBranchRegion(branch)) {
+    throw new DeliveryQuoteDataError("NOT_READY", "Lengkapi wilayah pengiriman cabang sebelum delivery.");
   }
   if (
     !(branch.shippingPhone ?? "").trim() ||

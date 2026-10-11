@@ -104,7 +104,8 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | GET | `/api/admin/categories` | admin-session (products:view) | List active categories |
 | GET | `/api/admin/brands` | admin-session (products:view) | List all product brands (dimension) for the homepage ProductFilterEditor dropdown |
 | GET | `/api/admin/branches` | admin-session (branches:view) | List branches (paginated) |
-| POST | `/api/admin/branches` | admin-session (branches:edit) | Create branch |
+| POST | `/api/admin/branches` | admin-session (branches:edit:all) | Create branch with verified Shipment hierarchy |
+| GET | `/api/admin/shipment/regions` | admin-session (branches:edit) | Shipment hierarchy lookup |
 | GET | `/api/admin/branches/{id}` | admin-session (branches:view) | Fetch a branch |
 | PUT | `/api/admin/branches/{id}` | admin-session (branches:edit) | Update a branch |
 | DELETE | `/api/admin/branches/{id}` | admin-session (branches:delete) | Delete a branch |
@@ -166,9 +167,19 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 # Detailed endpoint reference
 
+## Admin — Delivery work lists
+
+`GET /api/admin/orders` remains orders:view + current Branch Scope. `fulfillment=delivery` accepts `queue=actionable|monitoring|completed|all` (default actionable), `stage=<exact business label>`, `branchId`, `search`, `from`, `to`, and `page`. Delivery filters intersect authorized evidence before pagination; invalid queue/stage/date values return 400. Own-branch scope ignores a client branch override. Delivery rows add `stage:{label,guidance,terminal}`. Pagination is `{page,limit:20,total,baseTotal,totalPages}`, where baseTotal removes only creation dates, not scope/queue/stage/search/branch filters.
+
+`fulfillment=pickup` retains order-status and pickup-date filtering; omitted fulfillment retains general search/history. Lists have no default creation-date restriction and sort by createdAt then ID ascending, with fixed 20-row pages. UI Orders defaults to Delivery; Pickup and Semua remain separate contexts. [Workflow details](features/admin-delivery-workflow.md).
+
+## Admin — Delivery workflow projection
+
+`GET /api/admin/orders/{id}` retains orders:view and current Branch Scope (cross-scope IDs remain 404). Delivery data additionally includes `workflow: {stage: {label,guidance,terminal}, access: {known,allowed,reasons}, eligibility: {known,eligible,blocker?}, tracking: {handoff,reconcile}, special: {failure,release,finish}}` and authorized proof-review summaries. Edit/Home Branch restrictions are separate from visibility. Preflights reuse existing fulfillment/tracking/special-action guards read-only, not as grants to mutate; all writes recheck current server state. No provider request is made by this GET. Protected data is hidden when browser Current Policy becomes unavailable. [Workflow details](features/admin-delivery-workflow.md).
+
 ## Admin — Delivery follow-up
 
-- `GET /api/admin/orders/follow-up?kind=all|settlement|packing|booking|shipment` — orders:view + Branch Scope, open safe summaries only.
+- `GET /api/admin/orders/follow-up?kind=all|settlement|packing|booking|shipment` — orders:view + Branch Scope, existing open safe case summaries plus projected stage/guidance. Optional stage/branchId/search/from/to/page intersect the original case source before the same 20-row pagination and matching/no-date-base counts. No new case ledger or criteria.
 - `POST /api/admin/orders/{id}/delivery/packing-failure` — `{reasonCode: physical_stock_unavailable|damaged_goods|paid_service_limits_exceeded}` before booking; paid/processing preserved, normal fulfillment blocked.
 - `POST /api/admin/orders/{id}/delivery/release-booking` — strict `{proof:{source:'jubelio_confirmation',reference,reason,attemptNumber,absenceConfirmed:true,operationClosed:true}}`; only stable unknown, current attempt, explicit closed/no-booking provider confirmation. Archives proof; does not POST/create; next booking needs a separate click.
 - `POST /api/admin/orders/{id}/delivery/finish-manually` — `{reason}`; known booked/verified paid with issue or handoff/progress evidence, never ambiguous/AWB alone. Completed/paid, no invented courier DELIVERED or pickup code.
@@ -194,11 +205,11 @@ Both actions require `orders:edit` AND the current Home Branch matching the orde
 
 ## Store — Delivery placement
 
-`POST /api/checkout/place-order` retains legacy pickup input and additionally accepts strict delivery input `{ itemIds, contactPhone, contactEmail, fulfillmentMethod: "delivery", addressId, courierId, serviceId, approvedPricing }` or the same delivery approval with `{ newAddress, saveAddress: boolean, saveRequestId: UUID }` instead of `addressId`. `newAddress` uses the client address input fields documented below, including `isDefault` (only applied when `saveAddress` is true). An approved saved address is inserted in the local order transaction; repeated saves with the same client-scoped `saveRequestId` reuse the same address row. A changed destination needs a new request ID. Unsaved destinations produce only an order snapshot (nullable `address_id`). Requires onboarded client session. Delivery omits pickup slots; backend re-derives current cart/address/origin/parcels/rates and compares approval. Changed/unavailable service or pricing returns 409 `{ success: false, code: "DELIVERY_REPRICE_REQUIRED", data: { services } }` before order/SO/Snap writes. Fresh service rows carry the same normalized `serviceCategoryId: number | null` as the delivery-quote response; category metadata is display-only and is not accepted as order approval input. Confirmed placement uses one goods-only SO and snapshot-priced Snap. Repayment `/api/payments/midtrans/create` uses persisted amounts, not a new quote. See [delivery orders](features/delivery-orders.md).
+`POST /api/checkout/place-order` retains legacy pickup input and additionally accepts strict delivery input `{ itemIds, contactPhone, contactEmail, fulfillmentMethod: "delivery", addressId, courierId, serviceId, approvedPricing, originFingerprint }` or the same delivery approval with `{ newAddress, saveAddress: boolean, saveRequestId: UUID }` instead of `addressId`. `newAddress` uses the client address input fields documented below, including `isDefault` (only applied when `saveAddress` is true). An approved saved address is inserted in the local order transaction; repeated saves with the same client-scoped `saveRequestId` reuse the same address row. A changed destination needs a new request ID. Unsaved destinations produce only an order snapshot (nullable `address_id`). Requires onboarded client session. Delivery omits pickup slots; backend re-derives current cart/address/origin/parcels/rates and compares approval. Changed/unavailable service, pricing, or stored origin fingerprint returns 409 `{ success: false, code: "DELIVERY_REPRICE_REQUIRED", data: { services } }` before order/SO/Snap writes. Fresh service rows carry the same normalized `serviceCategoryId: number | null` as the delivery-quote response; category metadata is display-only and is not accepted as order approval input. Confirmed placement uses one goods-only SO and snapshot-priced Snap. Repayment `/api/payments/midtrans/create` uses persisted amounts, not a new quote. See [delivery orders](features/delivery-orders.md).
 
 ## Store — Delivery quotes
 
-`POST /api/checkout/delivery-quote` — onboarded store client session; strict body `{ itemIds: string[], addressId: string }` or `{ itemIds: string[], newAddress: ClientAddressInput }`. New addresses are verified against the Shipment hierarchy but not persisted on quote. Loads owned cart/address and current server prices/parcels/origin, verifies Shipment hierarchy and returns `{ success: true, data: { services } }` with rates-based shipping and delivery PPN/total. Each service also includes `serviceCategoryId: number | null`, normalized from vendor `courier_service_category` (positive integer/numeric string or exact official category name). Missing/malformed metadata becomes null; unknown positive IDs are preserved. These services remain selectable under Lainnya. Browser filtering uses provider categories only and does not change request input or pricing. Success logs include category/uncategorized counts without raw provider data. 404 missing/foreign rows; 400 invalid/unready inputs; 502 unavailable/no-service quote. No order, payment, insurance purchase or booking. See [delivery quotes](features/delivery-quotes.md).
+`POST /api/checkout/delivery-quote` — onboarded store client session; strict body `{ itemIds: string[], addressId: string }` or `{ itemIds: string[], newAddress: ClientAddressInput }`. New addresses are verified against the Shipment hierarchy but not persisted on quote. Loads owned cart/address and current server prices/parcels/origin, verifies Shipment hierarchy and returns `{ success: true, data: { services } }` with rates-based shipping and delivery PPN/total. Each service also includes `originFingerprint` (opaque SHA-256 binding to canonical branch region IDs/names/postcode, required unchanged at delivery approval) and `serviceCategoryId: number | null`, normalized from vendor `courier_service_category` (positive integer/numeric string or exact official category name). Missing/malformed metadata becomes null; unknown positive IDs are preserved. These services remain selectable under Lainnya. Browser filtering uses provider categories only and does not change request input or pricing. Success logs include category/uncategorized counts without raw provider data. 404 missing/foreign rows; 400 invalid/unready inputs; 502 unavailable/no-service quote. No order, payment, insurance purchase or booking. See [delivery quotes](features/delivery-quotes.md).
 
 ## Store — Client addresses and Shipment regions
 
@@ -214,7 +225,7 @@ All routes below require an onboarded store client session. See [Client address 
 
 Address input: `{ recipientName, phone, fullAddress, provinceId, cityId, districtId, areaId, postalCode, isDefault }`; IDs/postcodes remain strings. Successful address requests return `{ success: true, data }`. Invalid input/hierarchy returns 400, missing/foreign target 404, rate limit 429, unavailable backend 503. No address/region endpoint creates an order or books a courier.
 
-Admin branch POST/PUT additionally accepts nullable optional `shippingPhone`, `shippingAddress`, `shippingPostalCode`, `shippingAreaId`. Omitted PUT fields are preserved; null/empty clears them. Existing authorization/scope and transactional audit remain required. Full details: [origin and parcels](features/client-addresses.md#branch-origin-and-per-sku-parcels).
+Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, `shippingDistrictId`, `shippingAreaId`, `shippingPostalCode` on every create/edit. Canonical names are resolved server-side. Only sender `shippingPhone`/`shippingAddress` remain nullable optional: omission on PUT preserves current locked-row values; null/empty clears them. Existing authorization/scope and transactional audit remain required. Full details: [branch regions](features/branch-shipping-regions.md).
 
 ## Store — Catalog (products, branches, categories, homepage, vouchers)
 
@@ -512,12 +523,19 @@ Admin branch POST/PUT additionally accepts nullable optional `shippingPhone`, `s
 - **Response**: 200 `{ success, data: [...], pagination: { page, limit, total, totalPages } }`; 500 error
 - **Notes**: Ordered by `createdAt` desc.
 
+#### `GET` `/api/admin/shipment/regions`
+- **Auth**: admin-session (guard: branches/edit), never a store session.
+- **Query**: `level=provinces|cities|districts|areas`; other than provinces, `parentId` is required (1–16 digit string).
+- **Response**: 200 `{ success: true, data: [{ id, name, parentId?, postalCode? }] }`; 400 invalid query; 503 timeout/failure/malformed provider data, with safe retry feedback.
+- **Notes**: Server-side credential-free Shipment GETs via `JUBELIO_SHIPMENT_URL`; no synthetic results. Lookup grants no extra mutation Branch Scope.
+
 #### `POST` `/api/admin/branches`
-- **Auth**: admin-session (guard: branches/edit)
+- **Auth**: admin-session (guard: branches/edit, all-branch scope)
 - **Purpose**: Create a branch.
 - **Params**: —
 - **Body**: `{ name: string, code: string, city: string, address: string, latitude?: string, longitude?: string, operatingHours: { monday?: { open, close }|null, tuesday?, ..., sunday? } (default {}), googleMapsUrl?: string (valid URL or ""), status: "aktif"|"nonaktif" (default "aktif") }`
-- **Response**: 201 `{ success: true, data: branch }` (the created branch row, incl. `id`); 400 invalid; 500 error
+- **Required region body**: `shippingProvinceId`, `shippingCityId`, `shippingDistrictId`, `shippingAreaId` (1–16 digit strings), `shippingPostalCode` (3–10 digits). `shippingPhone`/`shippingAddress` are optional nullable strings. Every hierarchy level and postcode is provider-verified; browser labels are ignored.
+- **Response**: 201 `{ success: true, data: branch }` (the created branch row, incl. `id`); 400 invalid/missing/mismatched region; 503 region provider unavailable (no branch/audit write); 500 error
 - **Notes**: `latitude`/`longitude` stored null if empty; `googleMapsUrl` validated as URL or literal `""`, stored null if empty. `id` via `crypto.randomUUID()`. Created resources return 201 with the full row (same contract as the Roles/Users POST endpoints).
 
 #### `GET` `/api/admin/branches/{id}`
@@ -534,7 +552,8 @@ Admin branch POST/PUT additionally accepts nullable optional `shippingPhone`, `s
 - **Params**: `{id}`
 - **Body**: `{ name: string, code: string, city: string, address: string, latitude?: string, longitude?: string, operatingHours: { monday?: {open,close}|null, ... sunday? } (required), googleMapsUrl?: string (valid URL or ""), status: "aktif"|"nonaktif" }`
 - **Response**: 200 `{ success, data: { id } }`; 400 invalid; 404 not found; 500 error
-- **Notes**: Unlike POST, `operatingHours` has no default (required) and `status` is required. `latitude`/`longitude`/`googleMapsUrl` stored null when empty. `updatedAt` set.
+- **Required region body**: Same five mandatory region/postcode strings as POST, on every edit including legacy, inactive and pickup-only branches. Canonical names come from Shipment. Invalid/missing region is 400; provider failure is 503 without mutation/audit. Old clients cannot omit regions to preserve/bypass configuration.
+- **Notes**: Unlike POST, `operatingHours` has no default (required) and `status` is required. `latitude`/`longitude`/`googleMapsUrl` stored null when empty. `updatedAt` set. Omitted sender phone/address preserve current values under the transaction row lock; null/empty clears them. Foreign branches are 404 for own-branch scope before provider validation. Full origin before/after audit is transactional. See [branch regions](features/branch-shipping-regions.md).
 
 #### `DELETE` `/api/admin/branches/{id}`
 - **Auth**: admin-session (guard: branches/delete)

@@ -22,6 +22,8 @@
  *   zero ongkir. The quote carries NO id and NO TTL: the result is exactly
  *   `{ services }`.
  */
+import { createHash } from "node:crypto";
+import { hasConfiguredBranchRegion, type BranchShippingRegion } from "@marketplace/db/src/branch-shipping-region";
 import {
   calculateLineItemSubtotal,
   calculateOrderPricing,
@@ -29,7 +31,7 @@ import {
 } from "./order-pricing";
 import { buildShipmentParcel, type ShipmentDimensions } from "./shipment-parcel";
 
-export type ShipmentQuoteOriginBranch = {
+export type ShipmentQuoteOriginBranch = BranchShippingRegion & {
   id: string;
   name: string;
   status: string;
@@ -73,6 +75,8 @@ export interface ShipmentQuoteGateway {
 export type DeliveryQuoteServicePricing = ReturnType<typeof calculateOrderPricing>;
 
 export interface DeliveryQuoteService {
+  /** Opaque binding to canonical origin; carries no sender PII. */
+  originFingerprint: string;
   courierId: number;
   serviceId: number;
   /** Provider category ID; null when metadata is absent or malformed. */
@@ -154,6 +158,7 @@ export function buildShipmentRatesRequest(
   input: ShipmentQuoteInput,
   destinationAreaId: string
 ) {
+  if (!hasConfiguredBranchRegion(input.branch)) throw new QuoteDeliveryError("INVALID_INPUT", "Lengkapi wilayah pengiriman cabang sebelum delivery.");
   const parcel = buildShipmentParcel({
     items: input.items.map((item) => ({
       itemName: item.itemName,
@@ -171,8 +176,7 @@ export function buildShipmentRatesRequest(
       phone: (input.branch.shippingPhone ?? "").trim(),
       address: (input.branch.shippingAddress ?? "").trim(),
       zipcode: (input.branch.shippingPostalCode ?? "").trim(),
-      // Shipment area_id is optional per the contract (v1.8).
-      ...(originAreaId && /^\d{1,16}$/.test(originAreaId) ? { area_id: originAreaId } : {}),
+      area_id: originAreaId,
     },
     destination: {
       zipcode: (input.destination.postalCode ?? "").trim(),
@@ -191,6 +195,7 @@ export async function quoteDelivery(
   if (input.branch.status !== "aktif") {
     throw new QuoteDeliveryError("INVALID_INPUT", "Cabang asal kirim belum aktif");
   }
+  if (!hasConfiguredBranchRegion(input.branch)) throw new QuoteDeliveryError("INVALID_INPUT", "Lengkapi wilayah pengiriman cabang sebelum delivery.");
   const originPhone = nonBlank(input.branch.shippingPhone, "Asal kirim belum memiliki telepon pengirim yang valid");
   nonBlank(input.branch.shippingAddress, "Asal kirim belum memiliki alamat pengirim yang valid");
   const originZipcode = nonBlank(input.branch.shippingPostalCode, "Asal kirim belum memiliki kode pos pengirim yang valid");
@@ -281,6 +286,11 @@ export async function quoteDelivery(
         ? { from: etaFrom, to: etaTo }
         : undefined;
     services.push({
+      originFingerprint: createHash("sha256").update(JSON.stringify([
+        input.branch.id, input.branch.shippingProvinceId, input.branch.shippingCityId,
+        input.branch.shippingDistrictId, input.branch.shippingAreaId, input.branch.shippingPostalCode,
+        input.branch.shippingProvince, input.branch.shippingCity, input.branch.shippingDistrict, input.branch.shippingArea,
+      ])).digest("hex"),
       courierId,
       serviceId,
       serviceCategoryId: normalizeServiceCategoryId(rate.courier_service_category),

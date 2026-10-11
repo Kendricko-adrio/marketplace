@@ -43,17 +43,20 @@ export const branches = pgTable("branch", {
     .notNull()
     .default({}),
   googleMapsUrl: text("google_maps_url"),
-  // Ticket 02 — local shipping-origin complement (spec "Asal dan parcel"):
-  // sender phone/address/postal code + optional Shipment area id (STRING,
-  // leading zeros preserved — never coerced to a number). Edited ONLY through
-  // the Branch admin menu; the Jubelio sync never writes these columns (its
-  // upsert SET allowlist excludes them, guarded by jubelio-sync.test.ts).
-  // All four are nullable: a pickup-only branch stays NULL (not configured) —
-  // NULL is never presented as ready and seeder/imports never invent values.
+  // Locally owned Shipment origin. Nullable for legacy rows and imports;
+  // admin create/edit requires verified hierarchy, including pickup branches.
+  // Jubelio master sync must never write any of these fields.
   shippingPhone: text("shipping_phone"),
   shippingAddress: text("shipping_address"),
   shippingPostalCode: text("shipping_postal_code"),
   shippingAreaId: text("shipping_area_id"),
+  shippingProvinceId: text("shipping_province_id"),
+  shippingCityId: text("shipping_city_id"),
+  shippingDistrictId: text("shipping_district_id"),
+  shippingProvince: text("shipping_province"),
+  shippingCity: text("shipping_city"),
+  shippingDistrict: text("shipping_district"),
+  shippingArea: text("shipping_area"),
   status: text("status").notNull().default("aktif"), // aktif | nonaktif
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),

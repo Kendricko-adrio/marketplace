@@ -8,11 +8,9 @@ import dotenv from "dotenv";
 // The verify test mutates the seeded ready_for_pickup order; it is restored
 // via direct DB access afterwards so the spec is re-runnable.
 //
-// The admin session is admintoko (own-branch scope pinned to the Home
-// Branch "Jakarta Pusat"), and the orders list defaults its Order-Date
-// filter to today — the list test therefore asserts only Home-Branch
-// statuses, with the seeded orders' created_at shifted into that window
-// (restored afterwards).
+// The admin session is admintoko (own-branch scope pinned to its current
+// Home Branch). General history lives in Semua, with no date default and
+// globally ascending creation/id ordering across 20-row pages.
 
 dotenv.config({ path: ".env" });
 
@@ -22,15 +20,14 @@ const PICKUP_CODE = "G4XUNM";
 let pool: Pool;
 let manualReviewOrderId = "";
 let manualReviewOperationId = "";
-// Home-Branch list facts (asserted by the list spec) + created_at restore map.
+// Independent database expectations for the first general-history page.
 let homeBranchId = "";
-let homeBranchCity = "";
+let homeBranchName = "";
 let homeStatusLabels: string[] = [];
 // Visible badge count per status label (orders share statuses, so a label
 // can render once per matching row).
 let homeStatusLabelCounts: Record<string, number> = {};
 let homeStockReviewCount = 0;
-let originalCreatedAt: Array<{ id: string; created_at: Date }> = [];
 
 const STATUS_LABELS: Record<string, string> = {
   pending_payment: "Pending Payment",
@@ -40,16 +37,6 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
   failed_payment: "Payment Failed",
 };
-
-// Local YYYY-MM-DD (browser's clock) — matches the list page's default
-// Order-Date filter, which it sends as plain dates the API interprets as
-// [00:00Z, +1 day). Noon UTC of that local day is always inside the window.
-function defaultListWindowFrom(): Date {
-  const d = new Date();
-  const tzOffset = d.getTimezoneOffset() * 60_000;
-  const today = new Date(d.getTime() - tzOffset).toISOString().slice(0, 10);
-  return new Date(`${today}T12:00:00Z`);
-}
 
 test.beforeAll(async () => {
   pool = new Pool({ connectionString: process.env.DATABASE_URL });
@@ -73,17 +60,19 @@ test.beforeAll(async () => {
   );
 
   // admintoko's Home Branch — the own-branch orders list is pinned to it.
-  const home = await pool.query<{ branch_id: string; city: string | null }>(
-    `SELECT u.branch_id, b.city
+  const home = await pool.query<{ branch_id: string; name: string }>(
+    `SELECT u.branch_id, b.name
      FROM "user" u LEFT JOIN branch b ON b.id = u.branch_id
      WHERE u.username = 'admintoko'`
   );
   homeBranchId = home.rows[0].branch_id;
-  homeBranchCity = home.rows[0].city ?? "";
+  homeBranchName = home.rows[0].name;
 
   const statusRows = await pool.query<{ status: string; count: number }>(
-    `SELECT status, count(*)::int AS count
-     FROM orders WHERE branch_id = $1 GROUP BY status`,
+    `SELECT status, count(*)::int AS count FROM (
+       SELECT status FROM orders WHERE branch_id = $1
+       ORDER BY created_at ASC, id ASC LIMIT 20
+     ) first_page GROUP BY status`,
     [homeBranchId]
   );
   homeStatusLabels = statusRows.rows
@@ -97,29 +86,16 @@ test.beforeAll(async () => {
   );
   homeStockReviewCount = (
     await pool.query<{ count: number }>(
-      `SELECT count(DISTINCT o.id)::int AS count
-       FROM orders o
-       JOIN jubelio_stock_operation j ON j.order_id = o.id
-        AND j.status = 'manual_review'
-       WHERE o.branch_id = $1`,
+      `SELECT count(*)::int AS count FROM (
+         SELECT id FROM orders WHERE branch_id = $1
+         ORDER BY created_at ASC, id ASC LIMIT 20
+       ) o WHERE EXISTS (
+         SELECT 1 FROM jubelio_stock_operation j
+         WHERE j.order_id = o.id AND j.status = 'manual_review'
+       )`,
       [homeBranchId]
     )
   ).rows[0].count;
-
-  // The list page defaults its Order-Date filter to "today", so pull the
-  // seeded Home-Branch orders into that window (originals restored in
-  // afterAll).
-  originalCreatedAt = (
-    await pool.query<{ id: string; created_at: Date }>(
-      `SELECT id, created_at FROM orders WHERE branch_id = $1`,
-      [homeBranchId]
-    )
-  ).rows;
-  const shifted = defaultListWindowFrom();
-  await pool.query(
-    `UPDATE orders SET created_at = $1 WHERE branch_id = $2`,
-    [shifted, homeBranchId]
-  );
 
   const manualReview = await pool.query<{ order_id: string; id: string }>(
     `SELECT order_id, id FROM jubelio_stock_operation
@@ -131,19 +107,6 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  // Restore the fixture orders' original created_at.
-  if (originalCreatedAt.length > 0) {
-    await pool.query(
-      `UPDATE orders SET created_at = v.created_at
-       FROM (SELECT unnest($1::text[]) AS id, unnest($2::timestamptz[]) AS created_at) AS v
-       WHERE orders.id = v.id`,
-      [
-        originalCreatedAt.map((r) => r.id),
-        originalCreatedAt.map((r) => r.created_at),
-      ]
-    );
-  }
-
   // Restore the order the verify test completed.
   await pool.query(
     `UPDATE orders SET status = 'ready_for_pickup', payment_status = 'paid'
@@ -170,7 +133,10 @@ test.describe("admin orders", () => {
   test.describe.configure({ mode: "serial" });
 
   test("lists Home-Branch orders with status badges", async ({ page }) => {
-    await page.goto("/admin/orders");
+    await page.goto("/admin/orders?tab=all");
+    await expect(page.getByRole("tab", { name: "Semua", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByLabel("Tanggal order dari", { exact: true })).toHaveValue("");
+    await expect(page.getByLabel("Tanggal order sampai", { exact: true })).toHaveValue("");
 
     await expect(
       page.getByRole("heading", { name: /Pesanan|Orders/i })
@@ -184,18 +150,14 @@ test.describe("admin orders", () => {
     await expect(rows.first()).toBeVisible();
     const rowCount = await rows.count();
     expect(rowCount).toBeGreaterThan(0);
+    expect(rowCount).toBeLessThanOrEqual(20);
+    expect(rowCount).toBe(Object.values(homeStatusLabelCounts).reduce((sum, count) => sum + count, 0));
     for (let i = 0; i < rowCount; i++) {
-      await expect(rows.nth(i).locator("td").nth(3)).toContainText(
-        homeBranchCity
-      );
+      await expect(rows.nth(i).locator("td").nth(2)).toHaveText(homeBranchName);
     }
 
-    // Every Home-Branch status seeded in the DB is visible as a badge.
-    // Several orders can share a status, so each label renders once per
-    // matching row — assert the exact DB-derived count when the fixture has
-    // multiple orders of that status, and first-match visibility for the
-    // single-order case (all Home-Branch fixtures fit the default 25-row
-    // page, so the count is fully visible).
+    // Expected badges come from the independently selected first DB page,
+    // not all statuses in the branch or the currently loaded UI rows.
     for (const label of homeStatusLabels) {
       const badge = body.getByText(label, { exact: true });
       const count = homeStatusLabelCounts[label] ?? 0;

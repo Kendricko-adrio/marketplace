@@ -47,16 +47,16 @@ export default async function AdminLayout({
 
   return (
     <NotificationProvider>
-      <div className="flex min-h-screen bg-muted/20">
+      <div className="flex min-h-screen flex-col md:flex-row bg-muted/20">
         <AdminSidebar />
-        <div className="flex-1 flex flex-col transition-all duration-300 ease-in-out pl-0">
+        <div className="min-w-0 flex-1 flex flex-col transition-all duration-300 ease-in-out pl-0">
           <header className="sticky top-0 z-30 flex h-16 items-center border-b bg-background px-6 shadow-sm">
             <h1 className="text-xl font-bold text-foreground">Admin Dashboard</h1>
             <div className="ml-auto flex items-center gap-4">
               <NotificationBell />
             </div>
           </header>
-          <main className="flex-1 p-6 md:p-8 overflow-y-auto">{children}</main>
+          <main className="min-w-0 flex-1 p-4 md:p-8 overflow-y-auto">{children}</main>
         </div>
       </div>
     </NotificationProvider>

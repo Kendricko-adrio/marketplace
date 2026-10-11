@@ -414,6 +414,7 @@ export default function CheckoutPage() {
             courierId: deliveryService.courierId,
             serviceId: deliveryService.serviceId,
             approvedPricing: deliveryService.pricing,
+            originFingerprint: deliveryService.originFingerprint,
           }),
         });
         const data = (await res.json()) as {

@@ -404,6 +404,17 @@ describe("createShipmentTracking — handoff (PostgreSQL-backed)", () => {
 });
 
 describe("tracking safety regressions", () => {
+  it.skipIf(!dbReady)("tracking preflight is read-only and distinguishes terminal refresh from handoff", async () => {
+    if (!pool || !db) return;
+    await seedBookedShipment(ORDER_ID, { awb: AWB, shipmentId: SHIPMENT_ID });
+    const control = recordingGateway();
+    const tracking = createShipmentTracking(db, control.gateway);
+    expect(await tracking.inspect(ORDER_ID, ACTOR_HOME)).toEqual({ reconcile: true, handoff: true });
+    expect(await tracking.inspect(ORDER_ID, ACTOR_NO_EDIT)).toEqual({ reconcile: false, handoff: false });
+    await pool.query("UPDATE orders SET status='completed' WHERE id=$1", [ORDER_ID]);
+    expect(await tracking.inspect(ORDER_ID, ACTOR_HOME)).toEqual({ reconcile: true, handoff: false });
+    expect(control.calls).toHaveLength(0);
+  });
   it.skipIf(!dbReady)("stores available safe links without inventing an empty billed price", async () => {
     if (!pool || !db) return;
     await seedBookedShipment(ORDER_ID, { awb: AWB, shipmentId: SHIPMENT_ID });

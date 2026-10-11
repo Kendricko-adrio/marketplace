@@ -7,8 +7,9 @@ import { toast } from "sonner";
 import BranchForm from "@/components/admin/BranchForm";
 import type { BranchFormData } from "@/components/admin/BranchForm";
 import { useAuth } from "@/providers/auth-provider";
+import { hasConfiguredBranchRegion, type BranchShippingRegion } from "@marketplace/db/src/branch-shipping-region";
 
-interface ApiBranch {
+interface ApiBranch extends BranchShippingRegion {
   id: string;
   name: string;
   code: string;
@@ -25,6 +26,9 @@ interface ApiBranch {
   shippingAddress: string | null;
   shippingPostalCode: string | null;
   shippingAreaId: string | null;
+  shippingProvinceId: string | null;
+  shippingCityId: string | null;
+  shippingDistrictId: string | null;
 }
 
 export default function EditBranchPage() {
@@ -35,6 +39,7 @@ export default function EditBranchPage() {
 
   const [initialData, setInitialData] = useState<BranchFormData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [regionConfigured, setRegionConfigured] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -57,6 +62,7 @@ export default function EditBranchPage() {
         }
 
         const branch: ApiBranch = data.data;
+        setRegionConfigured(hasConfiguredBranchRegion(branch));
 
         setInitialData({
           name: branch.name,
@@ -72,6 +78,9 @@ export default function EditBranchPage() {
           shippingAddress: branch.shippingAddress ?? "",
           shippingPostalCode: branch.shippingPostalCode ?? "",
           shippingAreaId: branch.shippingAreaId ?? "",
+          shippingProvinceId: branch.shippingProvinceId ?? "",
+          shippingCityId: branch.shippingCityId ?? "",
+          shippingDistrictId: branch.shippingDistrictId ?? "",
         });
       } catch {
         const msg = "Gagal memuat data cabang";
@@ -132,7 +141,7 @@ export default function EditBranchPage() {
   return (
     <div className="max-w-4xl space-y-6">
       <h2 className="text-2xl font-bold tracking-tight">Edit Cabang</h2>
-      <BranchForm mode="edit" initialData={initialData} onSubmit={handleSubmit} />
+      <BranchForm mode="edit" initialData={initialData} regionConfigured={regionConfigured} onSubmit={handleSubmit} />
     </div>
   );
 }

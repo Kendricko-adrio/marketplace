@@ -339,7 +339,8 @@ test.describe("mock-only shipment packing + booking (ticket 05)", () => {
 
     // The existing order-detail surface: pack then book through the UI.
     await page.goto(`/admin/orders/${orderId}`);
-    await page.getByRole("button", { name: /Tandai selesai packing/i }).click();
+    await page.getByRole("button", { name: "Tandai siap", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Tandai siap", exact: true }).click();
     await expect(
       page.getByText(/packed|selesai di-pack|Sudah di-pack/i).first()
     ).toBeVisible({ timeout: 15_000 });
@@ -377,10 +378,12 @@ test.describe("mock-only shipment packing + booking (ticket 05)", () => {
   test("the booking button sends the approved packed request and shows the AWB", async () => {
     const page = await adminContext!.newPage(); const orderId = orderIds[2];
     await page.goto(`/admin/orders/${orderId}`);
-    await page.getByRole("button", { name: "Tandai selesai packing" }).click();
+    await page.getByRole("button", { name: "Tandai siap", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Tandai siap", exact: true }).click();
     await expect(page.getByRole("button", { name: "Pesan pengiriman" })).toBeEnabled();
     const booked = page.waitForResponse((r) => r.url().endsWith(`/orders/${orderId}/delivery/book`) && r.request().method() === "POST");
-    await page.getByRole("button", { name: "Pesan pengiriman" }).click();
+    await page.getByRole("button", { name: "Pesan pengiriman", exact: true }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Pesan pengiriman", exact: true }).click();
     expect((await booked).status()).toBe(200);
     await expect(page.getByLabel("Pemenuhan delivery").getByText(new RegExp(AWB_TEXT))).toBeVisible();
     await expect(page.getByLabel("Status pesanan")).toHaveText("Processing");

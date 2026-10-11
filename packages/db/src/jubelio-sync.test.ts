@@ -270,7 +270,7 @@ describe("upsertJubelioBranches — shipping-origin complement (ticket 02)", () 
   // phone/address/post_code/area) must never seed it and never overwrite the
   // branch admin's edit ("Pelengkap lokal diedit sekali di menu Branch admin
   // dan tidak ditimpa impor Jubelio").
-  it("never writes the shipping-origin complement from Jubelio locations", async () => {
+  it.each([true, false])("never writes local shipping fields during location/status sync (active=%s)", async (active) => {
     const inserted: Array<Record<string, unknown>> = [];
     let conflictUpdate: Record<string, unknown> | undefined;
     const db = {
@@ -294,7 +294,7 @@ describe("upsertJubelioBranches — shipping-origin complement (ticket 02)", () 
       location_name: "Gudang Pusat E2E",
       location_code: "LOC-21",
       is_pos_outlet: false,
-      is_active: true,
+      is_active: active,
       phone: "0215551000",
       address: "Jl. Jubelio Master 1",
       post_code: "12345",

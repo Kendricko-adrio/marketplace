@@ -5,7 +5,8 @@ import { describe, expect, it, afterAll, beforeAll } from "vitest";
 import * as schema from "@marketplace/db/src/schema";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
-import { createShipmentFulfillment } from "./shipment-fulfillment";
+import { createShipmentFulfillment, inspectDeliveryEligibility } from "./shipment-fulfillment";
+import { listDeliveryWork } from "./delivery-work-list";
 
 // =========================================================
 // shipment-fulfillment — packing + booking Jubelio Shipment on the REAL
@@ -248,6 +249,57 @@ async function seedVerifiedDeliveryOrder(orderId: string, patch: SnapshotPatch =
 }
 
 describe("shipment fulfillment (PostgreSQL-backed)", () => {
+  it.skipIf(!dbReady)("scoped delivery queues count dated and undated same-stage work before stable 20-row pagination", async () => {
+    if (!pool || !db) return;
+    const ids = Array.from({ length: 40 }, (_, i) => `${PREFIX}queue-${String(i).padStart(2, "0")}`);
+    try {
+      for (const id of ids) await seedVerifiedDeliveryOrder(id, { parcelQuantity: 1 });
+      await pool.query("UPDATE orders SET created_at='2026-01-01T08:00:00Z' WHERE id=ANY($1::text[])", [ids]);
+      await pool.query("UPDATE orders SET created_at='2026-05-01T08:00:00Z' WHERE id=ANY($1::text[])", [ids.slice(28)]);
+      const input = { scope: { mode: "own" as const, branchId: BRANCH_A_ID }, queue: "actionable" as const, stage: "Siapkan barang", search: `${PREFIX}queue-`, page: 1 };
+      const first = await listDeliveryWork(db, input);
+      expect(first.pagination).toEqual({ page: 1, limit: 20, total: 40, baseTotal: 40, totalPages: 2 });
+      expect(first.data.map((row) => row.id)).toEqual(ids.slice(0, 20));
+      const second = await listDeliveryWork(db, { ...input, page: 2 });
+      expect(second.data.map((row) => row.id)).toEqual(ids.slice(20));
+      const dated = await listDeliveryWork(db, { ...input, from: "2026-05-01", to: "2026-05-01", page: 2 });
+      expect(dated.pagination).toEqual({ page: 1, limit: 20, total: 12, baseTotal: 40, totalPages: 1 });
+      expect(dated.data.map((row) => row.id)).toEqual(ids.slice(28));
+      expect((await listDeliveryWork(db, { ...input, queue: "monitoring" })).pagination.total).toBe(0);
+      expect((await listDeliveryWork(db, { ...input, scope: { mode: "own", branchId: BRANCH_B_ID }, branchId: BRANCH_A_ID })).pagination.baseTotal).toBe(0);
+      const fulfillment = createShipmentFulfillment(db, recordingGateway().gateway);
+      for (const id of ids.slice(0, 8)) await fulfillment.pack(id, ACTOR_HOME);
+      await pool.query("UPDATE delivery_shipment SET state='booked', latest_status='WAITING', awb='QUEUE-' || order_id, shipment_id=880000+right(order_id,2)::integer, booked_price=25000, booked_by=$2, dispatched_at='2026-05-01T09:00:00Z', booked_at='2026-05-01T09:00:00Z' WHERE order_id=ANY($1::text[])", [ids.slice(0, 6), USER_HOME_ID]);
+      await pool.query("UPDATE delivery_shipment SET handed_over_at='2026-05-01T09:00:00Z', handed_over_by=$2 WHERE order_id=$1", [ids[1], USER_HOME_ID]);
+      for (const [i, status] of [[2, "ON_DELIVERY"], [3, "ON_HOLD"], [4, "RETURNED"], [5, "DELIVERED"]] as const) await pool.query("UPDATE delivery_shipment SET latest_status=$2 WHERE order_id=$1", [ids[i], status]);
+      await pool.query("UPDATE orders SET status='completed' WHERE id=$1", [ids[5]]);
+      await pool.query("UPDATE delivery_shipment SET state='booking_unknown' WHERE order_id=$1", [ids[6]]);
+      await pool.query("UPDATE delivery_shipment SET state='booking_dispatched' WHERE order_id=$1", [ids[7]]);
+      await pool.query("UPDATE orders SET payment_status='pending' WHERE id=$1", [ids[8]]);
+      await pool.query("UPDATE orders SET fulfillment_blocked_reason='fixture settlement block' WHERE id=$1", [ids[9]]);
+      await pool.query("UPDATE orders SET delivery_failure_code='damaged_goods' WHERE id=$1", [ids[10]]);
+      const monitoring = await listDeliveryWork(db, { ...input, stage: null, queue: "monitoring" });
+      expect(monitoring.data.map((row) => row.id)).toEqual(ids.slice(1, 4));
+      const completed = await listDeliveryWork(db, { ...input, stage: null, queue: "completed" });
+      expect(completed.data.map((row) => row.id)).toEqual([ids[5]]);
+      expect((await listDeliveryWork(db, { ...input, stage: null, queue: "actionable" })).pagination.total).toBe(30);
+      expect((await listDeliveryWork(db, { ...input, stage: "Menunggu pembayaran", queue: "all" })).data.map((row) => row.id)).toEqual([ids[8]]);
+    } finally {
+      await pool.query("DELETE FROM delivery_shipment WHERE order_id=ANY($1::text[])", [ids]);
+      await pool.query("DELETE FROM jubelio_sales_operation WHERE order_id=ANY($1::text[])", [ids]);
+      await pool.query("DELETE FROM orders WHERE id=ANY($1::text[])", [ids]);
+    }
+  });
+  it.skipIf(!dbReady)("read preflight uses current mutation guards without consuming the packing intent", async () => {
+    if (!pool || !db) return;
+    await seedVerifiedDeliveryOrder(ORDER_HAPPY, { parcelQuantity: 1 });
+    expect(await inspectDeliveryEligibility(db, ORDER_HAPPY, ACTOR_HOME)).toEqual({ known: true, eligible: true });
+    expect(await inspectDeliveryEligibility(db, ORDER_HAPPY, ACTOR_WRONG_BRANCH)).toMatchObject({ known: true, eligible: false });
+    expect(await inspectDeliveryEligibility(db, ORDER_HAPPY, ACTOR_NO_EDIT)).toMatchObject({ known: true, eligible: false });
+    const control = recordingGateway();
+    expect(await createShipmentFulfillment(db, control.gateway).pack(ORDER_HAPPY, ACTOR_HOME)).toEqual({ status: "packed" });
+    expect(control.calls).toHaveLength(0);
+  });
   it.skipIf(!dbReady)(
     "eligibility failures reject pack AND book before ANY provider POST",
     async () => {

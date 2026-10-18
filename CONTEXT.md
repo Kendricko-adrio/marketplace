@@ -1,6 +1,6 @@
 # Marketplace Administration Context
 
-The language used for staff identity, authorization, and branch-bounded administration in the marketplace back office.
+The language used for staff identity, authorization, branch-bounded administration, and product pricing/promotion administration in the marketplace back office.
 
 ## Language
 
@@ -139,3 +139,21 @@ _Avoid_: remote HQ pickup, all-branch pickup override
 **Edit Action**:
 The Action that permits modifying data and, where scope can authorize a new target, creating data in a Module. Creating a branch is an explicit all-branch operation.
 _Avoid_: update-only permission
+
+### Product Pricing and Promotions
+
+**Base Price**:
+The undiscounted selling price of a product variant supplied by Jubelio, against which a website Markdown is measured.
+_Avoid_: cost price, cheapest product price
+
+**Markdown**:
+A website-managed fixed selling-price reduction of a product variant for all branches, including clearance of older or slow-moving stock. It is a product price adjustment rather than an inherently time-bound campaign; a percentage input calculates the confirmed fixed price, not a continuing percentage rule.
+_Avoid_: mandatory sale campaign, stock adjustment
+
+**Coupon**:
+Offer yang ditemukan dan dipilih langsung oleh customer tanpa prior claim untuk mengurangi nilai barang atau ongkir. Pada fase awal, Coupon barang bersifat general untuk seluruh barang order dengan harga setelah Markdown, tanpa targeting produk/kategori/brand; satu order dapat menggabungkan Markdown dengan maksimal satu Coupon atau Manual Promo Code untuk barang maupun ongkir.
+_Avoid_: additional coupon slot, permanent product price
+
+**Manual Promo Code**:
+Offer yang diaktifkan dengan memasukkan kode, bukan memilih Coupon yang ditampilkan. Manual Promo Code berbagi satu slot order dengan Coupon; pada fase awal, benefit barang berlaku general untuk seluruh barang order dengan harga setelah Markdown, tanpa targeting produk/kategori/brand, tetapi persyaratan offer lainnya tetap berlaku.
+_Avoid_: separate stacking slot, proof of customer identity

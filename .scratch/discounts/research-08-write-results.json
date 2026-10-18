@@ -1,0 +1,5662 @@
+{
+  "run": "RESEARCH08-2026-10-14T17-17-36-342Z",
+  "initialCreateAttempts": 10,
+  "additionalCreateLimit": 10,
+  "createAttempts": 10,
+  "events": [
+    {
+      "at": "2026-10-14T17:17:37.788Z",
+      "label": "login-1791998256342",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:17:37.927Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:38.034Z",
+      "label": "master-43842",
+      "method": "GET",
+      "path": "/inventory/items/43842",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:17:38.137Z",
+      "label": "master-43843",
+      "method": "GET",
+      "path": "/inventory/items/43843",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:17:38.203Z",
+      "label": "tax",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:17:38.274Z",
+      "label": "Q-stock-before",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:17:38.275Z",
+      "label": "Q-stock-before-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 3,
+          "on_order": 0,
+          "available": 3
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:17:38.275Z",
+      "label": "Q-expected",
+      "createAttempt": 1,
+      "cumulativeCreateAttempts": 6,
+      "expected": {
+        "gross": 518000,
+        "lineDisc": 51800,
+        "totalDisc": 51800,
+        "addDisc": 0,
+        "shipping": 0,
+        "net": 466200
+      },
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 518000,
+        "total_disc": 51800,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 466200,
+        "shipping_cost": 0,
+        "insurance_cost": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-Q",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 2,
+            "price": 259000,
+            "disc": 10,
+            "disc_amount": 51800,
+            "amount": 466200,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:38.276Z",
+      "label": "Q-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 518000,
+        "total_disc": 51800,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 466200,
+        "shipping_cost": 0,
+        "insurance_cost": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-Q",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 2,
+            "price": 259000,
+            "disc": 10,
+            "disc_amount": 51800,
+            "amount": 466200,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:38.492Z",
+      "label": "Q-create",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 200,
+      "snapshot": {
+        "id": 68416
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:38.493Z",
+      "label": "Q-fixture",
+      "id": 68416
+    },
+    {
+      "at": "2026-10-14T17:17:39.853Z",
+      "label": "Q-get",
+      "method": "GET",
+      "path": "/sales/orders/68416",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68416,
+        "salesorder_no": "SO-000068416",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "518000.0000",
+        "total_disc": "51800.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "466200.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-Q",
+        "items": [
+          {
+            "salesorder_detail_id": 74700,
+            "item_id": 43842,
+            "qty_in_base": "2.0000",
+            "price": "259000.0000",
+            "disc": "10.00",
+            "disc_amount": "51800.0000",
+            "amount": "466200.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:39.854Z",
+      "label": "Q-money",
+      "matches": true,
+      "mismatches": []
+    },
+    {
+      "at": "2026-10-14T17:17:39.854Z",
+      "label": "Q-line-semantics",
+      "observed": {
+        "salesorder_detail_id": 74700,
+        "item_id": 43842,
+        "qty_in_base": "2.0000",
+        "price": "259000.0000",
+        "disc": "10.00",
+        "disc_amount": "51800.0000",
+        "amount": "466200.0000",
+        "tax_amount": "0.0000",
+        "tax_id": 1
+      },
+      "wholeLineNominal": true
+    },
+    {
+      "at": "2026-10-14T17:17:40.104Z",
+      "label": "Q-cancel-pre",
+      "method": "GET",
+      "path": "/sales/orders/68416",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68416,
+        "salesorder_no": "SO-000068416",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "518000.0000",
+        "total_disc": "51800.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "466200.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-Q",
+        "items": [
+          {
+            "salesorder_detail_id": 74700,
+            "item_id": 43842,
+            "qty_in_base": "2.0000",
+            "price": "259000.0000",
+            "disc": "10.00",
+            "disc_amount": "51800.0000",
+            "amount": "466200.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:40.105Z",
+      "label": "Q-cancel",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/cancel/",
+      "input": {}
+    },
+    {
+      "at": "2026-10-14T17:17:40.662Z",
+      "label": "Q-cancel",
+      "method": "POST",
+      "path": "/sales/orders/cancel/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:17:40.910Z",
+      "label": "Q-cancel-get",
+      "method": "GET",
+      "path": "/sales/orders/68416",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68416,
+        "salesorder_no": "SO-000068416",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "518000.0000",
+        "total_disc": "51800.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "466200.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": true,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-Q",
+        "items": [
+          {
+            "salesorder_detail_id": 74700,
+            "item_id": 43842,
+            "qty_in_base": "2.0000",
+            "price": "259000.0000",
+            "disc": "10.00",
+            "disc_amount": "51800.0000",
+            "amount": "466200.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:40.951Z",
+      "label": "Q-stock-after",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:17:40.952Z",
+      "label": "Q-stock-after-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 3,
+          "on_order": 0,
+          "available": 3
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:17:40.953Z",
+      "label": "Q-cleanup",
+      "id": 68416,
+      "moneyPreserved": true,
+      "stock": [
+        {
+          "item_id": 43842,
+          "before": {
+            "item_id": 43842,
+            "location_id": 2,
+            "on_hand": 3,
+            "on_order": 0,
+            "available": 3
+          },
+          "after": {
+            "item_id": 43842,
+            "location_id": 2,
+            "on_hand": 3,
+            "on_order": 0,
+            "available": 3
+          },
+          "restored": true
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:17:40.958Z",
+      "label": "Q-complete"
+    },
+    {
+      "at": "2026-10-14T17:17:52.467Z",
+      "label": "login-1791998271504",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:17:52.611Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:52.678Z",
+      "label": "master-43842",
+      "method": "GET",
+      "path": "/inventory/items/43842",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:17:52.748Z",
+      "label": "master-43843",
+      "method": "GET",
+      "path": "/inventory/items/43843",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:17:52.947Z",
+      "label": "tax",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:17:54.257Z",
+      "label": "accounts",
+      "method": "GET",
+      "path": "/accounts/lookup/all/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:17:54.370Z",
+      "label": "L-stock-before",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:17:54.370Z",
+      "label": "L-stock-before-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 3,
+          "on_order": 0,
+          "available": 3
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:17:54.371Z",
+      "label": "L-expected",
+      "createAttempt": 2,
+      "cumulativeCreateAttempts": 7,
+      "expected": {
+        "gross": 509000,
+        "lineDisc": 20000,
+        "totalDisc": 20000,
+        "addDisc": 0,
+        "shipping": 0,
+        "net": 489000
+      },
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 509000,
+        "total_disc": 20000,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 489000,
+        "shipping_cost": 0,
+        "insurance_cost": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-L",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 3.929343629343629,
+            "disc_amount": 10177,
+            "amount": 248823,
+            "tax_amount": 0,
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43843,
+            "qty_in_base": 1,
+            "price": 250000,
+            "disc": 3.9292000000000002,
+            "disc_amount": 9823,
+            "amount": 240177,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:54.371Z",
+      "label": "L-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 509000,
+        "total_disc": 20000,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 489000,
+        "shipping_cost": 0,
+        "insurance_cost": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-L",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 3.929343629343629,
+            "disc_amount": 10177,
+            "amount": 248823,
+            "tax_amount": 0,
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43843,
+            "qty_in_base": 1,
+            "price": 250000,
+            "disc": 3.9292000000000002,
+            "disc_amount": 9823,
+            "amount": 240177,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:54.534Z",
+      "label": "L-create",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 200,
+      "snapshot": {
+        "id": 68417
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:54.535Z",
+      "label": "L-fixture",
+      "id": 68417
+    },
+    {
+      "at": "2026-10-14T17:17:54.769Z",
+      "label": "L-get",
+      "method": "GET",
+      "path": "/sales/orders/68417",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68417,
+        "salesorder_no": "SO-000068417",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "509000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "489000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-L",
+        "items": [
+          {
+            "salesorder_detail_id": 74701,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "3.93",
+            "disc_amount": "10177.0000",
+            "amount": "248823.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 74702,
+            "item_id": 43843,
+            "qty_in_base": "1.0000",
+            "price": "250000.0000",
+            "disc": "3.93",
+            "disc_amount": "9823.0000",
+            "amount": "240177.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:54.770Z",
+      "label": "L-money",
+      "matches": true,
+      "mismatches": []
+    },
+    {
+      "at": "2026-10-14T17:17:54.771Z",
+      "label": "L-marker-edit",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 68417,
+        "salesorder_no": "SO-000068417",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 509000,
+        "total_disc": 20000,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 489000,
+        "shipping_cost": 0,
+        "insurance_cost": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-L",
+        "items": [
+          {
+            "salesorder_detail_id": 74701,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 3.93,
+            "disc_amount": 10177,
+            "amount": 248823,
+            "tax_amount": 0,
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 74702,
+            "location_id": 2,
+            "item_id": 43843,
+            "qty_in_base": 1,
+            "price": 250000,
+            "disc": 3.93,
+            "disc_amount": 9823,
+            "amount": 240177,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:55.031Z",
+      "label": "L-marker-edit",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 200,
+      "snapshot": {
+        "id": 68417
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:55.299Z",
+      "label": "L-marker-get",
+      "method": "GET",
+      "path": "/sales/orders/68417",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68417,
+        "salesorder_no": "SO-000068417",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "509000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "489000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-L",
+        "items": [
+          {
+            "salesorder_detail_id": 74701,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "3.93",
+            "disc_amount": "10177.0000",
+            "amount": "248823.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 74702,
+            "item_id": 43843,
+            "qty_in_base": "1.0000",
+            "price": "250000.0000",
+            "disc": "3.93",
+            "disc_amount": "9823.0000",
+            "amount": "240177.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:55.300Z",
+      "label": "L-marker-verification",
+      "moneyPreserved": true,
+      "markerConfirmed": true
+    },
+    {
+      "at": "2026-10-14T17:17:55.581Z",
+      "label": "L-invoice-pre",
+      "method": "GET",
+      "path": "/sales/orders/68417",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68417,
+        "salesorder_no": "SO-000068417",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "509000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "489000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-L",
+        "items": [
+          {
+            "salesorder_detail_id": 74701,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "3.93",
+            "disc_amount": "10177.0000",
+            "amount": "248823.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 74702,
+            "item_id": 43843,
+            "qty_in_base": "1.0000",
+            "price": "250000.0000",
+            "disc": "3.93",
+            "disc_amount": "9823.0000",
+            "amount": "240177.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:55.581Z",
+      "label": "L-invoice-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/packlists/create-invoice",
+      "input": {
+        "salesorder_id": 68417
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:55.913Z",
+      "label": "L-invoice-create",
+      "method": "POST",
+      "path": "/sales/packlists/create-invoice",
+      "http": 200,
+      "snapshot": {
+        "id": 45952
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:55.914Z",
+      "label": "L-invoice-id",
+      "id": 45952
+    },
+    {
+      "at": "2026-10-14T17:17:56.291Z",
+      "label": "L-invoice-get",
+      "method": "GET",
+      "path": "/sales/invoices/45952",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": null,
+        "salesorder_no": "SO-000068417",
+        "invoice_id": 45952,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "509000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "489000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "shipping_cost_discount": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "payment_amount": "0",
+        "is_tax_included": false,
+        "ref_no": "SO-000068417",
+        "items": [
+          {
+            "salesorder_detail_id": 74701,
+            "invoice_detail_id": 50122,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "3.93",
+            "disc_amount": "10177.0000",
+            "amount": "248823.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 74702,
+            "invoice_detail_id": 50123,
+            "item_id": 43843,
+            "qty_in_base": "1.0000",
+            "price": "250000.0000",
+            "disc": "3.93",
+            "disc_amount": "9823.0000",
+            "amount": "240177.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:56.577Z",
+      "label": "L-so-linkage",
+      "method": "GET",
+      "path": "/sales/orders/68417",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68417,
+        "salesorder_no": "SO-000068417",
+        "invoice_id": 45952,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "509000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "489000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-L",
+        "items": [
+          {
+            "salesorder_detail_id": 74701,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "3.93",
+            "disc_amount": "10177.0000",
+            "amount": "248823.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 74702,
+            "item_id": 43843,
+            "qty_in_base": "1.0000",
+            "price": "250000.0000",
+            "disc": "3.93",
+            "disc_amount": "9823.0000",
+            "amount": "240177.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:56.578Z",
+      "label": "L-invoice-verification",
+      "matches": true,
+      "expectedPayable": 489000,
+      "soInvoiceId": 45952,
+      "invoiceId": 45952
+    },
+    {
+      "at": "2026-10-14T17:17:56.579Z",
+      "label": "L-payment-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/payments/",
+      "input": {
+        "payment_id": 0,
+        "amount": 489000,
+        "payment_type": 0,
+        "account_id": 2,
+        "items": [
+          {
+            "invoice_id": 45952,
+            "payment_detail_id": 0,
+            "payment_amount": 489000
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:56.722Z",
+      "label": "L-payment-create",
+      "method": "POST",
+      "path": "/sales/payments/",
+      "http": 200,
+      "snapshot": {
+        "id": 42
+      }
+    },
+    {
+      "at": "2026-10-14T17:17:56.723Z",
+      "label": "L-payment-id",
+      "id": 42
+    },
+    {
+      "at": "2026-10-14T17:17:56.773Z",
+      "label": "L-payment-get",
+      "method": "GET",
+      "path": "/sales/payments/42",
+      "http": 500,
+      "snapshot": {},
+      "errorCode": "No data returned from the query.",
+      "errorCategory": "Internal Server Error",
+      "genericInternalError": true
+    },
+    {
+      "at": "2026-10-14T17:17:56.773Z",
+      "label": "L-payment-get-stop",
+      "ambiguous": false,
+      "reason": "HTTP 500"
+    },
+    {
+      "at": "2026-10-14T17:17:56.774Z",
+      "label": "run-stopped",
+      "errorCategory": "Error",
+      "message": "HTTP 500 L-payment-get",
+      "businessWritesBlocked": false,
+      "createAttempts": 2
+    },
+    {
+      "at": "2026-10-14T17:18:26.090Z",
+      "label": "payment-confirmation-stop",
+      "reason": "Payment POST returned ID 42 but GET failed; no more business writes until reconciliation"
+    },
+    {
+      "at": "2026-10-14T17:18:28.465Z",
+      "label": "login-1791998306151",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:18:28.600Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:18:28.866Z",
+      "label": "reconcile-Q",
+      "method": "GET",
+      "path": "/sales/orders/68416",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68416,
+        "salesorder_no": "SO-000068416",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "518000.0000",
+        "total_disc": "51800.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "466200.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": true,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-Q",
+        "items": [
+          {
+            "salesorder_detail_id": 74700,
+            "item_id": 43842,
+            "qty_in_base": "2.0000",
+            "price": "259000.0000",
+            "disc": "10.00",
+            "disc_amount": "51800.0000",
+            "amount": "466200.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:18:29.156Z",
+      "label": "reconcile-L",
+      "method": "GET",
+      "path": "/sales/orders/68417",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68417,
+        "salesorder_no": "SO-000068417",
+        "invoice_id": 45952,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "509000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "489000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-L",
+        "items": [
+          {
+            "salesorder_detail_id": 74701,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "3.93",
+            "disc_amount": "10177.0000",
+            "amount": "248823.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 74702,
+            "item_id": 43843,
+            "qty_in_base": "1.0000",
+            "price": "250000.0000",
+            "disc": "3.93",
+            "disc_amount": "9823.0000",
+            "amount": "240177.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:18:29.307Z",
+      "label": "reconcile-invoice-L",
+      "method": "GET",
+      "path": "/sales/invoices/45952",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": null,
+        "salesorder_no": "SO-000068417",
+        "invoice_id": 45952,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "509000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "489000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "shipping_cost_discount": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "payment_amount": "489000.0000",
+        "is_tax_included": false,
+        "ref_no": "SO-000068417",
+        "items": [
+          {
+            "salesorder_detail_id": 74701,
+            "invoice_detail_id": 50122,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "3.93",
+            "disc_amount": "10177.0000",
+            "amount": "248823.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 74702,
+            "invoice_detail_id": 50123,
+            "item_id": 43843,
+            "qty_in_base": "1.0000",
+            "price": "250000.0000",
+            "disc": "3.93",
+            "disc_amount": "9823.0000",
+            "amount": "240177.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:18:29.379Z",
+      "label": "reconcile-stock",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:18:29.379Z",
+      "label": "reconcile-stock-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 2,
+          "on_order": 0,
+          "available": 2
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:18:29.415Z",
+      "label": "reconcile-list",
+      "path": "/wms/sales/orders/ready-to-process/",
+      "http": 200,
+      "totalCount": 0,
+      "rows": []
+    },
+    {
+      "at": "2026-10-14T17:18:30.004Z",
+      "label": "reconcile-list",
+      "path": "/sales/orders/cancel/",
+      "http": 200,
+      "totalCount": 8,
+      "rows": [
+        {
+          "salesorder_id": 68408,
+          "salesorder_no": "SO-000068408",
+          "source": 1,
+          "grand_total": "259000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-A"
+        },
+        {
+          "salesorder_id": 68409,
+          "salesorder_no": "SO-000068409",
+          "source": 1,
+          "grand_total": "233100.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-F"
+        },
+        {
+          "salesorder_id": 68410,
+          "salesorder_no": "SO-000068410",
+          "source": 1,
+          "grand_total": "239000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-H"
+        },
+        {
+          "salesorder_id": 68412,
+          "salesorder_no": "SO-000068412",
+          "source": 1,
+          "grand_total": "466200.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-K"
+        },
+        {
+          "salesorder_id": 68413,
+          "salesorder_no": "SO-000068413",
+          "source": 1,
+          "grand_total": "489000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-L"
+        },
+        {
+          "salesorder_id": 68414,
+          "salesorder_no": "SO-000068414",
+          "source": 1,
+          "grand_total": "249000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-M"
+        },
+        {
+          "salesorder_id": 68415,
+          "salesorder_no": "SO-000068415",
+          "source": 1,
+          "grand_total": "234000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-N"
+        },
+        {
+          "salesorder_id": 68416,
+          "salesorder_no": "SO-000068416",
+          "source": 1,
+          "grand_total": "466200.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-Q"
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:18:30.121Z",
+      "label": "reconcile-list",
+      "path": "/sales/orders/failed/",
+      "http": 200,
+      "totalCount": 0,
+      "rows": []
+    },
+    {
+      "at": "2026-10-14T17:18:30.616Z",
+      "label": "reconcile-list",
+      "path": "/sales/invoices/",
+      "http": 200,
+      "totalCount": 2,
+      "rows": [
+        {
+          "salesorder_id": 68411,
+          "grand_total": "239000.0000",
+          "due": "0.00000000000000000000",
+          "ref_no": "SO-000068411"
+        },
+        {
+          "salesorder_id": 68417,
+          "grand_total": "489000.0000",
+          "due": "0.00000000000000000000",
+          "ref_no": "SO-000068417"
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:18:30.664Z",
+      "label": "reconcile-list",
+      "path": "/sales/payments/",
+      "http": 200,
+      "totalCount": 2,
+      "rows": [
+        {
+          "payment_id": 40,
+          "amount": "239000.0000",
+          "payment_type": 0,
+          "account_id": 2
+        },
+        {
+          "payment_id": 42,
+          "amount": "489000.0000",
+          "payment_type": 0,
+          "account_id": 2
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:19:21.791Z",
+      "label": "login-1791998360842",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:19:21.913Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:19:22.074Z",
+      "label": "L-payment-reconciliation-get",
+      "method": "GET",
+      "path": "/sales/payments/42",
+      "http": 200,
+      "snapshot": {
+        "payment_id": 42,
+        "amount": "489000.0000",
+        "payment_type": 0,
+        "account_id": 2,
+        "invoices": [
+          {
+            "salesorder_id": 68417,
+            "invoice_id": 45952,
+            "payment_id": 42,
+            "payment_detail_id": 16,
+            "grand_total": 489000,
+            "due": 0,
+            "payment_amount": 489000,
+            "ref_no": "SO-000068417"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:19:22.267Z",
+      "label": "L-invoice-reconciliation-get",
+      "method": "GET",
+      "path": "/sales/invoices/45952",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": null,
+        "salesorder_no": "SO-000068417",
+        "invoice_id": 45952,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "509000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "489000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "shipping_cost_discount": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "payment_amount": "489000.0000",
+        "is_tax_included": false,
+        "ref_no": "SO-000068417",
+        "items": [
+          {
+            "salesorder_detail_id": 74701,
+            "invoice_detail_id": 50122,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "3.93",
+            "disc_amount": "10177.0000",
+            "amount": "248823.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 74702,
+            "invoice_detail_id": 50123,
+            "item_id": 43843,
+            "qty_in_base": "1.0000",
+            "price": "250000.0000",
+            "disc": "3.93",
+            "disc_amount": "9823.0000",
+            "amount": "240177.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:19:22.268Z",
+      "label": "L-payment-reconciled",
+      "paymentId": 42,
+      "invoiceId": 45952,
+      "amount": 489000,
+      "association": {
+        "salesorder_id": 68417,
+        "invoice_id": 45952,
+        "payment_id": 42,
+        "payment_detail_id": 16,
+        "grand_total": 489000,
+        "due": 0,
+        "payment_amount": 489000,
+        "ref_no": "SO-000068417"
+      },
+      "remainingWritesUnblocked": true
+    },
+    {
+      "at": "2026-10-14T17:19:37.090Z",
+      "label": "counter-correction-existing-evidence",
+      "reason": "Read newly available sandbox-followup.md: J-N already consumed five additional creates before this tranche; initial attempts are 10, not 5. Historical initial counters retained with correction.",
+      "initialCreateAttempts": 10,
+      "additionalCreateAttempts": 2,
+      "cumulativeCreateAttempts": 12,
+      "additionalLimit": 10,
+      "cumulativeLimit": 20
+    },
+    {
+      "at": "2026-10-14T17:20:11.820Z",
+      "label": "login-1791998410508",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:20:11.978Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:12.092Z",
+      "label": "master-43842",
+      "method": "GET",
+      "path": "/inventory/items/43842",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:20:12.714Z",
+      "label": "master-43843",
+      "method": "GET",
+      "path": "/inventory/items/43843",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:20:12.794Z",
+      "label": "tax",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:20:12.856Z",
+      "label": "accounts",
+      "method": "GET",
+      "path": "/accounts/lookup/all/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:20:12.974Z",
+      "label": "S-stock-before",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:20:12.975Z",
+      "label": "S-stock-before-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 2,
+          "on_order": 0,
+          "available": 2
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:20:12.975Z",
+      "label": "S-expected",
+      "createAttempt": 3,
+      "cumulativeCreateAttempts": 13,
+      "expected": {
+        "gross": 259000,
+        "lineDisc": 0,
+        "totalDisc": 0,
+        "addDisc": 0,
+        "shipping": 30000,
+        "net": 289000
+      },
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 0,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 289000,
+        "shipping_cost": 30000,
+        "insurance_cost": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-S",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 0,
+            "disc_amount": 0,
+            "amount": 259000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:12.976Z",
+      "label": "S-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 0,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 289000,
+        "shipping_cost": 30000,
+        "insurance_cost": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-S",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 0,
+            "disc_amount": 0,
+            "amount": 259000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:13.242Z",
+      "label": "S-create",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 200,
+      "snapshot": {
+        "id": 68418
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:13.243Z",
+      "label": "S-fixture",
+      "id": 68418
+    },
+    {
+      "at": "2026-10-14T17:20:13.518Z",
+      "label": "S-get",
+      "method": "GET",
+      "path": "/sales/orders/68418",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68418,
+        "salesorder_no": "SO-000068418",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "289000.0000",
+        "shipping_cost": "30000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-S",
+        "items": [
+          {
+            "salesorder_detail_id": 74703,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:13.519Z",
+      "label": "S-money",
+      "matches": true,
+      "mismatches": []
+    },
+    {
+      "at": "2026-10-14T17:20:13.750Z",
+      "label": "S-invoice-pre",
+      "method": "GET",
+      "path": "/sales/orders/68418",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68418,
+        "salesorder_no": "SO-000068418",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "289000.0000",
+        "shipping_cost": "30000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-S",
+        "items": [
+          {
+            "salesorder_detail_id": 74703,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:13.751Z",
+      "label": "S-invoice-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/packlists/create-invoice",
+      "input": {
+        "salesorder_id": 68418
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:14.126Z",
+      "label": "S-invoice-create",
+      "method": "POST",
+      "path": "/sales/packlists/create-invoice",
+      "http": 200,
+      "snapshot": {
+        "id": 45953
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:14.126Z",
+      "label": "S-invoice-id",
+      "id": 45953
+    },
+    {
+      "at": "2026-10-14T17:20:14.272Z",
+      "label": "S-invoice-get",
+      "method": "GET",
+      "path": "/sales/invoices/45953",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": null,
+        "salesorder_no": "SO-000068418",
+        "invoice_id": 45953,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "289000.0000",
+        "shipping_cost": "30000.0000",
+        "insurance_cost": "0.0000",
+        "shipping_cost_discount": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "payment_amount": "0",
+        "is_tax_included": false,
+        "ref_no": "SO-000068418",
+        "items": [
+          {
+            "salesorder_detail_id": 74703,
+            "invoice_detail_id": 50124,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:14.545Z",
+      "label": "S-so-linkage",
+      "method": "GET",
+      "path": "/sales/orders/68418",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68418,
+        "salesorder_no": "SO-000068418",
+        "invoice_id": 45953,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "289000.0000",
+        "shipping_cost": "30000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-S",
+        "items": [
+          {
+            "salesorder_detail_id": 74703,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:14.545Z",
+      "label": "S-invoice-verification",
+      "matches": true,
+      "expectedPayable": 289000,
+      "soInvoiceId": 45953,
+      "invoiceId": 45953
+    },
+    {
+      "at": "2026-10-14T17:20:14.546Z",
+      "label": "S-payment-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/payments/",
+      "input": {
+        "payment_id": 0,
+        "amount": 289000,
+        "payment_type": 0,
+        "account_id": 2,
+        "items": [
+          {
+            "invoice_id": 45953,
+            "payment_detail_id": 0,
+            "payment_amount": 289000
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:14.685Z",
+      "label": "S-payment-create",
+      "method": "POST",
+      "path": "/sales/payments/",
+      "http": 200,
+      "snapshot": {
+        "id": 44
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:14.686Z",
+      "label": "S-payment-id",
+      "id": 44
+    },
+    {
+      "at": "2026-10-14T17:20:14.826Z",
+      "label": "S-payment-get",
+      "method": "GET",
+      "path": "/sales/payments/44",
+      "http": 200,
+      "snapshot": {
+        "payment_id": 44,
+        "amount": "289000.0000",
+        "payment_type": 0,
+        "account_id": 2,
+        "invoices": [
+          {
+            "salesorder_id": 68418,
+            "invoice_id": 45953,
+            "payment_id": 44,
+            "payment_detail_id": 17,
+            "grand_total": 289000,
+            "due": 0,
+            "payment_amount": 289000,
+            "ref_no": "SO-000068418"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:15.031Z",
+      "label": "S-invoice-after-payment",
+      "method": "GET",
+      "path": "/sales/invoices/45953",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": null,
+        "salesorder_no": "SO-000068418",
+        "invoice_id": 45953,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "289000.0000",
+        "shipping_cost": "30000.0000",
+        "insurance_cost": "0.0000",
+        "shipping_cost_discount": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "payment_amount": "289000.0000",
+        "is_tax_included": false,
+        "ref_no": "SO-000068418",
+        "items": [
+          {
+            "salesorder_detail_id": 74703,
+            "invoice_detail_id": 50124,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:15.032Z",
+      "label": "S-payment-verification",
+      "headerMatches": true,
+      "associationMatches": true,
+      "invoiceDue": null,
+      "invoicePayment": null,
+      "expectedPayable": 289000
+    },
+    {
+      "at": "2026-10-14T17:20:15.033Z",
+      "label": "S-complete",
+      "soId": 68418,
+      "invoiceId": 45953,
+      "paymentId": 44
+    },
+    {
+      "at": "2026-10-14T17:20:21.594Z",
+      "label": "login-1791998420265",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:20:21.684Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:21.808Z",
+      "label": "master-43842",
+      "method": "GET",
+      "path": "/inventory/items/43842",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:20:21.876Z",
+      "label": "master-43843",
+      "method": "GET",
+      "path": "/inventory/items/43843",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:20:21.908Z",
+      "label": "tax",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:20:22.505Z",
+      "label": "F1-stock-before",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:20:22.506Z",
+      "label": "F1-stock-before-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:20:22.507Z",
+      "label": "F1-expected",
+      "createAttempt": 4,
+      "cumulativeCreateAttempts": 14,
+      "expected": {
+        "gross": 259000,
+        "lineDisc": 0,
+        "totalDisc": 0,
+        "addDisc": 0,
+        "shipping": 10000,
+        "net": 269000
+      },
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 0,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 269000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": 20000,
+        "shipping_fee_discount_seller": 20000,
+        "shipping_fee_discount_platform": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F1",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 0,
+            "disc_amount": 0,
+            "amount": 259000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:22.508Z",
+      "label": "F1-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 0,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 269000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": 20000,
+        "shipping_fee_discount_seller": 20000,
+        "shipping_fee_discount_platform": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F1",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 0,
+            "disc_amount": 0,
+            "amount": 259000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:20:22.542Z",
+      "label": "F1-create",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 400,
+      "snapshot": {},
+      "errorCode": null,
+      "errorCategory": "Bad Request",
+      "genericInternalError": false
+    },
+    {
+      "at": "2026-10-14T17:20:22.543Z",
+      "label": "F1-create-stop",
+      "ambiguous": true,
+      "reason": "HTTP 400"
+    },
+    {
+      "at": "2026-10-14T17:20:22.543Z",
+      "label": "run-stopped",
+      "errorCategory": "Error",
+      "message": "HTTP 400 F1-create",
+      "businessWritesBlocked": true,
+      "createAttempts": 4
+    },
+    {
+      "at": "2026-10-14T17:21:20.388Z",
+      "label": "F1-classification-review",
+      "http": 400,
+      "classification": "definite-provider-rejection",
+      "reason": "Structured Bad Request response; repo writeRejection classifies 400 as non-ambiguous. Initial runner overly conservatively classified all non-2xx as ambiguous. No retry F1; exact validation field not captured and cannot be reconstructed.",
+      "reference": "apps/store/src/lib/jubelio-sales-client.ts:1073",
+      "createAttempts": 4
+    },
+    {
+      "at": "2026-10-14T17:21:41.810Z",
+      "label": "login-1791998500192",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:21:41.943Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:42.074Z",
+      "label": "master-43842",
+      "method": "GET",
+      "path": "/inventory/items/43842",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:42.188Z",
+      "label": "master-43843",
+      "method": "GET",
+      "path": "/inventory/items/43843",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:42.218Z",
+      "label": "tax",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:42.317Z",
+      "label": "R-stock-before",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:42.317Z",
+      "label": "R-stock-before-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:21:42.318Z",
+      "label": "R-expected",
+      "createAttempt": 5,
+      "cumulativeCreateAttempts": 15,
+      "expected": {
+        "gross": 259000,
+        "lineDisc": 20000,
+        "totalDisc": 20000,
+        "addDisc": 0,
+        "shipping": 0,
+        "net": 239000
+      },
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 20000,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 239000,
+        "shipping_cost": 0,
+        "insurance_cost": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-R",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 7.72,
+            "disc_amount": 20000,
+            "amount": 239000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:42.319Z",
+      "label": "R-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 20000,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 239000,
+        "shipping_cost": 0,
+        "insurance_cost": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-R",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 7.72,
+            "disc_amount": 20000,
+            "amount": 239000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:42.543Z",
+      "label": "R-create",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 200,
+      "snapshot": {
+        "id": 68419
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:42.543Z",
+      "label": "R-fixture",
+      "id": 68419
+    },
+    {
+      "at": "2026-10-14T17:21:42.822Z",
+      "label": "R-get",
+      "method": "GET",
+      "path": "/sales/orders/68419",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68419,
+        "salesorder_no": "SO-000068419",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "239000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-R",
+        "items": [
+          {
+            "salesorder_detail_id": 74704,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "7.72",
+            "disc_amount": "20000.0000",
+            "amount": "239000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:42.823Z",
+      "label": "R-money",
+      "matches": true,
+      "mismatches": []
+    },
+    {
+      "at": "2026-10-14T17:21:43.082Z",
+      "label": "R-cancel-pre",
+      "method": "GET",
+      "path": "/sales/orders/68419",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68419,
+        "salesorder_no": "SO-000068419",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "239000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-R",
+        "items": [
+          {
+            "salesorder_detail_id": 74704,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "7.72",
+            "disc_amount": "20000.0000",
+            "amount": "239000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:43.083Z",
+      "label": "R-cancel",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/cancel/",
+      "input": {}
+    },
+    {
+      "at": "2026-10-14T17:21:43.312Z",
+      "label": "R-cancel",
+      "method": "POST",
+      "path": "/sales/orders/cancel/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:43.552Z",
+      "label": "R-cancel-get",
+      "method": "GET",
+      "path": "/sales/orders/68419",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68419,
+        "salesorder_no": "SO-000068419",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "239000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": true,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-R",
+        "items": [
+          {
+            "salesorder_detail_id": 74704,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "7.72",
+            "disc_amount": "20000.0000",
+            "amount": "239000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:43.627Z",
+      "label": "R-stock-after",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:43.628Z",
+      "label": "R-stock-after-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:21:43.629Z",
+      "label": "R-cleanup",
+      "id": 68419,
+      "moneyPreserved": true,
+      "stock": [
+        {
+          "item_id": 43842,
+          "before": {
+            "item_id": 43842,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          "after": {
+            "item_id": 43842,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          "restored": true
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:21:43.629Z",
+      "label": "R-complete"
+    },
+    {
+      "at": "2026-10-14T17:21:46.779Z",
+      "label": "login-1791998503701",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:21:46.901Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:46.979Z",
+      "label": "master-43842",
+      "method": "GET",
+      "path": "/inventory/items/43842",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:47.065Z",
+      "label": "master-43843",
+      "method": "GET",
+      "path": "/inventory/items/43843",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:47.099Z",
+      "label": "tax",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:47.317Z",
+      "label": "F2-stock-before",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:47.318Z",
+      "label": "F2-stock-before-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:21:47.319Z",
+      "label": "F2-expected",
+      "createAttempt": 6,
+      "cumulativeCreateAttempts": 16,
+      "expected": {
+        "gross": 259000,
+        "lineDisc": 0,
+        "totalDisc": 0,
+        "addDisc": 0,
+        "shipping": 10000,
+        "net": 269000
+      },
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 0,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 269000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "shipping_cost_discount": 20000,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F2",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 0,
+            "disc_amount": 0,
+            "amount": 259000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:47.319Z",
+      "label": "F2-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 0,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 269000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "shipping_cost_discount": 20000,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F2",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 0,
+            "disc_amount": 0,
+            "amount": 259000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:47.543Z",
+      "label": "F2-create",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 200,
+      "snapshot": {
+        "id": 68420
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:47.544Z",
+      "label": "F2-fixture",
+      "id": 68420
+    },
+    {
+      "at": "2026-10-14T17:21:47.781Z",
+      "label": "F2-get",
+      "method": "GET",
+      "path": "/sales/orders/68420",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68420,
+        "salesorder_no": "SO-000068420",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "269000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "20000.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F2",
+        "items": [
+          {
+            "salesorder_detail_id": 74705,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:47.782Z",
+      "label": "F2-exploratory-field",
+      "snapshot": {
+        "salesorder_id": 68420,
+        "salesorder_no": "SO-000068420",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "269000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "20000.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F2",
+        "items": [
+          {
+            "salesorder_detail_id": 74705,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:48.907Z",
+      "label": "F2-cancel-pre",
+      "method": "GET",
+      "path": "/sales/orders/68420",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68420,
+        "salesorder_no": "SO-000068420",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "269000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "20000.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F2",
+        "items": [
+          {
+            "salesorder_detail_id": 74705,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:48.908Z",
+      "label": "F2-cancel",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/cancel/",
+      "input": {}
+    },
+    {
+      "at": "2026-10-14T17:21:49.100Z",
+      "label": "F2-cancel",
+      "method": "POST",
+      "path": "/sales/orders/cancel/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:49.332Z",
+      "label": "F2-cancel-get",
+      "method": "GET",
+      "path": "/sales/orders/68420",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68420,
+        "salesorder_no": "SO-000068420",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "269000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "20000.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": true,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F2",
+        "items": [
+          {
+            "salesorder_detail_id": 74705,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:49.457Z",
+      "label": "F2-stock-after",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:49.458Z",
+      "label": "F2-stock-after-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:21:49.459Z",
+      "label": "F2-cleanup",
+      "id": 68420,
+      "moneyPreserved": true,
+      "stock": [
+        {
+          "item_id": 43842,
+          "before": {
+            "item_id": 43842,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          "after": {
+            "item_id": 43842,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          "restored": true
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:21:49.460Z",
+      "label": "F2-complete"
+    },
+    {
+      "at": "2026-10-14T17:21:50.810Z",
+      "label": "login-1791998509535",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:21:50.939Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:51.012Z",
+      "label": "master-43842",
+      "method": "GET",
+      "path": "/inventory/items/43842",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:51.085Z",
+      "label": "master-43843",
+      "method": "GET",
+      "path": "/inventory/items/43843",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:51.116Z",
+      "label": "tax",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:51.191Z",
+      "label": "F3-stock-before",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:51.192Z",
+      "label": "F3-stock-before-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:21:51.193Z",
+      "label": "F3-expected",
+      "createAttempt": 7,
+      "cumulativeCreateAttempts": 17,
+      "expected": {
+        "gross": 259000,
+        "lineDisc": 0,
+        "totalDisc": 0,
+        "addDisc": 0,
+        "shipping": 10000,
+        "net": 269000
+      },
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 0,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 269000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "original_shipment_cost": 30000,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F3",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 0,
+            "disc_amount": 0,
+            "amount": 259000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:51.193Z",
+      "label": "F3-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 0,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 269000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "original_shipment_cost": 30000,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F3",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 0,
+            "disc_amount": 0,
+            "amount": 259000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:51.440Z",
+      "label": "F3-create",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 200,
+      "snapshot": {
+        "id": 68421
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:51.441Z",
+      "label": "F3-fixture",
+      "id": 68421
+    },
+    {
+      "at": "2026-10-14T17:21:51.701Z",
+      "label": "F3-get",
+      "method": "GET",
+      "path": "/sales/orders/68421",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68421,
+        "salesorder_no": "SO-000068421",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "269000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F3",
+        "items": [
+          {
+            "salesorder_detail_id": 74706,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:51.702Z",
+      "label": "F3-exploratory-field",
+      "snapshot": {
+        "salesorder_id": 68421,
+        "salesorder_no": "SO-000068421",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "269000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F3",
+        "items": [
+          {
+            "salesorder_detail_id": 74706,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:51.941Z",
+      "label": "F3-cancel-pre",
+      "method": "GET",
+      "path": "/sales/orders/68421",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68421,
+        "salesorder_no": "SO-000068421",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "269000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F3",
+        "items": [
+          {
+            "salesorder_detail_id": 74706,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:51.942Z",
+      "label": "F3-cancel",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/cancel/",
+      "input": {}
+    },
+    {
+      "at": "2026-10-14T17:21:52.110Z",
+      "label": "F3-cancel",
+      "method": "POST",
+      "path": "/sales/orders/cancel/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:52.335Z",
+      "label": "F3-cancel-get",
+      "method": "GET",
+      "path": "/sales/orders/68421",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68421,
+        "salesorder_no": "SO-000068421",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "269000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": true,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F3",
+        "items": [
+          {
+            "salesorder_detail_id": 74706,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:52.379Z",
+      "label": "F3-stock-after",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:52.380Z",
+      "label": "F3-stock-after-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:21:52.381Z",
+      "label": "F3-cleanup",
+      "id": 68421,
+      "moneyPreserved": true,
+      "stock": [
+        {
+          "item_id": 43842,
+          "before": {
+            "item_id": 43842,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          "after": {
+            "item_id": 43842,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          "restored": true
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:21:52.381Z",
+      "label": "F3-complete"
+    },
+    {
+      "at": "2026-10-14T17:21:53.758Z",
+      "label": "login-1791998512455",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:21:53.824Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:53.895Z",
+      "label": "master-43842",
+      "method": "GET",
+      "path": "/inventory/items/43842",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:54.020Z",
+      "label": "master-43843",
+      "method": "GET",
+      "path": "/inventory/items/43843",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:54.056Z",
+      "label": "tax",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:54.109Z",
+      "label": "F4-stock-before",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:54.110Z",
+      "label": "F4-stock-before-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:21:54.110Z",
+      "label": "F4-expected",
+      "createAttempt": 8,
+      "cumulativeCreateAttempts": 18,
+      "expected": {
+        "gross": 259000,
+        "lineDisc": 0,
+        "totalDisc": 0,
+        "addDisc": 0,
+        "shipping": 10000,
+        "net": 269000
+      },
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 0,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 269000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "shipping_fee_discount_seller": 20000,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F4",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 0,
+            "disc_amount": 0,
+            "amount": 259000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:54.111Z",
+      "label": "F4-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 0,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 269000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "shipping_fee_discount_seller": 20000,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F4",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 0,
+            "disc_amount": 0,
+            "amount": 259000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:54.141Z",
+      "label": "F4-create",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 400,
+      "snapshot": {},
+      "errorCode": null,
+      "errorCategory": "Bad Request",
+      "genericInternalError": false,
+      "validationFields": [
+        "disc",
+        "shipping_fee_discount_seller"
+      ],
+      "notAllowed": true
+    },
+    {
+      "at": "2026-10-14T17:21:54.142Z",
+      "label": "F4-create-stop",
+      "ambiguous": false,
+      "reason": "HTTP 400"
+    },
+    {
+      "at": "2026-10-14T17:21:54.142Z",
+      "label": "run-stopped",
+      "errorCategory": "Error",
+      "message": "HTTP 400 F4-create",
+      "businessWritesBlocked": false,
+      "createAttempts": 8
+    },
+    {
+      "at": "2026-10-14T17:21:55.424Z",
+      "label": "login-1791998514207",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:21:55.764Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:55.842Z",
+      "label": "master-43842",
+      "method": "GET",
+      "path": "/inventory/items/43842",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:55.913Z",
+      "label": "master-43843",
+      "method": "GET",
+      "path": "/inventory/items/43843",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:55.941Z",
+      "label": "tax",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:55.990Z",
+      "label": "F5-stock-before",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:21:55.991Z",
+      "label": "F5-stock-before-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:21:55.991Z",
+      "label": "F5-expected",
+      "createAttempt": 9,
+      "cumulativeCreateAttempts": 19,
+      "expected": {
+        "gross": 259000,
+        "lineDisc": 0,
+        "totalDisc": 0,
+        "addDisc": 0,
+        "shipping": 10000,
+        "net": 269000
+      },
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 0,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 269000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "shipping_fee_discount_platform": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F5",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 0,
+            "disc_amount": 0,
+            "amount": 259000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:55.992Z",
+      "label": "F5-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 0,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 269000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "shipping_fee_discount_platform": 0,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F5",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 0,
+            "disc_amount": 0,
+            "amount": 259000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:21:56.021Z",
+      "label": "F5-create",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 400,
+      "snapshot": {},
+      "errorCode": null,
+      "errorCategory": "Bad Request",
+      "genericInternalError": false,
+      "validationFields": [
+        "disc",
+        "shipping_fee_discount_platform"
+      ],
+      "notAllowed": true
+    },
+    {
+      "at": "2026-10-14T17:21:56.022Z",
+      "label": "F5-create-stop",
+      "ambiguous": false,
+      "reason": "HTTP 400"
+    },
+    {
+      "at": "2026-10-14T17:21:56.023Z",
+      "label": "run-stopped",
+      "errorCategory": "Error",
+      "message": "HTTP 400 F5-create",
+      "businessWritesBlocked": false,
+      "createAttempts": 9
+    },
+    {
+      "at": "2026-10-14T17:23:18.287Z",
+      "label": "login-1791998596488",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:23:18.419Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:18.549Z",
+      "label": "master-43842",
+      "method": "GET",
+      "path": "/inventory/items/43842",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:23:18.668Z",
+      "label": "master-43843",
+      "method": "GET",
+      "path": "/inventory/items/43843",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:23:18.751Z",
+      "label": "tax",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:23:18.780Z",
+      "label": "accounts",
+      "method": "GET",
+      "path": "/accounts/lookup/all/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:23:18.906Z",
+      "label": "F6-stock-before",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:23:18.907Z",
+      "label": "F6-stock-before-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:23:18.908Z",
+      "label": "F6-expected",
+      "createAttempt": 10,
+      "cumulativeCreateAttempts": 20,
+      "expected": {
+        "gross": 259000,
+        "lineDisc": 20000,
+        "totalDisc": 20000,
+        "addDisc": 0,
+        "shipping": 10000,
+        "net": 249000
+      },
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 20000,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 249000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": 20000,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F6",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 7.72,
+            "disc_amount": 20000,
+            "amount": 239000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:18.909Z",
+      "label": "F6-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 20000,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 249000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": 20000,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F6",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 7.72,
+            "disc_amount": 20000,
+            "amount": 239000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:19.198Z",
+      "label": "F6-create",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 200,
+      "snapshot": {
+        "id": 68422
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:19.199Z",
+      "label": "F6-fixture",
+      "id": 68422
+    },
+    {
+      "at": "2026-10-14T17:23:19.433Z",
+      "label": "F6-get",
+      "method": "GET",
+      "path": "/sales/orders/68422",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68422,
+        "salesorder_no": "SO-000068422",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "249000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "20000.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F6",
+        "items": [
+          {
+            "salesorder_detail_id": 74707,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "7.72",
+            "disc_amount": "20000.0000",
+            "amount": "239000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:19.434Z",
+      "label": "F6-money",
+      "matches": true,
+      "mismatches": []
+    },
+    {
+      "at": "2026-10-14T17:23:19.435Z",
+      "label": "F6-marker-edit",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 68422,
+        "salesorder_no": "SO-000068422",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 259000,
+        "total_disc": 20000,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 249000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": 20000,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F6",
+        "items": [
+          {
+            "salesorder_detail_id": 74707,
+            "location_id": 2,
+            "item_id": 43842,
+            "qty_in_base": 1,
+            "price": 259000,
+            "disc": 7.72,
+            "disc_amount": 20000,
+            "amount": 239000,
+            "tax_amount": 0,
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:19.661Z",
+      "label": "F6-marker-edit",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 200,
+      "snapshot": {
+        "id": 68422
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:19.869Z",
+      "label": "F6-marker-get",
+      "method": "GET",
+      "path": "/sales/orders/68422",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68422,
+        "salesorder_no": "SO-000068422",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "249000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "20000.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F6",
+        "items": [
+          {
+            "salesorder_detail_id": 74707,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "7.72",
+            "disc_amount": "20000.0000",
+            "amount": "239000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:19.870Z",
+      "label": "F6-marker-verification",
+      "moneyPreserved": true,
+      "markerConfirmed": true
+    },
+    {
+      "at": "2026-10-14T17:23:20.116Z",
+      "label": "F6-invoice-pre",
+      "method": "GET",
+      "path": "/sales/orders/68422",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68422,
+        "salesorder_no": "SO-000068422",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "249000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "20000.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F6",
+        "items": [
+          {
+            "salesorder_detail_id": 74707,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "7.72",
+            "disc_amount": "20000.0000",
+            "amount": "239000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:20.117Z",
+      "label": "F6-invoice-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/packlists/create-invoice",
+      "input": {
+        "salesorder_id": 68422
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:20.360Z",
+      "label": "F6-invoice-create",
+      "method": "POST",
+      "path": "/sales/packlists/create-invoice",
+      "http": 500,
+      "snapshot": {},
+      "errorCode": "23113",
+      "errorCategory": "Internal Server Error",
+      "genericInternalError": true,
+      "validationFields": [],
+      "notAllowed": false
+    },
+    {
+      "at": "2026-10-14T17:23:20.361Z",
+      "label": "F6-invoice-create-stop",
+      "ambiguous": true,
+      "reason": "HTTP 500"
+    },
+    {
+      "at": "2026-10-14T17:23:20.362Z",
+      "label": "run-stopped",
+      "errorCategory": "Error",
+      "message": "HTTP 500 F6-invoice-create",
+      "businessWritesBlocked": true,
+      "createAttempts": 10
+    },
+    {
+      "at": "2026-10-14T17:23:27.407Z",
+      "label": "login-1791998606356",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:23:27.483Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:27.703Z",
+      "label": "reconcile-Q",
+      "method": "GET",
+      "path": "/sales/orders/68416",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68416,
+        "salesorder_no": "SO-000068416",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "518000.0000",
+        "total_disc": "51800.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "466200.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": true,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-Q",
+        "items": [
+          {
+            "salesorder_detail_id": 74700,
+            "item_id": 43842,
+            "qty_in_base": "2.0000",
+            "price": "259000.0000",
+            "disc": "10.00",
+            "disc_amount": "51800.0000",
+            "amount": "466200.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:27.961Z",
+      "label": "reconcile-L",
+      "method": "GET",
+      "path": "/sales/orders/68417",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68417,
+        "salesorder_no": "SO-000068417",
+        "invoice_id": 45952,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "509000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "489000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-L",
+        "items": [
+          {
+            "salesorder_detail_id": 74701,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "3.93",
+            "disc_amount": "10177.0000",
+            "amount": "248823.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 74702,
+            "item_id": 43843,
+            "qty_in_base": "1.0000",
+            "price": "250000.0000",
+            "disc": "3.93",
+            "disc_amount": "9823.0000",
+            "amount": "240177.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:28.109Z",
+      "label": "reconcile-invoice-L",
+      "method": "GET",
+      "path": "/sales/invoices/45952",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": null,
+        "salesorder_no": "SO-000068417",
+        "invoice_id": 45952,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "509000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "489000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "shipping_cost_discount": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "payment_amount": "489000.0000",
+        "is_tax_included": false,
+        "ref_no": "SO-000068417",
+        "items": [
+          {
+            "salesorder_detail_id": 74701,
+            "invoice_detail_id": 50122,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "3.93",
+            "disc_amount": "10177.0000",
+            "amount": "248823.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 74702,
+            "invoice_detail_id": 50123,
+            "item_id": 43843,
+            "qty_in_base": "1.0000",
+            "price": "250000.0000",
+            "disc": "3.93",
+            "disc_amount": "9823.0000",
+            "amount": "240177.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:28.391Z",
+      "label": "reconcile-S",
+      "method": "GET",
+      "path": "/sales/orders/68418",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68418,
+        "salesorder_no": "SO-000068418",
+        "invoice_id": 45953,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "289000.0000",
+        "shipping_cost": "30000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-S",
+        "items": [
+          {
+            "salesorder_detail_id": 74703,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:28.541Z",
+      "label": "reconcile-invoice-S",
+      "method": "GET",
+      "path": "/sales/invoices/45953",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": null,
+        "salesorder_no": "SO-000068418",
+        "invoice_id": 45953,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "289000.0000",
+        "shipping_cost": "30000.0000",
+        "insurance_cost": "0.0000",
+        "shipping_cost_discount": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "payment_amount": "289000.0000",
+        "is_tax_included": false,
+        "ref_no": "SO-000068418",
+        "items": [
+          {
+            "salesorder_detail_id": 74703,
+            "invoice_detail_id": 50124,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:28.807Z",
+      "label": "reconcile-R",
+      "method": "GET",
+      "path": "/sales/orders/68419",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68419,
+        "salesorder_no": "SO-000068419",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "239000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": true,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-R",
+        "items": [
+          {
+            "salesorder_detail_id": 74704,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "7.72",
+            "disc_amount": "20000.0000",
+            "amount": "239000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:29.039Z",
+      "label": "reconcile-F2",
+      "method": "GET",
+      "path": "/sales/orders/68420",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68420,
+        "salesorder_no": "SO-000068420",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "269000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": null,
+        "shipping_cost_discount": "20000.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": true,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F2",
+        "items": [
+          {
+            "salesorder_detail_id": 74705,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:29.287Z",
+      "label": "reconcile-F3",
+      "method": "GET",
+      "path": "/sales/orders/68421",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68421,
+        "salesorder_no": "SO-000068421",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "269000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "0.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": true,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F3",
+        "items": [
+          {
+            "salesorder_detail_id": 74706,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:29.499Z",
+      "label": "reconcile-F6",
+      "method": "GET",
+      "path": "/sales/orders/68422",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68422,
+        "salesorder_no": "SO-000068422",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "249000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "20000.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F6",
+        "items": [
+          {
+            "salesorder_detail_id": 74707,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "7.72",
+            "disc_amount": "20000.0000",
+            "amount": "239000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:23:29.574Z",
+      "label": "reconcile-stock",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:23:29.576Z",
+      "label": "reconcile-stock-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 1,
+          "available": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:23:29.615Z",
+      "label": "reconcile-list",
+      "path": "/wms/sales/orders/ready-to-process/",
+      "http": 200,
+      "totalCount": 0,
+      "rows": []
+    },
+    {
+      "at": "2026-10-14T17:23:30.506Z",
+      "label": "reconcile-list",
+      "path": "/sales/orders/cancel/",
+      "http": 200,
+      "totalCount": 11,
+      "rows": [
+        {
+          "salesorder_id": 68408,
+          "salesorder_no": "SO-000068408",
+          "source": 1,
+          "grand_total": "259000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-A"
+        },
+        {
+          "salesorder_id": 68409,
+          "salesorder_no": "SO-000068409",
+          "source": 1,
+          "grand_total": "233100.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-F"
+        },
+        {
+          "salesorder_id": 68410,
+          "salesorder_no": "SO-000068410",
+          "source": 1,
+          "grand_total": "239000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-H"
+        },
+        {
+          "salesorder_id": 68412,
+          "salesorder_no": "SO-000068412",
+          "source": 1,
+          "grand_total": "466200.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-K"
+        },
+        {
+          "salesorder_id": 68413,
+          "salesorder_no": "SO-000068413",
+          "source": 1,
+          "grand_total": "489000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-L"
+        },
+        {
+          "salesorder_id": 68414,
+          "salesorder_no": "SO-000068414",
+          "source": 1,
+          "grand_total": "249000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-M"
+        },
+        {
+          "salesorder_id": 68415,
+          "salesorder_no": "SO-000068415",
+          "source": 1,
+          "grand_total": "234000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-N"
+        },
+        {
+          "salesorder_id": 68416,
+          "salesorder_no": "SO-000068416",
+          "source": 1,
+          "grand_total": "466200.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-Q"
+        },
+        {
+          "salesorder_id": 68419,
+          "salesorder_no": "SO-000068419",
+          "source": 1,
+          "grand_total": "239000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-R"
+        },
+        {
+          "salesorder_id": 68420,
+          "salesorder_no": "SO-000068420",
+          "source": 1,
+          "grand_total": "269000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F2"
+        },
+        {
+          "salesorder_id": 68421,
+          "salesorder_no": "SO-000068421",
+          "source": 1,
+          "grand_total": "269000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F3"
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:23:30.602Z",
+      "label": "reconcile-list",
+      "path": "/sales/orders/failed/",
+      "http": 200,
+      "totalCount": 0,
+      "rows": []
+    },
+    {
+      "at": "2026-10-14T17:23:31.077Z",
+      "label": "reconcile-list",
+      "path": "/sales/invoices/",
+      "http": 200,
+      "totalCount": 3,
+      "rows": [
+        {
+          "salesorder_id": 68411,
+          "grand_total": "239000.0000",
+          "due": "0.00000000000000000000",
+          "ref_no": "SO-000068411"
+        },
+        {
+          "salesorder_id": 68417,
+          "grand_total": "489000.0000",
+          "due": "0.00000000000000000000",
+          "ref_no": "SO-000068417"
+        },
+        {
+          "salesorder_id": 68418,
+          "grand_total": "289000.0000",
+          "due": "0.00000000000000000000",
+          "ref_no": "SO-000068418"
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:23:31.351Z",
+      "label": "reconcile-list",
+      "path": "/sales/payments/",
+      "http": 200,
+      "totalCount": 3,
+      "rows": [
+        {
+          "payment_id": 40,
+          "amount": "239000.0000",
+          "payment_type": 0,
+          "account_id": 2
+        },
+        {
+          "payment_id": 42,
+          "amount": "489000.0000",
+          "payment_type": 0,
+          "account_id": 2
+        },
+        {
+          "payment_id": 44,
+          "amount": "289000.0000",
+          "payment_type": 0,
+          "account_id": 2
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:31:46.990Z",
+      "label": "login-1791999105607",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-14T17:31:47.117Z",
+      "label": "contact",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "location_id": null,
+        "account_id": null
+      }
+    },
+    {
+      "at": "2026-10-14T17:31:47.924Z",
+      "label": "F6-reconciliation-start",
+      "method": "GET",
+      "path": "/sales/orders/68422",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68422,
+        "salesorder_no": "SO-000068422",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "249000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "20000.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F6",
+        "items": [
+          {
+            "salesorder_detail_id": 74707,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "7.72",
+            "disc_amount": "20000.0000",
+            "amount": "239000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:31:48.575Z",
+      "label": "F6-reconciliation-list",
+      "path": "/sales/invoices/",
+      "page": 1,
+      "http": 200,
+      "totalCount": 3,
+      "returnedRows": 3,
+      "fixtureRows": [
+        {
+          "doc_id": 45951,
+          "doc_type": "invoice",
+          "salesorder_id": 68411,
+          "grand_total": "239000.0000",
+          "due": "0.00000000000000000000",
+          "ref_no": "SO-000068411"
+        },
+        {
+          "doc_id": 45952,
+          "doc_type": "invoice",
+          "salesorder_id": 68417,
+          "grand_total": "489000.0000",
+          "due": "0.00000000000000000000",
+          "ref_no": "SO-000068417"
+        },
+        {
+          "doc_id": 45953,
+          "doc_type": "invoice",
+          "salesorder_id": 68418,
+          "grand_total": "289000.0000",
+          "due": "0.00000000000000000000",
+          "ref_no": "SO-000068418"
+        }
+      ],
+      "coverageComplete": true
+    },
+    {
+      "at": "2026-10-14T17:31:48.792Z",
+      "label": "F6-invoice-candidate-45951",
+      "method": "GET",
+      "path": "/sales/invoices/45951",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": null,
+        "salesorder_no": "SO-000068411",
+        "invoice_id": 45951,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "239000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "shipping_cost_discount": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "payment_amount": "239000.0000",
+        "is_tax_included": false,
+        "ref_no": "SO-000068411",
+        "items": [
+          {
+            "salesorder_detail_id": 74694,
+            "invoice_detail_id": 50121,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "7.72",
+            "disc_amount": "20000.0000",
+            "amount": "239000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:31:48.793Z",
+      "label": "F6-invoice-candidate-link",
+      "invoiceId": 45951,
+      "linkedTo68422": false
+    },
+    {
+      "at": "2026-10-14T17:31:48.996Z",
+      "label": "F6-invoice-candidate-45952",
+      "method": "GET",
+      "path": "/sales/invoices/45952",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": null,
+        "salesorder_no": "SO-000068417",
+        "invoice_id": 45952,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "509000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "489000.0000",
+        "shipping_cost": "0.0000",
+        "insurance_cost": "0.0000",
+        "shipping_cost_discount": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "payment_amount": "489000.0000",
+        "is_tax_included": false,
+        "ref_no": "SO-000068417",
+        "items": [
+          {
+            "salesorder_detail_id": 74701,
+            "invoice_detail_id": 50122,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "3.93",
+            "disc_amount": "10177.0000",
+            "amount": "248823.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          },
+          {
+            "salesorder_detail_id": 74702,
+            "invoice_detail_id": 50123,
+            "item_id": 43843,
+            "qty_in_base": "1.0000",
+            "price": "250000.0000",
+            "disc": "3.93",
+            "disc_amount": "9823.0000",
+            "amount": "240177.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:31:48.997Z",
+      "label": "F6-invoice-candidate-link",
+      "invoiceId": 45952,
+      "linkedTo68422": false
+    },
+    {
+      "at": "2026-10-14T17:31:49.200Z",
+      "label": "F6-invoice-candidate-45953",
+      "method": "GET",
+      "path": "/sales/invoices/45953",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": null,
+        "salesorder_no": "SO-000068418",
+        "invoice_id": 45953,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "0.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "289000.0000",
+        "shipping_cost": "30000.0000",
+        "insurance_cost": "0.0000",
+        "shipping_cost_discount": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "payment_amount": "289000.0000",
+        "is_tax_included": false,
+        "ref_no": "SO-000068418",
+        "items": [
+          {
+            "salesorder_detail_id": 74703,
+            "invoice_detail_id": 50124,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "amount": "259000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:31:49.201Z",
+      "label": "F6-invoice-candidate-link",
+      "invoiceId": 45953,
+      "linkedTo68422": false
+    },
+    {
+      "at": "2026-10-14T17:31:49.273Z",
+      "label": "F6-reconciliation-list",
+      "path": "/sales/payments/",
+      "page": 1,
+      "http": 200,
+      "totalCount": 3,
+      "returnedRows": 3,
+      "fixtureRows": [
+        {
+          "payment_id": 40,
+          "amount": "239000.0000",
+          "payment_type": 0,
+          "account_id": 2
+        },
+        {
+          "payment_id": 42,
+          "amount": "489000.0000",
+          "payment_type": 0,
+          "account_id": 2
+        },
+        {
+          "payment_id": 44,
+          "amount": "289000.0000",
+          "payment_type": 0,
+          "account_id": 2
+        }
+      ],
+      "coverageComplete": true
+    },
+    {
+      "at": "2026-10-14T17:31:49.407Z",
+      "label": "F6-payment-candidate-40",
+      "method": "GET",
+      "path": "/sales/payments/40",
+      "http": 200,
+      "snapshot": {
+        "payment_id": 40,
+        "amount": "239000.0000",
+        "payment_type": 0,
+        "account_id": 2,
+        "invoices": [
+          {
+            "salesorder_id": 68411,
+            "invoice_id": 45951,
+            "payment_id": 40,
+            "payment_detail_id": 15,
+            "grand_total": 239000,
+            "due": 0,
+            "payment_amount": 239000,
+            "ref_no": "SO-000068411"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:31:49.408Z",
+      "label": "F6-payment-candidate-link",
+      "paymentId": 40,
+      "linkedTo68422": false
+    },
+    {
+      "at": "2026-10-14T17:31:49.802Z",
+      "label": "F6-payment-candidate-42",
+      "method": "GET",
+      "path": "/sales/payments/42",
+      "http": 200,
+      "snapshot": {
+        "payment_id": 42,
+        "amount": "489000.0000",
+        "payment_type": 0,
+        "account_id": 2,
+        "invoices": [
+          {
+            "salesorder_id": 68417,
+            "invoice_id": 45952,
+            "payment_id": 42,
+            "payment_detail_id": 16,
+            "grand_total": 489000,
+            "due": 0,
+            "payment_amount": 489000,
+            "ref_no": "SO-000068417"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:31:49.804Z",
+      "label": "F6-payment-candidate-link",
+      "paymentId": 42,
+      "linkedTo68422": false
+    },
+    {
+      "at": "2026-10-14T17:31:49.899Z",
+      "label": "F6-payment-candidate-44",
+      "method": "GET",
+      "path": "/sales/payments/44",
+      "http": 200,
+      "snapshot": {
+        "payment_id": 44,
+        "amount": "289000.0000",
+        "payment_type": 0,
+        "account_id": 2,
+        "invoices": [
+          {
+            "salesorder_id": 68418,
+            "invoice_id": 45953,
+            "payment_id": 44,
+            "payment_detail_id": 17,
+            "grand_total": 289000,
+            "due": 0,
+            "payment_amount": 289000,
+            "ref_no": "SO-000068418"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:31:49.901Z",
+      "label": "F6-payment-candidate-link",
+      "paymentId": 44,
+      "linkedTo68422": false
+    },
+    {
+      "at": "2026-10-14T17:31:50.439Z",
+      "label": "F6-reconciliation-list",
+      "path": "/sales/",
+      "page": 1,
+      "http": 200,
+      "totalCount": 3,
+      "returnedRows": 3,
+      "fixtureRows": [
+        {
+          "doc_id": 45951,
+          "doc_type": "invoice",
+          "salesorder_id": 68411,
+          "grand_total": "239000.0000",
+          "due": "0.00000000000000000000",
+          "ref_no": "SO-000068411"
+        },
+        {
+          "doc_id": 45952,
+          "doc_type": "invoice",
+          "salesorder_id": 68417,
+          "grand_total": "489000.0000",
+          "due": "0.00000000000000000000",
+          "ref_no": "SO-000068417"
+        },
+        {
+          "doc_id": 45953,
+          "doc_type": "invoice",
+          "salesorder_id": 68418,
+          "grand_total": "289000.0000",
+          "due": "0.00000000000000000000",
+          "ref_no": "SO-000068418"
+        }
+      ],
+      "coverageComplete": true
+    },
+    {
+      "at": "2026-10-14T17:31:51.059Z",
+      "label": "F6-reconciliation-list",
+      "path": "/sales/orders/cancel/",
+      "page": 1,
+      "http": 200,
+      "totalCount": 11,
+      "returnedRows": 11,
+      "fixtureRows": [
+        {
+          "salesorder_id": 68408,
+          "salesorder_no": "SO-000068408",
+          "source": 1,
+          "grand_total": "259000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-A"
+        },
+        {
+          "salesorder_id": 68409,
+          "salesorder_no": "SO-000068409",
+          "source": 1,
+          "grand_total": "233100.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-F"
+        },
+        {
+          "salesorder_id": 68410,
+          "salesorder_no": "SO-000068410",
+          "source": 1,
+          "grand_total": "239000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-H"
+        },
+        {
+          "salesorder_id": 68412,
+          "salesorder_no": "SO-000068412",
+          "source": 1,
+          "grand_total": "466200.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-K"
+        },
+        {
+          "salesorder_id": 68413,
+          "salesorder_no": "SO-000068413",
+          "source": 1,
+          "grand_total": "489000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-L"
+        },
+        {
+          "salesorder_id": 68414,
+          "salesorder_no": "SO-000068414",
+          "source": 1,
+          "grand_total": "249000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-M"
+        },
+        {
+          "salesorder_id": 68415,
+          "salesorder_no": "SO-000068415",
+          "source": 1,
+          "grand_total": "234000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z-N"
+        },
+        {
+          "salesorder_id": 68416,
+          "salesorder_no": "SO-000068416",
+          "source": 1,
+          "grand_total": "466200.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-Q"
+        },
+        {
+          "salesorder_id": 68419,
+          "salesorder_no": "SO-000068419",
+          "source": 1,
+          "grand_total": "239000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-R"
+        },
+        {
+          "salesorder_id": 68420,
+          "salesorder_no": "SO-000068420",
+          "source": 1,
+          "grand_total": "269000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F2"
+        },
+        {
+          "salesorder_id": 68421,
+          "salesorder_no": "SO-000068421",
+          "source": 1,
+          "grand_total": "269000.0000",
+          "is_canceled": true,
+          "is_paid": null,
+          "channel_status": "Belum Bayar",
+          "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F3"
+        }
+      ],
+      "coverageComplete": true
+    },
+    {
+      "at": "2026-10-14T17:31:52.376Z",
+      "label": "F6-reconciliation-list",
+      "path": "/sales/orders/completed/",
+      "page": 1,
+      "http": 200,
+      "totalCount": 0,
+      "returnedRows": 0,
+      "fixtureRows": [],
+      "coverageComplete": true
+    },
+    {
+      "at": "2026-10-14T17:31:52.443Z",
+      "label": "F6-reconciliation-list",
+      "path": "/sales/orders/failed/",
+      "page": 1,
+      "http": 200,
+      "totalCount": 0,
+      "returnedRows": 0,
+      "fixtureRows": [],
+      "coverageComplete": true
+    },
+    {
+      "at": "2026-10-14T17:31:52.488Z",
+      "label": "F6-reconciliation-list",
+      "path": "/wms/sales/orders/ready-to-process/",
+      "page": 1,
+      "http": 200,
+      "totalCount": 0,
+      "returnedRows": 0,
+      "fixtureRows": [],
+      "coverageComplete": true
+    },
+    {
+      "at": "2026-10-14T17:31:52.557Z",
+      "label": "F6-reconciliation-stock",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {}
+    },
+    {
+      "at": "2026-10-14T17:31:52.558Z",
+      "label": "F6-reconciliation-stock-rows",
+      "rows": [
+        {
+          "item_id": 43843,
+          "location_id": 2,
+          "on_hand": 0,
+          "on_order": 0,
+          "available": 0
+        },
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 1,
+          "available": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-10-14T17:31:53.278Z",
+      "label": "F6-reconciliation-end",
+      "method": "GET",
+      "path": "/sales/orders/68422",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68422,
+        "salesorder_no": "SO-000068422",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "249000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "20000.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F6",
+        "items": [
+          {
+            "salesorder_detail_id": 74707,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "7.72",
+            "disc_amount": "20000.0000",
+            "amount": "239000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-14T17:31:53.280Z",
+      "label": "F6-reconciliation-summary",
+      "soId": 68422,
+      "invoiceId": null,
+      "linkedInvoices": [],
+      "linkedPayments": [],
+      "soCanceled": null,
+      "money": {
+        "salesorder_id": 68422,
+        "salesorder_no": "SO-000068422",
+        "invoice_id": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "259000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "249000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "20000.0000",
+        "voucher_amount": null,
+        "discount_marketplace": "0.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Menunggu Verifikasi",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-2026-10-14T17-17-36-342Z-F6",
+        "items": [
+          {
+            "salesorder_detail_id": 74707,
+            "item_id": 43842,
+            "qty_in_base": "1.0000",
+            "price": "259000.0000",
+            "disc": "7.72",
+            "disc_amount": "20000.0000",
+            "amount": "239000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1
+          }
+        ]
+      },
+      "stock": [
+        {
+          "item_id": 43842,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 1,
+          "available": 0
+        }
+      ],
+      "businessWrites": 0,
+      "conversionDisposition": "not-confirmed-no-linked-invoice-observed",
+      "supportAccounting": "deferred-by-owner",
+      "writeStopRemains": true
+    }
+  ],
+  "fixtures": [
+    {
+      "case": "Q",
+      "id": 68416,
+      "ref": "RESEARCH08-2026-10-14T17-17-36-342Z-Q",
+      "stage": "canceled"
+    },
+    {
+      "case": "L",
+      "id": 68417,
+      "ref": "RESEARCH08-2026-10-14T17-17-36-342Z-L",
+      "stage": "paid",
+      "invoiceId": 45952,
+      "paymentId": 42
+    },
+    {
+      "case": "S",
+      "id": 68418,
+      "ref": "RESEARCH08-2026-10-14T17-17-36-342Z-S",
+      "stage": "paid",
+      "invoiceId": 45953,
+      "paymentId": 44
+    },
+    {
+      "case": "R",
+      "id": 68419,
+      "ref": "RESEARCH08-2026-10-14T17-17-36-342Z-R",
+      "stage": "canceled"
+    },
+    {
+      "case": "F2",
+      "id": 68420,
+      "ref": "RESEARCH08-2026-10-14T17-17-36-342Z-F2",
+      "stage": "canceled"
+    },
+    {
+      "case": "F3",
+      "id": 68421,
+      "ref": "RESEARCH08-2026-10-14T17-17-36-342Z-F3",
+      "stage": "canceled"
+    },
+    {
+      "case": "F6",
+      "id": 68422,
+      "ref": "RESEARCH08-2026-10-14T17-17-36-342Z-F6",
+      "stage": "created"
+    }
+  ],
+  "blocked": true
+}

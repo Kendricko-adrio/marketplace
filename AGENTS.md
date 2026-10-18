@@ -90,7 +90,8 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   must log through the app's structured logger (`apps/store/src/lib/logger.ts`
   / `apps/admin/src/lib/logger.ts`): minimum `info` on success, `error` with
   context on failure. Details: [`docs/features/logging.md`](docs/features/logging.md).
-- Write AGENTS.md and code-facing docs in **English**.
+- Keep AGENTS.md in **English**. For generated documents, follow the
+  **Indonesian documentation policy** in §6.
 
 ## 4. Agent Constraints & Boundaries
 
@@ -194,6 +195,17 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 
 ## 6. Communication With the User
 
+- **Generate all documentation in Indonesian**, unless the user explicitly
+  requests another language. This includes research notes, proposals, wayfinder
+  maps and decision tickets, specifications, plans, ADRs, architecture/feature/API
+  documentation, and agent-facing handoffs. Preserve commonly used English
+  technical/product terms, code/API/database identifiers, file paths, commands,
+  and machine-readable tracker metadata keys/values rather than translating
+  them awkwardly or breaking automation. AGENTS.md remains the English-language
+  agent instruction file; this exception does not make English the default for
+  other generated documents. Existing documents outside the requested scope do
+  not need wholesale translation, but newly generated content must follow this
+  policy.
 - Respond in the user's language unless they request another language. When
   responding in Indonesian, keep commonly used English technical and product
   terms in English rather than translating them literally or awkwardly. This

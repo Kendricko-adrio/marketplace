@@ -11,6 +11,8 @@ import { eq, and, inArray } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
 import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
+import { verifyCheckoutStock } from "@marketplace/db/src/checkout-live-stock";
+import { persistCheckoutStockAdjustments, checkoutStockAdjustmentMessage } from "@/lib/checkout-stock-adjustment";
 
 // Pre-checkout validation: verifies that the branch of the selected items is
 // still active before the customer is allowed to proceed to /checkout. If the
@@ -78,6 +80,7 @@ export async function POST(request: NextRequest) {
         variantId: cartItems.variantId,
         quantity: cartItems.quantity,
         productName: products.name,
+        jubelioItemId: productVariants.jubelioItemId,
       })
       .from(cartItems)
       .innerJoin(productVariants, eq(cartItems.variantId, productVariants.id))
@@ -86,7 +89,7 @@ export async function POST(request: NextRequest) {
         and(eq(cartItems.cartId, cart.id), inArray(cartItems.id, selectedItemIds))
       );
 
-    if (selectedItems.length === 0) {
+    if (selectedItems.length !== new Set(selectedItemIds).size) {
       return NextResponse.json(
         { success: false, error: "No selected items to checkout" },
         { status: 400 }
@@ -122,6 +125,7 @@ export async function POST(request: NextRequest) {
         id: branches.id,
         name: branches.name,
         status: branches.status,
+        jubelioLocationId: branches.jubelioLocationId,
       })
       .from(branches)
       .where(eq(branches.id, branchId))
@@ -165,10 +169,48 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Local stock is provisional. Never remove or lower cart items using a
-    // daily snapshot; the final place-order verifies the provider live.
-    // Branch is active — ok to proceed to /checkout.
-    log.info("checkout validation passed", { branchId });
+    const unmappedItem = selectedItems.find((item) => item.jubelioItemId == null);
+    if (branch[0].jubelioLocationId == null || unmappedItem) {
+      log.warn("checkout validation rejected — missing Jubelio mapping", { branchId, variantId: unmappedItem?.variantId });
+      return withRequestId(NextResponse.json({
+        success: false,
+        error: "Barang atau cabang belum terhubung ke stok Jubelio. Silakan hubungi toko.",
+      }, { status: 409 }), log);
+    }
+
+    // Check live before entering /checkout, not against the provisional badge.
+    // No holds/orders are created here; place-order repeats this verification
+    // and acquires its atomic hold because stock can change during checkout.
+    const stockCheck = await verifyCheckoutStock(db, selectedItems.map((item) => ({
+      branchId,
+      variantId: item.variantId,
+      itemId: item.jubelioItemId!,
+      locationId: branch[0].jubelioLocationId!,
+      quantity: item.quantity,
+      productName: item.productName,
+    })));
+    if (!stockCheck.ok) {
+      if (stockCheck.reason === "unavailable") {
+        log.error("checkout validation rejected — Jubelio stock unavailable", {
+          branchId, detail: stockCheck.detail, productName: stockCheck.productName,
+        });
+        return withRequestId(NextResponse.json({
+          success: false,
+          error: "Stok Jubelio belum dapat diverifikasi. Silakan coba beberapa saat lagi.",
+        }, { status: 503 }), log);
+      }
+      const adjustments = await persistCheckoutStockAdjustments(db, cart.id,
+        selectedItems.map((item) => ({ cartItemId: item.id, variantId: item.variantId, branchId: item.branchId })),
+        stockCheck.shortages);
+      log.info("cart checkout quantities adjusted to verified stock", { branchId, adjustments });
+      return withRequestId(NextResponse.json({
+        success: false,
+        code: "CHECKOUT_STOCK_ADJUSTED",
+        adjustments,
+        error: checkoutStockAdjustmentMessage(adjustments),
+      }, { status: 409 }), log);
+    }
+    log.info("checkout validation passed with live Jubelio stock", { branchId });
     return withRequestId(
       NextResponse.json({ success: true }),
       log

@@ -12,9 +12,18 @@ export type CheckoutStockSelection = {
   productName: string;
 };
 
+export type CheckoutStockShortage = {
+  branchId: string;
+  variantId: string;
+  productName: string;
+  requestedQuantity: number;
+  availableQuantity: number;
+};
+
 export type CheckoutStockResult =
   | { ok: true; observedAt: Date }
-  | { ok: false; reason: "insufficient" | "unavailable"; productName: string; detail?: string };
+  | { ok: false; reason: "insufficient"; productName: string; shortages: CheckoutStockShortage[]; detail?: string }
+  | { ok: false; reason: "unavailable"; productName: string; detail?: string };
 
 /**
  * Reconcile selected items with a fresh provider observation before any SO
@@ -57,6 +66,7 @@ export async function verifyCheckoutStock(
   const byPair = new Map(observed.map((row) => [`${row.itemId}:${row.locationId}`, row]));
   if (byPair.size !== mapped.size) return { ok: false, reason: "unavailable", detail: "observation_missing_or_invalid", productName: selections[0].productName };
 
+  const shortages: CheckoutStockShortage[] = [];
   for (const [index, item] of selections.entries()) {
     const remote = byPair.get(`${item.itemId}:${item.locationId}`)!;
     const before = snapshots[index];
@@ -76,9 +86,20 @@ export async function verifyCheckoutStock(
       or(sql`${branchStocks.providerStockSyncedAt} is null`, lt(branchStocks.providerStockSyncedAt, observedAt))
     )).returning({ pending: branchStocks.pendingRemoteStock });
     if (!updated.length) return { ok: false, reason: "unavailable", detail: "concurrent_local_change", productName: item.productName };
-    if (remote.available - updated[0].pending < item.quantity) {
-      return { ok: false, reason: "insufficient", productName: item.productName };
+    const availableQuantity = Math.max(0, remote.available - updated[0].pending);
+    if (availableQuantity < item.quantity) {
+      shortages.push({
+        branchId: item.branchId,
+        variantId: item.variantId,
+        productName: item.productName,
+        requestedQuantity: item.quantity,
+        availableQuantity,
+      });
     }
   }
-  return { ok: true, observedAt };
+  // Only propose adjustments after EVERY selected observation is verified.
+  // A missing/invalid/concurrently changed pair must never partially edit cart quantities.
+  return shortages.length
+    ? { ok: false, reason: "insufficient", productName: shortages[0].productName, shortages }
+    : { ok: true, observedAt };
 }

@@ -75,7 +75,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | POST | `/api/cart/items` | client-session | Add variant@branch to cart (merge) |
 | PUT | `/api/cart/items/{id}` | client-session | Update cart item quantity |
 | DELETE | `/api/cart/items/{id}` | client-session | Remove a cart item |
-| POST | `/api/cart/validate-checkout` | client-session | Pre-checkout branch validation (stock is checked live at place-order) |
+| POST | `/api/cart/validate-checkout` | client-session | Validate branch and live stock before entering checkout; adjust insufficient quantities |
 | POST | `/api/checkout/validate-step-2` | client-session | Validate pickup slot vs operating hours |
 | GET | `/api/checkout/order-status` | client-session | Poll order status/paymentStatus |
 | POST | `/api/checkout/place-order` | client-session | Verify live Jubelio stock, hold locally, confirm SO, then create Midtrans Snap |
@@ -337,11 +337,11 @@ Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, 
 
 #### `POST` `/api/cart/validate-checkout`
 - **Auth**: client-session
-- **Purpose**: Pre-checkout validation that the selected items' branch is still active.
+- **Purpose**: Validate the selected branch and live Jubelio stock when the customer clicks Checkout in cart, before entering `/checkout`.
 - **Params**: —
 - **Body**: `{ selectedItemIds: string[] (min 1) }`
-- **Response**: 200 `{ success: true }`; 400 invalid body / `"Cart is empty"` / `"No selected items to checkout"` / multi-branch error / `{ success: false, code: "BRANCH_INACTIVE", branchName, removedItemCount }`; 401 if unauth; 500 on error
-- **Notes**: Enforces single-branch checkout. On inactive/removed branch, deletes ALL of that branch's items from the cart. Stock is not checked or mutated here; the provider read and atomic hold happen during place-order.
+- **Response**: 200 `{ success: true }` or `{ success: false, code: "BRANCH_INACTIVE", branchName, removedItemCount }`; 400 invalid body / empty cart / missing selected items / multi-branch error; 401 if unauth; 409 missing Jubelio mapping or `{ success: false, code: "CHECKOUT_STOCK_ADJUSTED", error, adjustments: [{ cartItemId, productName, requestedQuantity, availableQuantity }] }`; 503 unavailable/incomplete/inconsistent provider stock; 500 on error
+- **Notes**: Enforces single-branch checkout and ownership of all selected IDs. On inactive/removed branch, deletes ALL of that branch's items from the caller's cart. For an active mapped branch, reads selected stock live and reconciles the mirror without clearing local holds. A verified shortage saves positive sellable quantities in one quantity-guarded transaction, returns 409 and keeps the customer in cart (e.g. 31 requested, 20 sellable → quantity 20). UI shows a popup, updates totals, retains available-item selection and requires another Checkout click. Zero-stock items stay in cart but are deselected; failed verification does not change quantities. No reservation, order, SO or payment is created here. Place-order still re-reads stock and acquires its atomic hold at Bayar Sekarang.
 
 #### `POST` `/api/checkout/validate-step-2`
 - **Auth**: client-session
@@ -364,7 +364,8 @@ Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, 
 - **Purpose**: Read selected stock live from Jubelio, hold locally, confirm the Jubelio Sales Order, then create Midtrans Snap and remove checked-out cart items.
 - **Params**: —
 - **Body**: `{ phone: string (8-20), email: string (email), pickupDate: string (YYYY-MM-DD), pickupTime: string (HH:mm), selectedItemIds: string[] (min 1) }`
-- **Response**: 200 `{ success, orderId, redirectUrl, token }`; 400 invalid body/local stock failure; 401 if unauth; 409 insufficient provider stock or definitive Jubelio rejection; 503 unavailable/inconsistent provider stock or ambiguous Jubelio confirmation; 500 on error; 502 on Midtrans failure (cart preserved)
+- **Response**: 200 `{ success, orderId, redirectUrl, token }`; 400 invalid body/local stock failure; 401 if unauth; 409 verified shortage `{ success: false, code: "CHECKOUT_STOCK_ADJUSTED", error, adjustments: [{ cartItemId, productName, requestedQuantity, availableQuantity }] }` or definitive Jubelio rejection; 503 unavailable/inconsistent provider stock or ambiguous Jubelio confirmation; 500 on error; 502 on Midtrans failure (cart preserved)
+- **Stock adjustment** (pickup and delivery): only after all selected observations are verified, positive `availableQuantity` (provider available minus pending local holds, clamped to zero) is saved as the cart quantity for every insufficient selected item. Updates are transactional and scoped to the caller's cart and submitted quantity. `availableQuantity: 0` leaves the item in cart; the browser deselects it from checkout. No order, SO intent, SO or Snap is created on this refusal. UI recalculates amounts and requires fresh confirmation; delivery also requotes and requires service reselection. Failed/incomplete provider verification preserves cart quantities. See [stock reservation](features/stock-reservation.md).
 - **Notes**: Enforces single-branch checkout and a Jakarta-time pickup slot. Server prices are authoritative. PPN uses `tax.ppnRatePercent` (11 fallback), applies after discount, rounds upward to whole Rupiah, and persists `ppnRate`/`ppnAmount` with the gross `total`. Before the transaction, the server reads selected pairs live via `/inventory/items/all-stocks/` and reconciles their local mirrors with CAS guards. Missing/inconsistent/failed reads fail closed without a Sales Order. The transaction creates order/items, atomically increments `pending_remote_stock` against that very observation and persists the SO create intent; `paymentMethod` stays `NULL` until the customer picks a method on the hosted Snap page. Midtrans is called only after Jubelio confirms the Sales Order; item details include PPN and sum to the gross total, with product names limited to 50 characters only in the Midtrans payload, and the Snap token offers QRIS, GoPay, cards (3DS), and VA channels (`enabled_payments`). The Midtrans expiry countdown is anchored at place-order via `expiry.start_time` so it cannot outlive the reservation TTL. A Jubelio failure never creates a Midtrans transaction. Midtrans failure triggers a confirmed SO cancel or manual review; it never blindly retries a write.
 
 #### `GET` `/api/orders`

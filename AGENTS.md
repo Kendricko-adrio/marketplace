@@ -90,7 +90,16 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   must log through the app's structured logger (`apps/store/src/lib/logger.ts`
   / `apps/admin/src/lib/logger.ts`): minimum `info` on success, `error` with
   context on failure. Details: [`docs/features/logging.md`](docs/features/logging.md).
-- Write AGENTS.md and code-facing docs in **English**.
+- **Bahasa dokumentasi:** seluruh dokumen project yang dibuat atau di-generate
+  harus menggunakan **bahasa Indonesia**, termasuk AGENTS.md, research notes,
+  plans, spesifikasi, decision/implementation tickets, wayfinder maps, ADRs,
+  READMEs, dan dokumentasi teknis untuk code. Gunakan bahasa Indonesia untuk
+  judul, headings, dan isi; pertahankan English technical/product terms yang
+  familiar jika lebih jelas. Jangan menerjemahkan code identifiers, paths,
+  commands, URLs, metadata tracker yang machine-readable, atau kutipan sumber
+  verbatim. Aturan ini menggantikan default bahasa pada skills/templates,
+  kecuali pengguna secara eksplisit meminta bahasa lain. Dokumen existing
+  tidak perlu diterjemahkan massal kecuali diminta.
 
 ## 4. Agent Constraints & Boundaries
 

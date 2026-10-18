@@ -304,14 +304,21 @@ export default function CartPage() {
           refreshCart();
           return;
         }
-        if (data.code === "INSUFFICIENT_STOCK") {
-          // Some items are out of stock (removed) or partially available
-          // (quantity lowered). Server already applied the changes — sync
-          // local state and show a popup listing the affected products.
-          setStockOutOfStock(data.outOfStock ?? []);
-          setStockAdjusted(data.adjusted ?? []);
+        if (data.code === "CHECKOUT_STOCK_ADJUSTED") {
+          // The server verified every selected item live and saved reductions.
+          // Keep available items selected; zero-stock items stay in cart only.
+          const adjustments: { cartItemId: string; productName: string; availableQuantity: number }[] = data.adjustments ?? [];
+          const unavailableIds = new Set(adjustments.filter((item) => item.availableQuantity === 0).map((item) => item.cartItemId));
+          setStockOutOfStock(adjustments.filter((item) => item.availableQuantity === 0).map((item) => ({ name: item.productName })));
+          setStockAdjusted(adjustments.filter((item) => item.availableQuantity > 0).map((item) => ({ name: item.productName, available: item.availableQuantity })));
           setStockDialogOpen(true);
-          setSelectedItemIds(new Set());
+          const remainingIds = new Set([...selectedItemIds].filter((id) => !unavailableIds.has(id)));
+          setSelectedItemIds(remainingIds);
+          try {
+            sessionStorage.setItem("checkoutSelectedItemIds", JSON.stringify([...remainingIds]));
+          } catch {
+            // The current cart selection remains usable without sessionStorage.
+          }
           await fetchCart();
           refreshCart();
           return;
@@ -320,7 +327,7 @@ export default function CartPage() {
         return;
       }
 
-      // Branch is active — store selection and proceed to checkout.
+      // Branch and live stock verified — store selection and proceed to checkout.
       try {
         sessionStorage.setItem(
           "checkoutSelectedItemIds",
@@ -369,8 +376,8 @@ export default function CartPage() {
   );
 
   // ===== Insufficient-stock popup =====
-  // Shown when the server found selected items that are out of stock
-  // (removed from cart) or only partially available (quantity lowered).
+  // Shown when live stock excludes an item from checkout (kept in cart)
+  // or only partially covers demand (cart quantity lowered).
   // Both sections can appear at once.
   const insufficientStockDialog = (
     <Dialog open={stockDialogOpen} onOpenChange={setStockDialogOpen}>
@@ -386,8 +393,8 @@ export default function CartPage() {
                 {stockOutOfStock.length > 0 && (
                   <div>
                     <p>
-                      Maaf, barang berikut sudah habis stoknya dan telah dihapus
-                      dari keranjang Anda:
+                      Maaf, barang berikut sudah habis stoknya dan dikeluarkan
+                      dari pilihan checkout, tetapi tetap di keranjang Anda:
                     </p>
                     <ul className="mt-1.5 list-disc pl-5 text-foreground">
                       {stockOutOfStock.map((item, idx) => (

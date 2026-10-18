@@ -28,6 +28,7 @@ import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
 import { claimAndFailOrder } from "@/lib/order-finalize";
 import { initializeReservedOrderPayment } from "@/lib/payment-initialization";
 import { verifyCheckoutStock } from "@marketplace/db/src/checkout-live-stock";
+import { persistCheckoutStockAdjustments, checkoutStockAdjustmentMessage } from "@/lib/checkout-stock-adjustment";
 import {
   DeliveryQuoteDataError,
   loadQuoteOriginBranch,
@@ -370,12 +371,20 @@ export async function POST(request: NextRequest) {
       } else {
         log.warn("checkout rejected — Jubelio stock insufficient", stockFailure);
       }
+      if (stockCheck.reason === "insufficient") {
+        const saved = await persistCheckoutStockAdjustments(db, cart.id, selectedItems, stockCheck.shortages);
+        log.info("checkout quantities adjusted to verified stock", { adjustments: saved });
+        return withRequestId(NextResponse.json({
+          success: false,
+          code: "CHECKOUT_STOCK_ADJUSTED",
+          adjustments: saved,
+          error: checkoutStockAdjustmentMessage(saved),
+        }, { status: 409 }), log);
+      }
       return withRequestId(NextResponse.json({
         success: false,
-        error: stockCheck.reason === "insufficient"
-          ? `Stok ${stockCheck.productName} di cabang ini tidak mencukupi. Silakan kurangi jumlah atau pilih barang lain.`
-          : "Stok Jubelio belum dapat diverifikasi. Silakan coba beberapa saat lagi.",
-      }, { status: stockCheck.reason === "insufficient" ? 409 : 503 }), log);
+        error: "Stok Jubelio belum dapat diverifikasi. Silakan coba beberapa saat lagi.",
+      }, { status: 503 }), log);
     }
     log.info("Jubelio stock verified before Sales Order", { itemCount: selectedItems.length });
 

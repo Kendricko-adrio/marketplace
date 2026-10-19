@@ -2,16 +2,21 @@
 
 ## Ringkasan dan status
 
-**Research telah menghasilkan bukti runtime baru, tetapi tiket 08 belum resolved.** Diskon barang qty 1/2, alokasi fixed/capped, header discount, mirror, dan settlement barang sudah memiliki evidence. Ongkir tanpa subsidi dapat disettle. Field subsidi tertentu writable pada INTERNAL, tetapi konversi invoice dengan subsidi gagal `23113 journal_unbalance`; funding seller/platform ditolak. Tidak ada klaim launch-ready.
+**Tiket08 resolved pada scope terpilih yang disetujui**, setelah review T1–T3 dan evidence existing. Mapping source INTERNAL/tax0: diskon barang per baris/total_disc, add_disc0, original ongkir padaSO dan net shipping, shipping_cost_discount omitted. T1qty1 danT2qty2 satu baris membuktikan full mirror sebelum invoice, invoice/payment exact dan association/due0; T3 membuktikan mirror lalu safe cancel pre-invoice/stock restore. Fixed/capped/precision didukung evidence terdahulu. Unit field excluded/funding/header nonzero dan legacy ambiguity tetap keterbatasan di luar gate approved; bukan proof universal atau klaim launch-ready. Kontrak lengkap09/implementasi tetap terpisah.
 
 Artefak:
 
-- [Protokol write terbaru](research-08-write-protocol.md).
-- [Evidence JSON write tranche terbaru](research-08-write-results.json).
+- [Protokol, hasil T1–T3 dan review acceptance final](research-08-selected-lifecycle.md), [journal](research-08-selected-lifecycle-results.json).
+- [Scope bukti08 yang direvisi dan disetujui](research-08-approved-proof-scope.md), [arah mapping terpilih](research-08-selected-shipping-mapping.md).
+- [Hasil matriks field terbaru](research-08-field-matrix-evidence.md), [protokol approved](research-08-field-matrix-protocol.md), [journal](research-08-field-matrix-results.json).
+- [Protokol write tranche20](research-08-write-protocol.md).
+- [Evidence JSON write tranche20](research-08-write-results.json).
 - [Evidence JSON fase read-only](research-08-results.json).
 - [Evidence awal A–H](sandbox-error-investigation.md), [JSON awal dan J–N](sandbox-results.json), [hasil J–N](sandbox-followup.md).
 
-Pemilik mengizinkan **10 request create SO lagi** dan meminta research diteruskan. Tranche terbaru memakai **10/10 create attempts**, termasuk tiga definite HTTP400 rejections. Evidence existing sudah mencatat 10 create A/B/F/G/H/J/K/L/M/N; total rangkaian **20 create attempts**, bukan 20 SO berhasil. Tujuh SO baru mendapat ID, empat canceled, dua terkonfirmasi invoice/payment, satu menunggu reconciliation conversion.
+### Riwayat tranche20
+
+Pada tranche20, pemilik mengizinkan **10 request create SO lagi** dan meminta research diteruskan. Tranche itu memakai **10/10 create attempts**, termasuk tiga definite HTTP400 rejections. Evidence existing sudah mencatat 10 create A/B/F/G/H/J/K/L/M/N; total rangkaian **20 create attempts**, bukan 20 SO berhasil. Tujuh SO baru mendapat ID, empat canceled, dua terkonfirmasi invoice/payment, satu menunggu reconciliation conversion.
 
 Koreksi counter: saat protokol awal tranche ini dibuat, J–N baru tersedia di repo dan belum terbaca, sehingga baseline sempat 5. Setelah membaca `sandbox-followup.md`, baseline journal dikoreksi ke10 sebelum request ke3 tranche ini. Event historis dua kasus pertama tidak ditimpa; event `counter-correction-existing-evidence` mencatat correction. Budget tranche terbaru tetap10, tidak ditumpuk dengan izin5 sebelumnya.
 
@@ -155,11 +160,128 @@ Untuk menentukan disposition/cleanup berikutnya tanpa klarifikasi accounting sup
 
 ## Remaining unknowns dan next action
 
-1. **Launch blocker extended shipping/subsidy ledger:** F6 invoice conversion23113; writable funding seller/platform tidak tersedia pada endpoint ini. Klarifikasi supported INTERNAL accounting payload/journal treatment melalui support ditunda sesuai instruksi terbaru pemilik. Reconciliation API F6 sudah diperluas, tetapi safe settlement subsidi tetap belum terbukti.
-2. **Outcome lama B/G:** manual UI/list tidak menemukan reference; audit rollback/non-application belum tersedia. Tidak retry B/G.
-3. **Precedence universal:** disc0+nominalpositive dan disc-only/inconsistent metadata belum memiliki kontrak aman. Nominal exact + derived/nonzero percentage adalah observed supported envelope, bukan semua input.
-4. **Belum diuji:** header discount, qty2, serta semua kombinasi lain sampai payment; negative/refund/post-invoice cancel/provider tax nonzero tidak termasuk scope ini.
+Bukti wajib scope08 telah dipenuhi T1–T3/evidence existing dan direview pada [acceptance final](research-08-selected-lifecycle.md#review-acceptance-tiket08). Daftar berikut adalah batas kontrak/handoff dan follow-up terpisah, bukan status gate08 yang belum selesai.
+
+1. **Envelope mapping terpilih:** payment/full mirror sebelum invoice/qty>1/safe cancel pre-invoice terverifikasi dalam T1–T3. Jangan memperluasnya menjadi klaim semua stage/nominal/source/account. Invoice original metadata tetap tidak tersedia; acceptance SO original + nominal/linkage lifecycle sudah disetujui. SO is_paid masihnull pada fixtures paid, sehingga bukti settlement memakai payment association/due dan invoice paid amount.
+2. **Outcome lama B/G dan fixtures conversion error:** audit rollback/disposition belum tersedia. Pemilik menyetujui follow-up terpisah, bukan penghalang bukti kontrak baru; unknown tidak berubah menjadi verified, tidak retry/cancel tanpa izin dan state aman.
+3. **Precedence universal:** disc0+nominalpositive dan disc-only/inconsistent metadata belum memiliki kontrak aman. Nominal exact + derived/nonzero percentage adalah observed supported envelope, bukan semua input. Unknown tetap dicatat; jangan mengklaim support input yang tidak dibuktikan.
+4. **Di luar scope awal:** header add_disc nonzero, unit/dukungan field shipping/funding yang tidak dipakai, negative/refund/post-invoice cancel/provider tax nonzero serta semua edits post-invoice belum dibuktikan oleh T1–T3. Mapping awal add_disc0/discount field omitted dan pemisahan funding website tetap; root journal/account treatment untuk field excluded tidak dianggap diketahui.
 
 Jika jalur support kelak dibuka kembali, request dapat menyertakan run refF6, timestamp event F6-invoice-create di JSON, SO68422, code23113, source1/NoTax1 dan money projection di atas, tanpa credentials/PII. Pada scope terbaru tidak ada request support yang dijalankan. Jangan mengubah SO68422 sebelum disposition/state aman ditentukan.
 
-**Tiket08 tetap claimed, bukan resolved.** Budget20 kumulatif sudah habis dan business-write stop aktif. Bukti ini cukup untuk membahas kandidat goods-only mapping, tetapi memilih goods-only + merchant funding ledger lokal versus memperluas ledger shipping tetap keputusan pemilik di tiket09. Mengubah destination atau mengabaikan required proof supaya tiket08 ditutup memerlukan approval eksplisit; tidak dilakukan agent.
+**Tiket08 resolved sesudah review scope approved.** Riwayat tranche20, tiga tambahan tunggal, matriks10, ablation2, serta hipotesis persen2 membuat baseline37. Setelah pemilik menyetujui T1–T3, tambahan3 create/3 mirror/2 invoice/2 payment/1 eligible cancel memenuhi bukti aktif. Kumulatif sekarang **40 create attempts**, bukan40 successful SO; tidak ada izin write lanjutan otomatis. Pilihan **barang + net ongkir**, original sebelum subsidi/shipping net/discount field omitted dan [scope bukti yang direvisi pemilik](research-08-approved-proof-scope.md) menjadi dasar penutupan, bukan waiver baru dari agent. Legacy ambiguity tetap follow-up terpisah. Tiket09 kini unblocked tetapi open/unclaimed; complete contract09 dan implementasi tetap memerlukan proses serta approval tersendiri.
+
+## Retest2026-10-18 dengan item pengganti
+
+[Protokol, otorisasi, checkpoint, serta hasil](research-08-retest.md), [journal create](research-08-alternative-retest-results.json), dan [journal continuation](research-08-alternative-retest-continuation.json).
+
+- Retest item43842/location2 terblokir sebelum create karena available0; tidak ada retry SO68422.
+- Setelah pemilik meminta dan menyetujui item lain, item60344/location2 memiliki stock1 dan harga650000. Satu SO baru**68423** dibuat: qty1, disc3.08/nominal20000, net barang630000; original shipment30000, shipping discount20000, net shipping10000, grand640000.
+- Create dan GET nominal berhasil. Script awal sempat salah menganggap lokasi baris tidak tersedia karena mengabaikan alias `loc_id`; merujuk parser existing dan GET ulang membuktikan loc_id2/detail74708. Tidak ada create ulang, guard aplikasi tidak diubah.
+- Mirror sekali berhasil; GET mempertahankan semua nominal. **Conversion invoice sekali kembali HTTP500/code23113**, tanpaID. Tidak retry, payment, atau cancel.
+- GET reconciliation: SO68423 invoice_idnull, is_canceled/is_paidnull, marker Menunggu Verifikasi, grand640000. Stock60344/location2 on_hand1/on_order1/available0. Dua filtered lists invoice/payment masing-masing3/totalCount3 hanya menampilkan artefak lama; ini bukan audit internal/proof rollback.
+
+Kesimpulan: error yang sama teramati pada **varian** skenario subsidi dengan item/harga/persentase berbeda. Belum membuktikan akar accounting/field penyebab dan tidak membuktikan safe settlement subsidi. SO68423 kini juga memerlukan manual UI/audit disposition sebelum cleanup; SO68422/B/G tetap unknown terpisah. Tidak ada perubahan aplikasi/master/account mapping, application validation runs, subagent, atau commit. Required proof08 tidak ditutup otomatis.
+
+## Test endpoint gabungan invoice/payment2026-10-18
+
+Setelah menerima perbedaan endpoint dan risiko payment internal, pemilik menyetujui satu fixture baru item43825/location2, harga650000, diskon20000/net630000, original shipping30000/subsidy20000/net10000, grand640000. [Protokol/hasil](research-08-combined-retest.md), [journal tersanitasi](research-08-combined-retest-results.json).
+
+Create**SO68424**/detail74709 dan full-payload mirror berhasil; GET seluruh nominal/identity cocok. Satu POST `/sales/packlists/create-invoice-payment` dengan ID68424 kembali **HTTP500/code23113**, tanpa invoiceID. Tidak ada invoice-only atau POST payment terpisah untuk fixture ini.
+
+Reconciliation GET: SO68424 invoice_idnull, marker Menunggu Verifikasi, is_canceled/is_paidnull, grand640000. Stock43825/location2 on_hand1/on_order1/available0. Filtered invoice/payment lists lengkap menurut totalCount masing-masing3, hanya artefak lama. Payment internal tetap unknown karena request gabungan sudah dikirim dan absence pada API bukan proof rollback.
+
+Error yang sama teramati pada endpoint gabungan, tetapi item berbeda dari test invoice-only; akar accounting/field penyebab serta atomicity belum terbukti. Stop business writes aktif; tanpa retry/cancel atau perubahan SO68422/68423. SO68424 kini juga memerlukan manual UI/audit disposition sebelum cleanup. Total kumulatif22 create attempts pada akhir test gabungan ini, bukan22 successful SO. Tidak ada perubahan aplikasi/schema/master/account mapping, application validation runs, subagent, atau commit. Tiket08 tetap claimed.
+
+## Test diskon integer exact2026-10-18
+
+Pemilik menduga fractional percentage/ketidaksesuaian disc dengan nominal terhadap price, lalu menyetujui satu test gabungan baru dengan integer exact. [Protokol/hasil](research-08-integer-discount.md), [journal](research-08-integer-discount-results.json).
+
+Item43823/location2, price650000×qty1×disc10/100=65000 tepat tanpa rounding. Input disc10/disc_amount65000, net barang585000; original shipping30000/subsidy20000/net10000, grand595000; NoTax1. **SO68425**/detail74710 dibuat dan dimirror sekali, seluruh GET money/identity cocok. Satu conversion gabungan dengan ID68425 kembali **HTTP500/code23113**, tanpa invoiceID.
+
+Reconciliation GET: invoice_idnull, is_canceled/is_paidnull, marker Menunggu Verifikasi, grand595000; stock43823/location2 on_hand1/on_order1/available0. Filtered invoice/payment lists masing-masing3/totalCount3 hanya artefak lama; bukan proof rollback, efek internal payment tetap unknown. Tidak retry/cancel/payment terpisah atau write pada SO68422/68423/68424.
+
+Kesimpulan: error yang sama dapat muncul tanpa fractional percentage/mismatch nominal diskon; kondisi tersebut tidak diperlukan untuk menghasilkan error pada varian ini. Akar journal/account mapping dan field penyebab belum diisolasi. Item berbeda dan subsidi tetap dikirim; bukan control goods-only atau bukti universal semua error lama. GET10.00/65000.0000 adalah format decimal string dengan nilai integer exact.
+
+Budget tambahan1/1 habis, kumulatif**23 create attempts** pada akhir test integer ini. Stop business writes aktif; manual UI/audit disposition SO68425 diperlukan sebelum cleanup/write lanjutan. Tidak ada perubahan aplikasi/schema/master/account mapping, application validation runs, subagent, atau commit. Tiket08 tetap claimed.
+
+## Matriks field item157190 — kontrol sukses, nonzero shipping discount gagal
+
+Pemilik meminta eksperimen pengurangan field, mengarahkan SKU157190 **Celana Okcir Bagus** (group55269), memilih invoice-only, lalu menyetujui maksimum10 kasus sesuai [protokol](research-08-field-matrix-protocol.md). [Laporan lengkap dan input/output pembanding](research-08-field-matrix-evidence.md), [journal runtime](research-08-field-matrix-results.json).
+
+Konstanta: item157190/location2, qty1, price1000000, disc10/nominal100000 bila aktif, NoTax1, tanpa fee/insurance/add_disc, tanpa mirror/payment/cancel. Semua8 SO create HTTP200 dan GET nominal/identity cocok.
+
+- **A–G berhasil invoice**: SO68426–68432 → invoice45958–45964. Kontrol diskon barang saja(B/F), ongkir biasa(C/D), shipping_cost_discount explicit0(E), shipping_cost omitted(F), dan original_shipment_cost30000 tanpa nonzero shipping discount(G) semuanya lolos GET invoice/SO linkage serta money. Ketujuh invoice unpaid: payment_amount0 dan due sebesar grand. G tidak mengekspos original_shipment_cost pada invoice GET; preservation metadata itu tidak diklaim.
+- **H SO68433**: financial request sama denganD (barang1000000−diskon100000+net ongkir10000=grand910000), hanya menambahkan shipping_cost_discount20000; original_shipment_cost tetap omitted. Create/GET berhasil, lalu satu conversion invoice-only mendapat **HTTP500/code23113**, tanpa invoiceID. Global stop aktif; **I/J tidak dijalankan**, tanpa retry H.
+- PembandingD omitted versusE0 versusH20000 mempersempit kandidat pemicu ke **nonzero shipping_cost_discount pada envelope ini**, bukan fractional goods discount, keharusan original_shipment_cost, atau mirror. Ini belum membuktikan mekanisme internal jurnal, gross/net shipping contract, atau universal causality.
+
+Reconciliation H: invoice_idnull, is_canceled/is_paidnull, grand910000, marker Belum Bayar, field shippingdiscount20000 tetap. Filtered invoice list10/totalCount10 hanya tiga artefak lama dan tujuh invoice baru A–G; payment list3/totalCount3 tetap40/42/44. Absence invoiceH bukan proof rollback. Stock157190/location2 dari21/1/20 menjadi14/2/12 (on_hand/on_order/available):7 invoice mengurangi on_hand dan H menambah on_order menurut observasi; existing on_order1 tidak disentuh oleh agent.
+
+Pada checkpointH, budget matriks8/10, kumulatif**31 create attempts**. Sisa dua slot bukan izin otomatis melanjutkan setelah stop. Manual UI/audit disposition SO68433 diperlukan sebelum cleanup/write lanjutan; unknown fixtures68422–68425 dan B/G lama tetap terpisah. Tidak ada perubahan aplikasi/schema/master/account mapping/env, application validation runs, subagent, atau commit. Tiket08 tetap claimed, bukan resolved.
+
+## Kelanjutan I/J — tanpa dan dengan diskon barang sama-sama23113
+
+Pemilik memerintahkan I/J dijalankan setelah laporan H. I dibuat **SO68434**, detail74719: qty1/price1000000, disc0/disc_amount0/net barang1000000; original30000/subsidy20000/net shipping10000, grand1010000. Create/GET cocok, satu invoice-only conversion **HTTP500/code23113**, tanpaID. Agent menjalankan global stop sebelumJ dan reconciliation read-only, lalu meminta keputusan lanjut baru.
+
+Setelah mengetahui outcome ambigu I, pemilik memilih **Ya, jalankan J (Recommended)**. Satu fixture baru **SO68435**, detail74720: disc10/nominal100000/net barang900000, original30000/subsidy20000/net shipping10000, grand910000. Create/GET cocok, satu invoice-only conversion kembali **HTTP500/code23113**, tanpaID. Tidak retry, mirror, payment, cancel atau write pada I/H dan fixtures historis.
+
+[Evidence I/J dan approval](research-08-field-matrix-ij-evidence.md), [journal I/checkpointJ](research-08-field-matrix-ij-results.json), [journal J](research-08-field-matrix-j-results.json). Filtered lists setelahI/J tetap invoice10/totalCount10 dan payment3/totalCount3, tanpa artefak baru terlihat; kedua SO invoice_idnull/is_canceled/is_paidnull. Bukan proof rollback internal. Stock157190/location2 akhir**on_hand14/on_order4/available10**, dari baseline21/1/20.
+
+Semua A–J selesai dieksekusi: **7 invoice verified, 3 conversion errors23113**. I menunjukkan diskon barang tidak diperlukan agar error muncul pada skenario subsidi ini. G versus J (original30000, net shipping10000, barang berdiskon/grand910000 sama) berbeda pada shipping_cost_discount omitted versus20000, dengan hasil sukses versus23113; ini memperkuat kandidat kondisional nonzero shipping discount, bukan bukti akar journal/accounting atau semua nilai nonzero.
+
+Budget matriks**10/10 create dan10/10 invoice attempts**, kumulatif**33 create attempts** pada akhir A–J. Budget habis dan stop business writes aktif. SO68433/68434/68435 serta unknown fixtures lama memerlukan disposition terpisah sebelum cleanup/write lanjutan. Tidak ada perubahan aplikasi/schema/master/account mapping/env, application validation runs, subagent, atau commit. Tiket08 tetap claimed, bukan resolved.
+
+## Ablation I/J tanpa shipping_cost_discount — kedua invoice sukses
+
+Pemilik meminta dua fixtures baru dengan I/J sama tetapi key shipping_cost_discount20000 **dihilangkan**. [Protokol dan hasil](research-08-without-shipping-discount.md), [journal](research-08-without-shipping-discount-results.json). Source/item157190/location2/price1000000/qty1/NoTax1, original_shipment_cost30000 dan shipping_cost10000 tetap. Tidak retry/edit SO68434/68435 lama.
+
+- **I-minus SO68436 → invoice45968**: disc0/disc_amount0/net barang1000000/grand1010000, HTTP200 dan GET money/identity/linkage cocok.
+- **J-minus SO68437 → invoice45969**: disc10/disc_amount100000/net barang900000/grand910000, HTTP200 dan GET money/identity/linkage cocok.
+- Key shipping_cost_discount tidak ada pada actual create request. GET mengembalikan default0; bukan agent mengirim0. Invoice payment_amount0/due penuh, tidak ada payment. Original shipment metadata tetap ada di SO tetapi tidak tersedia pada invoice GET.
+
+I/J asli dengan shipping_cost_discount20000 gagal23113, sedangkan pasangan ablation tanpa key sukses. Ini bukti pembanding kuat untuk conditional failing financial request pada envelope tersebut, bukan bukti universal field intrinsik salah atau akar gross/net/account mapping. Jangan mengubah accounting/aplikasi atau menganggap funding merchant otomatis tercatat.
+
+Tambahan2/2 create/invoice-only attempts, kumulatif**35 create attempts** pada akhirablation. Stock157190/location2 saat itu12/4/8; filtered invoice list12/totalCount12 (dua invoice ablation teridentifikasi), payment list3/totalCount3 tetap40/42/44. Tidak ada mirror/payment/cancel/retry, cleanup fixtures lama, perubahan aplikasi/schema/master/account mapping/env, application validation runs, subagent, atau commit. Tidak ada izin write berikutnya otomatis; tiket08 tetap claimed.
+
+## Hipotesis shipping_cost_discount persen10/20 — kedua conversion gagal
+
+Pemilik mengusulkan unit persen dan memilih financial input yang konsisten dengan10%/20% dari original shipment30000. [Protokol, approval dan hasil](research-08-shipping-percentage.md), [journalP10](research-08-shipping-percentage-results.json), [journalP20](research-08-shipping-percentage-p20-results.json). Spec hanya menyebut type number/Shipping cost discount, tanpa unit eksplisit.
+
+- **P10 SO68438**, field10, net shipping27000, grand927000; barang1000000−disc100000=900000. Create/GET cocok, invoice-only conversionHTTP500/code23113. Agent stop dan reconciliation sebelumP20.
+- Setelah menerima outcomeP10, pemilik memberi izin khusus **Ya, jalankan P20**. **P20 SO68439**, field20, net shipping24000, grand924000; konstanta barang/source/location/NoTax sama. Create/GET cocok, invoice-only conversion kembaliHTTP500/code23113. Tidak retry, mirror, payment, cancel atau write pada fixtures historis.
+
+GET mempertahankan raw field10.0000/20.0000; tidak ada computed benefit3000/6000 yang dibuktikan independen. Unit **persen atau amount tetap unknown**: mengganti input10/20 belum menghindari error, bukan proof universal persen salah/amount benar. Label subsidi20000 pada eksperimen lama adalah intended business benefit/candidate mapping, bukan bukti unit provider. Gross/net shipping dan journal/account mapping tetap unknown.
+
+Reconciliation kedua SO invoice_idnull/is_canceled/is_paidnull dan seluruh money tetap; filtered invoice/payment lists12/3 artefak dikenal, tanpa artefak baru terlihat untukP10/P20 pada filter tersebut, bukan proof rollback internal. Stock157190/location2 akhir**on_hand12/on_order6/available6**. Kedua fixtures memerlukan manual UI/audit disposition sebelum cleanup.
+
+Tranche2/2 create/invoice attempts terpakai, kumulatif**37 create attempts**. Tidak ada perubahan aplikasi/schema/master/account mapping/env, application validation runs, subagent, atau commit. Tidak ada budget/izin write lanjutan otomatis; tiket08 tetap claimed.
+
+## Keputusan arah mapping terbaru — original dan net, tanpa discount field
+
+Setelah hasil hipotesis persen, pemilik meminta mengecualikan shipping_cost_discount dan memakai shipping_cost/original_shipment_cost seperti caseG. Agent mengklarifikasi original=ongkir sebelum subsidi, shipping=net customer, serta implikasi revisi dari goods-only. Pemilik memilih **Ya, catat revisi mapping (Recommended)**.
+
+[Catatan keputusan parsial lengkap](research-08-selected-shipping-mapping.md): arah planning **barang + net ongkir**, contoh original30000/shipping10000/grand barang net900000+10000=910000, shipping_cost_discount benar-benar omitted dari request. Subsidi/funding merchant dan quote/biaya kurir tetap terpisah di website; PPN/fee tetap menurut04. Default shipping_cost_discount0 pada GET tidak melanggar exclusion request.
+
+Pada checkpoint pemilihan arah mapping ini, approval belum mencakup complete contract09, implementasi, izin provider write baru atau revisi required proof/penutupan08. Revisi scope bukti kemudian disetujui terpisah sebagaimana dicatat di bawah. Payment dan preservation lifecycle konfigurasi terpilih belum lengkap; original shipment metadata invoice tidak tersedia pada GET. Accounting/funding merchant provider tidak dianggap otomatis verified. Kode runtime existing belum berubah. Status08 claimed dan09 open/blocked by08 tetap; budget tetap37 create attempts, tanpa validation runs aplikasi, subagent, atau commit.
+
+## Approval scope bukti08 terbaru
+
+Pemilik menyetujui empat pilihan questionnaire: **Ya, fokus mapping terpilih (Recommended)**; **Per baris, add_disc0 (Recommended)**; **Pisahkan tindak lanjutnya (Recommended)**; **SO + nominal lifecycle (Recommended)**. [Scope/acceptance approved](research-08-approved-proof-scope.md) kini menjadi acuan Question/Bukti penyelesaian tiket08.
+
+Bukti wajib fokus pada barang/per-line discount/add_disc0 dan mapping original sebelum subsidi + net shipping, shipping_cost_discount omitted. Field ongkir/funding yang tidak dipakai dan header discount nonzero tidak lagi required proof scope awal. Legacy investigasi/cleanup dipisahkan tanpa proof rollback atau izin cancel/tiket baru. Original cukup dibuktikan pada SO, invoice/payment melalui nominal/linkage yang tersedia; tidak mengklaim metadata internal invoice verified.
+
+Pada checkpoint approval scope, gap payment/full-payload mirror/qty>1 masih perlu evidence dan safe cancel tetap tercakup08. Saat itu belum ada protokol/budget/write baru; baseline37. Hasil dan approval T1–T3 berikutnya menyelesaikan bukti aktif tanpa mengubah batas yang diterima.
+
+## Lifecycle T1–T3 — review final scope08 terpenuhi
+
+Pemilik memilih **Setuju, T1–T3 (Recommended)** setelah menerima rincian endpoint/nominal/budget/account2/type0 dan cancellation hanya fixture barueligible. [Protokol, hasil dan review acceptance](research-08-selected-lifecycle.md), [journal](research-08-selected-lifecycle-results.json).
+
+- **T1 SO68440 → invoice45972 → payment55**, qty1, whole-line discount100000, net900000 + shipping10000 =910000, full mirror terpelihara, association tepat/due0.
+- **T2 SO68441 → invoice45973 → payment57**, qty2 satu baris, gross2000000−whole-line discount200000=1800000 + shipping10000 =1810000, mirror/invoice/payment mempertahankan nominal/identity, association tepat/due0.
+- **T3 SO68442**, qty1/grand910000, full mirror cocok lalu satu pre-invoice cancel. GET canceledtrue/invoice_idnull/money tetap dan stock restored9/6/3 ke baseline kasus.
+
+Actual create/mirror request tanpa shipping_cost_discount; GET default0 diperbolehkan sesuai keputusan. Original30000 pada SO dan net shipping10000 terpelihara; invoice tidak mengekspos original metadata sesuai accepted limitation. SO is_paid masihnull meskipun paid amount dan payment associations sudah tepat; jangan menggunakannya sendirian sebagai settlement source of truth.
+
+Main agent mereview tujuh kewajiban scope aktif terhadap T1–T3 dan existing evidence L/J/H/R untuk precision/fixed-capped allocation. **Semua terpenuhi pada envelope yang diuji;08 ditandai resolved**, bukan dari HTTP200 saja atau approval implementasi. Mirror yang dibuktikan sebelum invoice/cancel; tidak mengklaim semua edits post-invoice atau input/config universal. Kontrak lengkap09 tetap belum dikerjakan.
+
+Dipakai3 create/3 mirror/2 invoice/2 payment/1 cancel, kumulatif40 create attempts. Stock akhir157190/location2**on_hand9/on_order6/available3**; on_order6 legacy tidak dibersihkan. Filtered invoice list14/totalCount14 dan payment5/totalCount5 mencakup artefak T1/T2; T3 canceled, tanpa retry atau perubahan order historis. Tidak ada perubahan aplikasi/schema/master/account mapping/env, unit/E2E/build/lint/typecheck aplikasi, subagent, atau commit. Tidak ada izin write/cleanup tambahan otomatis.

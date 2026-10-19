@@ -56,6 +56,8 @@ Jangan menanyakan ulang keputusan tersebut kecuali jawaban berikutnya menyebabka
 
 - [Limit Redemption, Identitas, dan Kebijakan Reservation](issues/03-redemption-limits-identity-and-reservations.md#answer--keputusan-final-disetujui): kuota/budget minimal satu wajib, jatah akun default 1 dengan verified email; hold saat order dibuat, consume saat paid terverifikasi, release hanya terminal aman; retry/ambigu tetap hold, riwayat dan snapshot tidak reset.
 
+- [Bukti Kontrak Diskon Nonzero Jubelio](issues/08-jubelio-nonzero-discount-evidence.md#answer--scope-terpilih-terverifikasi): resolved pada scope approved—diskon per baris/add_disc0, original sebelum subsidi + net ongkir tanpa discount field, mirror/invoice/paymentqty1/qty2 dan safe cancel terverifikasi; legacy ambiguity dipisahkan, bukan proof rollback atau izin implementasi.
+
 ## Not yet specified
 
 - Temuan provider/finance mungkin memerlukan bukti tambahan atau workflow operator yang terbatas sebelum diskon aman digunakan. Jadikan tiket saat gap dapat dirumuskan secara konkret; bukti yang belum tersedia adalah launch blocker, bukan kesiapan tersirat.

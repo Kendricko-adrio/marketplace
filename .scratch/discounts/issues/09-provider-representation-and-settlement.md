@@ -17,6 +17,8 @@ Putuskan alokasi nominal per baris dibandingkan header discount yang terverifika
 
 - Jawaban/artefak wajib dari [Bukti Kontrak Diskon Nonzero Jubelio](08-jubelio-nonzero-discount-evidence.md).
 - Konteks finance wajib dari [Perhitungan Pajak dan Subsidi Ongkir](04-tax-and-shipping-subsidy-accounting.md).
+- [Keputusan arah ongkir parsial terbaru dari pemilik](../research-08-selected-shipping-mapping.md): barang + net ongkir, original sebelum subsidi, tanpa shipping_cost_discount request; bukan complete contract tiket ini.
+- [Scope bukti08 yang sudah direvisi dan disetujui](../research-08-approved-proof-scope.md): per-line discount/add_disc0, unused fields dan legacy follow-up dipisahkan, acceptance SO + nominal lifecycle.
 - [Rekomendasi mapping provider](../../../plan/research/discounts-coupons-promo-codes.md#d-so--invoice--payment-and-existing-safety-gates).
 - [Proposal komponen order immutable](../../../plan/research/discount-database-design.md#8-order-money-compatibility-and-jubelio-mapping).
 
@@ -32,4 +34,12 @@ Claim setelah blocker selesai. Muat `grilling`, `domain-modeling`, `development-
 
 ## Comments
 
-Dipublikasikan setelah proposal map lengkap disetujui. Bukti provider belum melampaui bentuk schema yang terdokumentasi dan observasi zero-discount existing.
+Pada publikasi awal, bukti provider baru berupa schema dan observasi zero-discount existing. Research08 kemudian menghasilkan [runtime evidence terkini](../research-08-evidence.md), termasuk T1–T3 mirror/invoice/paymentqty1/qty2 dan safe cancel. **Prerequisite08 kini resolved pada scope approved**, sehingga tiket09 unblocked; status tetap open/assignee none, belum diklaim.
+
+### Arah parsial dari pemilik, belum jawaban lengkap tiket09
+
+Pemilik menyetujui **Ya, catat revisi mapping (Recommended)** setelah klarifikasi eksplisit: mengganti pilihan goods-only sebelumnya menjadi **barang + net ongkir**. Gunakan original_shipment_cost untuk ongkir sebelum subsidi dan shipping_cost untuk net ongkir customer; **shipping_cost_discount omitted dari request**, bukan0/null. Contoh original30000/net10000, barang net900000 → candidate payable910000 tanpa PPN/fee website. Subsidi/funding merchant serta quote/biaya kurir tetap terpisah di website sesuai04.
+
+[Keputusan lengkap beserta bukti dan batas approval](../research-08-selected-shipping-mapping.md). CaseG/I-minus/J-minus mendukung sampai invoice; [T1–T3](../research-08-selected-lifecycle.md) kemudian memverifikasi mirror sebelum invoice/cancel, paymentqty1/qty2 exact/due0, dan safe cancel/stock restore. Original metadata tidak tersedia pada invoice GET sesuai accepted limitation; SO original terverifikasi. Default discount0 di response bukan berarti field dikirim atau harus dianggap mismatch.
+
+Ini hanya catatan arah dan handoff evidence08, **bukan claim atau penyelesaian kontrak lengkap09**. Dependency Blocked by08 tetap tercatat sebagai riwayat prerequisite, tetapi08 telah resolved sehingga09 unblocked; status open/assignee none tetap. Pemilik menyetujui [revisi scope bukti08](../research-08-approved-proof-scope.md): fokus mapping terpilih/per-line discount/add_disc0; unused shipping/funding fields dan header nonzero keluar scope awal; legacy investigasi terpisah; original pada SO dan nominal/linkage lifecycle diterima tanpa mewajibkan metadata original invoice internal. Bukti aktif kemudian dipenuhi T1–T3 dan direview pada08. Batas stage mirror yang dibuktikan adalah sebelum invoice/cancel, bukan semua edits post-invoice; SO is_paid masihnull pada fixtures paid, sehingga jangan memakai flag itu sendirian sebagai sumber settlement. Guard aplikasi/accounting tidak berubah dan tidak ada izin provider writes/implementasi/commit baru.

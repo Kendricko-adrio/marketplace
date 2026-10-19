@@ -32,6 +32,10 @@ Kontrak komponen nominal, pajak, dan funding yang dikonfirmasi pemilik/finance, 
 
 Claim setelah blockers selesai. Muat `grilling`, `domain-modeling`, dan `development-workflow`. Hanya planning dan bukti read-only; tidak ada perubahan pajak/env/config, request provider, atau subagent. Jangan menyatakan saran hukum/pajak sebagai kebijakan yurisdiksi yang sudah diverifikasi.
 
+## Koreksi scope berikutnya — website tanpa service fee
+
+Pemilik kemudian menegaskan website tidak mengenakan service fee dan pembuktian pembayaran/provider Rp0 tidak diwajibkan. [Jejak keputusan lengkap](../decision-zero-payment-and-no-service-fee.md) menggantikan asumsi fee berbayar dan gate lama; pencegahan pembayaran Rp0 dijaga prosedur admin/pemilik bisnis, bukan requirement pembuktian baru. Histori keputusan lainnya tetap berlaku.
+
 ## Answer — keputusan final disetujui
 
 Pemilik menyetujui kontrak lengkap dan contoh melalui `ask_user_question` dengan memilih **Setuju, catat final (Recommended)**. Approval hanya untuk keputusan planning tiket 04, bukan implementasi.
@@ -42,7 +46,7 @@ Pemilik menyetujui kontrak lengkap dan contoh melalui `ask_user_question` dengan
 - PPN dibulatkan ke atas ke Rupiah utuh sekali dari total dasar pajak, bukan per baris. Contoh dasar Rp100.005 × 11% = Rp11.000,55 → Rp11.001. Rate 11% dalam contoh mengikuti default kode, bukan penetapan rate baru atau verifikasi hukum pajak.
 - Subsidi ongkir ditanggung merchant saja pada fase awal. Ongkir customer bersih = ongkir sebelum subsidi − subsidi. Biaya quote/provider tetap dicatat terpisah dan tidak dikurangi karena customer menerima subsidi.
 - Diskon barang, Markdown, dan subsidi ongkir tidak boleh dicampur atau dikurangkan dua kali. Subsidi tidak masuk `disc_amount` barang. Eligibility/clipping subsidi tetap mengikuti keputusan tiket 02.
-- Total customer = net barang + PPN barang + net ongkir customer + service fee. Kupon barang/subsidi ongkir tidak memotong service fee. Net barang nol menghasilkan PPN nol; total final tetap harus positif sesuai tiket 02.
+- Total customer = net barang + PPN barang + net ongkir customer. Website tidak mengenakan service fee sesuai koreksi scope pemilik. Net barang nol menghasilkan PPN nol; tidak ada kewajiban pembuktian pembayaran Rp0 atau alur transaksi gratis.
 - Product/cart menampilkan harga barang belum termasuk PPN. Checkout menampilkan komponen barang/ongkir/subsidi/PPN/fee secara terpisah, dengan total final sudah termasuk PPN; tidak ada tambahan pajak saat pembayaran.
 - Pemisahan pencatatan PPN dipertahankan: website/Midtrans mencatat PPN, Jubelio tetap tanpa PPN. Kontrak provider delivery saat ini adalah goods-only; bukti dan keputusan mapping diskon/ongkir provider tetap milik tiket provider terpisah, bukan dianggap sudah terverifikasi.
 - Snapshot order mempertahankan komponen harga, Markdown, kupon barang, quote/provider shipping cost, ongkir sebelum subsidi, subsidi/funding merchant, net ongkir customer, fee, dasar/rate/nominal PPN, serta total. Jumlah rincian Midtrans harus sama dengan total order.

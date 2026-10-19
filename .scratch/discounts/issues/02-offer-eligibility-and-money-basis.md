@@ -60,6 +60,10 @@ Pemilik mengklarifikasi dan meminta pencatatan: diskon kupon/kode barang bersifa
 - Setelah klarifikasi terpisah melalui ask_user_question, pemilik menyetujui: persentase wajib >0 sampai 100%; nominal/plafon positif. Konfigurasi invalid tidak boleh dipublikasikan dan harus memberikan alasan perbaikan.
 - Setelah pembulatan, benefit Rp0 tidak bisa diterapkan; kuota global dan jatah customer tidak berkurang. Contoh 1% × Rp50 = Rp0,50 → Rp0.
 
+## Koreksi scope berikutnya — tanpa kewajiban pembuktian pembayaran Rp0
+
+[Keputusan eksplisit pemilik setelah pembahasan outstanding 2](../decision-zero-payment-and-no-service-fee.md) menjadi acuan terkini: website tanpa service fee; pembayaran Rp0 tidak masuk scope operasional dan dijaga prosedur admin/pemilik bisnis. Tidak ada kewajiban membuktikan pembayaran/provider Rp0, merancang alur transaksi gratis, atau menjadikannya launch gate. Catatan net barang nol pada keputusan awal di bawah bukan izin membuka kembali outstanding tersebut.
+
 ## Answer — keputusan final disetujui
 
 Pemilik mengonfirmasi ringkasan lengkap melalui ask_user_question dengan tambahan eksplisit: **plafon diskon persentase opsional**. Diskon 10% tanpa cap diperbolehkan. Jika cap diisi, harus positif; ketentuan positif nominal tetap berlaku. Tambahan ini menggantikan penyebutan plafon persentase wajib sebelumnya.

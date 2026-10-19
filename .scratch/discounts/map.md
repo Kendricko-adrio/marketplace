@@ -41,6 +41,7 @@ Jangan menanyakan ulang keputusan tersebut kecuali jawaban berikutnya menyebabka
 - Keputusan akses/akun terisolasi dan protokol request provider aktual yang bounded memerlukan izin eksplisit terpisah. Persetujuan map tidak mengizinkan login, POST SO/invoice/payment, cancellation, mirror edit, eksperimen production, atau perubahan order existing. Write ambigu tidak pernah mengizinkan blind retry.
 - Selesaikan child dengan menambahkan jawaban/bukti di child, mengubah status menjadi resolved, lalu menambahkan ringkasan satu baris dengan link bernama di Decisions so far. Artefak diberi link, bukan disalin seluruhnya ke map. Pertanyaan baru yang konkret tetap melalui gates scope/publikasi yang disetujui; prerequisite yang masih kabur masuk Not yet specified.
 - Setelah seluruh keputusan selesai, draft spec lengkap yang bisa direview sebagai planning. Minta persetujuan eksplisit scope/acceptance criteria sebelum Ready. Publikasi implementation tickets, implementasi, delegasi, commit, dan deployment tetap memiliki gates masing-masing.
+- Hasil sintesis berikutnya: [complete spec diskon](../../plan/discounts-spec.md), disusun setelah pemilik mengonfirmasi kesepahaman drafting dan kemudian disetujui lengkap melalui **Setujui spec lengkap (Recommended)**. Pemilik secara terpisah menyetujui13 slices/dependency/lokasi melalui **Setujui dan publikasikan (Recommended)**; [implementation map dan tickets](../discounts-implementation/map.md) dipublikasikan terpisah. Status plan hanya di [plan/index.md](../../plan/index.md). Belum ada izin eksekusi implementasi/provider requests/delegasi/commit/deployment/launch.
 
 ## Decisions so far
 
@@ -58,9 +59,21 @@ Jangan menanyakan ulang keputusan tersebut kecuali jawaban berikutnya menyebabka
 
 - [Bukti Kontrak Diskon Nonzero Jubelio](issues/08-jubelio-nonzero-discount-evidence.md#answer--scope-terpilih-terverifikasi): resolved pada scope approved—diskon per baris/add_disc0, original sebelum subsidi + net ongkir tanpa discount field, mirror/invoice/paymentqty1/qty2 dan safe cancel terverifikasi; legacy ambiguity dipisahkan, bukan proof rollback atau izin implementasi.
 
+- [Kontrak Mapping Provider dan Settlement](issues/09-provider-representation-and-settlement.md#answer--kontrak-lengkap-disetujui): resolved dengan approval kontrak lengkap—harga awal + diskon per baris, payable net barang/net ongkir, verifikasi ketat, snapshot/versioning dan penahanan mismatch/ambigu. [Research09 berizin terpisah](research-09-post-invoice-mirror.md#hasil-kelanjutan-dan-review-main-agent) memenuhi evidence mirror post-invoice/payment pada scope M1/M2. Kewajiban pembuktian provider Rp0 kemudian dicoret oleh pemilik; bukan izin implementasi/launch.
+
+- [Batas scope pembatalan/refund dan safety late payment](issues/10-cancellation-refund-and-late-payment.md#answer--batas-scope-dan-safety-disetujui): resolved; refund sepenuhnya manual di luar aplikasi tanpa sync/restore pemakaian promo; safe release unpaid serta paid-but-blocked/late-payment review tetap dipertahankan, tanpa subsystem refund baru.
+
+- [Arsitektur Schema, Retention, dan Extensibility](issues/11-schema-retention-and-extensibility.md#answer--logical-schema-lengkap-disetujui): resolved setelah approval kontrak lengkap—relasi order/redemption/promo dan snapshot berversi, retention tanpa cascade/purge, tanpa compatibility legacy atau arsip Excel, serta extension seam-only; bukan izin implementasi atau penutupan launch gates provider.
+
+- [UX Admin Diskon dan Authorization](issues/06-admin-ux-and-authorization.md#answer--wireframe-dan-matriks-authorization-disetujui): resolved setelah approval wireframe/matriks lengkap—Produk untuk harga/Excel, Diskon untuk kupon/kode, tiga kewenangan harga/promo/kapasitas terpisah, kode tersamarkan bagi viewer, detail usage scoped Orders, draft/review/publish dan konflik versi; bukan approval implementasi.
+
+- [Acceptance End-to-End dan Kesiapan Spec](issues/12-acceptance-and-specification-readiness.md#answer--acceptance-matrix-dan-outline-spec-disetujui): resolved setelah approval [matrix/seams/outline/gates lengkap](acceptance-12-and-specification-outline.md); konfirmasi penggantian hanya jika total naik, invalid/gugur eksplisit, UAT staging lalu publik dan pause kupon terdampak; complete spec tetap memerlukan approval terpisah; status kewajiban provider mengikuti pembaruan dan koreksi scope di bawah.
+
+- [Koreksi scope pembayaran dan service fee](decision-zero-payment-and-no-service-fee.md): pemilik menegaskan pembayaran Rp0 tidak terjadi dalam scope operasional dan dijaga prosedur admin/pemilik bisnis; website tidak mengenakan service fee. Outstanding 2 dicoret, bukan ditunda: tidak ada kewajiban pembuktian pembayaran/provider Rp0 sebagai testing requirement atau launch gate. Contoh fee Rp2.000 ditarik; catatan lama yang bertentangan telah digantikan keputusan ini.
+
 ## Not yet specified
 
-- Temuan provider/finance mungkin memerlukan bukti tambahan atau workflow operator yang terbatas sebelum diskon aman digunakan. Jadikan tiket saat gap dapat dirumuskan secara konkret; bukti yang belum tersedia adalah launch blocker, bukan kesiapan tersirat.
+- Evidence post-invoice mirror tersedia pada scope M1/M2 melalui research09; integration/tests aplikasi tetap belum dilakukan. **Provider Rp0 bukan outstanding atau launch blocker** sesuai [koreksi pemilik](decision-zero-payment-and-no-service-fee.md); jangan membukanya kembali dari catatan lama. Complete spec, detail teknis, automated acceptance dan staging UAT tetap pekerjaan berikutnya.
 - Strategi rollout/read projection/large job akan lebih jelas setelah keputusan nominal, import, dan retention. Jangan membaginya menjadi build tickets sekarang.
 - Prerequisite compliance/identity retention mungkin muncul jika dipilih limit lintas akun atau verified phone yang lebih kuat.
 

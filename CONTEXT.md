@@ -150,6 +150,22 @@ _Avoid_: cost price, cheapest product price
 A website-managed fixed selling-price reduction of a product variant for all branches, including clearance of older or slow-moving stock. It is a product price adjustment rather than an inherently time-bound campaign; a percentage input calculates the confirmed fixed price, not a continuing percentage rule.
 _Avoid_: mandatory sale campaign, stock adjustment
 
+**Offer**:
+Identitas promo yang memiliki ketentuan benefit dan jatah pemakaian bersama. Pergantian nama, revisi ketentuan, atau penambahan kode tidak menjadikannya promo baru dan tidak mereset riwayat pemakaian.
+_Avoid_: kode sebagai identitas promo, Markdown
+
+**Offer Revision**:
+Versi ketentuan suatu Offer yang menjadi acuan ketika order dibuat. Perubahan ketentuan berikutnya tidak mengubah benefit yang telah disepakati pada order tersebut.
+_Avoid_: promo baru, hitung ulang order lama
+
+**Redemption**:
+Catatan pemakaian satu Offer pada satu order, termasuk kode bila dipakai, ketentuan yang berlaku, nilai benefit, dan status pemakaiannya. Satu order memiliki paling banyak satu Redemption kupon/kode; Markdown bukan Redemption.
+_Avoid_: prior claim, slot promo tambahan
+
+**Promo Reservation**:
+Penahanan kuota, budget, dan jatah akun untuk benefit aktual saat order dibuat. Penahanan menjadi pemakaian final setelah paid terverifikasi atau dilepas ketika order unpaid berakhir secara pasti dan aman.
+_Avoid_: pemakaian final saat preview, release otomatis karena timeout
+
 **Coupon**:
 Offer yang ditemukan dan dipilih langsung oleh customer tanpa prior claim untuk mengurangi nilai barang atau ongkir. Pada fase awal, Coupon barang bersifat general untuk seluruh barang order dengan harga setelah Markdown, tanpa targeting produk/kategori/brand; satu order dapat menggabungkan Markdown dengan maksimal satu Coupon atau Manual Promo Code untuk barang maupun ongkir.
 _Avoid_: additional coupon slot, permanent product price

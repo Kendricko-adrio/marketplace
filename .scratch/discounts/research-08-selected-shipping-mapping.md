@@ -6,7 +6,7 @@ Pemilik meminta mengecualikan shipping_cost_discount dan mengisi shipping_cost s
 
 **Arah planning terbaru: barang + net ongkir**, bukan goods-only. Ini menggantikan pilihan goods-only sebelumnya dalam diskusi, tetapi **bukan approval implementasi, complete contract tiket09, penutupan tiket08, testing tambahan, subagent, atau commit**. Approval awal arah mapping tidak sekaligus merevisi required proof08; revisi scope bukti kemudian disetujui secara terpisah sebagaimana dicatat di bawah. Kode existing tetap belum diubah dan dapat tetap memakai goods-only; arah planning baru tidak dianggap sudah berjalan di runtime.
 
-Keputusan ini dicatat sebagai hasil parsial dari pembahasan evidence08 untuk bahan mapping09. Setelah T1–T3 dan review scope approved, tiket08 kini resolved; tiket09 tetap open/unclaimed dan unblocked. Tidak ada claim atau jawaban lengkap09 yang diasumsikan.
+Keputusan ini dicatat sebagai hasil parsial dari pembahasan evidence08 untuk bahan mapping09. Setelah T1–T3 dan review scope approved, tiket08 resolved. Pemilik kemudian menyetujui [kontrak lengkap09](contract-09-provider-representation-and-settlement.md) dalam sesi terpisah; tiket09 resolved sebagai planning. Status terkini: evidence mirror M1/M2 tersedia, sedangkan pembuktian pembayaran/provider Rp0 dicoret oleh pemilik melalui [koreksi scope tanpa service fee](decision-zero-payment-and-no-service-fee.md); catatan gates lama di dokumen ini adalah histori. Approval arah parsial08 sendiri tidak dianggap otomatis menyelesaikan09.
 
 ## Mapping request yang dipilih
 
@@ -68,9 +68,9 @@ Required proof08 kini fokus pada mapping terpilih/per-line discount/add_disc0. F
 
 ## Pekerjaan dan unknowns yang tetap terbuka
 
-1. Kontrak mapping09 lengkap: field/nominal per stage, source of truth, verifikasi invoice/payment/mirror, payload versioning, mismatch/ambiguity handling dan snapshot lokal masih perlu dibahas serta disetujui sebagai keseluruhan.
+1. Kontrak mapping09 lengkap sudah dibahas dan [disetujui sebagai keseluruhan](contract-09-provider-representation-and-settlement.md). Evidence aman sinkronisasi status setelah invoice/payment kemudian tersedia pada M1/M2. Kewajiban solusi/pembuktian provider Rp0 kemudian dicoret oleh pemilik, bukan ditunda, sesuai koreksi scope yang ditautkan di awal dokumen. Persetujuan bukan izin testing atau implementasi.
 2. Bukti payment, full-payload mirror sebelum invoice/cancel, qty>1 dan safe cancel konfigurasi terpilih telah dipenuhi T1–T3 sesuai protokol yang diizinkan. Jangan menyimpulkan semua stages/configurations lain didukung atau menjalankan writes baru tanpa izin.
-3. Required proof08 yang direvisi telah direview terhadap T1–T3 dan evidence existing;08 resolved pada scope terpilih. Ini bukan approval complete contract09 atau implementasi.
+3. Required proof08 yang direvisi telah direview terhadap T1–T3 dan evidence existing;08 resolved pada scope terpilih. Complete contract09 disetujui terpisah setelahnya, bukan otomatis dari evidence08. Implementasi tetap memerlukan approval tersendiri.
 4. Unknown outcome/disposition fixtures B/G lama dan conversion errors lain tetap dicatat sebagai follow-up terpisah, bukan gate kontrak baru atau proof rollback. Cleanup/retry/cancel tetap memerlukan state aman dan izin terpisah.
 5. Accounting/funding subsidi merchant tidak dianggap otomatis tercatat pada Jubelio; website menyimpan komponennya sesuai04. Tidak mewajibkan writable funding field yang tidak dipakai, dan jangan memperbaiki account mapping/config tanpa scope serta izin baru.
 

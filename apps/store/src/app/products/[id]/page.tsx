@@ -24,7 +24,13 @@ interface ProductVariant {
   sku: string;
   color: string | null;
   size: string | null;
+  /** Effective price (Markdown applied when active). */
   price: string;
+  /** Source (Jubelio base) price of THIS variant. */
+  sourcePrice?: string;
+  storedTarget?: string | null;
+  markdownActive?: boolean;
+  markdownRevisionId?: string | null;
   isDefault: boolean;
   images: string[];
   branchStock: BranchStock[];
@@ -174,8 +180,18 @@ export default function ProductDetailPage() {
 
   const currentPrice = parseFloat(selectedVariant?.price || product.basePrice);
 
-  const originalPrice = parseFloat(product.basePrice);
-  const discount = computeDiscountPercent(originalPrice, currentPrice);
+  // Only an ACTIVE Markdown shows a coretan, and the original is the SAME
+  // variant's source price — the group RRP (product.basePrice) is not used.
+  const sourcePrice = selectedVariant?.sourcePrice
+    ? parseFloat(selectedVariant.sourcePrice)
+    : undefined;
+  const originalPrice =
+    selectedVariant?.markdownActive && sourcePrice && sourcePrice > currentPrice
+      ? sourcePrice
+      : undefined;
+  const discount = originalPrice
+    ? computeDiscountPercent(originalPrice, currentPrice)
+    : 0;
 
   const availableBranches = selectedVariant?.branchStock ?? [];
   const selectedBranchStock = availableBranches.find(
@@ -235,7 +251,7 @@ export default function ProductDetailPage() {
             <h2 className="text-4xl font-bold text-primary">
               Rp {currentPrice.toLocaleString("id-ID")}
             </h2>
-            {discount > 0 && (
+            {discount > 0 && originalPrice !== undefined && (
               <div className="flex gap-4 items-center mt-2">
                 <span className="text-muted-foreground line-through">
                   Rp {originalPrice.toLocaleString("id-ID")}

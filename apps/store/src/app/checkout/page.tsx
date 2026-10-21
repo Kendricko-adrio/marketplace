@@ -31,6 +31,7 @@ import {
 import { useSession } from "@/lib/auth-client";
 import { useCart } from "@/providers/cart-provider";
 import DeliveryQuotePanel, { type DeliveryAddressPreview } from "@/components/checkout/DeliveryQuotePanel";
+import { PromoSelector, type AvailableOffer } from "@/components/checkout/PromoSelector";
 import type { DeliveryQuoteService } from "@/lib/delivery-quote";
 import {
   getDayHours,
@@ -67,6 +68,24 @@ interface CartData {
   itemCount: number;
   subtotal: number;
   ppnRatePercent: number;
+  pricingContractVersion: 0 | 1;
+}
+
+interface PendingCheckout {
+  requestKey: string;
+  body: Record<string, unknown>;
+}
+interface CheckoutPricing extends ReturnType<typeof calculateOrderPricing> {
+  /** Additive Markdown snapshot fields from the versioned preview. */
+  sourceGoodsSubtotal?: string;
+  markdownTotal?: string;
+}
+
+interface CheckoutReview {
+  reviewToken: string;
+  expiresAt: string;
+  pricing: CheckoutPricing;
+  intent: Record<string, unknown>;
 }
 
 interface BranchWithHours {
@@ -100,6 +119,13 @@ export default function CheckoutPage() {
   const [email, setEmail] = useState("");
   const [contactError, setContactError] = useState("");
 
+  // Step 2 — Coupon publik pickup (ticket 07). Read-only list; the server
+  // re-evaluates capacity authoritatively at preview and place-order.
+  const [promoOffers, setPromoOffers] = useState<AvailableOffer[]>([]);
+  const [promoLoading, setPromoLoading] = useState(false);
+  const [promoError, setPromoError] = useState<string | null>(null);
+  const [selectedOfferId, setSelectedOfferId] = useState<string | null>(null);
+
   // Step 1 — Pickup
   const [pickupDate, setPickupDate] = useState("");
   const [pickupTime, setPickupTime] = useState("");
@@ -109,6 +135,11 @@ export default function CheckoutPage() {
 
   // Step 3 — Review
   const [confirmed, setConfirmed] = useState(false);
+  const [review, setReview] = useState<CheckoutReview | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  const [pendingRequest, setPendingRequest] = useState<PendingCheckout | null>(null);
+  const requestInFlight = useRef(false);
+  const requestStorageKey = session?.user.id ? `checkoutRequest:${session.user.id}` : null;
 
   // Step 1 chooses pickup or delivery before collecting the order contact.
   // Method changes invalidate delivery selection and approval.
@@ -144,6 +175,7 @@ export default function CheckoutPage() {
     if (method === fulfillmentMethod) return;
     pickupValidationGeneration.current += 1;
     setFulfillmentMethod(method);
+    setReview(null);
     setConfirmed(false);
     // Any method change invalidates the old service + money immediately.
     setDeliveryService(null);
@@ -154,6 +186,8 @@ export default function CheckoutPage() {
 
   // ===== Fetch cart + read selected item IDs on mount =====
   useEffect(() => {
+    if (sessionPending) return;
+    let cancelled = false;
     // Read the selection made on the cart page from sessionStorage.
     let ids: string[] = [];
     try {
@@ -165,9 +199,32 @@ export default function CheckoutPage() {
 
     async function fetchCart() {
       try {
+        // Recovery mendahului cart: accepted order tetap ada setelah cart kosong.
+        let stored: PendingCheckout | null = null;
+        try {
+          const raw = requestStorageKey ? sessionStorage.getItem(requestStorageKey) : null;
+          if (raw) {
+            const value = JSON.parse(raw);
+            if (typeof value.requestKey === "string" && /^[a-f0-9-]{36}$/i.test(value.requestKey) &&
+                value.body && typeof value.body === "object") stored = value;
+          }
+        } catch { /* Storage tidak tersedia; jangan merekonstruksi request baru. */ }
+        if (stored) {
+          if (cancelled) return;
+          setPendingRequest(stored);
+          try {
+            const lookup = await fetch(`/api/checkout/requests/${stored.requestKey}`, { cache: "no-store" });
+            const result = await lookup.json();
+            if (!cancelled && result.success && result.data?.orderId) {
+              if (requestStorageKey) sessionStorage.removeItem(requestStorageKey);
+              router.replace(`/account/orders/${result.data.orderId}`);
+            }
+          } catch { /* Panel recovery tetap memakai key yang sama. */ }
+          return;
+        }
         const res = await fetch("/api/cart");
         const data = await res.json();
-        if (data.success) {
+        if (!cancelled && data.success) {
           setCart(data.data);
           // Build the selected-item set from sessionStorage, intersected
           // with the current cart contents (so stale IDs are dropped).
@@ -186,11 +243,12 @@ export default function CheckoutPage() {
       } catch (error) {
         console.error("Error fetching cart:", error);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
     fetchCart();
-  }, [router]);
+    return () => { cancelled = true; };
+  }, [router, sessionPending, requestStorageKey]);
 
   // ===== Derived: selected items & branch =====
   const selectedItems = useMemo(() => {
@@ -225,6 +283,54 @@ export default function CheckoutPage() {
       cancelled = true;
     };
   }, [selectedBranchId]);
+
+  // Coupon publik pickup — read-only discovery for the picker. A capacity race
+  // is still re-checked at place-order; this call never reserves anything.
+  const loadPromos = useCallback(async () => {
+    if (
+      fulfillmentMethod !== "pickup" ||
+      cart?.pricingContractVersion !== 1 ||
+      selectedItems.length === 0
+    ) {
+      setPromoOffers([]);
+      setPromoError(null);
+      setPromoLoading(false);
+      return;
+    }
+    setPromoLoading(true);
+    setPromoError(null);
+    try {
+      const response = await fetch("/api/discounts/available", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          selectedItemIds: selectedItems.map((item) => item.id),
+          fulfillmentMethod: "pickup",
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        setPromoOffers([]);
+        setPromoError(result?.error ?? "Promo belum dapat dimuat.");
+        return;
+      }
+      const offers: AvailableOffer[] = result.data?.items ?? [];
+      setPromoOffers(offers);
+      setSelectedOfferId((current) =>
+        current && offers.some((offer) => offer.offerId === current) ? current : null
+      );
+    } catch {
+      setPromoOffers([]);
+      setPromoError("Promo belum dapat dimuat.");
+    } finally {
+      setPromoLoading(false);
+    }
+  }, [fulfillmentMethod, cart?.pricingContractVersion, selectedItems]);
+
+  useEffect(() => {
+    if (step === 2) void loadPromos();
+  }, [step, loadPromos]);
 
   // Order contact is required for both methods, independently of the
   // delivery recipient. Submit the same trimmed values that were validated.
@@ -308,7 +414,7 @@ export default function CheckoutPage() {
       ),
     [selectedItems]
   );
-  const pricing = useMemo(
+  const fallbackPricing = useMemo(
     () => fulfillmentMethod === "delivery" && deliveryService ? deliveryService.pricing : calculateOrderPricing({
       subtotal,
       // Delivery taxes the quoted ongkir (rates, never final_rates); the
@@ -322,7 +428,11 @@ export default function CheckoutPage() {
     }),
     [subtotal, fulfillmentMethod, deliveryService, cart?.ppnRatePercent]
   );
+  const pricing = review?.pricing ?? fallbackPricing;
   const total = Number(pricing.total);
+  const appliedPromo = selectedOfferId
+    ? promoOffers.find((offer) => offer.offerId === selectedOfferId) ?? null
+    : null;
 
   // Pickup validation — the server also revalidates at order placement.
   const validatePickup = (): boolean => {
@@ -383,19 +493,125 @@ export default function CheckoutPage() {
     }
   };
 
-  function handleNextFromContact() {
-    if (fulfillmentMethod === "delivery" && (deliveryPending || !deliveryService)) {
-      setStep(1);
-      return;
-    }
+  function currentIntent(): Record<string, unknown> {
+    return fulfillmentMethod === "delivery" && deliveryService ? {
+      itemIds: selectedItems.map((item) => item.id), contactPhone: phone.trim(), contactEmail: email.trim(),
+      fulfillmentMethod: "delivery",
+      ...(deliveryNewAddress ? { newAddress: deliveryNewAddress, saveAddress: deliverySaveAddress, saveRequestId }
+        : { addressId: deliveryAddressId }),
+      courierId: deliveryService.courierId, serviceId: deliveryService.serviceId,
+      approvedPricing: deliveryService.pricing, originFingerprint: deliveryService.originFingerprint,
+      // Pemilihan promo delivery dimiliki ticket 11; kontrak preview tetap
+      // mewajibkan pilihan eksplisit `none`.
+      promoSelection: { kind: "none" },
+    } : { phone: phone.trim(), email: email.trim(), pickupDate, pickupTime, selectedItemIds: Array.from(selectedItemIds),
+      promoSelection: selectedOfferId ? { kind: "public", offerId: selectedOfferId } : { kind: "none" } };
+  }
+
+  async function handleNextFromContact() {
+    if (reviewing) return;
+    if (fulfillmentMethod === "delivery" && (deliveryPending || !deliveryService)) { setStep(1); return; }
     if (!validateContact()) return;
     setConfirmed(false);
+    if (cart?.pricingContractVersion === 1) {
+      setReviewing(true);
+      try {
+        const intent = { ...currentIntent() };
+        const response = await fetch("/api/checkout/preview", {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(intent),
+        });
+        const result = await response.json();
+        if (!result.success) {
+          toast.error(result.error || "Review checkout belum tersedia.");
+          if (typeof result.code === "string" && result.code.startsWith("PROMO_")) {
+            void loadPromos();
+          }
+          return;
+        }
+        const data = result.data;
+        if (data.deliveryService) setDeliveryService(data.deliveryService);
+        setReview({ reviewToken: data.reviewToken, expiresAt: data.expiresAt, pricing: data.pricing,
+          intent: data.deliveryService ? { ...intent, approvedPricing: data.pricing, originFingerprint: data.deliveryService.originFingerprint } : intent });
+        setStep(3);
+      } catch { toast.error("Review checkout belum dapat dibaca. Silakan coba lagi."); }
+      finally { setReviewing(false); }
+      return;
+    }
     setStep(3);
+  }
+
+  function clearPendingRequest() {
+    if (requestStorageKey) sessionStorage.removeItem(requestStorageKey);
+    setPendingRequest(null);
+  }
+
+  async function submitVersioned(record: PendingCheckout) {
+    try {
+      const response = await fetch("/api/checkout/place-order", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(record.body),
+      });
+      const result = await response.json();
+      if (result.success && result.data?.orderId) {
+        clearPendingRequest();
+        refreshCart();
+        if (result.data.paymentAvailable && result.data.redirectUrl) window.location.href = result.data.redirectUrl;
+        else router.push(`/account/orders/${result.data.orderId}`);
+        return;
+      }
+      if (result.code === "CHECKOUT_REVIEW_REQUIRED" || result.code === "DELIVERY_REPRICE_REQUIRED") {
+        clearPendingRequest(); setConfirmed(false); setReview(null);
+        if (result.code === "DELIVERY_REPRICE_REQUIRED") {
+          const services: DeliveryQuoteService[] = result.data?.services ?? [];
+          const matched = services.find((service) => service.courierId === deliveryService?.courierId && service.serviceId === deliveryService?.serviceId) ?? null;
+          setDeliveryService(matched); setRepriceSync({ services, selected: matched }); setRepriceShown(true);
+          if (!matched) setStep(1); else setStep(2);
+        } else setStep(2);
+      }
+      // Promo ditolak authoritative (kapasitas/ineligible/berubah): tidak ada
+      // order yang dibuat. Kembali ke langkah promo untuk pilihan baru — jangan
+      // menampilkan applied state palsu atau order tanpa promo diam-diam.
+      if (typeof result.code === "string" && result.code.startsWith("PROMO_")) {
+        clearPendingRequest();
+        setReview(null);
+        setConfirmed(false);
+        setStep(2);
+      }
+      toast.error(result.error || "Status checkout belum dapat dipastikan. Periksa pesanan yang sama.");
+    } catch {
+      // Jangan ganti key/intent setelah response hilang. Panel recovery tetap tersedia.
+      toast.error("Koneksi terputus. Periksa status pesanan sebelum mencoba lagi.");
+    }
+  }
+
+  async function recoverPendingRequest() {
+    if (!pendingRequest || requestInFlight.current) return;
+    requestInFlight.current = true; setSubmitting(true);
+    try {
+      const response = await fetch(`/api/checkout/requests/${pendingRequest.requestKey}`, { cache: "no-store" });
+      const result = await response.json();
+      if (result.success && result.data?.orderId) {
+        clearPendingRequest(); router.push(`/account/orders/${result.data.orderId}`); refreshCart(); return;
+      }
+      if (response.status === 404) await submitVersioned(pendingRequest);
+      else toast.error("Status pesanan belum dapat dibaca. Coba periksa kembali.");
+    } catch { toast.error("Koneksi belum tersedia. Request checkout tetap tersimpan."); }
+    finally { requestInFlight.current = false; setSubmitting(false); }
   }
 
   // ===== Place order =====
   const handlePlaceOrder = async () => {
-    if (!confirmed) return;
+    if (!confirmed || requestInFlight.current) return;
+    if (cart?.pricingContractVersion === 1) {
+      if (!review || !requestStorageKey) { toast.error("Periksa kembali rincian checkout."); return; }
+      const requestKey = crypto.randomUUID();
+      const record: PendingCheckout = { requestKey, body: { ...review.intent, requestKey, reviewToken: review.reviewToken } };
+      try { sessionStorage.setItem(requestStorageKey, JSON.stringify(record)); }
+      catch { toast.error("Browser tidak dapat menyimpan request checkout. Izinkan penyimpanan lalu coba lagi."); return; }
+      requestInFlight.current = true; setPendingRequest(record); setSubmitting(true);
+      try { await submitVersioned(record); }
+      finally { requestInFlight.current = false; setSubmitting(false); }
+      return;
+    }
     if (fulfillmentMethod === "delivery") {
       if (deliveryPending || !deliveryService || (!deliveryAddressId && !deliveryNewAddress)) return;
       setSubmitting(true);
@@ -508,6 +724,18 @@ export default function CheckoutPage() {
         </div>
       </div>
     );
+  }
+
+  if (pendingRequest) {
+    return <div className="container mx-auto max-w-xl px-4 py-16">
+      <Card><CardContent className="space-y-4 pt-6">
+        <h1 className="text-2xl font-bold">Periksa status pesanan</h1>
+        <p>Request checkout tersimpan. Kami akan mencari pesanan yang sama, tanpa membuat pesanan atau pembayaran pengganti otomatis.</p>
+        <Button onClick={recoverPendingRequest} disabled={submitting}>
+          {submitting ? "Memeriksa pesanan…" : "Periksa pesanan"}
+        </Button>
+      </CardContent></Card>
+    </div>;
   }
 
   // ===== Empty cart redirect =====
@@ -647,6 +875,21 @@ export default function CheckoutPage() {
                   <p className="mt-4 text-sm text-destructive">{contactError}</p>
                 )}
 
+                {fulfillmentMethod === "pickup" && cart?.pricingContractVersion === 1 && (
+                  <div className="mt-6">
+                    <PromoSelector
+                      offers={promoOffers}
+                      selectedOfferId={selectedOfferId}
+                      loading={promoLoading}
+                      error={promoError}
+                      disabled={reviewing}
+                      onSelect={setSelectedOfferId}
+                      onClear={() => setSelectedOfferId(null)}
+                      onRetry={() => void loadPromos()}
+                    />
+                  </div>
+                )}
+
                 {canFillFromProfile && (
                   <Button
                     variant="outline"
@@ -668,7 +911,7 @@ export default function CheckoutPage() {
                   <Button
                     onClick={handleNextFromContact}
                     className="gap-2"
-                    disabled={fulfillmentMethod === "delivery" && (deliveryPending || !deliveryService)}
+                    disabled={reviewing || (fulfillmentMethod === "delivery" && (deliveryPending || !deliveryService))}
                   >
                     Lanjut <ArrowRight className="h-4 w-4" />
                   </Button>
@@ -938,6 +1181,12 @@ export default function CheckoutPage() {
                 {/* Order summary */}
                 <div className="space-y-3 mb-6">
                   <h3 className="font-semibold">Ringkasan Pesanan</h3>
+                  {appliedPromo && (
+                    <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
+                      Promo dipakai: <span className="font-medium">{appliedPromo.name}</span> · potongan Rp{" "}
+                      {Number(appliedPromo.benefitAmount).toLocaleString("id-ID")}
+                    </div>
+                  )}
                   {selectedItems.map((item) => (
                     <div
                       key={item.id}
@@ -1042,10 +1291,14 @@ export default function CheckoutPage() {
                     </span>
                     <span>Rp {subtotal.toLocaleString("id-ID")}</span>
                   </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Diskon</span>
-                    <span>Rp 0</span>
-                  </div>
+                  {Number(pricing.discount) > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Diskon promo</span>
+                      <span className="text-green-600">
+                        - Rp {Number(pricing.discount).toLocaleString("id-ID")}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">PPN ({pricing.ppnRatePercent}%)</span>
                     <span>Rp {Number(pricing.ppnAmount).toLocaleString("id-ID")}</span>
@@ -1060,10 +1313,14 @@ export default function CheckoutPage() {
                       <span className="text-green-600">Gratis (Pickup)</span>
                     )}
                   </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Biaya Layanan</span>
-                    <span>Rp 0</span>
-                  </div>
+                  {/* A zero service fee is not a charge: the row only exists when
+                      the approved pricing actually carries one (legacy rows). */}
+                  {Number(pricing.serviceFee) > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-muted-foreground">Biaya Layanan</span>
+                      <span>Rp {Number(pricing.serviceFee).toLocaleString("id-ID")}</span>
+                    </div>
+                  )}
                   <hr className="border-t border-dashed border-muted-foreground/30 my-2" />
                   <div className="flex justify-between font-bold">
                     <span>Total Bayar</span>
@@ -1156,10 +1413,14 @@ export default function CheckoutPage() {
                   <span className="text-muted-foreground">Subtotal</span>
                   <span>Rp {subtotal.toLocaleString("id-ID")}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Diskon</span>
-                  <span>Rp 0</span>
-                </div>
+                {Number(pricing.discount) > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Diskon promo</span>
+                    <span className="text-green-600">
+                      - Rp {Number(pricing.discount).toLocaleString("id-ID")}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">PPN ({pricing.ppnRatePercent}%)</span>
                   <span>{fulfillmentMethod === "delivery" && !deliveryService ? "—" : `Rp ${Number(pricing.ppnAmount).toLocaleString("id-ID")}`}</span>
@@ -1168,10 +1429,12 @@ export default function CheckoutPage() {
                   <span className="text-muted-foreground">Ongkos Kirim</span>
                   <span>{fulfillmentMethod === "pickup" ? "Gratis (Pickup)" : deliveryService ? `Rp ${Number(deliveryService.shippingCost).toLocaleString("id-ID")}` : "Pilih layanan pengiriman"}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Biaya Layanan</span>
-                  <span>Rp 0</span>
-                </div>
+                {Number(pricing.serviceFee) > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Biaya Layanan</span>
+                    <span>Rp {Number(pricing.serviceFee).toLocaleString("id-ID")}</span>
+                  </div>
+                )}
               </div>
 
               <hr className="border-t border-dashed border-muted-foreground/30 my-3" />

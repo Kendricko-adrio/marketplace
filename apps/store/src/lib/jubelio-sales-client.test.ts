@@ -487,6 +487,397 @@ describe("buildSalesOrderPayload", () => {
   });
 });
 
+// Contract v2 baseline (ticket 01): the persisted create intent carries the
+// explicit provider contract version plus the frozen original/net shipping and
+// the expected provider payable, so the provider request is derived from the
+// stored snapshot instead of being recomputed from a response.
+describe("buildSalesOrderPayload provider contract v2 (baseline shipping, no promo)", () => {
+  it("maps the delivery baseline to INTERNAL source, net goods + net shipping grand total and original/net shipping without a shipping discount", () => {
+    // Independent worked example (spec §4.4/§10.1, contract09 §3): goods
+    // 150000, original shipping 30000 with no subsidy (= net 30000), so the
+    // provider payable is 180000 and the customer PPN is not a provider field.
+    const payload = buildSalesOrderPayload({
+      providerContractVersion: 2,
+      contactId: 7,
+      customerName: "Pelanggan Umum",
+      locationId: 61,
+      note: "OKCIR_SO_CREATE:order-v2:op-1",
+      refNo: "order-v2",
+      transactionDate: new Date("2026-10-01T00:00:00.000Z"),
+      originalShipmentCost: 30_000,
+      shippingCost: 30_000,
+      expectedProviderPayable: 180_000,
+      items: [
+        {
+          itemId: 101187,
+          quantity: 1,
+          price: 150_000,
+          discAmount: 0,
+          taxAmount: 0,
+          unit: "Buah",
+          taxId: 1,
+        },
+      ],
+    });
+
+    expect(payload).toEqual({
+      salesorder_id: 0,
+      salesorder_no: "[auto]",
+      contact_id: 7,
+      customer_name: "Pelanggan Umum",
+      transaction_date: "2026-10-01T00:00:00.000Z",
+      is_tax_included: false,
+      note: "OKCIR_SO_CREATE:order-v2:op-1",
+      ref_no: "order-v2",
+      location_id: 61,
+      source: 1,
+      sub_total: 150_000,
+      total_disc: 0,
+      total_tax: 0,
+      grand_total: 180_000,
+      original_shipment_cost: 30_000,
+      shipping_cost: 30_000,
+      add_fee: 0,
+      add_disc: 0,
+      service_fee: 0,
+      items: [
+        {
+          salesorder_detail_id: 0,
+          item_id: 101187,
+          qty_in_base: 1,
+          price: 150_000,
+          disc: 0,
+          disc_amount: 0,
+          tax_amount: 0,
+          amount: 150_000,
+          unit: "Buah",
+          tax_id: 1,
+          location_id: 61,
+        },
+      ],
+    });
+  });
+});
+
+// =====================================================================
+// Provider contract v2 baseline (ticket 01): explicit version, frozen
+// original/net shipping and expected provider payable. No promo, no service
+// fee, no provider tax. Every request below is a captured fake fetch; no real
+// Jubelio traffic is ever made here.
+// =====================================================================
+
+const V2_SO_ID = 68_501;
+
+const v2ItemInput = {
+  itemId: 101187,
+  quantity: 1,
+  price: 150_000,
+  discAmount: 0,
+  taxAmount: 0,
+  unit: "Buah",
+  taxId: 1,
+};
+
+/** Delivery baseline: goods 150000, original shipping 30000, no subsidy. */
+const v2DeliveryCreateInput = {
+  providerContractVersion: 2,
+  contactId: -1,
+  customerName: "Pelanggan Umum",
+  locationId: 15,
+  note: "OKCIR_SO_CREATE:order-v2:op-1",
+  refNo: "order-v2",
+  transactionDate: new Date("2026-10-01T00:00:00.000Z"),
+  originalShipmentCost: 30_000,
+  shippingCost: 30_000,
+  expectedProviderPayable: 180_000,
+  items: [v2ItemInput],
+};
+
+/** The stored create-intent envelope that mirror/lifecycle callers pass in. */
+const v2ExpectedEnvelope = {
+  providerContractVersion: 2 as const,
+  originalShipmentCost: 30_000,
+  shippingCost: 30_000,
+  expectedProviderPayable: 180_000,
+};
+
+/** `GET /sales/orders/{id}` shape for the delivery baseline above. */
+function v2SalesOrderGet(
+  orderId: number,
+  overrides: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    salesorder_id: orderId,
+    salesorder_no: `SO-${String(orderId).padStart(9, "0")}`,
+    contact_id: -1,
+    customer_name: "Pelanggan Umum",
+    transaction_date: "2026-10-01T00:05:00.000Z",
+    is_tax_included: false,
+    location_id: 15,
+    source: 1,
+    note: "OKCIR_SO_CREATE:order-v2:op-1",
+    ref_no: "order-v2",
+    is_canceled: false,
+    invoice_id: null,
+    channel_status: "Belum Bayar",
+    sub_total: 150_000,
+    total_disc: 0,
+    total_tax: 0,
+    grand_total: 180_000,
+    original_shipment_cost: 30_000,
+    shipping_cost: 30_000,
+    add_fee: 0,
+    add_disc: 0,
+    service_fee: 0,
+    items: [
+      {
+        salesorder_detail_id: 75_001,
+        item_id: 101187,
+        qty_in_base: 1,
+        price: 150_000,
+        disc: 0,
+        disc_amount: 0,
+        tax_amount: 0,
+        amount: 150_000,
+        unit: "Buah",
+        tax_id: 1,
+        location_id: 15,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+describe("buildSalesOrderPayload provider contract v2 pickup baseline", () => {
+  it("maps pickup with zero original/net shipping to the provider payable", () => {
+    const payload = buildSalesOrderPayload({
+      ...v2DeliveryCreateInput,
+      originalShipmentCost: 0,
+      shippingCost: 0,
+      expectedProviderPayable: 150_000,
+    });
+
+    expect(payload).toMatchObject({
+      source: 1,
+      sub_total: 150_000,
+      total_disc: 0,
+      total_tax: 0,
+      grand_total: 150_000,
+      original_shipment_cost: 0,
+      shipping_cost: 0,
+      add_fee: 0,
+      add_disc: 0,
+      service_fee: 0,
+    });
+    expect(payload).not.toHaveProperty("shipping_cost_discount");
+  });
+});
+
+describe("buildSalesOrderPayload provider contract v2 guards (before any request)", () => {
+  it("accepts a whole-line Markdown discount on the versioned path and keeps tax at zero", () => {
+    // source150000 → effective140000: the provider line carries the SOURCE
+    // price and a 10000 whole-line discount, so the payable is net goods +
+    // net shipping = 140000 + 30000 = 170000.
+    const payload = buildSalesOrderPayload({
+      ...v2DeliveryCreateInput,
+      expectedProviderPayable: 170_000,
+      items: [{ ...v2ItemInput, discAmount: 10_000 }],
+    });
+    expect(payload).toMatchObject({ sub_total: 150_000, total_disc: 10_000, grand_total: 170_000 });
+    expect(payload.items).toEqual([
+      expect.objectContaining({ price: 150_000, disc_amount: 10_000, tax_amount: 0 }),
+    ]);
+    expect(() =>
+      buildSalesOrderPayload({
+        ...v2DeliveryCreateInput,
+        items: [{ ...v2ItemInput, taxAmount: 5_000 }],
+      })
+    ).toThrow(/tax amount is rejected/);
+  });
+
+  it("refuses an expected provider payable that is off by Rp1", () => {
+    expect(() =>
+      buildSalesOrderPayload({
+        ...v2DeliveryCreateInput,
+        expectedProviderPayable: 180_001,
+      })
+    ).toThrow(
+      /expected provider payable 180001 does not equal net goods 150000 \+ net shipping 30000 \(180000\)/
+    );
+  });
+
+  it("refuses net shipping above the original shipping", () => {
+    expect(() =>
+      buildSalesOrderPayload({
+        ...v2DeliveryCreateInput,
+        shippingCost: 40_000,
+        expectedProviderPayable: 190_000,
+      })
+    ).toThrow(/cannot exceed the original shipping/);
+  });
+
+  it("refuses shipping money without an explicit provider contract version instead of dropping it", () => {
+    expect(() =>
+      buildSalesOrderPayload({
+        ...v2DeliveryCreateInput,
+        providerContractVersion: undefined,
+      })
+    ).toThrow(/explicit provider contract version/);
+  });
+
+  it("refuses fractional source Rupiah and out-of-bound whole money", () => {
+    expect(() =>
+      buildSalesOrderPayload({
+        ...v2DeliveryCreateInput,
+        items: [{ ...v2ItemInput, price: 150_000.5 }],
+      })
+    ).toThrow(/item price must be whole Rupiah/);
+    expect(() =>
+      buildSalesOrderPayload({
+        ...v2DeliveryCreateInput,
+        originalShipmentCost: 10_000_000_000_000,
+      })
+    ).toThrow(/whole Rupiah integers from 0 to 9999999999999/);
+  });
+
+  it("refuses cart lines beyond 50 and a quantity beyond 99", () => {
+    const manyLines = Array.from({ length: 51 }, (_, index) => ({
+      ...v2ItemInput,
+      itemId: 200_000 + index,
+      price: 1000,
+    }));
+    expect(() =>
+      buildSalesOrderPayload({
+        ...v2DeliveryCreateInput,
+        expectedProviderPayable: 81_000,
+        items: manyLines,
+      })
+    ).toThrow(/at most 50 item lines/);
+    expect(() =>
+      buildSalesOrderPayload({
+        ...v2DeliveryCreateInput,
+        items: [{ ...v2ItemInput, quantity: 100 }],
+      })
+    ).toThrow(/1\.\.99/);
+  });
+});
+
+describe("Jubelio sales gateway createSalesOrder provider contract v2", () => {
+  it("POSTs the v2 envelope once and confirms the stored original/net shipping and grand total by an independent GET", async () => {
+    const { fetchImpl, requests } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/orders/" && request.method === "POST") {
+        return Response.json({ id: V2_SO_ID });
+      }
+      if (request.path === `/sales/orders/${V2_SO_ID}` && request.method === "GET") {
+        return Response.json(v2SalesOrderGet(V2_SO_ID));
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    const result = await gateway.createSalesOrder({
+      ...v2DeliveryCreateInput,
+      operationId: "op-v2",
+    });
+
+    expect(requests.map(({ method, path }) => `${method} ${path}`)).toEqual([
+      "POST /login",
+      "POST /sales/orders/",
+      `GET /sales/orders/${V2_SO_ID}`,
+    ]);
+    expect(requests[1].body).toMatchObject({
+      source: 1,
+      sub_total: 150_000,
+      total_disc: 0,
+      total_tax: 0,
+      grand_total: 180_000,
+      original_shipment_cost: 30_000,
+      shipping_cost: 30_000,
+      add_fee: 0,
+      add_disc: 0,
+      service_fee: 0,
+    });
+    expect(requests[1].body).not.toHaveProperty("shipping_cost_discount");
+    expect(result.salesOrderId).toBe(V2_SO_ID);
+    expect(result.order).toMatchObject({
+      grandTotal: 180_000,
+      originalShipmentCost: 30_000,
+      shippingCost: 30_000,
+      channelStatus: "Belum Bayar",
+    });
+  });
+
+  it("holds the stage and keeps the returned SO id when the GET omits the stored original shipping", async () => {
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/orders/" && request.method === "POST") {
+        return Response.json({ id: V2_SO_ID });
+      }
+      if (request.path === `/sales/orders/${V2_SO_ID}`) {
+        return Response.json(
+          v2SalesOrderGet(V2_SO_ID, { original_shipment_cost: undefined })
+        );
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(
+      gateway.createSalesOrder({ ...v2DeliveryCreateInput, operationId: "op-v2" })
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("original shipping"),
+      options: {
+        ambiguous: true,
+        retryable: false,
+        salesOrderId: V2_SO_ID,
+      },
+    });
+  });
+
+  it("holds the stage on a Rp1 net shipping divergence", async () => {
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/orders/" && request.method === "POST") {
+        return Response.json({ id: V2_SO_ID });
+      }
+      if (request.path === `/sales/orders/${V2_SO_ID}`) {
+        return Response.json(v2SalesOrderGet(V2_SO_ID, { shipping_cost: 29_999 }));
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(
+      gateway.createSalesOrder({ ...v2DeliveryCreateInput, operationId: "op-v2" })
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("net shipping"),
+      options: { ambiguous: true, retryable: false, salesOrderId: V2_SO_ID },
+    });
+  });
+
+  it("holds the stage when the GET grand total is not the requested provider payable", async () => {
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/orders/" && request.method === "POST") {
+        return Response.json({ id: V2_SO_ID });
+      }
+      if (request.path === `/sales/orders/${V2_SO_ID}`) {
+        return Response.json(v2SalesOrderGet(V2_SO_ID, { grand_total: 180_001 }));
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(
+      gateway.createSalesOrder({ ...v2DeliveryCreateInput, operationId: "op-v2" })
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("grand total"),
+      options: { ambiguous: true, retryable: false, salesOrderId: V2_SO_ID },
+    });
+  });
+});
+
 describe("Jubelio sales gateway createSalesOrder", () => {
   it("includes Belum Bayar in the single create POST and reports marker-only divergence after the core GET", async () => {
     const { fetchImpl, requests } = stubFetch((request) => {
@@ -1780,6 +2171,141 @@ describe("Jubelio sales gateway createInvoicePayment (Path 1)", () => {
 });
 
 // =====================================================================
+// Ticket 01 diskon — additive settlement observations (contract v2).
+//
+// Evidence research-08 (T1/T2) shows that the payment GET carries
+// `account_id`/`payment_type` and a per-invoice `payment_amount`/
+// `grand_total`/`due`, and that the paid invoice GET carries `payment_amount`.
+// The parser exposes them ADDITIVELY: a legacy response that omits a field
+// keeps the exact previous snapshot shape (no zero/false defaults), while the
+// contract-v2 settlement path (jubelio-sales-lifecycle.ts) is the strict
+// consumer that rejects a missing observation.
+// =====================================================================
+
+describe("Jubelio sales gateway — additive settlement observations", () => {
+  it("parses the observed payment account/type and per-invoice grand total/due", async () => {
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/payments/55") {
+        return Response.json({
+          payment_id: 55,
+          amount: "180000.0000",
+          payment_type: 0,
+          account_id: 2,
+          invoices: [
+            {
+              salesorder_id: 68440,
+              invoice_id: 45972,
+              payment_amount: 180000,
+              grand_total: 180000,
+              due: 0,
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+
+    const payment = await makeGateway({ fetchImpl }).getPayment(55);
+
+    expect(payment).toMatchObject({
+      paymentId: 55,
+      amount: 180000,
+      accountId: 2,
+      paymentType: 0,
+    });
+    expect(payment.invoices).toEqual([
+      {
+        invoiceId: 45972,
+        paymentAmount: 180000,
+        salesorderId: 68440,
+        grandTotal: 180000,
+        due: 0,
+      },
+    ]);
+  });
+
+  it("omits the observed keys when a legacy payment response does not carry them", async () => {
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/payments/12") {
+        return Response.json({
+          payment_id: 12,
+          amount: "1000.0000",
+          invoices: [
+            { invoice_id: 45934, payment_amount: 1000, salesorder_id: 68378 },
+          ],
+        });
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+
+    const payment = await makeGateway({ fetchImpl }).getPayment(12);
+
+    expect("accountId" in payment).toBe(false);
+    expect("paymentType" in payment).toBe(false);
+    expect(payment.invoices).toEqual([
+      { invoiceId: 45934, paymentAmount: 1000, salesorderId: 68378 },
+    ]);
+  });
+
+  it("parses the paid amount observed on the invoice GET, additively", async () => {
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/invoices/45972") {
+        return Response.json({
+          invoice_id: 45972,
+          invoice_no: "INV-000045972",
+          salesorder_id: null,
+          contact_id: -1,
+          location_id: 15,
+          sub_total: "150000.0000",
+          total_disc: "0.0000",
+          total_tax: "0.0000",
+          grand_total: "180000.0000",
+          payment_amount: "180000.0000",
+          is_canceled: false,
+          items: [
+            {
+              item_id: 101187,
+              qty_in_base: 1,
+              price: "150000.0000",
+              amount: "150000.0000",
+              unit: "Buah",
+            },
+          ],
+        });
+      }
+      if (request.path === "/sales/invoices/45934") {
+        return Response.json({
+          invoice_id: 45934,
+          contact_id: -1,
+          location_id: 15,
+          sub_total: 1300000,
+          total_disc: 0,
+          total_tax: 0,
+          grand_total: 1300000,
+          items: [],
+        });
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    const paid = await gateway.getInvoice(45972);
+    expect(paid).toMatchObject({
+      invoiceId: 45972,
+      grandTotal: 180000,
+      paymentAmount: 180000,
+    });
+
+    // A legacy invoice GET without the observed field keeps the previous shape.
+    const unpaidInvoice = await gateway.getInvoice(45934);
+    expect("paymentAmount" in unpaidInvoice).toBe(false);
+  });
+});
+
+// =====================================================================
 // Ticket #03 — Siap Proses channel-status edit (full-payload, fail-closed).
 // Every edit GETs the current SO first, then POSTs the full documented
 // `saveSalesOrderRequest` envelope built ONLY from that verified read with
@@ -2223,5 +2749,567 @@ describe("Jubelio sales gateway editSalesOrder (one full-payload POST + GET conf
       })
     ).rejects.toMatchObject({ options: { ambiguous: true } });
     expect(postCount).toBe(1);
+  });
+});
+
+// =====================================================================
+// Contract v2 edit (ticket 01): the optional explicit create envelope keeps
+// the legacy guards untouched while proving the stored original/net shipping
+// and payable are preserved across the channel-status write. Fake fetch only.
+// =====================================================================
+
+function v2EditSnapshot(): JubelioSalesOrderEditSnapshot {
+  return {
+    salesorderId: V2_SO_ID,
+    salesorderNo: "SO-000068501",
+    source: 1,
+    refNo: "order-v2",
+    contactId: -1,
+    customerName: "Pelanggan Umum",
+    locationId: 15,
+    note: "OKCIR_SO_CREATE:order-v2:op-1",
+    transactionDate: "2026-10-01T00:05:00.000Z",
+    isTaxIncluded: false,
+    isCanceled: false,
+    invoiceId: null,
+    channelStatus: "Belum Bayar",
+    subTotal: 150_000,
+    totalDisc: 0,
+    totalTax: 0,
+    grandTotal: 180_000,
+    addFee: 0,
+    addDisc: 0,
+    serviceFee: 0,
+    originalShipmentCost: 30_000,
+    shippingCost: 30_000,
+    items: [
+      {
+        salesorderDetailId: 75_001,
+        itemId: 101187,
+        quantity: 1,
+        price: 150_000,
+        disc: 0,
+        discAmount: 0,
+        taxAmount: 0,
+        amount: 150_000,
+        unit: "Buah",
+        taxId: 1,
+        locationId: 15,
+      },
+    ],
+  };
+}
+
+describe("Jubelio sales gateway contract v2 edit (baseline shipping preserved)", () => {
+  it("pre-reads the stored envelope and preserves original/net shipping, ids and money in the single edit POST", async () => {
+    let posted = false;
+    const { fetchImpl, requests } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/orders/" && request.method === "POST") {
+        posted = true;
+        return Response.json({ id: V2_SO_ID });
+      }
+      if (request.path === `/sales/orders/${V2_SO_ID}`) {
+        return Response.json(
+          v2SalesOrderGet(V2_SO_ID, {
+            channel_status: posted ? "Menunggu Verifikasi" : "Belum Bayar",
+          })
+        );
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    const edit = await gateway.getSalesOrderForEdit(V2_SO_ID, v2ExpectedEnvelope);
+    expect(edit).toMatchObject({
+      salesorderId: V2_SO_ID,
+      originalShipmentCost: 30_000,
+      shippingCost: 30_000,
+      grandTotal: 180_000,
+    });
+
+    const result = await gateway.editSalesOrder({
+      edit,
+      targetChannelStatus: "Menunggu Verifikasi",
+      expected: v2ExpectedEnvelope,
+      operationId: "op-v2-edit",
+    });
+
+    const editPosts = requests.filter(
+      (request) => request.method === "POST" && request.path === "/sales/orders/"
+    );
+    expect(editPosts).toHaveLength(1);
+    expect(editPosts[0].body).toMatchObject({
+      salesorder_id: V2_SO_ID,
+      salesorder_no: "SO-000068501",
+      source: 1,
+      channel_status: "Menunggu Verifikasi",
+      sub_total: 150_000,
+      total_disc: 0,
+      total_tax: 0,
+      grand_total: 180_000,
+      original_shipment_cost: 30_000,
+      shipping_cost: 30_000,
+      add_fee: 0,
+      add_disc: 0,
+      service_fee: 0,
+      items: [
+        {
+          salesorder_detail_id: 75_001,
+          item_id: 101187,
+          qty_in_base: 1,
+          price: 150_000,
+          disc: 0,
+          disc_amount: 0,
+          tax_amount: 0,
+          amount: 150_000,
+          unit: "Buah",
+          tax_id: 1,
+          location_id: 15,
+        },
+      ],
+    });
+    expect(editPosts[0].body).not.toHaveProperty("shipping_cost_discount");
+    expect(result.order.channelStatus).toBe("Menunggu Verifikasi");
+    expect(result.order).toMatchObject({
+      originalShipmentCost: 30_000,
+      shippingCost: 30_000,
+      grandTotal: 180_000,
+    });
+  });
+
+  it("fail-closes the v2 pre-read when the GET net shipping differs from the stored envelope (zero POST)", async () => {
+    const { fetchImpl, requests } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === `/sales/orders/${V2_SO_ID}`) {
+        return Response.json(v2SalesOrderGet(V2_SO_ID, { shipping_cost: 10_000 }));
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(
+      gateway.getSalesOrderForEdit(V2_SO_ID, v2ExpectedEnvelope)
+    ).rejects.toThrow(/money envelope/);
+    expect(
+      requests.filter(
+        (request) => request.method === "POST" && request.path === "/sales/orders/"
+      )
+    ).toHaveLength(0);
+  });
+
+  it("keeps the legacy pre-read fail-closed for a v2 order when no expected envelope is supplied", async () => {
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === `/sales/orders/${V2_SO_ID}`) {
+        return Response.json(v2SalesOrderGet(V2_SO_ID));
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(gateway.getSalesOrderForEdit(V2_SO_ID)).rejects.toThrow(
+      /money envelope/
+    );
+  });
+
+  it("refuses a v2 edit payload whose snapshot shipping differs from the stored envelope", () => {
+    expect(() =>
+      buildSalesOrderEditPayload(
+        { ...v2EditSnapshot(), shippingCost: 10_000 },
+        "Siap Proses",
+        v2ExpectedEnvelope
+      )
+    ).toThrow(/money envelope/);
+  });
+
+  it("keeps the legacy edit envelope unchanged for a v2 snapshot without the explicit envelope", () => {
+    expect(() =>
+      buildSalesOrderEditPayload(v2EditSnapshot(), "Siap Proses")
+    ).toThrow(/money envelope/);
+  });
+});
+
+// =====================================================================
+// Review follow-up regressions: only an ABSENT provider contract version is
+// the legacy branch (an explicit null is an unknown version), and an
+// explicitly supplied edit expected envelope must pass the same runtime
+// version/bounds gate as the create input BEFORE any payload is serialized or
+// any HTTP request is made. Fake fetch only.
+// =====================================================================
+
+function capturedGatewayError(run: () => unknown): {
+  name?: string;
+  options?: { code?: string; ambiguous?: boolean; retryable?: boolean };
+} {
+  try {
+    run();
+  } catch (error) {
+    return error as {
+      name?: string;
+      options?: { code?: string; ambiguous?: boolean; retryable?: boolean };
+    };
+  }
+  throw new Error("expected a JubelioSalesGatewayError but nothing was thrown");
+}
+
+describe("provider contract version: only an absent version is legacy", () => {
+  it("keeps an absent version on the unchanged legacy branch", () => {
+    const payload = buildSalesOrderPayload(salesOrderCreateInput);
+    expect(payload).not.toHaveProperty("original_shipment_cost");
+    expect(payload).not.toHaveProperty("shipping_cost");
+  });
+
+  it("refuses an explicit null provider contract version as unsupported", () => {
+    const error = capturedGatewayError(() =>
+      buildSalesOrderPayload({
+        ...v2DeliveryCreateInput,
+        // Runtime shape of a persisted `jsonb` payload: compile-time typing
+        // cannot be trusted, so an explicit null must be rejected, not read
+        // as the unversioned legacy snapshot.
+        providerContractVersion: null as unknown as number,
+      })
+    );
+
+    expect(error.name).toBe("JubelioSalesGatewayError");
+    expect(error.options).toMatchObject({
+      code: "CONTRACT_VERSION_UNSUPPORTED",
+      ambiguous: false,
+      retryable: false,
+    });
+  });
+
+  it("refuses an explicit null provider contract version before login or the create POST", async () => {
+    const { fetchImpl, requests } = stubFetch(() =>
+      Response.json({ token: "must-never-be-fetched" })
+    );
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(
+      gateway.createSalesOrder({
+        ...v2DeliveryCreateInput,
+        providerContractVersion: null as unknown as number,
+        operationId: "version-null",
+      })
+    ).rejects.toMatchObject({
+      name: "JubelioSalesGatewayError",
+      options: {
+        code: "CONTRACT_VERSION_UNSUPPORTED",
+        ambiguous: false,
+        retryable: false,
+      },
+    });
+    expect(requests).toHaveLength(0);
+  });
+});
+
+describe("edit expected envelope is version/bounds validated before payload or HTTP", () => {
+  const unsupportedVersions: Array<[string, unknown]> = [
+    ["an unknown explicit version", 3],
+    ["an explicit null version", null],
+  ];
+
+  for (const [label, version] of unsupportedVersions) {
+    const expected = {
+      ...v2ExpectedEnvelope,
+      providerContractVersion: version,
+    } as unknown as typeof v2ExpectedEnvelope;
+
+    it(`refuses ${label} in the edit payload builder`, () => {
+      const error = capturedGatewayError(() =>
+        buildSalesOrderEditPayload(v2EditSnapshot(), "Siap Proses", expected)
+      );
+
+      expect(error.name).toBe("JubelioSalesGatewayError");
+      expect(error.options).toMatchObject({
+        code: "CONTRACT_VERSION_UNSUPPORTED",
+        ambiguous: false,
+        retryable: false,
+      });
+    });
+
+    it(`refuses ${label} before the edit pre-read GET`, async () => {
+      const { fetchImpl, requests } = stubFetch(() =>
+        Response.json({ token: "must-never-be-fetched" })
+      );
+      const gateway = makeGateway({ fetchImpl });
+
+      await expect(
+        gateway.getSalesOrderForEdit(V2_SO_ID, expected)
+      ).rejects.toMatchObject({
+        name: "JubelioSalesGatewayError",
+        options: {
+          code: "CONTRACT_VERSION_UNSUPPORTED",
+          ambiguous: false,
+          retryable: false,
+        },
+      });
+      expect(requests).toHaveLength(0);
+    });
+
+    it(`refuses ${label} before the edit POST`, async () => {
+      const { fetchImpl, requests } = stubFetch(() =>
+        Response.json({ token: "must-never-be-fetched" })
+      );
+      const gateway = makeGateway({ fetchImpl });
+
+      await expect(
+        gateway.editSalesOrder({
+          edit: v2EditSnapshot(),
+          targetChannelStatus: "Siap Proses",
+          expected,
+        })
+      ).rejects.toMatchObject({
+        name: "JubelioSalesGatewayError",
+        options: {
+          code: "CONTRACT_VERSION_UNSUPPORTED",
+          ambiguous: false,
+          retryable: false,
+        },
+      });
+      expect(requests).toHaveLength(0);
+    });
+  }
+});
+
+// =====================================================================
+// Returned-ID persistence seam (ticket 01 / spec §10.2): the provider id a
+// write returns must be handed to an awaited persistence hook BEFORE any
+// independent verification GET, so a crash between the POST and the GET never
+// loses the only reconciliation handle. A failing hook is ambiguous and never
+// retried. Fake fetch only.
+// =====================================================================
+
+describe("returned provider ids are persisted before independent verification", () => {
+  it("awaits onSalesOrderId with the returned SO id before the confirmation GET", async () => {
+    const events: string[] = [];
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/orders/" && request.method === "POST") {
+        events.push("POST create");
+        return Response.json({ id: V2_SO_ID });
+      }
+      if (request.path === `/sales/orders/${V2_SO_ID}` && request.method === "GET") {
+        events.push("GET confirm");
+        return Response.json(v2SalesOrderGet(V2_SO_ID));
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    const result = await gateway.createSalesOrder({
+      ...v2DeliveryCreateInput,
+      operationId: "op-v2",
+      onSalesOrderId: async (salesOrderId) => {
+        events.push(`HOOK ${salesOrderId}`);
+      },
+    });
+
+    expect(events).toEqual(["POST create", `HOOK ${V2_SO_ID}`, "GET confirm"]);
+    expect(result.salesOrderId).toBe(V2_SO_ID);
+  });
+
+  it("withholds the confirmation GET and reports an ambiguous outcome when the SO id cannot be persisted", async () => {
+    const { fetchImpl, requests } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/orders/" && request.method === "POST") {
+        return Response.json({ id: V2_SO_ID });
+      }
+      if (request.path === `/sales/orders/${V2_SO_ID}`) {
+        return Response.json(v2SalesOrderGet(V2_SO_ID));
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(
+      gateway.createSalesOrder({
+        ...v2DeliveryCreateInput,
+        operationId: "op-v2",
+        onSalesOrderId: async () => {
+          throw new Error("ledger write failed");
+        },
+      })
+    ).rejects.toMatchObject({
+      options: {
+        code: "RETURNED_ID_PERSIST_FAILED",
+        ambiguous: true,
+        retryable: false,
+        salesOrderId: V2_SO_ID,
+      },
+    });
+    expect(requests.filter((request) => request.method === "GET")).toHaveLength(0);
+    expect(
+      requests.filter(
+        (request) => request.method === "POST" && request.path === "/sales/orders/"
+      )
+    ).toHaveLength(1);
+  });
+
+  it("awaits onInvoiceId with the returned invoice id before the invoice and SO verification GETs", async () => {
+    const events: string[] = [];
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/packlists/create-invoice" && request.method === "POST") {
+        events.push("POST invoice");
+        return Response.json({ status: "ok", id: 45934 });
+      }
+      if (request.path === "/sales/invoices/45934") {
+        events.push("GET invoice");
+        return Response.json({
+          invoice_id: 45934,
+          invoice_no: "INV-000045934",
+          salesorder_id: null,
+          contact_id: -1,
+          location_id: 15,
+          sub_total: "1300000.0000",
+          total_disc: "0.0000",
+          total_tax: "0.0000",
+          grand_total: "1300000.0000",
+          is_canceled: false,
+          items: [
+            {
+              item_id: 101187,
+              qty_in_base: "1.0000",
+              price: "1300000.0000",
+              amount: "1300000.0000",
+              unit: "Buah",
+            },
+          ],
+        });
+      }
+      if (request.path === "/sales/orders/68378") {
+        events.push("GET so");
+        return Response.json({ ...mockSalesOrderGet(68378), invoice_id: 45934 });
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    const result = await gateway.createInvoice({
+      salesOrderId: 68378,
+      operationId: "op-inv",
+      onInvoiceId: async (invoiceId) => {
+        events.push(`HOOK ${invoiceId}`);
+      },
+    });
+
+    expect(events).toEqual([
+      "POST invoice",
+      "HOOK 45934",
+      "GET invoice",
+      "GET so",
+    ]);
+    expect(result.invoiceId).toBe(45934);
+  });
+
+  it("withholds every verification GET when the invoice id cannot be persisted", async () => {
+    const { fetchImpl, requests } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/packlists/create-invoice" && request.method === "POST") {
+        return Response.json({ status: "ok", id: 45934 });
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(
+      gateway.createInvoice({
+        salesOrderId: 68378,
+        operationId: "op-inv",
+        onInvoiceId: async () => {
+          throw new Error("ledger write failed");
+        },
+      })
+    ).rejects.toMatchObject({
+      options: {
+        code: "RETURNED_ID_PERSIST_FAILED",
+        ambiguous: true,
+        retryable: false,
+        invoiceId: 45934,
+      },
+    });
+    expect(requests.filter((request) => request.method === "GET")).toHaveLength(0);
+  });
+
+  it("awaits onPaymentId with the returned payment id before the payment GET", async () => {
+    const events: string[] = [];
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/payments/" && request.method === "POST") {
+        events.push("POST payment");
+        return Response.json({ status: "ok", id: 12 });
+      }
+      if (request.path === "/sales/payments/12") {
+        events.push("GET payment");
+        return Response.json({
+          payment_id: 12,
+          payment_no: "CP-000000003",
+          contact_id: -1,
+          amount: "1000.0000",
+          payment_type: 0,
+          invoices: [
+            { invoice_id: 45934, payment_amount: 1000, salesorder_id: 68378 },
+          ],
+        });
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    const result = await gateway.createInvoicePayment({
+      payment: {
+        invoiceId: 45934,
+        accountId: 2,
+        amount: 1000,
+        contactId: -1,
+        paymentType: 0,
+      },
+      operationId: "op-pay",
+      onPaymentId: async (paymentId) => {
+        events.push(`HOOK ${paymentId}`);
+      },
+    });
+
+    expect(events).toEqual(["POST payment", "HOOK 12", "GET payment"]);
+    expect(result.paymentId).toBe(12);
+  });
+
+  it("withholds the payment GET when the payment id cannot be persisted", async () => {
+    const { fetchImpl, requests } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/payments/" && request.method === "POST") {
+        return Response.json({ status: "ok", id: 12 });
+      }
+      if (request.path === "/sales/payments/12") {
+        return Response.json({ payment_id: 12, amount: 1000, invoices: [] });
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(
+      gateway.createInvoicePayment({
+        payment: {
+          invoiceId: 45934,
+          accountId: 2,
+          amount: 1000,
+          contactId: -1,
+          paymentType: 0,
+        },
+        operationId: "op-pay",
+        onPaymentId: async () => {
+          throw new Error("ledger write failed");
+        },
+      })
+    ).rejects.toMatchObject({
+      options: {
+        code: "RETURNED_ID_PERSIST_FAILED",
+        ambiguous: true,
+        retryable: false,
+        paymentId: 12,
+      },
+    });
+    expect(requests.filter((request) => request.method === "GET")).toHaveLength(0);
   });
 });

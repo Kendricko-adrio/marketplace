@@ -40,6 +40,7 @@ import { test, expect, type BrowserContext } from "@playwright/test";
 import bcrypt from "bcryptjs";
 import crypto from "node:crypto";
 import { Pool } from "pg";
+import { deleteRetainedOrderFixtures } from "../../packages/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 dotenv.config({ path: ".env" });
 
@@ -188,10 +189,7 @@ test.beforeAll(async ({ browser }) => {
   // Own rows only: the branches, the roles/grants, the admin + client users
   // (bcrypt credentials — the seeder's pattern), and ONE booked delivery
   // order whose id matches the static webhook fixture's ref_no.
-  await pool.query("DELETE FROM delivery_tracking_event te USING delivery_shipment s WHERE te.shipment_id = s.id AND s.order_id = $1", [ORDER_ID]);
-  await pool.query("DELETE FROM delivery_shipment WHERE order_id = $1", [ORDER_ID]);
-  await pool.query("DELETE FROM jubelio_sales_operation WHERE order_id = $1", [ORDER_ID]);
-  await pool.query("DELETE FROM orders WHERE id = $1", [ORDER_ID]);
+  await deleteRetainedOrderFixtures(pool, [ORDER_ID]);
   await pool.query("DELETE FROM admin_session WHERE user_id LIKE 'e2etrack-%'");
   await pool.query("DELETE FROM admin_account WHERE user_id LIKE 'e2etrack-%'");
   await pool.query('DELETE FROM "user" WHERE id LIKE $1', [`${PREFIX}-%`]);
@@ -304,10 +302,7 @@ test.afterAll(async () => {
   await customerContext?.close().catch(() => {});
   await attackerContext?.close().catch(() => {});
   if (pool) {
-    await pool.query("DELETE FROM delivery_tracking_event te USING delivery_shipment s WHERE te.shipment_id = s.id AND s.order_id = $1", [ORDER_ID]);
-    await pool.query("DELETE FROM delivery_shipment WHERE order_id = $1", [ORDER_ID]);
-    await pool.query("DELETE FROM jubelio_sales_operation WHERE order_id = $1", [ORDER_ID]);
-    await pool.query("DELETE FROM orders WHERE id = $1", [ORDER_ID]);
+    await deleteRetainedOrderFixtures(pool, [ORDER_ID]);
     await pool.query("DELETE FROM admin_session WHERE user_id LIKE 'e2etrack-%'");
     await pool.query("DELETE FROM admin_account WHERE user_id LIKE 'e2etrack-%'");
     await pool.query('DELETE FROM "user" WHERE id LIKE $1', [`${PREFIX}-%`]);

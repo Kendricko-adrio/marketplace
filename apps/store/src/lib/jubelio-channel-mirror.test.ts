@@ -278,6 +278,273 @@ describe("channelStatusMarkerForTerminalLocalOrderStatus (ticket #06 mapping con
   });
 });
 
+// =========================================================
+// Ticket 01 integration (discounts spec §10.2): the mirror's pre-edit
+// cross-check must be VERSION-AWARE. A contract-v2 order carries frozen
+// original/net shipping and an expected provider payable (net goods + net
+// shipping), so the legacy `grand_total == sub_total` assumption must NEVER
+// be applied to it; conversely an unversioned legacy snapshot keeps the
+// legacy rule untouched. Expected values below are independent literals from
+// the approved contract (goods 150000; pickup payable 150000; delivery
+// original/net shipping 30000 → payable 180000), not recomputed by the code
+// under test. Unknown/malformed stored versions fail closed — never silently
+// fall back to legacy rules.
+// =========================================================
+const V2_ITEM_ID = 51_001;
+const V2_SO_ID = 684_430_001; // never a real remote id
+const V2_INVOICE_ID = 459_450_002; // never a real remote id
+const V2_GOODS = 150_000;
+const V2_ORIGINAL_SHIPPING = 30_000;
+const V2_NET_SHIPPING = 30_000;
+const V2_PAYABLE = 180_000;
+const V2_NOTE = "OKCIR_SO_CREATE:v2-order-1:v2-op-1";
+
+function storedCreatePayload(
+  create: Record<string, unknown>
+): JubelioSalesOrderEditRequest {
+  return { type: "create", create } as unknown as JubelioSalesOrderEditRequest;
+}
+
+/** Stored contract-v2 create intent (immutable money snapshot). */
+function v2StoredCreate(
+  overrides: Record<string, unknown> = {},
+  omit: string[] = []
+): JubelioSalesOrderEditRequest {
+  const create: Record<string, unknown> = {
+    contactId: -1,
+    customerName: "Pelanggan Umum",
+    locationId: 7,
+    note: V2_NOTE,
+    channelStatus: "Belum Bayar",
+    providerContractVersion: 2,
+    originalShipmentCost: V2_ORIGINAL_SHIPPING,
+    shippingCost: V2_NET_SHIPPING,
+    expectedProviderPayable: V2_PAYABLE,
+    items: [
+      {
+        itemId: V2_ITEM_ID,
+        quantity: 1,
+        price: V2_GOODS,
+        discAmount: 0,
+        taxAmount: 0,
+        unit: "Buah",
+        taxId: 1,
+      },
+    ],
+    ...overrides,
+  };
+  for (const key of omit) delete create[key];
+  return storedCreatePayload(create);
+}
+
+/** Provider GET snapshot of the same contract-v2 delivery Sales Order. */
+function v2Snapshot(
+  overrides: Partial<JubelioSalesOrderEditSnapshot> = {}
+): JubelioSalesOrderEditSnapshot {
+  return {
+    salesorderId: V2_SO_ID,
+    salesorderNo: "SO-0000684430",
+    source: 1,
+    refNo: "",
+    contactId: -1,
+    customerName: "Pelanggan Umum",
+    locationId: 7,
+    note: V2_NOTE,
+    transactionDate: "2026-10-19T15:00:00.000Z",
+    isTaxIncluded: false,
+    isCanceled: false,
+    invoiceId: V2_INVOICE_ID,
+    channelStatus: "Belum Bayar",
+    subTotal: V2_GOODS,
+    totalDisc: 0,
+    totalTax: 0,
+    grandTotal: V2_PAYABLE,
+    addFee: 0,
+    addDisc: 0,
+    serviceFee: 0,
+    originalShipmentCost: V2_ORIGINAL_SHIPPING,
+    shippingCost: V2_NET_SHIPPING,
+    items: [
+      {
+        salesorderDetailId: 74_728,
+        itemId: V2_ITEM_ID,
+        quantity: 1,
+        price: V2_GOODS,
+        disc: 0,
+        discAmount: 0,
+        taxAmount: 0,
+        amount: V2_GOODS,
+        unit: "Buah",
+        taxId: 1,
+        locationId: 7,
+      },
+    ],
+    ...overrides,
+  };
+}
+
+describe("mirrorPreReadMismatch contract-v2 envelope (ticket 01, pure unit)", () => {
+  it("accepts a v2 delivery pre-read whose payable is net goods + net shipping, not sub_total", () => {
+    expect(
+      mirrorPreReadMismatch({
+        snapshot: v2Snapshot(),
+        create: confirmedCreate(v2StoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBeNull();
+  });
+
+  it("accepts a v2 pickup pre-read with zero shipping and a payable equal to the net goods", () => {
+    expect(
+      mirrorPreReadMismatch({
+        snapshot: v2Snapshot({
+          grandTotal: V2_GOODS,
+          originalShipmentCost: 0,
+          shippingCost: 0,
+        }),
+        create: confirmedCreate(
+          v2StoredCreate({
+            originalShipmentCost: 0,
+            shippingCost: 0,
+            expectedProviderPayable: V2_GOODS,
+          })
+        ),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBeNull();
+  });
+
+  it("fail-closes on a Rp1 provider payable change on a v2 order (no money tolerance)", () => {
+    expect(
+      mirrorPreReadMismatch({
+        snapshot: v2Snapshot({ grandTotal: V2_PAYABLE - 1 }),
+        create: confirmedCreate(v2StoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("PRE_READ_MONEY_MISMATCH");
+  });
+
+  it("fail-closes when the v2 pre-read applies the legacy grand_total == sub_total assumption", () => {
+    // The legacy rule would demand 150000 while the stored payable is 180000.
+    expect(
+      mirrorPreReadMismatch({
+        snapshot: v2Snapshot({ grandTotal: V2_GOODS }),
+        create: confirmedCreate(v2StoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("PRE_READ_MONEY_MISMATCH");
+  });
+
+  it("fail-closes when the GET omits the stored original/net shipping (a missing field is never zero)", () => {
+    const snapshot = v2Snapshot();
+    delete snapshot.originalShipmentCost;
+    delete snapshot.shippingCost;
+    expect(
+      mirrorPreReadMismatch({
+        snapshot,
+        create: confirmedCreate(v2StoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("PRE_READ_MONEY_MISMATCH");
+  });
+
+  it("fail-closes when the GET reports a different net shipping than the stored intent", () => {
+    expect(
+      mirrorPreReadMismatch({
+        snapshot: v2Snapshot({ shippingCost: 10_000 }),
+        create: confirmedCreate(v2StoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("PRE_READ_MONEY_MISMATCH");
+  });
+
+  it("fail-closes on an unknown stored provider contract version instead of falling back to legacy rules", () => {
+    for (const version of [1, 3, null]) {
+      expect(
+        mirrorPreReadMismatch({
+          snapshot: v2Snapshot(),
+          create: confirmedCreate(v2StoredCreate({ providerContractVersion: version })),
+          verifiedInvoiceId: V2_INVOICE_ID,
+        })
+      ).toBe("SNAPSHOT_PROVIDER_VERSION_UNSUPPORTED");
+    }
+  });
+
+  it("fail-closes when a v2 stored intent is missing its frozen shipping/payable money", () => {
+    for (const omitted of [
+      "originalShipmentCost",
+      "shippingCost",
+      "expectedProviderPayable",
+    ]) {
+      expect(
+        mirrorPreReadMismatch({
+          snapshot: v2Snapshot(),
+          create: confirmedCreate(v2StoredCreate({}, [omitted])),
+          verifiedInvoiceId: V2_INVOICE_ID,
+        })
+      ).toBe("SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE");
+    }
+  });
+
+  it("still fail-closes on invoice link, unit and tax divergence for a v2 pre-read (guards not loosened)", () => {
+    const base = {
+      create: confirmedCreate(v2StoredCreate()),
+      verifiedInvoiceId: V2_INVOICE_ID,
+    };
+    expect(
+      mirrorPreReadMismatch({ snapshot: v2Snapshot({ invoiceId: null }), ...base })
+    ).toBe("PRE_READ_INVOICE_LINK_MISMATCH");
+    const wrongUnit = v2Snapshot();
+    wrongUnit.items[0].unit = "Pcs";
+    expect(mirrorPreReadMismatch({ snapshot: wrongUnit, ...base })).toBe(
+      "PRE_READ_ITEM_MISMATCH"
+    );
+    const wrongTax = v2Snapshot();
+    wrongTax.items[0].taxId = 2;
+    expect(mirrorPreReadMismatch({ snapshot: wrongTax, ...base })).toBe(
+      "PRE_READ_ITEM_MISMATCH"
+    );
+  });
+});
+
+describe("mirrorPreReadMismatch stored-contract negatives (ticket 01, pure unit)", () => {
+  // The stored create intent is decoded by the SHARED pure decoder
+  // (jubelio-sales-expected), not by a second ad-hoc money engine. These two
+  // shapes are corrupt stored records: they must produce a STATIC, PII-free
+  // investigation reason (never a silent legacy read, never a provider call).
+  it("rejects a legacy intent that carries contract-v2 shipping money without an explicit version", () => {
+    expect(
+      mirrorPreReadMismatch({
+        snapshot: v2Snapshot(),
+        create: confirmedCreate(v2StoredCreate({}, ["providerContractVersion"])),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("SNAPSHOT_PROVIDER_VERSION_UNSUPPORTED");
+  });
+
+  it("rejects a v2 stored intent whose payable does not equal net goods + net shipping", () => {
+    expect(
+      mirrorPreReadMismatch({
+        snapshot: v2Snapshot(),
+        create: confirmedCreate(
+          v2StoredCreate({ expectedProviderPayable: V2_PAYABLE - 1 })
+        ),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE");
+  });
+
+  it("keeps the legit v2 pair accepted (the shared decoder is not stricter than the stored record)", () => {
+    expect(
+      mirrorPreReadMismatch({
+        snapshot: v2Snapshot(),
+        create: confirmedCreate(v2StoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBeNull();
+  });
+});
+
 describe("isChannelTargetRegression (ticket #06: no backward overwrite of a confirmed forward stage)", () => {
   it("refuses to re-project an EARLIER stage over a confirmed `Selesai` (no backward marker overwrite)", () => {
     expect(isChannelTargetRegression("Selesai", "Siap Proses")).toBe(true);

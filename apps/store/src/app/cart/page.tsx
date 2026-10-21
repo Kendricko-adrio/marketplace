@@ -38,7 +38,13 @@ interface CartItem {
     sku: string;
     color: string | null;
     size: string | null;
+    /** Effective price (Markdown applied when active). */
     price: string;
+    /** Same variant's source price; present on fallback too. */
+    sourcePrice?: string;
+    storedTarget?: string | null;
+    markdownActive?: boolean;
+    markdownRevisionId?: string | null;
   };
   branch: {
     id: string;
@@ -555,11 +561,13 @@ export default function CartPage() {
                             <div className="text-primary font-bold mt-1">
                               Rp {parseFloat(item.variant.price).toLocaleString("id-ID")}
                             </div>
-                            {parseFloat(item.product.basePrice) >
-                              parseFloat(item.variant.price) && (
+                            {item.variant.markdownActive &&
+                              item.variant.sourcePrice &&
+                              parseFloat(item.variant.sourcePrice) >
+                                parseFloat(item.variant.price) && (
                               <div className="text-xs text-muted-foreground line-through">
                                 Rp{" "}
-                                {parseFloat(item.product.basePrice).toLocaleString(
+                                {parseFloat(item.variant.sourcePrice).toLocaleString(
                                   "id-ID"
                                 )}
                               </div>

@@ -1,3 +1,4 @@
+import { deleteRetainedOrderFixtures } from "@marketplace/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import path from "node:path";
 dotenv.config({ path: path.resolve(import.meta.dirname, "../../../../.env") });
@@ -205,11 +206,7 @@ interface SnapshotPatch {
 
 async function seedVerifiedDeliveryOrder(orderId: string, patch: SnapshotPatch = {}): Promise<void> {
   if (!pool) return;
-  await pool.query(
-    "DELETE FROM jubelio_sales_operation WHERE order_id = $1",
-    [orderId]
-  );
-  await pool.query("DELETE FROM orders WHERE id = $1", [orderId]);
+  await deleteRetainedOrderFixtures(pool, [orderId]);
   const parcel = {
     weight: 290, // 1 × 250 + 40 kemasan
     items: [
@@ -285,9 +282,7 @@ describe("shipment fulfillment (PostgreSQL-backed)", () => {
       expect((await listDeliveryWork(db, { ...input, stage: null, queue: "actionable" })).pagination.total).toBe(30);
       expect((await listDeliveryWork(db, { ...input, stage: "Menunggu pembayaran", queue: "all" })).data.map((row) => row.id)).toEqual([ids[8]]);
     } finally {
-      await pool.query("DELETE FROM delivery_shipment WHERE order_id=ANY($1::text[])", [ids]);
-      await pool.query("DELETE FROM jubelio_sales_operation WHERE order_id=ANY($1::text[])", [ids]);
-      await pool.query("DELETE FROM orders WHERE id=ANY($1::text[])", [ids]);
+      await deleteRetainedOrderFixtures(pool, ids);
     }
   });
   it.skipIf(!dbReady)("read preflight uses current mutation guards without consuming the packing intent", async () => {
@@ -560,8 +555,8 @@ beforeAll(async () => {
   if (!pool) return;
   // FK-valid shared fixtures: two branches (A = origin-ready, B = other),
   // two roles (edit grants + view-only), three admin users.
-  await pool.query(`DELETE FROM jubelio_sales_operation WHERE order_id LIKE '${PREFIX}order-%'`);
-  await pool.query(`DELETE FROM orders WHERE id LIKE '${PREFIX}order-%'`);
+  const fixtureOrders = await pool.query("SELECT id FROM orders WHERE user_id=$1", [`${PREFIX}client`]);
+  await deleteRetainedOrderFixtures(pool, fixtureOrders.rows.map((row) => row.id));
   await pool.query(`DELETE FROM "user" WHERE id LIKE '${PREFIX}user-%'`);
   await pool.query(`DELETE FROM branch WHERE id LIKE '${PREFIX}branch-%'`);
   await pool.query(`DELETE FROM admin_role WHERE id LIKE '${PREFIX}role-%'`);
@@ -616,8 +611,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!pool) return;
-  await pool.query(`DELETE FROM jubelio_sales_operation WHERE order_id LIKE '${PREFIX}order-%'`);
-  await pool.query(`DELETE FROM orders WHERE id LIKE '${PREFIX}order-%'`);
+  const fixtureOrders = await pool.query("SELECT id FROM orders WHERE user_id=$1", [`${PREFIX}client`]);
+  await deleteRetainedOrderFixtures(pool, fixtureOrders.rows.map((row) => row.id));
   await pool.query(`DELETE FROM "user" WHERE id LIKE '${PREFIX}user-%'`);
   await pool.query(`DELETE FROM branch WHERE id LIKE '${PREFIX}branch-%'`);
   await pool.query(`DELETE FROM admin_role WHERE id LIKE '${PREFIX}role-%'`);

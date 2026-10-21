@@ -1,3 +1,4 @@
+import { deleteRetainedOrderFixtures } from "@marketplace/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import path from "node:path";
 dotenv.config({ path: path.resolve(import.meta.dirname, "../../../../.env") });
@@ -68,6 +69,7 @@ async function setupFixtures(): Promise<void> {
   clientId = `${PREFIX}client`;
   orderId = `${PREFIX}order`;
   const productId = `${PREFIX}product`;
+  await deleteRetainedOrderFixtures(pool!, [orderId]);
   await db.delete(clients).where(eq(clients.id, clientId));
   await pool!.query(`DELETE FROM product WHERE id LIKE '${PREFIX}%'`);
   await pool!.query(`DELETE FROM branch WHERE id LIKE '${PREFIX}%'`);
@@ -252,7 +254,9 @@ describe("SO local hold concurrency (PostgreSQL)", () => {
 
 afterAll(async () => {
   if (!pool) return;
-  // Client deletion cascades to orders; branch_stock rows are removed first.
+  // Retained fixture evidence/orders before catalog, clients and branches.
+  const fixtureOrders = await pool.query("SELECT id FROM orders WHERE user_id LIKE $1", [`${PREFIX}%`]);
+  await deleteRetainedOrderFixtures(pool, fixtureOrders.rows.map((row) => row.id));
   await pool.query(`DELETE FROM branch_stock WHERE branch_id LIKE '${PREFIX}%'`);
   await pool.query(`DELETE FROM product WHERE id LIKE '${PREFIX}%'`);
   await pool.query(`DELETE FROM "client" WHERE id LIKE '${PREFIX}%'`);

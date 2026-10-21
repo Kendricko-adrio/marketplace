@@ -14,6 +14,8 @@ import { serializeError } from "@/lib/logger";
 import { guard, crossBranchNotFound } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import { groupBranchStock, type BranchStockInputRow } from "@/lib/branch-stock";
+import { projectMarkdownPrice } from "@marketplace/db/src/markdown-pricing";
+import { readAdminVariantProjections } from "@/lib/variant-price-read";
 
 export const dynamic = "force-dynamic";
 
@@ -115,6 +117,8 @@ export async function GET(
       .innerJoin(categories, eq(productToCategory.categoryId, categories.id))
       .where(eq(productToCategory.productId, productData.id));
 
+    const projections = await readAdminVariantProjections(variantIds);
+
     const variantsWithImages = await Promise.all(
       variants.map(async (variant) => {
         const variantImages = await db
@@ -141,6 +145,14 @@ export async function GET(
         return {
           ...variant,
           images,
+          // Markdown projection for the price panel: source and effective are
+          // explicit, the target stays stored on fallback.
+          price: projections.get(variant.id)?.effectiveUnitPrice ?? variant.price,
+          sourcePrice: projections.get(variant.id)?.sourceUnitPrice ?? variant.price,
+          storedTarget: projections.get(variant.id)?.storedTarget ?? null,
+          markdownActive: projections.get(variant.id)?.markdownActive ?? false,
+          markdownRevisionId:
+            projections.get(variant.id)?.markdownRevisionId ?? null,
         };
       })
     );

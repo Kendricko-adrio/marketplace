@@ -10,9 +10,16 @@ import {
   branches,
   brands,
   genders,
+  variantPriceCurrent,
+  variantPriceRevisions,
 } from "@/db";
 import { eq, ilike, and, or, sql, desc, asc, gte, lte, inArray } from "drizzle-orm";
 import { hasAvailableStock } from "@/lib/stock";
+import {
+  effectivePriceSql,
+  markdownActiveSql,
+  projectRow,
+} from "@/lib/variant-price-projection";
 import { parseListParams } from "@/lib/list-params";
 import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
 
@@ -48,15 +55,36 @@ export async function GET(request: NextRequest) {
       searchParams
     );
 
-    // Cheapest variant net price per product — the price shown on cards and the
-    // basis for the price-range filter, the "has discount" filter, and price
-    // sort. Joined (avoids N+1). Products without variants are excluded.
+    // Cheapest variant EFFECTIVE price per product — the price shown on cards
+    // and the single basis for the price-range filter, the "has Markdown" filter
+    // and price sort. The projection is identical to the JS one
+    // (lib/variant-price-projection): a target counts only while it is below the
+    // variant's CURRENT source. Joined (avoids N+1); products without variants
+    // are excluded.
     const minPriceSq = db
       .select({
         productId: productVariants.productId,
-        minPrice: sql<string>`min(${productVariants.price})`.as("minPrice"),
+        minPrice: sql<string>`min(${effectivePriceSql(
+          productVariants.price,
+          variantPriceRevisions.targetUnitPrice
+        )})`.as("minPrice"),
+        hasMarkdown: sql<boolean>`bool_or(${markdownActiveSql(
+          productVariants.price,
+          variantPriceRevisions.targetUnitPrice
+        )})`.as("hasMarkdown"),
       })
       .from(productVariants)
+      .leftJoin(
+        variantPriceCurrent,
+        eq(variantPriceCurrent.variantId, productVariants.id)
+      )
+      .leftJoin(
+        variantPriceRevisions,
+        and(
+          eq(variantPriceRevisions.id, variantPriceCurrent.revisionId),
+          eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
+        )
+      )
       .groupBy(productVariants.productId)
       .as("vp");
 
@@ -79,8 +107,9 @@ export async function GET(request: NextRequest) {
     }
 
     if (hasDiscount) {
-      // Discount = RRP (base_price) above the cheapest variant net price.
-      conditions.push(sql`${products.basePrice} > ${minPriceSq.minPrice}`);
+      // "Diskon" means an ACTIVE Markdown on a relevant variant — never the
+      // legacy RRP (product.base_price) above the cheapest variant.
+      conditions.push(sql`${minPriceSq.hasMarkdown}`);
     }
 
     if (minPrice) {
@@ -221,14 +250,69 @@ export async function GET(request: NextRequest) {
     // the page's products, then their branch-stock rows restricted to active
     // branches (same rule as the product-detail API).
     const pageVariantRows = await db
-      .select({ id: productVariants.id, productId: productVariants.productId, jubelioItemId: productVariants.jubelioItemId })
+      .select({
+        id: productVariants.id,
+        productId: productVariants.productId,
+        jubelioItemId: productVariants.jubelioItemId,
+        price: productVariants.price,
+        targetUnitPrice: variantPriceRevisions.targetUnitPrice,
+        markdownRevisionId: variantPriceRevisions.id,
+        revisionVariantId: variantPriceRevisions.variantId,
+      })
       .from(productVariants)
+      .leftJoin(
+        variantPriceCurrent,
+        eq(variantPriceCurrent.variantId, productVariants.id)
+      )
+      .leftJoin(
+        variantPriceRevisions,
+        and(
+          eq(variantPriceRevisions.id, variantPriceCurrent.revisionId),
+          eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
+        )
+      )
       .where(
         inArray(
           productVariants.productId,
           queryResults.map((p) => p.id)
         )
       );
+
+    // Card display: the cheapest EFFECTIVE variant, its own source for the
+    // strikethrough, and the stable tie-break by variant id (spec §4.1).
+    type DisplayPrice = {
+      effective: bigint;
+      source: bigint;
+      active: boolean;
+      revisionId: string | null;
+      variantId: string;
+    };
+    const displayByProduct = new Map<string, DisplayPrice>();
+    for (const row of pageVariantRows) {
+      const projection = projectRow({
+        variantId: row.id,
+        sourceUnitPrice: row.price,
+        storedTargetUnitPrice: row.targetUnitPrice,
+        markdownRevisionId:
+          row.revisionVariantId === null ? null : row.markdownRevisionId,
+      });
+      const candidate: DisplayPrice = {
+        effective: BigInt(projection.effectiveUnitPrice),
+        source: BigInt(projection.sourceUnitPrice),
+        active: projection.markdownActive,
+        revisionId: projection.markdownRevisionId,
+        variantId: row.id,
+      };
+      const current = displayByProduct.get(row.productId);
+      if (
+        !current ||
+        candidate.effective < current.effective ||
+        (candidate.effective === current.effective &&
+          candidate.variantId < current.variantId)
+      ) {
+        displayByProduct.set(row.productId, candidate);
+      }
+    }
 
     // When a branch filter is active, hasStock reflects availability at that
     // branch only (products shown are all in-stock there anyway — this keeps
@@ -309,9 +393,19 @@ export async function GET(request: NextRequest) {
           }
         }
 
+        const display = displayByProduct.get(product.id);
         return {
           ...product,
-          price: product.price ?? product.basePrice,
+          price: display
+            ? display.effective.toString()
+            : (product.price ?? product.basePrice),
+          // Original/coretan always comes from the SAME variant that supplies
+          // the effective price — never the group RRP or another variant.
+          sourcePrice: display
+            ? display.source.toString()
+            : (product.price ?? product.basePrice),
+          markdownActive: display?.active ?? false,
+          markdownRevisionId: display?.revisionId ?? null,
           image,
           // A mapped branch remains selectable with a provisional zero.
           hasStock: (stockByProduct.get(product.id)?.length ?? 0) > 0,

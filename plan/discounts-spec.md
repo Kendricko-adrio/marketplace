@@ -28,7 +28,8 @@ Dokumen research awal adalah bahan penelusuran, bukan otoritas untuk mengembalik
 - Kesepahaman drafting: pemilik memilih **Sesuai, susun draft (Recommended)** melalui `ask_user_question` setelah rangkuman scope, seams, koreksi pembayaran, visual existing, dan pemisahan cleanup sandbox disampaikan pada sesi ini.
 - Approval complete spec: pada sesi tindak lanjut `to-tickets`, pemilik memilih **Setujui spec lengkap (Recommended)** melalui `ask_user_question` setelah menerima link dokumen, ringkasan dan register §14.1. Approval mencakup complete scope, seluruh proposal teknis, acceptance/verification; mengizinkan Ready, bukan eksekusi implementasi.
 - Approval breakdown terpisah: pemilik memilih **Setujui dan publikasikan (Recommended)** atas13 vertical slices, dependency dan Local Markdown di `.scratch/discounts-implementation/`. [Map dan approval record](../.scratch/discounts-implementation/map.md) menautkan satu file per ticket; semuanya open/unclaimed saat publikasi. Pengelompokan5 fitur di bawah tetap bukan status tracker kedua.
-- Implementasi, subagent, provider requests, schema/config changes, commit, remote/deployment, dan launch belum diminta/diizinkan. Ready/publikasi bukan otorisasi tindakan tersebut.
+- **Batas saat publikasi:** implementasi, subagent, provider requests, schema/config changes, commit, remote/deployment, dan launch belum diminta/diizinkan. Ready/publikasi bukan otorisasi tindakan tersebut.
+- **Eksekusi sesi berikutnya:** pemilik meminta implementasi seluruh13 tickets dan mengizinkan parallel subagents untuk development serta penulisan unit/Playwright E2E tests. Hanya main agent menjalankan seluruh bash testing dan menerima hasil review. Ticket01 sedang dikerjakan; [catatan eksekusi](../.scratch/discounts-implementation/execution.md) memuat lane boundaries dan evidence. Izin provider requests nyata, commit/push, remote/deployment/launch tetap tidak diberikan; gate operasional tetap0.
 - Pemeriksaan drafting/publikasi hanya read-only terhadap aplikasi dan validasi dokumen. Semua tests fitur pada §12 masih rencana.
 
 ### 1.4 Scope dan non-goals
@@ -47,9 +48,9 @@ Visual prototype bukan desain final: ikuti [feedback pemilik](../.scratch/discou
 | --- | --- | --- | --- | --- |
 | 1 | Markdown dan read projection storefront | Ready | M01–M03; harga/coretan/filter/sort konsisten, sync tidak menghapus target | Termasuk harga authoritative checkout |
 | 2 | Admin harga dan Excel partial/resume | Ready | X01–X06, A01, A04; Playwright + real PG | Memakai pricing fitur1, permission terpisah |
-| 3 | Offer/admin/code/kapasitas/retention | Ready | C05, T02–T03, A01–A04, D01/D03 | Satu benefit/jalur; tanpa kode publik |
-| 4 | Pilihan customer dan reservation checkout/payment | Ready | C01–C07, F01–F03, T01–T06, S01–S04 | Atomic order+promo+stock intent; no service fee |
-| 5 | Provider integration, cutover dan release | Ready | P01–P03, D02, R01; regression/rehearsal/UAT | Reuse ledger existing, evidence provider bounded |
+| 3 | Offer/admin/code/kapasitas/retention | In Progress | C05, T02–T03, A01–A04, D01/D03 | Ticket06 dimulai pada grants administrasi fixed-public; draft/publish/customer usage belum selesai |
+| 4 | Pilihan customer dan reservation checkout/payment | In Progress | C01–C07, F01–F03, T01–T06, S01–S04 | Baseline snapshot checkout ticket01 sedang diimplementasikan; reservation Offer belum dibangun. Atomic order+promo+stock intent tetap target; no service fee |
+| 5 | Provider integration, cutover dan release | In Progress | P01–P03, D02, R01; regression/rehearsal/UAT | Baseline contract2/ledger/mirror ticket01 sedang diintegrasikan. Cutover/release/UAT belum diverifikasi; evidence provider tetap bounded |
 
 Ini pengelompokan scope untuk review, bukan urutan horizontal database → API → UI. Delivery nanti tetap vertical slice dengan TDD, review, dan bukti tiap slice sebelum diterima.
 

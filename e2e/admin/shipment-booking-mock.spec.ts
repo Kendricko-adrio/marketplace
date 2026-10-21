@@ -45,6 +45,7 @@
 import { test, expect, type BrowserContext } from "@playwright/test";
 import bcrypt from "bcryptjs";
 import { Pool } from "pg";
+import { deleteRetainedOrderFixtures } from "../../packages/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 dotenv.config({ path: ".env" });
 
@@ -193,8 +194,8 @@ test.beforeAll(async ({ browser }) => {
   // Own fixture rows only: the branches, roles, users (bcrypt credential —
   // the seeder's pattern), and TWO paid verified delivery orders with the
   // SAME five-block delivery snapshot.
-  await pool.query(`DELETE FROM jubelio_sales_operation WHERE order_id LIKE '${PREFIX}%'`);
-  await pool.query(`DELETE FROM orders WHERE contact_email = $1`, [ORDER_SUFFIX_EMAIL]);
+  const fixtureOrders = await pool.query("SELECT id FROM orders WHERE contact_email=$1", [ORDER_SUFFIX_EMAIL]);
+  await deleteRetainedOrderFixtures(pool, fixtureOrders.rows.map((row) => row.id));
   await pool.query("DELETE FROM admin_session WHERE user_id LIKE 'e2eship-%'");
   await pool.query("DELETE FROM admin_account WHERE user_id LIKE 'e2eship-%'");
   await pool.query('DELETE FROM "user" WHERE id LIKE $1', [`${PREFIX}-%`]);
@@ -292,8 +293,8 @@ test.beforeAll(async ({ browser }) => {
 test.afterAll(async () => {
   await adminContext?.close().catch(() => {});
   if (pool) {
-    await pool.query(`DELETE FROM jubelio_sales_operation WHERE order_id LIKE '${PREFIX}%'`);
-    await pool.query(`DELETE FROM orders WHERE contact_email = $1`, [ORDER_SUFFIX_EMAIL]);
+    const fixtureOrders = await pool.query("SELECT id FROM orders WHERE contact_email=$1", [ORDER_SUFFIX_EMAIL]);
+    await deleteRetainedOrderFixtures(pool, fixtureOrders.rows.map((row) => row.id));
     await pool.query('DELETE FROM client WHERE id=$1', [`${PREFIX}-client`]);
     await pool.query("DELETE FROM admin_session WHERE user_id LIKE 'e2eship-%'");
     await pool.query("DELETE FROM admin_account WHERE user_id LIKE 'e2eship-%'");

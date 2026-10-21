@@ -1,3 +1,4 @@
+import { deleteRetainedOrderFixtures } from "@marketplace/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import path from "node:path";
 dotenv.config({ path: path.resolve(import.meta.dirname, "../../../../.env") });
@@ -143,6 +144,8 @@ describe("confirmed SO accounting crash recovery (PostgreSQL)", () => {
 });
 
 afterAll(async () => {
+  const fixtureOrders = await pool.query("SELECT id FROM orders WHERE user_id=$1", [clientId]);
+  await deleteRetainedOrderFixtures(pool, fixtureOrders.rows.map((row) => row.id));
   await pool.query('DELETE FROM "client" WHERE id = $1', [clientId]);
   await pool.query('DELETE FROM product WHERE id = $1', [productId]);
   await pool.query('DELETE FROM branch WHERE id = $1', [branchId]);

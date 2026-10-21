@@ -72,6 +72,26 @@ describe("local Shipment rates boundary", () => {
   });
 });
 
+describe("local Midtrans Snap create boundary", () => {
+  it("captures actual item details and returns a loopback hosted payment redirect", async () => {
+    resetMockState();
+    const payload = {
+      transaction_details: { order_id: "snapshot-pickup", gross_amount: 166500 },
+      item_details: [{ id: "goods", price: 150000, quantity: 1 }, { id: "PPN", price: 16500, quantity: 1 }],
+    };
+    const response = await fetch(`${baseUrl}/snap/v1/transactions`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
+    });
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual({ token: "mock-snap-snapshot-pickup", redirect_url: `${baseUrl}/snap/snapshot-pickup` });
+    const capture = await (await fetch(`${baseUrl}/__control/requests`)).json();
+    expect(capture.data).toContainEqual({ method: "POST", path: "/snap/v1/transactions", body: payload });
+    const hosted = await fetch(`${baseUrl}/snap/snapshot-pickup`);
+    expect(hosted.status).toBe(200);
+    expect(await hosted.text()).toContain("Pembayaran fixture");
+  });
+});
+
 describe("local Midtrans status boundary", () => {
   it("returns a configured authoritative settlement for E2E webhooks", async () => {
     resetMockState();
@@ -360,6 +380,19 @@ async function getOrder(id: number): Promise<Response> {
   });
 }
 
+describe("Jubelio v2 shipping observation", () => {
+  it("preserves original/net shipping independently in the observed SO", async () => {
+    resetMockState();
+    await ensureStock(2);
+    const created = await createSalesOrder({ original_shipment_cost: 30000, shipping_cost: 10000, grand_total: 1310000 });
+    expect(created.status).toBe(200);
+    const body = await created.json();
+    const observed = await getOrder(body.id);
+    expect(observed.status).toBe(200);
+    await expect(observed.json()).resolves.toMatchObject({ original_shipment_cost: 30000, shipping_cost: 10000, grand_total: 1310000 });
+  });
+});
+
 describe("Jubelio sales-order lifecycle (canary-modeled candidate)", () => {
 
   it("moves on_order/available on create and restores both on pre-invoice cancel like the canary", async () => {
@@ -442,6 +475,18 @@ describe("Jubelio sales-order lifecycle (canary-modeled candidate)", () => {
     expect(oversell.status).toBe(500);
     await expect(oversell.json()).resolves.toMatchObject({ code: "23100" });
     // Nothing was written by any rejected request
+    expect(await snapshot()).toEqual({ on_hand: 2, on_order: 0, reserved: 0, available: 2 });
+  });
+
+  it("rejects a scenario-forced pre-apply SO create with 4xx and writes nothing", async () => {
+    resetMockState();
+    await ensureStock(2);
+    await setScenario("reject-create");
+
+    const rejected = await createSalesOrder();
+    expect(rejected.status).toBe(400);
+    await expect(rejected.json()).resolves.toMatchObject({ code: "E000003" });
+    // Nothing was applied: no SO, no on_order increment, no hold.
     expect(await snapshot()).toEqual({ on_hand: 2, on_order: 0, reserved: 0, available: 2 });
   });
 
@@ -938,7 +983,16 @@ describe("Jubelio payment seam (single-payment candidate)", () => {
       payment_id: number;
       payment_no: string;
       amount: string;
-      invoices: Array<{ payment_detail_id: number; payment_id: number; invoice_id: number; payment_amount: number }>;
+      invoices: Array<{
+        payment_detail_id: number;
+        payment_id: number;
+        trx_date: string;
+        invoice_id: number;
+        payment_amount: number;
+        salesorder_id: number;
+        grand_total: number;
+        due: number;
+      }>;
     };
     expect(payment.payment_id).toBe(17);
     expect(payment.payment_no).toBe("PAY-000000017");
@@ -950,6 +1004,13 @@ describe("Jubelio payment seam (single-payment candidate)", () => {
         trx_date: "2026-09-23T17:00:00.000Z",
         invoice_id: 222,
         payment_amount: 1_300_000,
+        // Enriched from the CURRENT invoice store, not from the request echo:
+        // the invoiced SO is 68378, the invoice is worth 1_300_000 and this
+        // payment settles all of it (due 0). These are independent fixture
+        // expectations, so the exact-shape assertion stays exact.
+        salesorder_id: 68378,
+        grand_total: 1_300_000,
+        due: 0,
       },
     ]);
 
@@ -957,6 +1018,92 @@ describe("Jubelio payment seam (single-payment candidate)", () => {
     await expect((await getInvoice(222)).json()).resolves.toMatchObject({
       invoice_id: 222,
       payment_amount: 1_300_000,
+    });
+  });
+
+  // Kontrak v2 (§10.2): the payment↔invoice association must carry the
+  // invoice's own grand total and its remaining due, because gateway
+  // verification compares both with the stored expected provider payable and
+  // fails closed when they are absent (observed runtime rejection: "Payment
+  // line grand total undefined does not match the stored expected provider
+  // payable"). Evidence T1/T2 documents the association rows as
+  // {salesorder_id, invoice_id, payment_amount, grand_total, due};
+  // salesorder_no is not part of that evidence and is not asserted here.
+  it("exposes the invoice grand total and settled due on the payment association", async () => {
+    resetMockState();
+    await ensureStock(2);
+    // Independent source of truth: this fixture invoice is worth 150000 (not
+    // the 1_300_000 canary default the other payment tests use), and the
+    // expected association values below are literals derived from that
+    // fixture, never re-read from the payment request body.
+    const created = await createSalesOrder({
+      sub_total: 150_000,
+      grand_total: 150_000,
+      items: [
+        {
+          salesorder_detail_id: 0,
+          item_id: 10384,
+          tax_id: 1,
+          price: 150_000,
+          unit: "Buah",
+          qty_in_base: 1,
+          disc: 0,
+          disc_amount: 0,
+          tax_amount: 0,
+          amount: 150_000,
+          location_id: 61,
+        },
+      ],
+    });
+    expect(((await created.json()) as { id: number }).id).toBe(68378);
+    const invoiced = await createInvoice({ salesorder_id: 68378 });
+    expect(((await invoiced.json()) as { id: number }).id).toBe(222);
+    // Documented getInvoiceResponse: grand_total is a string, unpaid at 0.
+    await expect((await getInvoice(222)).json()).resolves.toMatchObject({
+      invoice_id: 222,
+      grand_total: "150000",
+      payment_amount: 0,
+    });
+
+    const paid = await createPayment(
+      paymentBody({
+        account_id: 2,
+        payment_type: 0,
+        amount: 150_000,
+        items: [{ payment_detail_id: 0, invoice_id: 222, payment_amount: 150_000 }],
+      }),
+    );
+    expect(paid.status).toBe(200);
+    expect(((await paid.json()) as { id: number }).id).toBe(17);
+
+    const payment = (await (await getPayment(17)).json()) as {
+      account_id: number;
+      payment_type: number;
+      invoices: Array<Record<string, unknown>>;
+    };
+    expect(payment.account_id).toBe(2);
+    expect(payment.payment_type).toBe(0);
+    // Exactly one association, linked to the invoiced sales order.
+    expect(payment.invoices).toHaveLength(1);
+    const association = payment.invoices[0];
+    expect(association).toMatchObject({
+      payment_detail_id: 0,
+      payment_id: 17,
+      invoice_id: 222,
+      salesorder_id: 68378,
+      payment_amount: 150_000,
+    });
+    // Provider money may be a number or a decimal string (gateway parser
+    // accepts both), so the settled values are compared numerically. Both must
+    // track the invoice state read above: payable 150000, nothing left due.
+    expect(Number(association.grand_total)).toBe(150_000);
+    expect(Number(association.due)).toBe(0);
+
+    // The settled invoice read agrees with its association line.
+    await expect((await getInvoice(222)).json()).resolves.toMatchObject({
+      invoice_id: 222,
+      grand_total: "150000",
+      payment_amount: 150_000,
     });
   });
 

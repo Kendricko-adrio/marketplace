@@ -34,11 +34,219 @@ not live provider behavior or operational delivery activation. The legacy
 `playwright.config.ts` checkout suite still uses the real isolated Jubelio account
 and must not be run without separate write authorization.
 
+**Fixture secret (mock-only).** Konfigurasi mock ini memberikan
+`BETTER_AUTH_SECRET` **deterministik khusus test** yang sama ke webServer store
+dan admin (konstanta `MOCK_SHARED_AUTH_SECRET`, ≥32 karakter). Alasannya:
+`verify-pickup` di admin menandatangani panggilan HMAC ke endpoint internal store
+`/api/internal/order-complete` memakai secret tersebut, sementara route store
+gagal-tertutup (`403 Unauthorized`) bila variabel itu tidak ada. Login Better Auth
+tetap berhasil di dev lewat fallback bawaan library, sehingga kegagalan pickup
+sebelumnya adalah masalah **wiring env test**, bukan bug pricing/RBAC. Nilai ini
+hanya fixture: tidak berasal dari secret developer, tidak pernah di-log, dan tidak
+boleh disalin ke konfigurasi staging/production. Dua instance Better Auth tetap
+terpisah (cookie, tabel, dan guard masing-masing); hanya nilai signing bersama ini
+yang dipasok. Tidak ada perubahan env production/deployment.
+
 ## Mock-only delivery acceptance
 
 The same isolated config includes address/default ownership, branch origin, server quote and reprice approval, immutable placement/repayment, packing/ambiguous booking, handoff/signed tracking/customer privacy and scoped follow-up/manual resolution. Final implementation verification: **22/22** browser/HTTP cases; full serial unit run **106 files / 953 passed / 2 skipped**. The two skips are `skipIf(schemaState.ready)` infrastructure-failure sentinels; PostgreSQL-dependent acceptance tests ran, not skipped.
 
 Use `npm run test:unit -- --no-file-parallelism` to avoid shared RBAC-fixture races. Tracking has an independently computed fixed HMAC fixture, concurrent event regressions and real-PG lifecycle assertions. Follow-up covers current Home/ledger guards, zero create on release, one proof-approved attempt-2 create and system-only known-ID GET settlement recovery. Never treat mock success as courier/dashboard/deployment activation. See [delivery lifecycle](../features/home-delivery.md).
+
+## Baseline checkout berversi (disposable)
+
+Bagian ini hanya untuk database **disposable**. Selalu set `DATABASE_URL`
+eksplisit; jangan mengandalkan DB default dan jangan memakai DB staging/production.
+
+```bash
+# ganti <db_disposable> dengan database sekali pakai milik run ini
+export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/<db_disposable>"
+npm run db:push            # skema development (JANGAN db:migrate di dev)
+SEED_MODE=demo npm run db:seed
+```
+
+Gate `discounts.contractVersion` ditulis seeder sebagai baris **eksplisit** dengan
+value `0` (system config, kedua `SEED_MODE`); baris yang absen tetap dibaca legacy
+`0`. Test gate `1` wajib menyetel nilai sendiri lalu mengembalikannya ke `0` pada
+cleanup, dan hanya boleh berjalan di DB disposable di atas.
+
+Ladder yang dipakai untuk slice ini (path test disesuaikan dengan file yang
+benar-benar ada di worktree):
+
+```bash
+npm run verify:types:store
+npm run verify:types:admin
+npm run verify:unit:slice -- apps/store/src/lib/versioned-pricing.test.ts \
+  apps/store/src/lib/delivery-quote.test.ts
+npm run verify:unit:slice -- apps/store/src/lib/jubelio-sales-client.test.ts \
+  apps/store/src/lib/jubelio-sales-settlement.test.ts
+npm run verify:batch:unit
+npm run verify:batch:e2e -- e2e/store/versioned-checkout-mock.spec.ts
+```
+
+Spec mock baru **wajib** ditambahkan ke `testMatch`
+[`playwright.mock.config.ts`](../../playwright.mock.config.ts) pada perubahan yang
+sama; tanpa itu `verify:batch:e2e` menyaring spec tersebut keluar dan run hijau
+bukan bukti apa pun. Periksa regex-nya memuat `versioned-checkout` sebelum
+menganggap perintah di atas benar-benar menjalankan spec itu. Untuk regresi legacy,
+jalankan hanya spec yang terdampak, mis. `e2e/store/pickup-mock.spec.ts` dan
+`e2e/store/delivery-order-mock.spec.ts`.
+
+Aturan bukti:
+
+- Skip/infrastructure blocker **bukan** lulus; laporkan sebagai blocked dengan
+  alasan, jangan dihapus atau diganti `skipIf` tanpa keputusan reviewer.
+- Jangan rerun suite yang sudah lulus tanpa perubahan source/fixture terkait;
+  catat baris ringkasannya sebagai evidence.
+- `npm run test:e2e` (legacy) memuat live-provider writes dan **butuh izin
+  terpisah**; mock pass tidak menggantikannya.
+- Bila Playwright gagal, baca report Markdown/teks saja; jangan membuka `.png`.
+
+## Checkout review, request key, dan admission (disposable)
+
+Ticket 02 menguji review token/fingerprint, replay request-wide, recovery
+sesudah response hilang, dan admission rate-limit berbasis PostgreSQL. Sama
+seperti suite berversi: **hanya DB disposable** dengan `DATABASE_URL`
+eksplisit dan nama database berawalan `marketplace_discounts_test_*`. Fixture
+menaikkan `discounts.contractVersion` ke `1` dan mengembalikannya pada cleanup.
+
+```bash
+npm run verify:types:store
+DATABASE_URL=<db-disposable> npm run verify:unit:slice -- \
+  packages/db/src/checkout-request.db.test.ts \
+  apps/store/src/lib/checkout-admission.db.test.ts \
+  packages/db/src/seed-cleanup.test.ts
+DATABASE_URL=<db-disposable> npm run verify:batch:e2e -- \
+  e2e/store/checkout-review-mock.spec.ts
+  e2e/store/markdown-mock.spec.ts
+DATABASE_URL=<db-disposable> npm run verify:batch:e2e -- \
+  e2e/store/versioned-checkout-mock.spec.ts \
+  e2e/store/versioned-settlement-mock.spec.ts
+```
+
+`checkout-review-mock.spec.ts` mencakup token tamper/expired/context berubah,
+parallel same-key (satu order, satu SO), status 201/200/202, rollback receipt,
+failure injection pada batas transaksi dan claim eksternal, delivery reapproval
+walau total turun, owner 404, UI recovery setelah response hilang, serta
+admission 429/`Retry-After` termasuk forged `X-Real-IP`/`X-Forwarded-For`.
+`E2E_CHECKOUT_ADMISSION_NOW` dan `CRON_SECRET` adalah fixture pada
+`playwright.mock.config.ts` dan tidak dipakai produksi. Spec
+`versioned-checkout`/`versioned-settlement` kini memakai preview+token karena
+gate1 mewajibkan review. Bukti ini **bukan** redemption/capacity ticket 07/12.
+
+## Discount Offer administration (disposable)
+
+Slice ticket 06 menguji lifecycle Offer publik fixed-goods. Sama seperti suite
+berversi di atas: **hanya DB disposable** dengan `DATABASE_URL` eksplisit dan
+nama database berawalan `marketplace_discounts_test_*`. Gate
+`discounts.contractVersion` dinaikkan ke `1` oleh fixture dan dikembalikan ke
+`0` pada cleanup.
+
+```bash
+npm run verify:types:admin
+npx vitest run apps/admin/src/lib/discounts-administration.test.ts
+DATABASE_URL=<db-disposable> npx vitest run \
+  apps/admin/src/lib/discounts-administration.db.test.ts \
+  packages/db/src/discount-schema.db.test.ts \
+  packages/db/src/seed-cleanup.test.ts
+DATABASE_URL=<db-disposable> npm run verify:batch:e2e -- \
+  e2e/admin/discounts-admin-mock.spec.ts
+  e2e/admin/price-change-mock.spec.ts
+```
+
+Spec E2E itu mencakup create/replay/detail lewat HTTP, penolakan
+`INPUT_INVALID`, dan alur UI lengkap (buat draft → simpan terms → kapasitas →
+simulasi → review → publish → pause). `discounts-admin` sudah terdaftar pada
+kedua `testMatch` di `playwright.mock.config.ts`; bila regex diubah, alur UI di
+atas berhenti menjadi bukti. Bukti ini **bukan** redemption/reserve race
+(ticket 07/12) dan bukan aktivasi gate produksi.
+
+## Coupon publik pickup dan lifecycle Redemption (disposable)
+
+Slice ticket 07 menguji picker Coupon, reservasi atomik di place-order, dan
+lifecycle paid/consume/release. Real PostgreSQL (disposable) untuk race dan
+constraint; Playwright mock untuk UI/HTTP nyata. Gate
+`discounts.contractVersion` dinaikkan fixture E2E ke `1` dan dikembalikan pada
+cleanup.
+
+```bash
+npm run verify:types:store
+npx vitest run packages/db/src/discount-eligibility.test.ts \
+  packages/db/src/discount-pricing.test.ts \
+  apps/store/src/lib/checkout-review.test.ts
+DATABASE_URL=<db-disposable> npx vitest run \
+  packages/db/src/discount-redemption-schema.db.test.ts \
+  apps/store/src/lib/discount-availability.db.test.ts \
+  apps/store/src/lib/discount-selection.db.test.ts \
+  apps/store/src/lib/discount-reservation.db.test.ts \
+  apps/store/src/lib/discount-lifecycle-flow.db.test.ts
+DATABASE_URL=<db-disposable> npm run verify:batch:e2e -- \
+  e2e/store/discounts-coupon-mock.spec.ts
+```
+
+`discount-reservation.db.test.ts` membuktikan dua akun berebut kuota/budget
+terakhir, satu akun berebut jatah 1/2, reservasi serial terhadap pause,
+consume/release tepat sekali, late-paid review tanpa reacquire kapasitas, dan
+rollback penuh. `discount-lifecycle-flow.db.test.ts` membuktikan jalur public
+`claimPaidOrder`/confirmed cancel/definitive rejection/late settlement.
+`discounts-coupon-mock.spec.ts` mencakup picker + disabled reason, total review
+(138750), place order (Redemption reserved + allocation + provider
+`disc_amount` 25000/amount 125000), order detail, dan paid-but-blocked. Kedua
+`testMatch` di `playwright.mock.config.ts` wajib memuat `discounts-coupon`.
+`discounts.contractVersion` tetap `0` pada seed; fixture E2E yang membukanya
+untuk DB disposable. Bukti ini bukan UAT staging/rollout ticket 13.
+
+## Bulk Markdown harga (disposable)
+
+Ticket 04 menguji pemilihan SKU lintas halaman, stage 1..N row, apply bertahap
+dengan resume manual, hasil yang jujur, batas config, dan request key apply. Sama
+seperti suite di atas: **hanya DB disposable** dengan `DATABASE_URL` eksplisit dan
+nama database berawalan `marketplace_discounts_test_*`. Fixture menaikkan
+`discounts.contractVersion` ke `1` dan mengembalikannya pada cleanup; ledger
+`price_change_apply_request` dibersihkan sebelum batch rows/batch.
+
+```bash
+npm run verify:types:admin
+npm run verify:unit:slice -- packages/db/src/discount-import-limits.test.ts \
+  packages/db/src/seed-system-config.test.ts \
+  packages/db/src/seed-cleanup.test.ts
+DATABASE_URL=<db-disposable> npm run verify:unit:slice -- \
+  apps/admin/src/lib/price-changes-administration.db.test.ts
+DATABASE_URL=<db-disposable> npm run verify:batch:e2e -- \
+  e2e/admin/price-change-bulk-mock.spec.ts
+```
+
+- `packages/db/src/discount-import-limits.test.ts` (pure) mengunci parsing limit:
+  missing → default `1000`/`5242880`/`26214400`, nilai valid `1..2147483647`,
+  nilai invalid menggagalkan seluruh resolve (fail closed).
+  `packages/db/src/seed-system-config.test.ts` memastikan tiga key default ikut
+  ter-seed dengan tipe `number`, dan `packages/db/src/seed-cleanup.test.ts`
+  memastikan ledger apply-request dihapus sebelum batch rows dan batch.
+- `apps/admin/src/lib/price-changes-administration.db.test.ts` memuat skenario
+  bulk: stage 3 row + audit per row, SKU tak ditemukan tetap di-stage,
+  pembekuan shortcut persen, chunk 30 row (202 lalu resume sampai final), dua
+  apply paralel tanpa duplikasi, revoke → halt `POLICY_REVOKED` → resume setelah
+  re-grant, limit config (stage ditolak, batch oversized ditahan, config invalid
+  fail closed), source terbaru saat apply, no-op tanpa revision, request key
+  apply (409 vs replay), detail pagination/filter state untuk report, dan
+  kandidat SKU.
+- `e2e/admin/price-change-bulk-mock.spec.ts` berjalan di
+  `playwright.mock.config.ts` (loopback + DB disposable + gate 1): seleksi 30 SKU
+  lintas halaman, review target fixed 240000 dari base 300000 (kenaikan 90000
+  pada SKU ber-Markdown 150000), apply pertama `pending > 0` lalu resume sampai
+  final 30 applied/30 revision, restore tanpa Markdown → unchanged, shortcut 15%
+  dari 100001 → 85001, apply key sama + `previewDigest` berbeda → `409
+  REQUEST_KEY_CONFLICT` tanpa revision kedua, dan penolakan admin tanpa grant
+  `prices`.
+- Spec mock baru **wajib** ada di `testMatch`
+  [`playwright.mock.config.ts`](../../playwright.mock.config.ts) pada perubahan
+  yang sama; periksa regex-nya memuat `price-change-bulk` sebelum menganggap run
+  di atas sebagai bukti. Green mock bukan bukti parser workbook (ticket 05),
+  aktivasi gate produksi, atau UAT.
+
+Seed demo bulk (`SEED_MODE=demo`) juga hanya untuk database disposable: seeder
+menambahkan satu batch `staged` berisi 3 row `pending` (`SS-WHT-41`, `SS-BLK-41`,
+`OX-BLK-41`) tanpa revision/pointer dan tanpa mengubah `product_variant.price`.
 
 ## Prerequisites
 
@@ -64,8 +272,43 @@ Use `npm run test:unit -- --no-file-parallelism` to avoid shared RBAC-fixture ra
 | `npm run test:e2e:debug` | Run with the Playwright inspector (step through) |
 | `npm run test:e2e:install` | Install Chromium (and other browsers if configured) |
 | `npm run test:e2e:report` | Open the last HTML report |
+| `npm run verify:types:store` | L0 — store typecheck (`tsc --noEmit`, incremental) |
+| `npm run verify:types:admin` | L0 — admin typecheck |
+| `npm run verify:unit:slice -- <paths>` | L1 — focused Vitest on the files a slice touched |
+| `npm run verify:batch:unit` | L2 — full unit suite, serial, compact reporter |
+| `npm run verify:batch:e2e -- <specs>` | L2 — mock E2E, only the specs named |
 
 Use `--headed`, `--ui`, or `--debug` to watch the browser do the work.
+
+## Verification ladder
+
+Policy lives in [`AGENTS.md`](../../AGENTS.md) §5; this section is the operational
+how-to for multi-ticket work such as [discounts implementation](../../.scratch/discounts-implementation/map.md).
+The ladder separates *cheap, frequent* signal from *expensive* suites so a batch of
+tickets does not re-run the whole repository after every slice.
+
+| Level | When | Command | Cost |
+|---|---|---|---|
+| L0 | every slice | `npm run verify:types:store` / `verify:types:admin` | seconds |
+| L1 | every slice | `npm run verify:unit:slice -- apps/store/src/lib/<file>.test.ts` | seconds |
+| L2 | every batch of tickets | `npm run verify:batch:unit` + `verify:batch:e2e -- <affected mocks>` | minutes |
+| L3 | before commit/PR and at the integration ticket | full unit + required UI E2E | slowest |
+
+Rules that keep this honest:
+
+- L1 always receives **explicit file paths**. Passing no path runs every project.
+- `verify:batch:e2e` intersects the CLI path filter with
+  [`playwright.mock.config.ts`](../../playwright.mock.config.ts) `testMatch`, so a new
+  mock spec that is not listed there never runs. Add it in the same change that
+  creates it; a green run that silently skipped a spec is not evidence.
+- Capture output instead of pasting it: redirect to a log outside the repo or grep the
+  summary/failure lines only (`dot`/`line` reporters already cut most of the noise).
+- Never re-run a suite that already passed to "confirm" it. Record its summary line
+  (`Test Files … Tests …`) as the evidence entry for that batch instead.
+- A ticket stays `claimed` until its batch gate passes; it never becomes `resolved`
+  on a child's report alone.
+- The legacy `npm run test:e2e` (36 specs, live-provider writes in the checkout suite)
+  is **not** part of this ladder and still needs separate authorization.
 
 ## Test users
 

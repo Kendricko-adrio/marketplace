@@ -18,6 +18,7 @@ import {
   ChevronDown,
   PanelBottom,
   Bell,
+  Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -65,10 +66,12 @@ export default function AdminSidebar() {
 
   const links: SidebarLink[] = [
     { href: "/admin/products", label: "Produk", icon: Package, module: "products" },
+    { href: "/admin/products/harga", label: "Harga SKU", icon: Tag, module: "prices" },
     { href: "/admin/orders", label: "Pesanan", icon: ShoppingBag, module: "orders" },
     { href: "/admin/orders/reviews", label: "Review Jubelio", icon: ShieldQuestion, module: "orders" },
     { href: "/admin/customers", label: "Customer", icon: UserRoundSearch, module: "customers" },
     { href: "/admin/notifications", label: "Notifikasi", icon: Bell, module: "notifications" },
+    { href: "/admin/discounts", label: "Diskon", icon: Tag, module: "discounts" },
     { href: "/admin/branches", label: "Cabang", icon: Store, module: "branches" },
     { href: "/admin/analytics", label: "Analitik", icon: BarChart3, module: "analytics" },
     { href: "/admin/homepage", label: "Homepage", icon: LayoutTemplate, module: "homepage" },

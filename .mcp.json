@@ -5,6 +5,10 @@
       "args": [
         "@playwright/mcp@latest"
       ]
+    },
+    "context7": {
+      "url": "https://mcp.context7.com/mcp/oauth",
+      "description": "Up-to-date version-specific documentation and code examples for libraries and frameworks (Next.js, Drizzle, Better Auth, Zod, Playwright, Tailwind, and others). OAuth-authenticated; tokens are stored by the MCP client, never in this file."
     }
   }
 }

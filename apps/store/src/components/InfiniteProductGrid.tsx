@@ -11,6 +11,11 @@ export interface Product {
   name: string;
   slug: string;
   price: string;
+  /** Source (Jubelio base) price of the SAME variant; present even on fallback. */
+  sourcePrice?: string | null;
+  /** True only when this variant's Markdown is effective (target < source). */
+  markdownActive?: boolean;
+  /** Legacy group RRP — no longer used for the card strikethrough. */
   basePrice: string;
   image: string | null;
   collection: string | null;
@@ -136,9 +141,15 @@ export default function InfiniteProductGrid({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {products.map((product) => {
           const price = parseFloat(product.price || product.basePrice);
-          const basePrice = parseFloat(product.basePrice);
+          // Only an ACTIVE Markdown shows a strikethrough, and the original is
+          // the same variant's source price — never the group RRP.
+          const sourcePrice = product.sourcePrice
+            ? parseFloat(product.sourcePrice)
+            : undefined;
           const originalPrice =
-            basePrice > price ? basePrice : undefined;
+            product.markdownActive && sourcePrice && sourcePrice > price
+              ? sourcePrice
+              : undefined;
           return (
             <ProductCard
               key={product.id}

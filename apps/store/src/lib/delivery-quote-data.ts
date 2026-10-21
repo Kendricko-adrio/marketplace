@@ -26,6 +26,7 @@ import type {
   ShipmentQuoteOriginBranch,
 } from "./delivery-quote";
 import type { ShipmentDimensions } from "./shipment-parcel";
+import { readVariantProjections } from "./variant-price-projection";
 
 export type DeliveryQuoteDataErrorCode =
   | "NOT_FOUND" // cart items or address not owned/absent
@@ -107,6 +108,7 @@ export async function loadOwnedQuoteCartItems(
   const rows = await db
     .select({
       cartItemId: cartItems.id,
+      variantId: productVariants.id,
       quantity: cartItems.quantity,
       branchId: cartItems.branchId,
       variantPrice: productVariants.price,
@@ -140,13 +142,20 @@ export async function loadOwnedQuoteCartItems(
     );
   }
 
+  const projections = await readVariantProjections(rows.map((row) => row.variantId));
   const items = rows.map((row) => {
     const variantLabel = [row.variantColor, row.variantSize].filter(Boolean).join(" / ");
+    const projection = projections.get(row.variantId);
     return {
+      variantId: row.variantId,
       branchId: row.branchId as string,
       itemName: `${row.productName}${variantLabel ? ` ${variantLabel}` : ""}`.trim(),
       quantity: row.quantity,
+      // Courier/insurance quote value stays the SOURCE price; the customer
+      // breakdown uses the effective projection with its Markdown revision.
       value: row.variantPrice,
+      effectiveValue: projection?.effectiveUnitPrice ?? row.variantPrice,
+      markdownRevisionId: projection?.markdownRevisionId ?? null,
       dimensions: row.parcelDimensions,
     } satisfies ShipmentQuoteItem;
   });

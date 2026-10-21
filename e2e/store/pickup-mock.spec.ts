@@ -46,6 +46,7 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import crypto from "node:crypto";
 import { Pool } from "pg";
+import { deleteRetainedOrderFixtures } from "../../packages/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import { TEST_USERS } from "../config";
 
@@ -294,14 +295,14 @@ async function postSignedWebhook(
   });
 }
 
-/** Deletes this spec's orders (and their FK-cascaded ledger rows). */
+/** Deletes this spec's retained evidence before its fixture orders. */
 async function cleanOrderRows(orderIds: string[]): Promise<void> {
   if (orderIds.length === 0) return;
   await pool.query(
     "DELETE FROM audit_log WHERE action = 'VERIFY_PICKUP_CODE' AND entity_id = ANY($1::text[])",
     [orderIds]
   );
-  await pool.query("DELETE FROM orders WHERE id = ANY($1::text[])", [orderIds]);
+  await deleteRetainedOrderFixtures(pool, orderIds);
 }
 
 // ---------------------------------------------------------------------------

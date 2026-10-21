@@ -12,13 +12,35 @@ import {
   products,
   addresses,
   clients,
+  checkoutRequests,
+  variantPriceCurrent,
+  variantPriceRevisions,
 } from "@/db";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, sql, asc, inArray } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
+import { readCheckoutJson, CheckoutInputError } from "@/lib/checkout-input";
+import { admitCheckoutRequest, CheckoutAdmissionError } from "@/lib/checkout-admission";
+import { buildCheckoutReviewContextFingerprint, verifyCheckoutReviewToken, CheckoutReviewRequiredError, CheckoutReviewUnavailableError } from "@/lib/checkout-review";
 import { pickupDateToInstant, validatePickupSlot } from "@/lib/pickup-validation";
 import { createPayment, getMockPaymentResult } from "@/lib/midtrans";
-import { getConfigNumber, getConfigString, getPpnRatePercent } from "@/lib/config";
+import { getConfigNumber, getConfigString, getPpnRatePercent, getDiscountsContractVersion } from "@/lib/config";
+import { buildPricingSnapshot, PricingContractError, type PricingSnapshot } from "@/lib/versioned-pricing";
+import { evaluatePricing } from "@marketplace/db/src/discount-pricing";
+import {
+  evaluateSelectedPublicOffer,
+  mapOfferReasonToHttp,
+  offerReasonMessage,
+  type PublicOfferCandidate,
+} from "@/lib/discount-selection";
+import {
+  insertRedemptionReservation,
+  lockAndEvaluateOfferReservation,
+  RedemptionReviewChangedError,
+  writeOrderDiscountAllocations,
+} from "@/lib/discount-reservation";
+import { readVariantProjections } from "@/lib/variant-price-projection";
+import { projectMarkdownPrice } from "@marketplace/db/src/markdown-pricing";
 import {
   calculateLineItemSubtotal,
   calculateOrderPricing,
@@ -50,6 +72,27 @@ import {
 } from "@/lib/jubelio-sales-lifecycle";
 import { recordJubelioSalesIntent } from "@/lib/jubelio-sales-operations";
 import type { JubelioSalesOrderCreateRequest } from "@marketplace/db/src/schema";
+import { runCheckoutTransaction } from "@/lib/checkout-transaction";
+import { finalizeRejectedCheckoutCreate } from "@/lib/checkout-recovery";
+import { AcceptedCheckoutReplay, CheckoutRequestConflictError, normalizeCheckoutApproval, checkoutIntentFingerprint, findAcceptedCheckout, checkoutResultResponse, type CheckoutRecovery } from "@/lib/checkout-request";
+import type { CheckoutReviewPromo } from "@/lib/checkout-review";
+
+/**
+ * Promo kandidat ditolak authoritative di dalam transaksi (kapasitas/minimum/
+ * waktu/identitas berubah sesudah preview). Tidak membuat order/hold parsial
+ * dan tidak pernah membuat order tanpa promo secara diam-diam.
+ */
+class PromoReservationError extends Error {
+  constructor(
+    readonly status: 403 | 409,
+    readonly code: string,
+    readonly safeMessage: string,
+    readonly reason: string
+  ) {
+    super(safeMessage);
+    this.name = "PromoReservationError";
+  }
+}
 
 /**
  * Thrown inside the place-order transaction when the atomic SO-hold UPDATE
@@ -67,7 +110,28 @@ class InsufficientStockError extends Error {
   }
 }
 
+const selectedIdsSchema = z.array(z.string().min(1).max(128))
+  .min(1, "Select at least one item to checkout").max(50)
+  .refine((ids) => new Set(ids).size === ids.length, "Duplicate selected cart item IDs");
+
+const reviewFields = {
+  requestKey: z.string().uuid().transform((key) => key.toLowerCase()).optional(),
+  reviewToken: z.string().min(1).max(2048).optional(),
+  // Satu slot promo: tanpa promo atau satu Coupon publik (ticket 07). Pemilihan
+  // promo delivery dan manual code dimiliki ticket 11/09.
+  promoSelection: z
+    .discriminatedUnion("kind", [
+      z.strictObject({ kind: z.literal("none") }),
+      z.strictObject({
+        kind: z.literal("public"),
+        offerId: z.string().min(1).max(128),
+      }),
+    ])
+    .optional(),
+};
+
 const placeOrderSchema = z.object({
+  ...reviewFields,
   phone: z
     .string()
     .min(8, "Phone number is required")
@@ -76,8 +140,8 @@ const placeOrderSchema = z.object({
   pickupDate: z.string(), // YYYY-MM-DD
   pickupTime: z.string(), // HH:mm
   // Cart item ids the customer chose to checkout in this order.
-  selectedItemIds: z.array(z.string()).min(1, "Select at least one item to checkout"),
-});
+  selectedItemIds: selectedIdsSchema,
+}).strict();
 
 // Ticket 04 — the delivery approval body. ONLY an approval: every money
 // field is re-derived server-side (fresh quote) and compared; `pickupDate`/
@@ -87,9 +151,8 @@ const REPRICE_REQUIRED_MESSAGE =
 
 const deliveryPlaceOrderBase = z
   .object({
-    itemIds: z
-      .array(z.string())
-      .min(1, "Select at least one item to checkout"),
+    ...reviewFields,
+    itemIds: selectedIdsSchema,
     contactPhone: z
       .string()
       .min(8, "Phone number is required")
@@ -102,7 +165,7 @@ const deliveryPlaceOrderBase = z
     originFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   });
 const deliveryPlaceOrderSchema = z.union([
-  deliveryPlaceOrderBase.extend({ addressId: z.string().min(1) }).strict(),
+  deliveryPlaceOrderBase.extend({ addressId: z.string().min(1).max(128) }).strict(),
   deliveryPlaceOrderBase.extend({ newAddress: clientAddressInputSchema, saveAddress: z.boolean(), saveRequestId: z.string().uuid() }).strict(),
 ]);
 
@@ -123,6 +186,33 @@ export async function isCheckoutPaused(): Promise<boolean> {
 }
 
 export async function POST(request: NextRequest) {
+  const recovery: CheckoutRecovery = {};
+  const log = requestLogger(request, { module: "checkout-result" });
+  try {
+    const response = await placeOrder(request, recovery);
+    if (response.status >= 400 && recovery.identity) {
+      // Dua live-read concurrent dapat mengganti observation stamp sebelum
+      // salah satu commit. Guard stock tetap ketat; tunggu sebentar hanya
+      // hasil key yang sama, tanpa mengulang placement atau provider request.
+      const waits = response.status === 503 ? [0, 25, 75, 150, 250] : [0];
+      for (const wait of waits) {
+        if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+        const accepted = await findAcceptedCheckout(recovery.identity);
+        if (accepted) return checkoutResultResponse(accepted, !recovery.committed, log);
+      }
+    }
+    return response;
+  } catch (error) {
+    if (error instanceof CheckoutRequestConflictError) {
+      log.warn("checkout request key conflict", { code: error.code });
+      return withRequestId(NextResponse.json({ success: false, code: error.code, error: error.message, requestId: log.requestId }, { status: 409, headers: { "Cache-Control": "no-store" } }), log);
+    }
+    log.error("checkout result recovery unavailable", { committed: !!recovery.committed });
+    return withRequestId(NextResponse.json({ success: false, code: "POLICY_UNAVAILABLE", error: "Status checkout belum dapat dibaca. Coba lagi dengan request yang sama.", requestId: log.requestId }, { status: 503, headers: { "Cache-Control": "no-store" } }), log);
+  }
+}
+
+async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
   let log = requestLogger(request, { module: "place-order" });
   log.info("place order requested");
   try {
@@ -130,25 +220,7 @@ export async function POST(request: NextRequest) {
     if (!access.ok) return withRequestId(access.response, log);
     const { session } = access;
 
-    // Emergency pause: block NEW checkouts only; in-flight orders keep their
-    // normal reconciliation paths. Never falls back to the retired adjustment
-    // flow.
-    if (await isCheckoutPaused()) {
-      log.warn("checkout rejected — new checkouts are paused");
-      return withRequestId(
-        NextResponse.json(
-          {
-            success: false,
-            error:
-              "Checkout sedang dijeda sementara. Silakan coba beberapa saat lagi.",
-          },
-          { status: 503 }
-        ),
-        log
-      );
-    }
-
-    const body = await request.json();
+    const body = await readCheckoutJson(request);
     const requestedMethod = (body as { fulfillmentMethod?: unknown } | null)?.fulfillmentMethod;
 
     // ===== Method-aware body handling: pickup stays the legacy shape; a
@@ -159,7 +231,7 @@ export async function POST(request: NextRequest) {
       : placeOrderSchema.safeParse(body);
 
     if (!parsed.success) {
-      log.warn("invalid request body", { issues: parsed.error.issues });
+      log.warn("invalid request body", { issueCount: parsed.error.issues.length });
       return withRequestId(
         NextResponse.json(
           {
@@ -171,6 +243,30 @@ export async function POST(request: NextRequest) {
         ),
         log
       );
+    }
+
+    // Replay mendahului cart/master/config terbaru, termasuk pause dan expiry token.
+    if (parsed.data.requestKey && parsed.data.reviewToken) {
+      recovery.identity = { clientId: session.user.id, requestKey: parsed.data.requestKey,
+        fingerprint: checkoutIntentFingerprint(parsed.data) };
+      const accepted = await findAcceptedCheckout(recovery.identity);
+      if (accepted) return checkoutResultResponse(accepted, true, log);
+    }
+    if (await isCheckoutPaused()) {
+      log.warn("checkout rejected — new checkouts are paused");
+      return withRequestId(NextResponse.json({ success: false, code: "POLICY_UNAVAILABLE", error: "Checkout sedang dijeda sementara." }, { status: 503 }), log);
+    }
+    const contractVersion = await getDiscountsContractVersion();
+    if (contractVersion === 0 && (parsed.data.requestKey || parsed.data.reviewToken || parsed.data.promoSelection)) {
+      return withRequestId(NextResponse.json({ success: false, code: "UNSUPPORTED_VERSION", error: "Checkout berversi belum aktif." }, { status: 400 }), log);
+    }
+    let reviewedFingerprint: string | null = null;
+    if (contractVersion === 1) {
+      if (!parsed.data.requestKey || !parsed.data.reviewToken || !parsed.data.promoSelection) {
+        throw new CheckoutReviewRequiredError();
+      }
+      await admitCheckoutRequest({ clientId: session.user.id, kind: "place", headers: request.headers });
+      reviewedFingerprint = verifyCheckoutReviewToken(parsed.data.reviewToken);
     }
 
     const deliveryBody = isDelivery
@@ -239,7 +335,7 @@ export async function POST(request: NextRequest) {
     // Ticket 04: a delivery approval that references items outside the
     // caller's cart (or none at all) is not the caller's data — presented as
     // not found. The legacy pickup checkout keeps its 400 contract.
-    if (isDelivery && selectedItems.length !== selectedItemIds.length) {
+    if ((isDelivery || contractVersion === 1) && selectedItems.length !== selectedItemIds.length) {
       log.warn("delivery checkout rejected — selected items not owned", {
         selectedItemIds,
       });
@@ -259,11 +355,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    selectedItems.sort((a, b) => a.variantId < b.variantId ? -1 : a.variantId > b.variantId ? 1 : 0);
+    // Markdown projection read once for the whole selection. Only contract v1
+    // consumers apply it; the legacy (gate 0) path keeps source prices.
+    const markdownProjections = contractVersion === 1
+      ? await readVariantProjections(selectedItems.map((item) => item.variantId))
+      : new Map<string, { effectiveUnitPrice: string; markdownRevisionId: string | null }>();
+    const effectiveOf = (item: { variantId: string; variantPrice: string }) =>
+      markdownProjections.get(item.variantId)?.effectiveUnitPrice ?? item.variantPrice;
+    const markdownRevisionOf = (item: { variantId: string }) =>
+      markdownProjections.get(item.variantId)?.markdownRevisionId ?? null;
     // ===== Enforce single-branch checkout =====
     const branchIds = new Set(
       selectedItems.map((i) => i.branchId).filter((b): b is string => !!b)
     );
-    if (branchIds.size === 0) {
+    if (branchIds.size === 0 || selectedItems.some((item) => !item.branchId)) {
       log.warn("checkout rejected — selected items have no branch");
       return NextResponse.json(
         { success: false, error: "Selected items have no branch assigned" },
@@ -345,6 +451,113 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    const ppnRatePercent = await getPpnRatePercent();
+    // Validate source/quantity/aggregate bounds exactly BEFORE live stock or
+    // shipping HTTP. This preliminary snapshot is replaced by the fresh quote
+    // snapshot below for delivery; neither path trusts browser money.
+    let pricingSnapshot: PricingSnapshot | null = contractVersion === 1
+      ? buildPricingSnapshot({
+          fulfillmentMethod: isDelivery ? "delivery" : "pickup", ppnRatePercent,
+          lines: selectedItems.map((item) => ({
+            variantId: item.variantId, quantity: item.quantity,
+            sourceUnitPrice: item.variantPrice, effectiveUnitPrice: effectiveOf(item),
+            markdownRevisionId: markdownRevisionOf(item),
+          })),
+        })
+      : null;
+
+    // ===== One public Coupon in the single promo slot (ticket 07) ========
+    // Delivery promo selection belongs to ticket 11; a delivery body carrying a
+    // public selection is rejected instead of silently ignored. Pickup
+    // evaluates eligibility against the subtotal AFTER Markdown. This result is
+    // advisory: the authoritative capacity check runs again inside the
+    // transaction under the Offer lock.
+    let offerCandidate: PublicOfferCandidate | null = null;
+    let promo: CheckoutReviewPromo = { kind: "none" };
+    if (isDelivery && parsed.data.promoSelection?.kind === "public") {
+      log.warn("delivery promo selection rejected", { outcome: "invalid_input" });
+      return withRequestId(
+        NextResponse.json(
+          { success: false, code: "INPUT_INVALID", error: "Promo belum tersedia untuk pengiriman.", requestId: log.requestId },
+          { status: 400, headers: { "Cache-Control": "no-store" } }
+        ),
+        log
+      );
+    }
+    if (pricingSnapshot && !isDelivery && parsed.data.promoSelection?.kind === "public") {
+      const [clientRow] = await db
+        .select({ emailVerified: clients.emailVerified })
+        .from(clients)
+        .where(eq(clients.id, session.user.id))
+        .limit(1);
+      if (!clientRow) {
+        return withRequestId(
+          NextResponse.json({ success: false, code: "NOT_FOUND", error: "Akun tidak ditemukan.", requestId: log.requestId }, { status: 404, headers: { "Cache-Control": "no-store" } }),
+          log
+        );
+      }
+      const evaluation = await evaluateSelectedPublicOffer({
+        offerId: parsed.data.promoSelection.offerId,
+        clientId: session.user.id,
+        verifiedEmail: clientRow.emailVerified,
+        subtotalAfterMarkdown: pricingSnapshot.subtotal,
+      });
+      if (!evaluation.ok) {
+        const mapped = mapOfferReasonToHttp(evaluation.reason);
+        log.warn("checkout promo rejected before commit", {
+          outcome: "promo_ineligible",
+          reason: evaluation.reason,
+        });
+        return withRequestId(
+          NextResponse.json(
+            { success: false, code: mapped.code, error: offerReasonMessage(evaluation.reason), requestId: log.requestId },
+            { status: mapped.status, headers: { "Cache-Control": "no-store" } }
+          ),
+          log
+        );
+      }
+      offerCandidate = evaluation.candidate;
+      pricingSnapshot = evaluatePricing({
+        fulfillmentMethod: "pickup",
+        ppnRatePercent,
+        lines: selectedItems.map((item) => ({
+          variantId: item.variantId,
+          quantity: item.quantity,
+          sourceUnitPrice: item.variantPrice,
+          effectiveUnitPrice: effectiveOf(item),
+          markdownRevisionId: markdownRevisionOf(item),
+        })),
+        benefit: {
+          kind: "fixed_goods",
+          paramsVersion: 1,
+          fixedAmount: evaluation.candidate.benefitAmount,
+        },
+      });
+      promo = {
+        kind: "public",
+        offerId: evaluation.candidate.offerId,
+        revisionId: evaluation.candidate.revisionId,
+        benefitId: evaluation.candidate.benefitId,
+        benefitAmount: evaluation.candidate.benefitAmount,
+      };
+      log = log.child({ offerId: evaluation.candidate.offerId });
+    }
+
+    if (pricingSnapshot && !isDelivery) {
+      const currentFingerprint = buildCheckoutReviewContextFingerprint({
+        clientId: session.user.id, contactPhone: phone, contactEmail: email,
+        pickupDate: pickupDate!, pickupTime: pickupTime!, branchId,
+        fulfillmentMethod: "pickup", promo,
+        pricing: { ...pricingSnapshot, discount: pricingSnapshot.goodsDiscount },
+        lines: pricingSnapshot.lines.map((line) => ({
+          cartItemId: selectedItems.find((item) => item.variantId === line.variantId)!.cartItemId,
+          variantId: line.variantId, branchId, quantity: line.quantity,
+          sourceUnitPrice: line.sourceUnitPrice,
+        })),
+      });
+      if (reviewedFingerprint !== currentFingerprint) throw new CheckoutReviewRequiredError();
+    }
+
     // Read the local mirror first, then verify ALL selected pairs against the
     // provider before creating an SO. A stale/zero local cache is advisory:
     // the provider is the stock source of truth. The atomic hold below still
@@ -380,13 +593,9 @@ export async function POST(request: NextRequest) {
     log.info("Jubelio stock verified before Sales Order", { itemCount: selectedItems.length });
 
     // ===== Calculate totals (method-aware) =====
-    const subtotal = calculateLineItemSubtotal(
-      selectedItems.map((item) => ({
-        price: item.variantPrice,
-        quantity: item.quantity,
-      }))
+    const subtotal = pricingSnapshot?.subtotal ?? calculateLineItemSubtotal(
+      selectedItems.map((item) => ({ price: item.variantPrice, quantity: item.quantity }))
     );
-    const ppnRatePercent = await getPpnRatePercent();
     let pricing: ReturnType<typeof calculateOrderPricing>;
     let deliverySnapshot: DeliverySnapshotPayload | null = null;
     let verifiedNewAddress: Awaited<ReturnType<typeof loadRevalidatedNewDestination>> | null = null;
@@ -404,8 +613,10 @@ export async function POST(request: NextRequest) {
         const parcelConfig = await loadShipmentParcelConfig();
         const quote = await quoteDelivery(
           {
+            pricingContractVersion: contractVersion,
             branch: originBranch,
             items: selectedItems.map((item) => ({
+              variantId: item.variantId,
               branchId: item.branchId as string,
               itemName: `${item.productName}${
                 [item.variantColor, item.variantSize].filter(Boolean).join(" / ")
@@ -435,7 +646,7 @@ export async function POST(request: NextRequest) {
         // approval → the user re-approves the NEW money. Either way NOTHING
         // local has been created yet.
         if (!chosen || chosen.originFingerprint !== deliveryBody!.originFingerprint || !compareDeliveryApproval(
-          deliveryBody!.approvedPricing as unknown as OrderPricing,
+          (contractVersion === 1 ? normalizeCheckoutApproval(deliveryBody!.approvedPricing) : deliveryBody!.approvedPricing) as unknown as OrderPricing,
           chosen.pricing
         ).approved) {
           log.warn("delivery quote must be re-approved", {
@@ -457,7 +668,7 @@ export async function POST(request: NextRequest) {
         pricing = chosen.pricing;
         const parcel = buildShipmentParcel({
           items: selectedItems.map((item) => ({
-            itemName: item.productName,
+            itemName: `${item.productName}${[item.variantColor, item.variantSize].filter(Boolean).length ? ` ${[item.variantColor, item.variantSize].filter(Boolean).join(" / ")}` : ""}`.trim(),
             quantity: item.quantity,
             value: Number(item.variantPrice),
             dimensions: item.parcelDimensions,
@@ -539,12 +750,50 @@ export async function POST(request: NextRequest) {
         ppnRatePercent,
       });
     }
+    if (pricingSnapshot) {
+      if (isDelivery) {
+        pricingSnapshot = buildPricingSnapshot({
+          fulfillmentMethod: "delivery", ppnRatePercent,
+          lines: selectedItems.map((item) => ({
+            variantId: item.variantId, quantity: item.quantity,
+            sourceUnitPrice: item.variantPrice, effectiveUnitPrice: effectiveOf(item),
+            markdownRevisionId: markdownRevisionOf(item),
+          })),
+          shippingBeforeSubsidy: pricing.shippingCost,
+          // Customer quote rates are not automatically the provider's billed
+          // cost. No evidence of provider cost yet: preserve unknown as null.
+          providerQuotedShippingCost: null,
+        });
+      }
+      pricing = {
+        subtotal: pricingSnapshot.subtotal, discount: pricingSnapshot.goodsDiscount,
+        shippingCost: pricingSnapshot.shippingCost, taxableBase: pricingSnapshot.taxableBase,
+        serviceFee: pricingSnapshot.serviceFee, ppnRatePercent: pricingSnapshot.ppnRatePercent,
+        ppnAmount: pricingSnapshot.ppnAmount, total: pricingSnapshot.total,
+      };
+      if (deliverySnapshot) deliverySnapshot = { ...deliverySnapshot, pricing };
+    }
+    if (pricingSnapshot && isDelivery) {
+      const currentFingerprint = buildCheckoutReviewContextFingerprint({
+        clientId: session.user.id, contactPhone: phone, contactEmail: email,
+        pickupDate: null, pickupTime: null, branchId, fulfillmentMethod: "delivery",
+        deliverySnapshot, promo: { kind: "none" }, pricing: { ...pricingSnapshot, discount: pricingSnapshot.goodsDiscount },
+        lines: pricingSnapshot.lines.map((line) => ({
+          cartItemId: selectedItems.find((item) => item.variantId === line.variantId)!.cartItemId,
+          variantId: line.variantId, branchId, quantity: line.quantity, sourceUnitPrice: line.sourceUnitPrice,
+        })),
+      });
+      if (reviewedFingerprint !== currentFingerprint) throw new CheckoutReviewRequiredError();
+    }
     const total = Number(pricing.total);
     const paymentItemDetails = buildPaymentItemDetails({
       items: selectedItems.map((item) => ({
         id: item.variantId,
         name: item.productName,
-        price: item.variantPrice,
+        // Midtrans goods use the EFFECTIVE unit amounts (Markdown already
+        // deducted once) plus the goods-discount adjustment; the detail total
+        // must equal the stored customer total exactly.
+        price: pricingSnapshot ? effectiveOf(item) : item.variantPrice,
         quantity: item.quantity,
       })),
       ...pricing,
@@ -572,6 +821,12 @@ export async function POST(request: NextRequest) {
     });
 
     const createRequest: JubelioSalesOrderCreateRequest = {
+      ...(pricingSnapshot ? {
+        providerContractVersion: 2 as const,
+        originalShipmentCost: Number(pricingSnapshot.shippingBeforeSubsidy),
+        shippingCost: Number(pricingSnapshot.shippingCost),
+        expectedProviderPayable: Number(pricingSnapshot.expectedProviderPayable),
+      } : {}),
       // The verified generic Jubelio customer contact.
       contactId: -1,
       customerName: session.user.name || "Customer",
@@ -582,8 +837,24 @@ export async function POST(request: NextRequest) {
       items: selectedItems.map((item) => ({
         itemId: item.jubelioItemId!,
         quantity: item.quantity,
+        // Provider price stays the SOURCE unit; the whole-line Markdown is a
+        // line discount, never a lowered source price or a raised payment.
         price: Number(item.variantPrice),
-        discAmount: 0,
+        discAmount: pricingSnapshot
+          ? (() => {
+              // Provider line discount = Markdown whole-line + Coupon allocation
+              // (whole-line, NEVER multiplied by quantity again). The snapshot's
+              // source/net line amounts are the independent authority.
+              const line = pricingSnapshot.lines.find(
+                (row) => row.variantId === item.variantId
+              );
+              if (!line) return 0;
+              return (
+                Math.round(Number(line.sourceLineAmount)) -
+                Math.round(Number(line.netLineAmount))
+              );
+            })()
+          : 0,
         taxAmount: 0,
         unit: process.env.JUBELIO_ITEM_UNIT?.trim() || "Buah",
         // The provider FK-rejects tax_id 0; the account's "No Tax" record id
@@ -593,20 +864,140 @@ export async function POST(request: NextRequest) {
     };
 
     try {
-      await db.transaction(async (tx) => {
+      await runCheckoutTransaction(!!pricingSnapshot, async (tx, step) => {
+        if (pricingSnapshot) {
+          // Owner → sorted source variants → order → sorted stock → intent.
+          // No provider HTTP while locks are held. Re-read after the quote:
+          // stale source/parcel/cart inputs require a fresh customer review.
+          await step(() => tx.select({ id: clients.id }).from(clients)
+            .where(eq(clients.id, session.user.id)).for("update"));
+          if (recovery.identity) {
+            const identity = recovery.identity;
+            const [accepted] = await step(() => tx.select().from(checkoutRequests).where(and(
+              eq(checkoutRequests.clientId, identity.clientId),
+              eq(checkoutRequests.requestKey, identity.requestKey),
+            )).limit(1));
+            if (accepted) {
+              if (accepted.fingerprint !== recovery.identity.fingerprint) throw new CheckoutRequestConflictError();
+              throw new AcceptedCheckoutReplay();
+            }
+          }
+          if (offerCandidate) {
+            // Lock group 3 BEFORE group 4/5: Offer identity → global usage →
+            // client usage, then authoritative re-evaluation under those locks.
+            // Two reservations for the SAME Offer serialize on the Offer row,
+            // so the second sees the first commit's capacity instead of
+            // overselling. The insert happens after the order exists (FK).
+            const candidate = offerCandidate;
+            const [freshClient] = await step(() => tx.select({ emailVerified: clients.emailVerified })
+              .from(clients).where(eq(clients.id, session.user.id)).limit(1));
+            const decision = await lockAndEvaluateOfferReservation(tx, {
+              clientId: session.user.id,
+              verifiedEmail: freshClient?.emailVerified ?? false,
+              candidate: candidate,
+              subtotalAfterMarkdown: pricingSnapshot.subtotal,
+            });
+            if (!decision.ok) {
+              const mapped = mapOfferReasonToHttp(decision.reason);
+              throw new PromoReservationError(
+                mapped.status, mapped.code, decision.message, decision.reason
+              );
+            }
+          }
+          const freshVariants = await step(() => tx.select().from(productVariants)
+            .where(inArray(productVariants.id, selectedItems.map((item) => item.variantId)))
+            .orderBy(asc(productVariants.id)).for("update"));
+          // Lock order group 4 continues: variant/source rows first, then the
+          // current Markdown pointer. A concurrent apply/source sync therefore
+          // serializes against this commit instead of slipping a different
+          // price into an order reviewed under the old projection.
+          const freshMarkdownRows = await step(() => tx
+            .select({
+              variantId: variantPriceCurrent.variantId,
+              revisionId: variantPriceRevisions.id,
+              targetUnitPrice: variantPriceRevisions.targetUnitPrice,
+            })
+            .from(variantPriceCurrent)
+            .innerJoin(
+              variantPriceRevisions,
+              and(
+                eq(variantPriceRevisions.id, variantPriceCurrent.revisionId),
+                eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
+              )
+            )
+            .where(inArray(variantPriceCurrent.variantId, selectedItems.map((item) => item.variantId)))
+            .orderBy(asc(variantPriceCurrent.variantId))
+            .for("update"));
+          const freshMarkdown = new Map(
+            freshMarkdownRows.map((row) => [row.variantId, row] as const)
+          );
+          const [freshBranch] = await step(() => tx.select().from(branches).where(eq(branches.id, branchId)).for("share"));
+          if (!freshBranch || freshBranch.status !== "aktif" || freshBranch.jubelioLocationId !== branch[0].jubelioLocationId ||
+              (!isDelivery && !validatePickupSlot(freshBranch.operatingHours, pickupDate!, pickupTime!).ok)) {
+            throw new CheckoutReviewRequiredError();
+          }
+          if (deliverySnapshot) {
+            const origin = deliverySnapshot.origin;
+            if (freshBranch.name !== origin.name || freshBranch.shippingPhone !== origin.phone ||
+                freshBranch.shippingAddress !== origin.address || freshBranch.shippingPostalCode !== origin.zipcode ||
+                freshBranch.shippingAreaId !== origin.areaId) throw new CheckoutReviewRequiredError();
+            if (deliveryBody && "addressId" in deliveryBody) {
+              const addressId = deliveryBody.addressId;
+              const [currentAddress] = await step(() => tx.select().from(addresses).where(and(eq(addresses.id, addressId), eq(addresses.userId, session.user.id))).for("share"));
+              const address = deliverySnapshot.address;
+              if (!currentAddress || currentAddress.firstName !== address.recipientName || currentAddress.phone !== address.phone ||
+                  currentAddress.fullAddress !== address.fullAddress || currentAddress.provinceId !== address.provinceId ||
+                  currentAddress.cityId !== address.cityId || currentAddress.districtId !== address.districtId ||
+                  currentAddress.areaId !== address.areaId || currentAddress.postalCode !== address.postalCode) throw new CheckoutReviewRequiredError();
+            }
+          }
+          const freshCart = await step(() => tx.select().from(cartItems)
+            .where(and(eq(cartItems.cartId, cart.id), inArray(cartItems.id, selectedItemIds)))
+            .orderBy(asc(cartItems.id)).for("update"));
+          for (const item of selectedItems) {
+            const variant = freshVariants.find((row) => row.id === item.variantId);
+            const selected = freshCart.find((row) => row.id === item.cartItemId);
+            if (!variant || variant.price !== item.variantPrice || variant.jubelioItemId !== item.jubelioItemId ||
+                JSON.stringify(variant.parcelDimensions) !== JSON.stringify(item.parcelDimensions) ||
+                !selected || selected.variantId !== item.variantId || selected.branchId !== item.branchId || selected.quantity !== item.quantity) {
+              throw new PricingContractError("PRICING_INPUT_INVALID", "Harga atau keranjang berubah. Periksa kembali pesanan.");
+            }
+            // Reviewed Markdown must still be the current one. A source change
+            // alone can keep the same target active; the effective price and
+            // revision identity both have to match the review.
+            const current = freshMarkdown.get(item.variantId);
+            let freshEffective = variant.price;
+            let freshRevisionId: string | null = null;
+            try {
+              const projection = projectMarkdownPrice({
+                sourceUnitPrice: variant.price,
+                storedTargetUnitPrice: current?.targetUnitPrice ?? null,
+                markdownRevisionId: current?.revisionId ?? null,
+              });
+              freshEffective = projection.effectiveUnitPrice;
+              freshRevisionId = projection.markdownRevisionId;
+            } catch {
+              throw new CheckoutReviewRequiredError();
+            }
+            if (freshEffective !== effectiveOf(item) || freshRevisionId !== markdownRevisionOf(item)) {
+              throw new CheckoutReviewRequiredError();
+            }
+          }
+        }
         // Save only after the final quote has been approved, atomically with
         // the order. A failed quote never mutates the address book.
         let savedAddressId: string | null = null;
         if (isDelivery && deliveryBody && "newAddress" in deliveryBody && deliveryBody.saveAddress && verifiedNewAddress) {
-          const [owner] = await tx.select({ id: clients.id }).from(clients)
-            .where(eq(clients.id, session.user.id)).for("update").limit(1);
+          const [owner] = await step(() => tx.select({ id: clients.id }).from(clients)
+            .where(eq(clients.id, session.user.id)).for("update").limit(1));
           if (!owner) throw new Error("Address owner no longer exists");
           // A stable, scoped ID makes a repeated accepted save request reuse
           // its own address instead of creating duplicate book entries.
           savedAddressId = `checkout:${createHash("sha256")
             .update(`${session.user.id}:${deliveryBody.saveRequestId}`).digest("hex")}`;
           const canonical = verifiedNewAddress.canonical;
-          const [prior] = await tx.select().from(addresses).where(eq(addresses.id, savedAddressId)).limit(1);
+          const stableAddressId = savedAddressId;
+          const [prior] = await step(() => tx.select().from(addresses).where(eq(addresses.id, stableAddressId)).limit(1));
           if (prior) {
             const identical = prior.userId === session.user.id && prior.firstName === verifiedNewAddress.recipientName &&
               prior.phone === verifiedNewAddress.phone && prior.fullAddress === verifiedNewAddress.fullAddress &&
@@ -616,11 +1007,11 @@ export async function POST(request: NextRequest) {
             if (!identical) throw new Error("Checkout address save request reused with a different destination");
           } else {
             if (deliveryBody.newAddress.isDefault) {
-              await tx.update(addresses).set({ isDefault: false, updatedAt: new Date() })
-                .where(and(eq(addresses.userId, session.user.id), eq(addresses.isDefault, true)));
+              await step(() => tx.update(addresses).set({ isDefault: false, updatedAt: new Date() })
+                .where(and(eq(addresses.userId, session.user.id), eq(addresses.isDefault, true))));
             }
-            await tx.insert(addresses).values({
-              id: savedAddressId,
+            await step(() => tx.insert(addresses).values({
+              id: stableAddressId,
               userId: session.user.id,
               firstName: verifiedNewAddress.recipientName,
               lastName: "",
@@ -636,11 +1027,11 @@ export async function POST(request: NextRequest) {
               area: canonical.area,
               postalCode: canonical.postalCode,
               isDefault: deliveryBody.newAddress.isDefault,
-            });
+            }));
           }
         }
         // ===== Create the order =====
-        await tx.insert(orders).values({
+        await step(() => tx.insert(orders).values({
           id: orderId,
           userId: session.user.id,
           branchId,
@@ -663,19 +1054,86 @@ export async function POST(request: NextRequest) {
           ppnRate: pricing.ppnRatePercent,
           ppnAmount: pricing.ppnAmount,
           total: pricing.total,
+          ...(pricingSnapshot ? {
+            pricingContractVersion: pricingSnapshot.pricingContractVersion,
+            pricingEngineVersion: pricingSnapshot.pricingEngineVersion,
+            providerContractVersion: pricingSnapshot.providerContractVersion,
+            pricingCurrency: pricingSnapshot.currency,
+            sourceGoodsSubtotal: pricingSnapshot.sourceGoodsSubtotal,
+            markdownTotal: pricingSnapshot.markdownTotal,
+            netGoods: pricingSnapshot.netGoods,
+            shippingBeforeSubsidy: pricingSnapshot.shippingBeforeSubsidy,
+            shippingSubsidy: pricingSnapshot.shippingSubsidy,
+            merchantFunding: pricingSnapshot.merchantFunding,
+            taxableBase: pricingSnapshot.taxableBase,
+            expectedProviderPayable: pricingSnapshot.expectedProviderPayable,
+            providerQuotedShippingCost: pricingSnapshot.providerQuotedShippingCost,
+            providerBilledShippingCost: pricingSnapshot.providerBilledShippingCost,
+            pricingSnapshot,
+          } : {}),
           expiresAt,
-        });
+        }));
+
+        // ===== One Redemption for this order (reserved), atomic with the
+        // order/items/stock/intent/receipt. The Offer lock acquired above is
+        // still held, so counters and capacity move together in ONE commit. =====
+        let reservedRedemptionId: string | null = null;
+        if (offerCandidate && pricingSnapshot) {
+          const candidate = offerCandidate;
+          const inserted = await step(() => insertRedemptionReservation(tx, {
+            orderId,
+            clientId: session.user.id,
+            candidate,
+            deadline: expiresAt,
+            pricing: pricingSnapshot!,
+          }));
+          reservedRedemptionId = inserted.redemptionId;
+          log.info("redemption reserved atomically with order", {
+            redemptionId: inserted.redemptionId,
+            offerId: candidate.offerId,
+            benefitAmount: candidate.benefitAmount,
+          });
+        }
 
         // ===== Create order items (with real product names) =====
-        for (const item of selectedItems) {
-          await tx.insert(orderItems).values({
-            id: crypto.randomUUID(),
+        const orderItemIdByVariant = new Map<string, string>();
+        for (const item of [...selectedItems].sort((a, b) => a.variantId.localeCompare(b.variantId))) {
+          const line = pricingSnapshot?.lines.find((line) => line.variantId === item.variantId);
+          const orderItemId = crypto.randomUUID();
+          orderItemIdByVariant.set(item.variantId, orderItemId);
+          await step(() => tx.insert(orderItems).values({
+            id: orderItemId,
             orderId,
             variantId: item.variantId,
             productName: item.productName,
             variantInfo: `${item.variantColor || ""} ${item.variantSize || ""}`.trim(),
-            price: item.variantPrice,
+            price: line?.effectiveUnitPrice ?? item.variantPrice,
             quantity: item.quantity,
+            ...(line ? {
+              pricingContractVersion: 1,
+              sourceUnitPrice: line.sourceUnitPrice,
+              markdownAmount: line.markdownAmount,
+              goodsDiscountAmount: line.goodsDiscountAmount,
+              netLineAmount: line.netLineAmount,
+              markdownRevisionId: line.markdownRevisionId,
+            } : {}),
+          }));
+        }
+
+        // ===== Per-line allocation evidence: Markdown is a SEPARATE component
+        // from the Offer slot, and a zero allocation is never stored. =====
+        if (pricingSnapshot) {
+          if (offerCandidate && !reservedRedemptionId) {
+            throw new Error("Redemption missing while writing offer allocations");
+          }
+          await writeOrderDiscountAllocations(tx, {
+            orderId,
+            orderItemIdByVariant,
+            pricing: pricingSnapshot,
+            redemption:
+              reservedRedemptionId && offerCandidate
+                ? { id: reservedRedemptionId, benefitId: offerCandidate.benefitId }
+                : null,
           });
         }
 
@@ -684,8 +1142,8 @@ export async function POST(request: NextRequest) {
         // sellable stock remains (provider available − holds ≥ qty) and a
         // provider snapshot exists (fail closed). 0 rows means another
         // concurrent checkout took the last units → throw to roll back.
-        for (const item of selectedItems) {
-          const held = await tx
+        for (const item of [...selectedItems].sort((a, b) => a.variantId.localeCompare(b.variantId))) {
+          const held = await step(() => tx
             .update(branchStocks)
             .set({
               pendingRemoteStock: sql`${branchStocks.pendingRemoteStock} + ${item.quantity}`,
@@ -701,9 +1159,9 @@ export async function POST(request: NextRequest) {
                 sql`COALESCE(${branchStocks.availableStock}, 0) - ${branchStocks.pendingRemoteStock} >= ${item.quantity}`
               )
             )
-            .returning({ branchId: branchStocks.branchId });
+            .returning({ branchId: branchStocks.branchId }));
           if (held.length === 0) {
-            const snapshot = await tx
+            const snapshot = await step(() => tx
               .select({ availableStock: branchStocks.availableStock, providerStockSyncedAt: branchStocks.providerStockSyncedAt })
               .from(branchStocks)
               .where(
@@ -712,7 +1170,7 @@ export async function POST(request: NextRequest) {
                   eq(branchStocks.productVariantId, item.variantId)
                 )
               )
-              .limit(1);
+              .limit(1));
             throw new InsufficientStockError(
               item.productName,
               snapshot[0]?.availableStock == null || snapshot[0]?.providerStockSyncedAt?.getTime() !== stockCheck.observedAt.getTime()
@@ -725,13 +1183,22 @@ export async function POST(request: NextRequest) {
         }
 
         // ===== Persist the create intent BEFORE any provider POST =====
-        await recordJubelioSalesIntent(tx, {
+        await step(() => recordJubelioSalesIntent(tx, {
           orderId,
           type: "create",
           reference: createReference,
           payload: { type: "create", create: createRequest },
-        });
+        }));
+        if (recovery.identity) {
+          const identity = recovery.identity;
+          await step(() => tx.insert(checkoutRequests).values({
+            id: crypto.randomUUID(), clientId: identity.clientId,
+            requestKey: identity.requestKey, fingerprint: identity.fingerprint,
+            orderId, result: { version: 1, orderId },
+          }));
+        }
       });
+      recovery.committed = true;
 
       // Provider call stays OUTSIDE the DB transaction: exactly one SO create
       // POST, confirmed via GET before Midtrans is involved.
@@ -748,7 +1215,8 @@ export async function POST(request: NextRequest) {
       if (createOutcome.status !== "confirmed") {
         if (createOutcome.status === "rejected") {
           // Definitive pre-apply rejection: release the hold, fail the order.
-          await db.transaction(async (tx) => {
+          if (recovery.identity) await finalizeRejectedCheckoutCreate(orderId, log);
+          else await db.transaction(async (tx) => {
             const orderRows = await tx
               .select({ branchId: orders.branchId })
               .from(orders)
@@ -877,16 +1345,45 @@ export async function POST(request: NextRequest) {
         ppnAmount: pricing.ppnAmount,
         total: pricing.total,
       });
+      if (recovery.identity) {
+        const accepted = await findAcceptedCheckout(recovery.identity);
+        if (!accepted) throw new Error("Accepted checkout tidak ditemukan setelah commit.");
+        return checkoutResultResponse(accepted, false, log);
+      }
       return withRequestId(
-        NextResponse.json({
-          success: true,
-          orderId,
-          redirectUrl: midtransResult.redirectUrl,
-          token: midtransResult.token,
-        }),
-        log
+        NextResponse.json({ success: true, orderId, redirectUrl: midtransResult.redirectUrl, token: midtransResult.token }), log
       );
     } catch (checkoutError) {
+      if (recovery.identity && (recovery.committed || checkoutError instanceof AcceptedCheckoutReplay)) {
+        log.error("checkout completion interrupted; reading retained result", { committed: !!recovery.committed });
+        const accepted = await findAcceptedCheckout(recovery.identity);
+        if (accepted) return checkoutResultResponse(accepted, !recovery.committed, log);
+        throw checkoutError;
+      }
+      if (checkoutError instanceof CheckoutRequestConflictError || checkoutError instanceof CheckoutReviewRequiredError) throw checkoutError;
+      if (checkoutError instanceof RedemptionReviewChangedError) throw new CheckoutReviewRequiredError();
+      if (checkoutError instanceof PromoReservationError) {
+        log.warn("checkout promo rejected at commit", {
+          code: checkoutError.code,
+          reason: checkoutError.reason,
+        });
+        return withRequestId(
+          NextResponse.json(
+            {
+              success: false,
+              code: checkoutError.code,
+              error: checkoutError.safeMessage,
+              requestId: log.requestId,
+            },
+            { status: checkoutError.status, headers: { "Cache-Control": "no-store" } }
+          ),
+          log
+        );
+      }
+      if (checkoutError instanceof PricingContractError) {
+        log.warn("checkout source changed before commit", { code: checkoutError.code });
+        return withRequestId(NextResponse.json({ success: false, code: "CHECKOUT_REVIEW_REQUIRED", error: checkoutError.message }, { status: 409 }), log);
+      }
       // Insufficient stock → 400 (customer can retry / pick fewer units).
       if (checkoutError instanceof InsufficientStockError) {
         log.warn("insufficient stock — checkout transaction rolled back", {
@@ -906,15 +1403,19 @@ export async function POST(request: NextRequest) {
           log
         );
       }
+      if (recovery.identity) {
+        log.error("checkout transaction unavailable", { code: "POLICY_UNAVAILABLE" });
+        return withRequestId(NextResponse.json({ success: false, code: "POLICY_UNAVAILABLE",
+          error: "Checkout belum dapat diselesaikan. Coba kembali dengan request yang sama.", requestId: log.requestId },
+          { status: 503, headers: { "Cache-Control": "no-store" } }), log);
+      }
       const err = checkoutError as {
         message?: string;
         httpStatusCode?: number;
         ApiResponse?: unknown;
       };
       log.error("Midtrans payment creation failed", {
-        message: err.message,
         httpStatusCode: err.httpStatusCode,
-        apiResponse: err.ApiResponse,
       });
       // The compensation path marks the order failed and cancels the SO;
       // checked-out cart rows are preserved so the customer can retry.
@@ -932,7 +1433,50 @@ export async function POST(request: NextRequest) {
       );
     }
   } catch (error) {
-    log.error("place order failed", { error: serializeError(error) });
+    if (error instanceof CheckoutRequestConflictError) throw error;
+    if (error instanceof CheckoutAdmissionError) {
+      if (error.status === 503) log.error("checkout admission unavailable", { code: error.code });
+      else log.warn("checkout admission denied", { code: error.code });
+      return withRequestId(NextResponse.json({ success: false, code: error.code, error: error.message, requestId: log.requestId },
+        { status: error.status, headers: { "Cache-Control": "no-store", ...(error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {}) } }), log);
+    }
+    if (error instanceof CheckoutReviewRequiredError) {
+      log.warn("checkout review rejected", { code: error.code });
+      return withRequestId(NextResponse.json({ success: false, code: error.code, error: error.message, requestId: log.requestId }, { status: 409, headers: { "Cache-Control": "no-store" } }), log);
+    }
+    if (error instanceof CheckoutReviewUnavailableError) {
+      log.error("checkout review unavailable", { code: "PRICING_UNAVAILABLE" });
+      return withRequestId(NextResponse.json({ success: false, code: "PRICING_UNAVAILABLE", error: "Review checkout belum tersedia.", requestId: log.requestId }, { status: 503, headers: { "Cache-Control": "no-store" } }), log);
+    }
+    if (error instanceof PromoReservationError) {
+      log.warn("checkout promo rejected", { code: error.code, reason: error.reason });
+      return withRequestId(
+        NextResponse.json(
+          { success: false, code: error.code, error: error.safeMessage, requestId: log.requestId },
+          { status: error.status, headers: { "Cache-Control": "no-store" } }
+        ),
+        log
+      );
+    }
+    if (error instanceof RedemptionReviewChangedError) {
+      log.warn("checkout promo review changed", { code: "CHECKOUT_REVIEW_REQUIRED" });
+      return withRequestId(
+        NextResponse.json(
+          { success: false, code: "CHECKOUT_REVIEW_REQUIRED", error: error.message, requestId: log.requestId },
+          { status: 409, headers: { "Cache-Control": "no-store" } }
+        ),
+        log
+      );
+    }
+    if (error instanceof CheckoutInputError) {
+      log.warn("checkout body rejected", { status: error.status });
+      return withRequestId(NextResponse.json({ success: false, error: error.message }, { status: error.status }), log);
+    }
+    if (error instanceof PricingContractError) {
+      log.warn("checkout pricing input rejected", { code: error.code });
+      return withRequestId(NextResponse.json({ success: false, error: "Data harga atau keranjang tidak valid.", code: error.code }, { status: 400 }), log);
+    }
+    log.error("place order failed", { errorType: error instanceof Error ? error.name : "UnknownError" });
     return withRequestId(
       NextResponse.json(
         { success: false, error: "Failed to place order" },

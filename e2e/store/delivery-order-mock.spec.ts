@@ -52,6 +52,7 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import crypto from "node:crypto";
 import { Pool } from "pg";
+import { deleteRetainedOrderFixtures } from "../../packages/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import { TEST_USERS } from "../config";
 dotenv.config({ path: ".env" });
@@ -331,11 +332,7 @@ async function countOrders(): Promise<number> {
 
 async function deleteOrder(orderId: string): Promise<void> {
   if (!orderId) return;
-  await pool!.query(
-    "DELETE FROM jubelio_sales_operation WHERE order_id = $1",
-    [orderId]
-  );
-  await pool!.query("DELETE FROM orders WHERE id = $1", [orderId]);
+  await deleteRetainedOrderFixtures(pool!, [orderId]);
 }
 
 // ---------------------------------------------------------------------------

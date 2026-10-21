@@ -57,5 +57,7 @@ dist/
 
 .playwright-mcp
 
-.pi
+# Pi project MCP config (.pi/mcp.json) is tracked; ignore local/generated files
+.pi/mcp-traces/
+.pi/settings.json
 .tmp

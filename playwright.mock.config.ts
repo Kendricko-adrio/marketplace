@@ -17,6 +17,13 @@
  *   JUBELIO_* credentials are fakes; live traffic would fail login anyway.
  * - The admin side is wired for verify-pickup: `STORE_INTERNAL_URL` points at
  *   the isolated store origin (the shared root .env pins :3000).
+ * - BOTH apps receive the SAME TEST-ONLY deterministic `BETTER_AUTH_SECRET`
+ *   (`MOCK_SHARED_AUTH_SECRET` below) so the existing admin → store
+ *   verify-pickup HMAC contract works without depending on a developer's
+ *   local env files. The two Better Auth instances stay independent (own
+ *   cookie names, tables and guards); only this shared signing value is
+ *   supplied. It is a mock fixture, never a real credential, and must never
+ *   be copied into any deployment/environment configuration.
  *
  * There is NO `setup` project and no storageState: the spec creates its own
  * sessions through the public HTTP sign-in seam (Better Auth route handlers
@@ -54,11 +61,26 @@ process.env.MIDTRANS_SERVER_KEY = "pickup-mock-only-server-key";
 
 process.env.JUBELIO_SHIPMENT_WEBHOOK_SECRET = "fixture-shipment-secret";
 
+// TEST-ONLY shared signing secret (deterministic, >= 32 chars).
+//
+// admin `verify-pickup` signs its call to the store's internal
+// `/api/internal/order-complete` with `HMAC-SHA256(BETTER_AUTH_SECRET, orderId)`,
+// and that route FAILS CLOSED with 403 "Unauthorized" when
+// `BETTER_AUTH_SECRET` is absent (`computeExpectedSecret()` returns "").
+// Better Auth itself keeps working in dev through the library's development
+// fallback secret, which is why sign-in succeeds while the pickup completion
+// was rejected — the failure was missing test env wiring, not pricing/RBAC.
+// Both webServer entries below therefore get the SAME value: this is a
+// test-environment fixture only, derived from no developer secret, never
+// logged and never reused outside this isolated mock config.
+const MOCK_SHARED_AUTH_SECRET = "mock-e2e-only-shared-auth-secret-do-not-reuse";
+
 export default defineConfig({
   testDir: "./e2e",
-  // ONLY the mock-only pickup spec — this config must never run the live-cleanup
-  // checkout.spec.ts or the other shared-config specs.
-  testMatch: /(?:pickup|addresses|branch-origin|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up)-mock\.spec\.ts/,
+  // ONLY the mock-only specs (versioned checkout/settlement, checkout review
+  // preview, pickup, delivery, shipment, admin discounts) — this config must
+  // never run the live-cleanup checkout.spec.ts or the other shared-config specs.
+  testMatch: /(?:versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|markdown|markdown-settlement|price-change|price-change-bulk)-mock.spec.ts/,
   fullyParallel: false,
   workers: 1, // single fixture identity (john) — serial DB + cart ordering
   forbidOnly: true,
@@ -80,7 +102,7 @@ export default defineConfig({
     {
       name: "pickup-mock",
       testDir: "./e2e",
-      testMatch: /(?:pickup|addresses|branch-origin|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up)-mock\.spec\.ts/,
+      testMatch: /(?:versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|markdown|markdown-settlement|price-change|price-change-bulk)-mock.spec.ts/,
       // No storageState/project auth: sessions are created in the spec via the
       // public HTTP sign-in seam against the isolated origins.
     },
@@ -104,6 +126,12 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 180_000,
       env: {
+        // Ticket 02: clock admission terkontrol. Hanya aktif pada mock +
+        // database disposable (dijaga di checkout-admission.ts), sehingga
+        // test paralel/admission deterministik tanpa memakai jam dinding.
+        E2E_CHECKOUT_ADMISSION_NOW: "2040-01-02T12:00:10Z",
+        // Shared secret test-only untuk endpoint sweep yang dipakai spec 02.
+        CRON_SECRET: "checkout02-cron-fixture-only",
         // --- Provider-mock seam under test (ticket 01; parent implements) ---
         // E2E-only flag + loopback-only sales mock base URL. The sales runtime
         // must accept this pair for E2E runs and still reject non-loopback
@@ -140,6 +168,10 @@ export default defineConfig({
         // App-facing URLs on the isolated origin (see .env.local stomp note above).
         BETTER_AUTH_URL: STORE_PUBLIC_URL,
         NEXT_PUBLIC_APP_URL: STORE_PUBLIC_URL,
+        // TEST-ONLY fixture: lets the store's internal order-complete route
+        // verify the admin HMAC without any developer .env secret. Keep in
+        // sync with the admin webServer entry (same constant).
+        BETTER_AUTH_SECRET: MOCK_SHARED_AUTH_SECRET,
       },
     },
     {
@@ -159,6 +191,9 @@ export default defineConfig({
         JUBELIO_SHIPMENT_TIMEOUT_MS: "500",
         BETTER_AUTH_URL: ADMIN_PUBLIC_URL,
         NEXT_PUBLIC_APP_URL: ADMIN_PUBLIC_URL,
+        // TEST-ONLY fixture: verify-pickup signs order-complete with this same
+        // value (see MOCK_SHARED_AUTH_SECRET).
+        BETTER_AUTH_SECRET: MOCK_SHARED_AUTH_SECRET,
       },
     },
   ],

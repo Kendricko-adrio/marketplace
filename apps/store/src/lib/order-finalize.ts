@@ -17,6 +17,12 @@ import {
 import { createLogger, serializeError, type Logger } from "@/lib/logger";
 import { generatePickupCode } from "@/lib/pickup-code";
 import { dispatchJubelioSalesCancel } from "@/lib/jubelio-sales-lifecycle";
+import {
+  consumeReservedRedemption,
+  findRedemptionForOrder,
+  lockRedemptionOwners,
+  recordLatePaidReview,
+} from "@/lib/discount-lifecycle";
 
 export { generatePickupCode } from "@/lib/pickup-code";
 
@@ -112,31 +118,63 @@ export async function claimPaidOrder(
   paymentAttributes?: PaymentAttributes
 ): Promise<FinalizeResult> {
   const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
-  const claimed = await db
-    .update(orders)
-    .set({
-      status: "processing",
-      paymentStatus: "paid",
-      ...(paymentAttributes?.paymentType
-        ? { paymentMethod: paymentAttributes.paymentType }
-        : {}),
-      ...(paymentAttributes?.transactionId
-        ? { midtransTransactionId: paymentAttributes.transactionId }
-        : {}),
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(orders.id, orderId),
-        eq(orders.status, "pending_payment"),
-        eq(orders.paymentStatus, "pending")
-      )
-    )
-    .returning({ id: orders.id });
-  if (claimed.length === 0) {
-    log.info("paid-order claim lost — already handled by another path");
-    return { claimed: false };
-  }
+  const redemption = await findRedemptionForOrder(orderId);
+  const claimed = await db.transaction(async (tx) => {
+    // Lock group 3 before group 5: Offer → usage → client usage, then the
+    // existing order → Redemption. A concurrent webhook/sweep serializes here.
+    if (redemption && redemption.status === "reserved") {
+      await lockRedemptionOwners(tx, redemption);
+    }
+    const [current] = await tx
+      .select({ id: orders.id, status: orders.status, paymentStatus: orders.paymentStatus })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .for("update")
+      .limit(1);
+    if (!current || current.status !== "pending_payment" || current.paymentStatus !== "pending") {
+      log.info("paid-order claim lost — already handled by another path");
+      return false;
+    }
+    await tx
+      .update(orders)
+      .set({
+        status: "processing",
+        paymentStatus: "paid",
+        ...(paymentAttributes?.paymentType
+          ? { paymentMethod: paymentAttributes.paymentType }
+          : {}),
+        ...(paymentAttributes?.transactionId
+          ? { midtransTransactionId: paymentAttributes.transactionId }
+          : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(orders.id, orderId));
+    if (redemption) {
+      const consumed = await consumeReservedRedemption(tx, {
+        identity: redemption,
+        redemptionId: redemption.id,
+        source: "midtrans",
+        correlation: paymentAttributes?.transactionId ?? null,
+      });
+      if (!consumed) {
+        // Paid authoritative must never lose its evidence: if the hold was
+        // already released, keep it released and record ONE review event.
+        const reviewed = await recordLatePaidReview(tx, {
+          orderId,
+          correlation: paymentAttributes?.transactionId ?? null,
+          reason: "Paid arrived after the Redemption was released",
+        });
+        if (reviewed) {
+          await tx.update(orders)
+            .set({ fulfillmentBlockedReason: "Paid after Redemption release; manual review required", updatedAt: new Date() })
+            .where(eq(orders.id, orderId));
+          log.warn("paid after release — late review recorded, fulfillment blocked");
+        }
+      }
+    }
+    return true;
+  });
+  if (!claimed) return { claimed: false };
   log.info("order paid → processing (awaiting Sales-Order settlement)");
   return { claimed: true };
 }
@@ -505,28 +543,52 @@ export async function processLateSettlement(
     const message =
       "Late payment arrived after the Sales-Order cancel path started; manual reconciliation required";
     // Keep Midtrans's authoritative paid status, block pickup, surface review.
-    await db
-      .update(orders)
-      .set({
-        status: "processing",
-        paymentStatus: "paid",
-        fulfillmentBlockedReason: message,
-        paymentFailureReason: null,
-        ...(paymentAttributes?.paymentType
-          ? { paymentMethod: paymentAttributes.paymentType }
-          : {}),
-        ...(paymentAttributes?.transactionId
-          ? { midtransTransactionId: paymentAttributes.transactionId }
-          : {}),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(orders.id, orderId),
-          eq(orders.status, "failed_payment"),
-          eq(orders.paymentStatus, "failed")
+    // One transaction: order paid attributes + conditional Redemption consume
+    // (hold belum dilepas) atau late-review event (sudah released).
+    const redemption = await findRedemptionForOrder(orderId);
+    await db.transaction(async (tx) => {
+      if (redemption && redemption.status === "reserved") {
+        await lockRedemptionOwners(tx, redemption);
+      }
+      const [updated] = await tx
+        .update(orders)
+        .set({
+          status: "processing",
+          paymentStatus: "paid",
+          fulfillmentBlockedReason: message,
+          paymentFailureReason: null,
+          ...(paymentAttributes?.paymentType
+            ? { paymentMethod: paymentAttributes.paymentType }
+            : {}),
+          ...(paymentAttributes?.transactionId
+            ? { midtransTransactionId: paymentAttributes.transactionId }
+            : {}),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.status, "failed_payment"),
+            eq(orders.paymentStatus, "failed")
+          )
         )
-      );
+        .returning({ id: orders.id });
+      if (!updated || !redemption) return;
+      const consumed = await consumeReservedRedemption(tx, {
+        identity: redemption,
+        redemptionId: redemption.id,
+        source: "midtrans",
+        correlation: paymentAttributes?.transactionId ?? null,
+        reason: message,
+      });
+      if (!consumed) {
+        await recordLatePaidReview(tx, {
+          orderId,
+          correlation: paymentAttributes?.transactionId ?? null,
+          reason: message,
+        });
+      }
+    });
     log.warn("late settlement after cancel → manual review", { message });
     return { status: "manual_review", message };
   }
@@ -547,33 +609,61 @@ export async function claimLatePaidOrder(
   paymentAttributes?: PaymentAttributes
 ): Promise<boolean> {
   const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
-  const claimed = await db
-    .update(orders)
-    .set({
-      status: "processing",
-      paymentStatus: "paid",
-      fulfillmentBlockedReason: null,
-      paymentFailureReason: null,
-      midtransFailureStatus: null,
-      ...(paymentAttributes?.paymentType
-        ? { paymentMethod: paymentAttributes.paymentType }
-        : {}),
-      ...(paymentAttributes?.transactionId
-        ? { midtransTransactionId: paymentAttributes.transactionId }
-        : {}),
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(orders.id, orderId),
-        eq(orders.status, "failed_payment"),
-        eq(orders.paymentStatus, "failed")
-      )
-    )
-    .returning({ id: orders.id });
-  if (claimed.length === 0) {
-    log.info("late-paid claim lost — order moved on");
-    return false;
-  }
-  return true;
+  const redemption = await findRedemptionForOrder(orderId);
+  const claimed = await db.transaction(async (tx) => {
+    // Urutan lock §9.2: Offer/usage (3) → order/Redemption (5).
+    if (redemption && redemption.status === "reserved") {
+      await lockRedemptionOwners(tx, redemption);
+    }
+    const [current] = await tx
+      .select({ status: orders.status, paymentStatus: orders.paymentStatus })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .for("update")
+      .limit(1);
+    if (!current || current.status !== "failed_payment" || current.paymentStatus !== "failed") {
+      log.info("late-paid claim lost — order moved on");
+      return false;
+    }
+    await tx
+      .update(orders)
+      .set({
+        status: "processing",
+        paymentStatus: "paid",
+        fulfillmentBlockedReason: null,
+        paymentFailureReason: null,
+        midtransFailureStatus: null,
+        ...(paymentAttributes?.paymentType
+          ? { paymentMethod: paymentAttributes.paymentType }
+          : {}),
+        ...(paymentAttributes?.transactionId
+          ? { midtransTransactionId: paymentAttributes.transactionId }
+          : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(orders.id, orderId));
+    if (redemption) {
+      const consumed = await consumeReservedRedemption(tx, {
+        identity: redemption,
+        redemptionId: redemption.id,
+        source: "midtrans",
+        correlation: paymentAttributes?.transactionId ?? null,
+        reason: "Late payment on active Sales Order",
+      });
+      if (!consumed) {
+        const reviewed = await recordLatePaidReview(tx, {
+          orderId,
+          correlation: paymentAttributes?.transactionId ?? null,
+          reason: "Late payment on active Sales Order with released Redemption",
+        });
+        if (reviewed) {
+          await tx.update(orders)
+            .set({ fulfillmentBlockedReason: "Late payment after Redemption release; manual review required", updatedAt: new Date() })
+            .where(eq(orders.id, orderId));
+        }
+      }
+    }
+    return true;
+  });
+  return claimed;
 }

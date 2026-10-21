@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import crypto from "crypto";
 import {
   amountsMatch,
+  createPayment,
   buildSnapTransactionParameter,
   formatSnapStartTime,
   getMockPaymentResult,
@@ -15,10 +16,84 @@ import {
 // Expected values computed independently with node:crypto (the same SHA512
 // construction the Midtrans docs specify, written out in the test).
 
+// External SDK boundary is trapped: even RED must never contact sandbox.
+const sdkCreate = vi.hoisted(() => vi.fn().mockRejectedValue(new Error("SDK boundary must not be reached")));
+vi.mock("midtrans-client", () => ({ Snap: class { createTransaction = sdkCreate; } }));
+
 const SERVER_KEY = "test-server-key-123";
 
 afterEach(() => {
   delete process.env.MIDTRANS_SERVER_KEY;
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+  sdkCreate.mockClear();
+});
+
+describe("createPayment controlled Snap boundary", () => {
+  const customer = { first_name: "Fixture", email: "fixture@example.test", phone: "081234567890" };
+  const lines = [
+    { id: "variant1", name: "Goods", price: 150000, quantity: 1 },
+    { id: "PPN", name: "PPN", price: 16500, quantity: 1 },
+    { id: "SHIPPING", name: "Shipping", price: 30000, quantity: 1 },
+  ];
+  function environment(base: string, mode = "test") {
+    vi.stubEnv("NODE_ENV", mode);
+    vi.stubEnv("E2E_PROVIDER_MOCKS", "true");
+    vi.stubEnv("MIDTRANS_E2E_MOCK", "false");
+    vi.stubEnv("MIDTRANS_SERVER_KEY", "fake-key");
+    vi.stubEnv("MIDTRANS_MOCK_API_BASE_URL", base);
+  }
+
+  it.each([
+    "", "https://sandbox.midtrans.com", "http://example.test:3112",
+    "http://localhost:3112/injected", "http://user:pass@localhost:3112",
+    "http://localhost:3112?target=external", "http://localhost:3112#fragment",
+  ])("rejects unsafe mock base %s before SDK or network", async (base) => {
+    environment(base);
+    const fetchBoundary = vi.fn();
+    vi.stubGlobal("fetch", fetchBoundary);
+    await expect(createPayment("fixture-order", 196500, customer, lines)).rejects.toThrow(/mock/i);
+    expect(sdkCreate).not.toHaveBeenCalled();
+    expect(fetchBoundary).not.toHaveBeenCalled();
+  });
+
+  it("rejects the E2E flag in production before any network", async () => {
+    environment("http://127.0.0.1:3112", "production");
+    const fetchBoundary = vi.fn();
+    vi.stubGlobal("fetch", fetchBoundary);
+    await expect(createPayment("fixture-order", 196500, customer, lines)).rejects.toThrow(/mock/i);
+    expect(sdkCreate).not.toHaveBeenCalled();
+    expect(fetchBoundary).not.toHaveBeenCalled();
+  });
+
+  it("sends the complete real Snap payload to loopback without following redirects", async () => {
+    environment("http://127.0.0.1:3112");
+    const fetchBoundary = vi.fn().mockResolvedValue(new Response(JSON.stringify({ token: "fixture-token", redirect_url: "http://127.0.0.1:3112/snap/fixture-order" })));
+    vi.stubGlobal("fetch", fetchBoundary);
+    await expect(createPayment("fixture-order", 196500, customer, lines, 15, new Date("2026-10-19T03:00:00Z"))).resolves.toEqual({ token: "fixture-token", redirectUrl: "http://127.0.0.1:3112/snap/fixture-order" });
+    expect(sdkCreate).not.toHaveBeenCalled();
+    const [url, options] = fetchBoundary.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:3112/snap/v1/transactions");
+    expect(options.redirect).toBe("error");
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    const payload = JSON.parse(options.body);
+    expect(payload.transaction_details).toEqual({ order_id: "fixture-order", gross_amount: 196500 });
+    expect(payload.item_details).toEqual(lines);
+    expect(payload.expiry).toEqual({ unit: "minute", duration: 15, start_time: "2026-10-19 10:00:00 +0700" });
+    expect(payload.enabled_payments).toContain("credit_card");
+  });
+
+  it.each([
+    { token: "", redirect_url: "http://127.0.0.1:3112/snap/order" },
+    { token: "fixture", redirect_url: "https://external.test/snap" },
+    { token: "fixture", redirect_url: "http://user:pass@127.0.0.1:3112/snap" },
+    { token: "fixture" },
+  ])("rejects malformed or escaping mock responses", async (payload) => {
+    environment("http://127.0.0.1:3112");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(payload))));
+    await expect(createPayment("fixture-order", 196500, customer, lines)).rejects.toThrow(/mock/i);
+    expect(sdkCreate).not.toHaveBeenCalled();
+  });
 });
 
 describe("buildSnapTransactionParameter", () => {

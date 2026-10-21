@@ -114,7 +114,10 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   owns integration, review, and all validation: inspect the changes, run the
   relevant tests/checks, and decide any follow-up edits. No nested subagents
   without separate permission. Follow the skill's handoff, isolation, and
-  loop-stop rules.
+  loop-stop rules. Implementation handoffs use the project `implementer` agent
+  ([`.agents/agents/implementer.md`](.agents/agents/implementer.md)), whose tool
+  allowlist has no shell — a child cannot run validation even by accident. The
+  main agent owns the verification ladder in §5.
 - **Plan → execute → review applies to any behavior-affecting change.** "Code"
   is broadly defined — no loopholes: app code, config/env files, schema files,
   seeders, middleware/route configs, files under `deployment/`. Pure research,
@@ -128,8 +131,31 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   behavior — never guess a fix), `nextjs` (UI), `better-auth-best-practices` (auth), `frontend-design` (design).
   If subagents are used, they must load the matching skill too; subagent use
   never bypasses a rule.
-- **Use Context7** for current library/framework documentation before writing
-  code — don't rely on memory for library APIs.
+- **Context7 inquiry is mandatory before implementation.** Model knowledge stops
+  at its training cut-off, so never write library/framework API code from
+  memory. Before the first code slice that touches an external package
+  (Next.js 16, React, Drizzle ORM/drizzle-kit, Better Auth, Zod, Tailwind,
+  Playwright, Vitest, etc.):
+  1. `mcp__context7__resolve_library_id` with `{ libraryName: "<package>" }`
+     to get the canonical library ID for the installed version.
+  2. `mcp__context7__query_docs` with
+     `{ libraryId: "<id>", query: "<specific API question>" }` for every
+     uncertain signature, option, migration, or deprecation.
+  3. Record the library ID and what was confirmed in the plan/ticket/slice notes
+     (e.g. `Context7 checkpoint: <id> — <what was verified>`), so review can
+     audit it.
+  These tools come from the project server in `.pi/mcp.json` (OAuth, exposure
+  `direct`). If a lookup fails with `needs sign-in`, run `/mcp login context7`
+  (or `pi mcp login context7`) and retry. Skip the lookup only when the slice
+  touches no external API surface (pure refactor of already-confirmed code,
+  CSS/layout tweaks, docs, repo-internal logic), and say so in one line.
+  Subagents cannot call MCP tools (the `implementer` allowlist has neither
+  shell nor MCP), so the main agent runs the inquiry and passes the confirmed
+  signatures/options into the handoff packet; "the subagent should check
+  Context7" is not a valid handoff. If Context7 is unreachable, fall back to
+  the installed package types/source in `node_modules` or official vendor docs
+  and state which source replaced it — silent guessing is a violation. Setup:
+  [`docs/agents/mcp-tooling.md`](docs/agents/mcp-tooling.md).
 - **Schema edits ONLY in `packages/db/src/schema/`** — apps never define tables.
 - **Never treat the two Better Auth instances interchangeably** — cross-type
   sign-in is rejected by session hooks (`INVALID_USER_TYPE`).
@@ -186,6 +212,24 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   the failing test first for features and bug fixes. When an implementation is
   delegated, the subagent authors/updates tests but does not execute them; the
   main agent runs the tests and completes the red → green verification loop.
+- **Verification ladder — cheap per slice, expensive per batch.** Batching test
+  runs is allowed; skipping verification is not.
+  - **L0 (every slice, seconds):** `npm run verify:types:store` and/or
+    `npm run verify:types:admin` (`tsc --noEmit`, incremental).
+  - **L1 (every slice):** `npm run verify:unit:slice -- <explicit test paths>` —
+    only the files the slice touched. Never leave the file list implicit.
+  - **L2 (every batch of tickets):** `npm run verify:batch:unit` (serial, compact
+    reporter) plus only the mock E2E specs the batch touched:
+    `npm run verify:batch:e2e -- e2e/store/<spec>-mock.spec.ts`.
+  - **L3 (before commit/PR, and at the integration ticket):** the full suites
+    required above. The legacy `npm run test:e2e` still needs separate
+    authorization.
+  - A ticket may sit at `claimed` until its batch gate passes, but it is never
+    `resolved` without recorded L2/L3 evidence. Keep output bounded: capture to a
+    log outside the repo or print only summary/FAIL lines, and never re-run a
+    suite that already passed — record its summary line as evidence instead. New
+    mock specs must also be added to `playwright.mock.config.ts` `testMatch`, or
+    they silently never run.
 - **Keep tests deterministic.** Do not depend on random data, time-of-day, or
   external services that are not mocked / controlled in the test environment.
 - **When a Playwright run fails, read the Markdown output — do NOT open the

@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "context7": {
+      "url": "https://mcp.context7.com/mcp/oauth",
+      "exposure": "direct",
+      "description": "Up-to-date version-specific docs and code examples for libraries and frameworks (Next.js, Drizzle, Better Auth, Zod, Playwright, Tailwind, etc.). OAuth-authenticated."
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ],
+      "exposure": "codemode",
+      "description": "Playwright browser automation (navigate, snapshot, click, screenshot, console/network inspection) for manual UI verification."
+    }
+  }
+}

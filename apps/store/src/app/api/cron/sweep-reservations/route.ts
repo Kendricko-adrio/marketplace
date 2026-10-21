@@ -13,6 +13,7 @@ import {
 import { settleJubelioSalesOrder } from "@/lib/jubelio-sales-settlement";
 import { reconcileChannelStatusMirrorForSweep } from "@/lib/jubelio-channel-mirror";
 import { reconcileConfirmedSalesOrderHolds } from "@/lib/jubelio-sales-lifecycle";
+import { resumeUndispatchedCheckoutCreates } from "@/lib/checkout-recovery";
 import {
   reconcileJubelioSalesOperations,
   reconcileSettlements,
@@ -108,6 +109,14 @@ export async function POST(request: NextRequest) {
   };
 
   try {
+    // Intent checkout yang committed tetapi belum pernah dispatched boleh
+    // memakai satu claim existing. Possibly-sent tetap GET-only di bawah.
+    try {
+      const resumed = await resumeUndispatchedCheckoutCreates(50, log);
+      log.info("undispatched checkout create sweep completed", { resumed });
+    } catch {
+      log.error("undispatched checkout create sweep unavailable");
+    }
     // 1. Reconcile in-flight durable SO operations by persisted id + GET.
     try {
       const accounted = await reconcileConfirmedSalesOrderHolds(50);

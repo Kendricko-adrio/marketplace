@@ -13,6 +13,7 @@ import {
 } from "@/db";
 import { eq, and, asc, sql } from "drizzle-orm";
 import { requestLogger, serializeError } from "@/lib/logger";
+import { readVariantProjections } from "@/lib/variant-price-projection";
 
 export async function GET(
   request: NextRequest,
@@ -84,6 +85,10 @@ export async function GET(
       .where(eq(productVariants.productId, productData.id))
       .orderBy(asc(productVariants.isDefault));
 
+    // One query for every variant's Markdown projection (no N+1); a fallback
+    // (target >= source) reads as "no coretan" while the target stays stored.
+    const projections = await readVariantProjections(variants.map((v) => v.id));
+
     const variantsWithImagesAndStock = await Promise.all(
       variants.map(async (variant) => {
         const variantImages = await db
@@ -128,8 +133,16 @@ export async function GET(
             Math.max(0, (b.availableStock ?? 0) - b.pendingRemoteStock),
         }));
 
+        const projection = projections.get(variant.id);
         return {
           ...variant,
+          // `price` stays the display/effective price the UI already reads; the
+          // source price and Markdown state are explicit for the strikethrough.
+          price: projection?.effectiveUnitPrice ?? variant.price,
+          sourcePrice: projection?.sourceUnitPrice ?? variant.price,
+          storedTarget: projection?.storedTarget ?? null,
+          markdownActive: projection?.markdownActive ?? false,
+          markdownRevisionId: projection?.markdownRevisionId ?? null,
           images,
           branchStock,
         };

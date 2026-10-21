@@ -28,9 +28,10 @@ import { orders } from "./orders";
  * - `reference` is the unique provider-facing request note. There is no
  *   documented by-note GET search in Jubelio; reconciliation uses persisted
  *   SO ids only.
- * - A `create` operation must NOT carry a salesOrderId until an independent
- *   `GET /sales/orders/{id}` has confirmed the create; a `cancel` operation
- *   always carries the known SO id (both enforced by CHECK constraints).
+ * - A `create` response handle may be persisted as salesOrderId before the
+ *   independent `GET /sales/orders/{id}` verifies it, allowing GET-only crash
+ *   recovery. `confirmed` requires the known SO id; a `cancel` operation
+ *   always carries that id (enforced by CHECK constraints).
  * - Provider calls stay OUTSIDE any DB transaction; this table only records
  *   intent, claim and outcome.
  * - Settlement (Path 1) rides the same ledger: `invoice` operations carry the
@@ -40,8 +41,24 @@ import { orders } from "./orders";
  *   (`/sales/packlists/create-invoice-payment`) is never called.
  */
 
-/** Request snapshot of `POST /sales/orders/` (zero-disc/zero-tax envelope only). */
-export type JubelioSalesOrderCreateRequest = {
+/**
+ * Provider contract version of a persisted Sales Order create request.
+ *
+ * - absent — legacy/unversioned snapshot: the evidenced zero-disc/zero-tax
+ *   envelope without shipping fields, read by the explicit legacy decoder and
+ *   never assumed to be version 2.
+ * - `2` — contract v2 (spec §8.3/§10.1): frozen original/net shipping plus the
+ *   expected provider payable, so the provider request and its independent GET
+ *   verification are derived from the stored snapshot.
+ *
+ * Any other explicit version is unknown and must be rejected (fail closed) by
+ * the decoder/builder; this type is compile-time only, the runtime guard lives
+ * in the gateway (`apps/store/src/lib/jubelio-sales-client.ts`).
+ */
+export type JubelioSalesProviderContractVersion = 2;
+
+/** Fields shared by every persisted create-request snapshot. */
+export type JubelioSalesOrderCreateRequestFields = {
   contactId: number;
   customerName: string;
   locationId: number;
@@ -59,6 +76,36 @@ export type JubelioSalesOrderCreateRequest = {
     taxId: number;
   }>;
 };
+
+/**
+ * Unversioned legacy create intent: the evidenced zero-disc/zero-tax envelope
+ * only. The gateway branch for this shape is unchanged — it carries no shipping
+ * fields and keeps the original zero-discount guard.
+ */
+export type JubelioSalesOrderCreateRequestLegacy =
+  JubelioSalesOrderCreateRequestFields;
+
+/**
+ * Contract-v2 create intent: the frozen money snapshot the provider request is
+ * built from and verified against.
+ *
+ * - `originalShipmentCost` — customer shipping before subsidy (pickup: 0).
+ * - `shippingCost` — net customer shipping after subsidy (pickup: 0).
+ * - `expectedProviderPayable` — net goods + net shipping, which must equal the
+ *   provider `grand_total`, invoice and payment amount.
+ */
+export type JubelioSalesOrderCreateRequestV2 =
+  JubelioSalesOrderCreateRequestFields & {
+    providerContractVersion: JubelioSalesProviderContractVersion;
+    originalShipmentCost: number;
+    shippingCost: number;
+    expectedProviderPayable: number;
+  };
+
+/** Request snapshot of `POST /sales/orders/`. */
+export type JubelioSalesOrderCreateRequest =
+  | JubelioSalesOrderCreateRequestLegacy
+  | JubelioSalesOrderCreateRequestV2;
 
 /** Request snapshot of `POST /sales/orders/cancel/` with `{ids: [...]}`. */
 export type JubelioSalesOrderCancelRequest = {
@@ -115,7 +162,7 @@ export const jubelioSalesOperations = pgTable(
     id: text("id").primaryKey(),
     orderId: text("order_id")
       .notNull()
-      .references(() => orders.id, { onDelete: "cascade" }),
+      .references(() => orders.id, { onDelete: "restrict" }),
     type: text("type").notNull(), // create | cancel | invoice | payment
     status: text("status").notNull().default("intent"),
     // Unique provider-facing request reference (the create `note`): the only
@@ -125,8 +172,8 @@ export const jubelioSalesOperations = pgTable(
     // is always auditable/reconcilable without re-deriving the request.
     payload: jsonb("payload").$type<JubelioSalesOperationPayload>().notNull(),
     // Known remote sales-order identifier: required for cancel and invoice
-    // intents, set for create operations only after the confirmed independent
-    // GET.
+    // intents. A create response handle may be persisted before confirmation
+    // so recovery can GET it; status becomes confirmed only after verification.
     salesOrderId: integer("sales_order_id"),
     // Remote invoice id (the Sales Invoice Number returned by invoice
     // conversion). Persisted as soon as the conversion POST returns it —

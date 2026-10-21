@@ -7,6 +7,7 @@ import { createPayment } from "@/lib/midtrans";
 import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
 import { buildPaymentItemDetails } from "@/lib/payment-item-details";
 import { getConfigNumber } from "@/lib/config";
+import { readOrderPricing } from "@/lib/versioned-pricing";
 
 export async function POST(request: NextRequest) {
   let log = requestLogger(request, { module: "midtrans-create" });
@@ -51,6 +52,10 @@ export async function POST(request: NextRequest) {
         { status: 403 }
       );
     }
+
+    // Validate every explicit version before returning an existing redirect
+    // too: unknown contracts must never reach payment or financial display.
+    const pricing = readOrderPricing(order);
 
     // Only allow re-payment for pending_payment orders (failed_payment is final)
     if (order.status !== "pending_payment") {
@@ -128,28 +133,29 @@ export async function POST(request: NextRequest) {
 
     const result = await createPayment(
       orderId,
-      parseFloat(order.total),
+      Number(pricing.total),
       {
         first_name: session.user.name || "Customer",
         email: order.contactEmail,
         phone: order.contactPhone,
       },
       buildPaymentItemDetails({
-        items: items.map((item) => ({
-          id: item.variantId,
-          name: item.productName,
-          price: item.price,
-          quantity: item.quantity,
-        })),
-        discount: order.discount,
-        shippingCost: order.shippingCost,
-        serviceFee: order.serviceFee,
-        ppnRatePercent: order.ppnRate,
-        ppnAmount: order.ppnAmount,
-        total: order.total,
+        items: pricing.pricingContractVersion === 1
+          ? pricing.lines.map((line) => ({ id: line.variantId,
+              name: items.find((item) => item.variantId === line.variantId)?.productName ?? "Product",
+              price: line.effectiveUnitPrice, quantity: line.quantity }))
+          : items.map((item) => ({ id: item.variantId, name: item.productName, price: item.price, quantity: item.quantity })),
+        discount: pricing.pricingContractVersion === 1 ? pricing.goodsDiscount : pricing.discount,
+        shippingCost: pricing.shippingCost,
+        serviceFee: pricing.serviceFee,
+        ppnRatePercent: pricing.ppnRatePercent,
+        ppnAmount: pricing.ppnAmount,
+        total: pricing.total,
       }),
       remainingMinutes,
-      new Date()
+      // Anchor rounded-up duration backwards from the existing deadline so
+      // Midtrans expiry never extends the local reservation even by seconds.
+      order.expiresAt ? new Date(order.expiresAt.getTime() - remainingMinutes * 60_000) : new Date()
     );
 
     // Persist Snap redirect URL

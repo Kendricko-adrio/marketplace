@@ -9,11 +9,13 @@ import {
 // Schema-convention guard for the durable per-order channel-status mirror
 // projection (ticket #03 — Siap Proses edit, crash-tolerant). Every datetime
 // column MUST be timestamptz (docs/architecture/database.md), the projection
-// must be tied to the local order with a cascade FK, and the at-most-once
-// mirror invariants (one intent per (order, target version); monotonic
-// targets; possibly-sent always carries a dispatch timestamp; an investigated
-// or confirmed intent always carries its durable evidence) must be enforced
-// by the schema itself, not only by app code.
+// must be tied to the local order with a RESTRICT retention FK
+// (plan/discounts-spec.md §8.4: channel evidence must never cascade away when
+// the order row is hard-deleted), and the at-most-once mirror invariants (one
+// intent per (order, target version); monotonic targets; possibly-sent always
+// carries a dispatch timestamp; an investigated or confirmed intent always
+// carries its durable evidence) must be enforced by the schema itself, not
+// only by app code.
 const config = getTableConfig(jubelioChannelStatusIntents);
 const checkNames = config.checks.map((c) => c.name);
 const uniqueIndexNames = config.indexes
@@ -31,11 +33,14 @@ describe("jubelio_channel_status_intent schema conventions", () => {
     }
   });
 
-  it("is tied to the local order with an ON DELETE CASCADE FK", () => {
+  it("is tied to the local order with an ON DELETE RESTRICT retention FK", () => {
     expect(config.foreignKeys.length).toBe(1);
     const reference = config.foreignKeys[0].reference();
     expect(getTableName(reference.foreignTable)).toBe("orders");
-    expect(config.foreignKeys[0].onDelete).toBe("cascade");
+    // RESTRICT (never cascade): the mirror projection is evidence retained by
+    // spec §8.4, so a hard order delete must fail 23503 instead of silently
+    // destroying the channel-status history.
+    expect(config.foreignKeys[0].onDelete).toBe("restrict");
   });
 
   it("allows exactly one intent per (order, monotonic target version)", () => {

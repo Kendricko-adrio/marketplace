@@ -20,6 +20,18 @@ import { createLogger, serializeError, type Logger } from "./logger";
  *   fields. Nonzero discount/tax is fail-closed (rejected) until the money
  *   formula is evidenced: the live canary (2026-09-23) evidences only the
  *   zero-disc/zero-tax envelope.
+ * - Contract v2 (ticket 01) is explicit: `providerContractVersion: 2` plus the
+ *   frozen `originalShipmentCost`/`shippingCost`/`expectedProviderPayable`
+ *   envelope is required, bounded to whole Rupiah and bounded cart quantity
+ *   before the POST, and the request is emitted with `original_shipment_cost`
+ *   + `shipping_cost` and `grand_total = net goods + net shipping`.
+ *   `shipping_cost_discount` is never emitted. The unversioned legacy branch
+ *   keeps its rules unchanged; any other explicit version fails closed.
+ * - A create is only confirmed when the independent GET proves the STORED
+ *   expected envelope (original/net shipping, grand total = expected provider
+ *   payable, item/header money). Missing GET fields and a Rp1 divergence are
+ *   both mismatches, and the returned SO id is preserved on the error so the
+ *   outcome stays reconcilable.
  * - The create id is only trusted after an independent
  *   `GET /sales/orders/{id}` confirms the requested location, contact,
  *   items, item prices/amounts and header totals. There is no
@@ -76,6 +88,19 @@ export type JubelioSalesOrderItemInput = {
   taxId: number;
 };
 
+/**
+ * Expected money envelope of a contract-v2 Sales Order, taken from the STORED
+ * create intent (never recomputed from a provider response): frozen original
+ * shipping before subsidy, net customer shipping after subsidy and the exact
+ * provider payable (net goods + net shipping).
+ */
+export type JubelioSalesExpectedEnvelope = {
+  providerContractVersion: 2;
+  originalShipmentCost: number;
+  shippingCost: number;
+  expectedProviderPayable: number;
+};
+
 export type JubelioSalesOrderCreateInput = {
   contactId: number;
   customerName: string;
@@ -85,6 +110,28 @@ export type JubelioSalesOrderCreateInput = {
   channelStatus?: "Belum Bayar";
   transactionDate?: Date;
   items: JubelioSalesOrderItemInput[];
+  /**
+   * Explicit provider contract version of the persisted intent.
+   *
+   * - absent (`undefined`) — unversioned legacy snapshot (zero-disc/zero-tax
+   *   envelope, no shipping fields; rules unchanged).
+   * - `2` — contract v2: the frozen shipping/payable envelope below is
+   *   required and the provider request is derived from it.
+   *
+   * Any other explicit value — including an explicit `null` — is an unknown
+   * version and fails closed before anything is sent. The version is typed as
+   * `number | null` here on purpose: the persisted payload is `jsonb`
+   * (compile-time typing only), so an unknown/null version must be rejected at
+   * runtime instead of being trusted by the type. Only an ABSENT value is the
+   * legacy branch.
+   */
+  providerContractVersion?: number | null;
+  /** Contract v2 only: customer shipping before subsidy (pickup: 0). */
+  originalShipmentCost?: number;
+  /** Contract v2 only: net customer shipping after subsidy (pickup: 0). */
+  shippingCost?: number;
+  /** Contract v2 only: expected provider payable = net goods + net shipping. */
+  expectedProviderPayable?: number;
 };
 
 export type JubelioSalesOrderItem = {
@@ -138,6 +185,12 @@ export type JubelioSalesOrderEditSnapshot = {
   addFee: number;
   addDisc: number;
   serviceFee: number;
+  /**
+   * Shipping money as observed on the GET (contract v2). `null` when the
+   * response omits the field; the v2 envelope guard then fails closed.
+   */
+  originalShipmentCost?: number | null;
+  shippingCost?: number | null;
   items: JubelioSalesOrderEditLine[];
 };
 
@@ -163,6 +216,12 @@ export type JubelioSalesOrderSnapshot = {
   totalDisc: number;
   totalTax: number;
   grandTotal: number;
+  /**
+   * Shipping money as observed on the GET (contract v2). `null` when the
+   * response omits the field; a v2 confirmation never accepts a missing value.
+   */
+  originalShipmentCost?: number | null;
+  shippingCost?: number | null;
   items: JubelioSalesOrderItem[];
 };
 
@@ -170,6 +229,19 @@ export type JubelioSalesCreateResult = {
   salesOrderId: number;
   order: JubelioSalesOrderSnapshot;
 };
+
+/**
+ * Awaited persistence hook for a provider id a write returned.
+ *
+ * The caller stores the handle durably (its own ledger/DB) BEFORE any
+ * independent verification GET runs, so a crash between the POST and the GET
+ * never loses the only reconciliation handle. The hook is a runtime-only input
+ * and is NEVER serialized into the provider request or the persisted request
+ * snapshot.
+ */
+export type JubelioSalesReturnedIdPersistence = (
+  providerId: number
+) => Promise<void> | void;
 
 export type JubelioSalesCancelResult = {
   salesOrderId: number;
@@ -202,6 +274,28 @@ export type JubelioInvoiceSnapshot = {
   grandTotal: number;
   isCanceled: boolean;
   items: JubelioInvoiceItem[];
+  /**
+   * ADDITIVE (contract v2, evidence T1/T2): the paid amount observed on the
+   * invoice GET. Absent when the response does not carry `payment_amount`, so
+   * a legacy snapshot keeps its previous shape; the contract-v2 settlement
+   * treats a missing value as a failed-closed mismatch, never as zero.
+   */
+  paymentAmount?: number;
+};
+
+/**
+ * One payment↔invoice association as observed on `GET /sales/payments/{id}`
+ * (evidence T1/T2: `{salesorder_id, invoice_id, payment_amount, grand_total,
+ * due}`).
+ */
+export type JubelioPaymentInvoiceAssociation = {
+  invoiceId: number;
+  paymentAmount: number;
+  salesorderId: number | null;
+  /** ADDITIVE (contract v2): observed grand total of the association line. */
+  grandTotal?: number;
+  /** ADDITIVE (contract v2): observed remaining due of the association line. */
+  due?: number;
 };
 
 export type JubelioPaymentSnapshot = {
@@ -209,7 +303,15 @@ export type JubelioPaymentSnapshot = {
   invoiceId: number | null;
   contactId: number | null;
   amount: number;
-  invoices: { invoiceId: number; paymentAmount: number; salesorderId: number | null }[];
+  invoices: JubelioPaymentInvoiceAssociation[];
+  /**
+   * ADDITIVE (contract v2, evidence T1/T2): the payment account observed on the
+   * GET. Absent for a legacy response; contract v2 requires it to equal the
+   * stored account intent.
+   */
+  accountId?: number;
+  /** ADDITIVE (contract v2): observed payment type (0 = cash/other). */
+  paymentType?: number;
 };
 
 export type JubelioInvoiceCreateResult = {
@@ -230,6 +332,16 @@ export class JubelioSalesGatewayError extends Error {
       httpStatus?: number;
       ambiguous: boolean;
       retryable: boolean;
+      /**
+       * Remote id the provider already returned for the failed stage, so an
+       * ambiguous/mismatched outcome stays reconcilable by GET instead of
+       * being re-created (never a blind retry).
+       */
+      salesOrderId?: number;
+      /** Same reconciliation handle for the invoice conversion stage. */
+      invoiceId?: number;
+      /** Same reconciliation handle for the payment stage. */
+      paymentId?: number;
     }
   ) {
     super(message);
@@ -328,6 +440,125 @@ export function resolveJubelioSalesRuntime(
 }
 
 /**
+ * Conservative website money bound (spec §4.3): whole Rupiah
+ * `0..9_999_999_999_999`. Provider decimals are normalized exactly elsewhere;
+ * nothing here rounds a fractional Rupiah.
+ */
+const CONTRACT_MONEY_MAX = 9_999_999_999_999;
+/** Bounded cart (spec §4.3): at most 50 distinct variant lines. */
+const CONTRACT_MAX_ITEM_LINES = 50;
+/** Bounded cart (spec §4.3): quantity 1..99 per variant. */
+const CONTRACT_MAX_ITEM_QUANTITY = 99;
+
+function isContractMoney(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= CONTRACT_MONEY_MAX
+  );
+}
+
+/**
+ * Runtime validation of an EXPLICITLY supplied contract-v2 expected envelope
+ * (the stored create intent of the same order). The persisted payload is
+ * `jsonb`: its TypeScript type is compile-time only, so this is the single
+ * trust boundary for every caller that passes an envelope in.
+ *
+ * - `undefined` / `null` ARGUMENT → no envelope supplied (legacy caller): the
+ *   unchanged legacy rules apply.
+ * - A supplied envelope OBJECT must carry exactly version `2`; an explicit
+ *   `null`, `1`, `3` or any other value is an unknown version and fails closed.
+ * - Money must be bounded whole Rupiah with net shipping never above the
+ *   pre-subsidy shipping.
+ *
+ * All failures are non-ambiguous/pre-send, so an unknown version can never
+ * reach a payload or the network.
+ */
+function assertExpectedEnvelope(
+  expected:
+    | {
+        providerContractVersion?: number | null;
+        originalShipmentCost?: number;
+        shippingCost?: number;
+        expectedProviderPayable?: number;
+      }
+    | null
+    | undefined
+): JubelioSalesExpectedEnvelope | null {
+  if (expected === undefined || expected === null) return null;
+  const version = expected.providerContractVersion;
+  if (version !== 2) {
+    throw new JubelioSalesGatewayError(
+      `Jubelio sales order provider contract version ${String(version)} is unsupported: only the unversioned legacy snapshot and contract version 2 are accepted`,
+      { code: "CONTRACT_VERSION_UNSUPPORTED", ambiguous: false, retryable: false }
+    );
+  }
+  const { originalShipmentCost, shippingCost, expectedProviderPayable } = expected;
+  if (
+    !isContractMoney(originalShipmentCost) ||
+    !isContractMoney(shippingCost) ||
+    !isContractMoney(expectedProviderPayable)
+  ) {
+    throw new JubelioSalesGatewayError(
+      `Jubelio sales order contract v2 input is invalid: original shipping, net shipping and expected provider payable must be whole Rupiah integers from 0 to ${CONTRACT_MONEY_MAX}`,
+      { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
+    );
+  }
+  if (shippingCost > originalShipmentCost) {
+    throw new JubelioSalesGatewayError(
+      `Jubelio sales order contract v2 input is invalid: net shipping ${shippingCost} cannot exceed the original shipping ${originalShipmentCost}`,
+      { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
+    );
+  }
+  return {
+    providerContractVersion: 2,
+    originalShipmentCost,
+    shippingCost,
+    expectedProviderPayable,
+  };
+}
+
+/**
+ * Resolves the expected provider money envelope of a create input from the
+ * STORED intent.
+ *
+ * - absent (`undefined`) version → the unversioned legacy snapshot: the
+ *   existing zero-disc/zero-tax rules apply unchanged, and shipping money must
+ *   never be attached without an explicit version (it would be silently
+ *   dropped otherwise).
+ * - explicit version (including an explicit `null`) → must be exactly `2`;
+ *   everything else fails closed BEFORE login/POST.
+ */
+function resolveContractEnvelope(input: {
+  providerContractVersion?: number | null;
+  originalShipmentCost?: number;
+  shippingCost?: number;
+  expectedProviderPayable?: number;
+}): JubelioSalesExpectedEnvelope | null {
+  const version = input.providerContractVersion;
+  if (version === undefined) {
+    if (
+      input.originalShipmentCost !== undefined ||
+      input.shippingCost !== undefined ||
+      input.expectedProviderPayable !== undefined
+    ) {
+      throw new JubelioSalesGatewayError(
+        "Jubelio sales order input is invalid: shipping/payable money requires an explicit provider contract version",
+        { code: "CONTRACT_VERSION_REQUIRED", ambiguous: false, retryable: false }
+      );
+    }
+    return null;
+  }
+  return assertExpectedEnvelope({
+    providerContractVersion: version,
+    originalShipmentCost: input.originalShipmentCost,
+    shippingCost: input.shippingCost,
+    expectedProviderPayable: input.expectedProviderPayable,
+  });
+}
+
+/**
  * Runtime validation applied before anything is serialized or sent.
  * NaN/Infinity would serialize to JSON `null` and empty item lists would
  * silently create an empty order — all of it after a live POST — so every
@@ -337,14 +568,19 @@ export function resolveJubelioSalesRuntime(
  * taxAmount = 0` (canary T0–T2: `amount = price × quantity`). The ±disc/±tax
  * formula is NOT proven; any nonzero tax/discount fails closed until
  * sandbox evidence exists. This is not a claim that the formula is proven.
+ *
+ * Contract v2 (ticket 01) keeps the same zero item discount/tax rule (the
+ * discount mapping is ticket 03) and adds the frozen shipping/provider-payable
+ * envelope plus the bounded cart/money limits, all verified before the POST.
+ *
+ * @returns the resolved contract-v2 envelope, or `null` for the unchanged
+ * unversioned legacy branch.
  */
-function assertValidCreateInput(input: {
-  contactId: number;
-  customerName: string;
-  note: string;
-  locationId: number;
-  items: JubelioSalesOrderItemInput[];
-}): void {
+function assertValidCreateInput(
+  input: JubelioSalesOrderCreateInput
+): JubelioSalesExpectedEnvelope | null {
+  // The version gate runs first: an unknown version must never be sent.
+  const envelope = resolveContractEnvelope(input);
   // The verified generic customer has contact_id -1; zero and unsafe IDs are invalid.
   if (!Number.isSafeInteger(input.contactId) || input.contactId === 0) {
     throw new JubelioSalesGatewayError(
@@ -427,12 +663,103 @@ function assertValidCreateInput(input: {
         { ambiguous: false, retryable: false }
       );
     }
-    if (item.discAmount !== 0 || item.taxAmount !== 0) {
+    if (item.taxAmount !== 0) {
       throw new JubelioSalesGatewayError(
-        "Jubelio sales order with nonzero discount or tax amount is rejected: the money formula is not yet evidenced (the live canary evidences only zero tax and zero discount)",
+        "Jubelio sales order with a nonzero tax amount is rejected: the provider tax envelope is a valid No Tax record",
         { ambiguous: false, retryable: false }
       );
     }
+    if (item.discAmount > 0) {
+      if (!Number.isSafeInteger(item.price * item.quantity)) {
+        throw new JubelioSalesGatewayError(
+          "Jubelio sales order input is invalid: line gross must stay a safe integer when a discount is present",
+          { ambiguous: false, retryable: false }
+        );
+      }
+      if (item.discAmount > item.price * item.quantity) {
+        throw new JubelioSalesGatewayError(
+          "Jubelio sales order input is invalid: item discount cannot exceed the line gross",
+          { ambiguous: false, retryable: false }
+        );
+      }
+    }
+    // The unversioned legacy branch keeps its evidenced zero-discount rule
+    // unchanged; only the versioned contract-2 path may carry a whole-line
+    // Markdown discount (spec §10.2).
+    if (!envelope && item.discAmount !== 0) {
+      throw new JubelioSalesGatewayError(
+        "Jubelio sales order with a nonzero discount is rejected on the unversioned legacy contract",
+        { ambiguous: false, retryable: false }
+      );
+    }
+  }
+  if (envelope) {
+    assertContractCreateEnvelope(input, envelope);
+  }
+  return envelope;
+}
+
+/**
+ * Contract-v2 bounded cart + exact provider-payable verification (the expected
+ * value comes from the stored snapshot, never from a provider response).
+ */
+function assertContractCreateEnvelope(
+  input: JubelioSalesOrderCreateInput,
+  envelope: JubelioSalesExpectedEnvelope
+): void {
+  if (input.items.length > CONTRACT_MAX_ITEM_LINES) {
+    throw new JubelioSalesGatewayError(
+      `Jubelio sales order contract v2 input is invalid: at most ${CONTRACT_MAX_ITEM_LINES} item lines are allowed`,
+      { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
+    );
+  }
+  let subTotal = 0;
+  let totalDisc = 0;
+  for (const item of input.items) {
+    if (item.quantity > CONTRACT_MAX_ITEM_QUANTITY) {
+      throw new JubelioSalesGatewayError(
+        `Jubelio sales order contract v2 input is invalid: item quantity must be 1..${CONTRACT_MAX_ITEM_QUANTITY} per line`,
+        { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
+      );
+    }
+    // Source Jubelio prices with a nonzero Rupiah fraction are held, never
+    // silently rounded into provider money.
+    if (!isContractMoney(item.price)) {
+      throw new JubelioSalesGatewayError(
+        `Jubelio sales order contract v2 input is invalid: item price must be whole Rupiah from 0 to ${CONTRACT_MONEY_MAX}`,
+        { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
+      );
+    }
+    const gross = item.price * item.quantity;
+    if (!isContractMoney(gross)) {
+      throw new JubelioSalesGatewayError(
+        `Jubelio sales order contract v2 input is invalid: item gross amount must stay within whole Rupiah 0..${CONTRACT_MONEY_MAX}`,
+        { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
+      );
+    }
+    subTotal += gross;
+    totalDisc += item.discAmount;
+  }
+  // Net goods = gross - whole-line discount; provider payable = net goods +
+  // net shipping. Tax stays locked at 0 by the item guard above.
+  if (!isContractMoney(subTotal) || !isContractMoney(totalDisc)) {
+    throw new JubelioSalesGatewayError(
+      `Jubelio sales order contract v2 input is invalid: sub total must stay within whole Rupiah 0..${CONTRACT_MONEY_MAX}`,
+      { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
+    );
+  }
+  const payable = subTotal - totalDisc + envelope.shippingCost;
+  if (!isContractMoney(payable)) {
+    throw new JubelioSalesGatewayError(
+      `Jubelio sales order contract v2 input is invalid: provider payable must stay within whole Rupiah 0..${CONTRACT_MONEY_MAX}`,
+      { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
+    );
+  }
+  if (payable !== envelope.expectedProviderPayable) {
+    throw new JubelioSalesGatewayError(
+      `Jubelio sales order contract v2 input is invalid: expected provider payable ${envelope.expectedProviderPayable} does not equal net goods ${subTotal - totalDisc} + net shipping ${envelope.shippingCost} (${payable})`,
+      { code: "CONTRACT_PAYABLE_MISMATCH", ambiguous: false, retryable: false }
+    );
   }
 }
 
@@ -443,20 +770,19 @@ function assertValidCreateInput(input: {
  * Creation only: `salesorder_id` 0 and `salesorder_no` "[auto]" per the
  * documented schema and the canary. `source` 1 = Internal. `disc` (the
  * percentage field) is left at 0. Within the evidenced envelope
- * (disc = 0, tax = 0) the item `amount` and header totals reduce to
- * `price × quantity`, which is what the canary verified.
+ * (disc = 0, tax = 0) the item `amount` reduces to `price × quantity`.
+ *
+ * Contract v2 adds the frozen money envelope: header
+ * `original_shipment_cost` (pre-subsidy) and `shipping_cost` (net customer),
+ * with `grand_total = net goods + net shipping = expected provider payable`.
+ * `shipping_cost_discount` is never emitted (contract09 §3: absent from the
+ * actual request, not 0/null/empty string — a GET default of 0 is never
+ * copied into the request).
  */
-export function buildSalesOrderPayload(input: {
-  contactId: number;
-  customerName: string;
-  locationId: number;
-  note: string;
-  refNo?: string;
-  channelStatus?: "Belum Bayar";
-  transactionDate?: Date;
-  items: JubelioSalesOrderItemInput[];
-}): Record<string, unknown> {
-  assertValidCreateInput(input);
+export function buildSalesOrderPayload(
+  input: JubelioSalesOrderCreateInput
+): Record<string, unknown> {
+  const envelope = assertValidCreateInput(input);
   const lines = input.items.map((item) => {
     const gross = item.price * item.quantity;
     const amount = gross - item.discAmount + item.taxAmount;
@@ -465,7 +791,9 @@ export function buildSalesOrderPayload(input: {
       item_id: item.itemId,
       qty_in_base: item.quantity,
       price: item.price,
-      disc: 0,
+      // Percentage DERIVED from the whole-line discount (spec §10.1): a
+      // provider display field, never a second discount. 0 for zero gross.
+      disc: gross > 0 ? (100 * item.discAmount) / gross : 0,
       disc_amount: item.discAmount,
       tax_amount: item.taxAmount,
       amount,
@@ -495,7 +823,13 @@ export function buildSalesOrderPayload(input: {
     sub_total: subTotal,
     total_disc: totalDisc,
     total_tax: totalTax,
-    grand_total: subTotal - totalDisc + totalTax,
+    ...(envelope
+      ? {
+          original_shipment_cost: envelope.originalShipmentCost,
+          shipping_cost: envelope.shippingCost,
+        }
+      : {}),
+    grand_total: subTotal - totalDisc + totalTax + (envelope?.shippingCost ?? 0),
     add_fee: 0,
     add_disc: 0,
     service_fee: 0,
@@ -516,11 +850,24 @@ export function buildSalesOrderPayload(input: {
  * - the evidenced money envelope is zero discount/zero tax/zero fees with
  *   `amount = price × qty` (the one-shot edit evidence, SO 68399); anything
  *   else risks rewriting financial attributes → zero POST.
+ *
+ * `expected` is the OPTIONAL explicit contract-v2 create envelope of the same
+ * order (from the stored create intent). When supplied, the snapshot's
+ * original/net shipping must equal it, `grand_total` must equal the stored
+ * expected provider payable, and the outbound payload preserves
+ * `original_shipment_cost` + `shipping_cost`. `shipping_cost_discount` is
+ * never emitted — a GET default of 0 is not copied into the request. Without
+ * `expected`, the legacy rules above apply unchanged.
  */
 export function buildSalesOrderEditPayload(
   edit: JubelioSalesOrderEditSnapshot,
-  targetChannelStatus: string
+  targetChannelStatus: string,
+  expected: JubelioSalesExpectedEnvelope | null = null
 ): Record<string, unknown> {
+  // The supplied envelope is the only trust boundary for the v2 money rules:
+  // an unknown version or out-of-bound money must fail closed BEFORE anything
+  // is serialized (and therefore long before any POST).
+  const validatedExpected = assertExpectedEnvelope(expected);
   if (
     !Number.isSafeInteger(edit.salesorderId) ||
     edit.salesorderId <= 0 ||
@@ -571,7 +918,7 @@ export function buildSalesOrderEditPayload(
       );
     }
   }
-  assertEditableMoneyEnvelope(edit);
+  assertEditableMoneyEnvelope(edit, validatedExpected);
   return {
     salesorder_id: edit.salesorderId,
     salesorder_no: edit.salesorderNo,
@@ -587,6 +934,13 @@ export function buildSalesOrderEditPayload(
     sub_total: edit.subTotal,
     total_disc: edit.totalDisc,
     total_tax: edit.totalTax,
+    ...(validatedExpected
+      ? {
+          original_shipment_cost:
+            edit.originalShipmentCost ?? validatedExpected.originalShipmentCost,
+          shipping_cost: edit.shippingCost ?? validatedExpected.shippingCost,
+        }
+      : {}),
     grand_total: edit.grandTotal,
     add_fee: edit.addFee,
     add_disc: edit.addDisc,
@@ -611,34 +965,60 @@ export function buildSalesOrderEditPayload(
  * MONEY SAFETY for edits: only the zero-disc/zero-tax/zero-fee envelope is
  * evidenced (one-shot edit evidence, SO 68399, 2026-09-26). Anything else
  * could silently rewrite financial attributes — refuse before serializing.
+ *
+ * With an explicit contract-v2 `expected` envelope the header grand total is
+ * checked against "net goods + net shipping = expected provider payable" and
+ * the GET's original/net shipping must equal the stored values, instead of the
+ * legacy `grand_total = sub_total` rule. The legacy branch is unchanged.
  */
-function assertEditableMoneyEnvelope(edit: {
-  subTotal: number;
-  totalDisc: number;
-  totalTax: number;
-  grandTotal: number;
-  addFee: number;
-  addDisc: number;
-  serviceFee: number;
-  items: Array<{
-    quantity: number;
-    price: number;
-    disc: number;
-    discAmount: number;
-    taxAmount: number;
-    amount: number;
-    itemId: number;
-  }>;
-}): void {
+function assertEditableMoneyEnvelope(
+  edit: {
+    subTotal: number;
+    totalDisc: number;
+    totalTax: number;
+    grandTotal: number;
+    addFee: number;
+    addDisc: number;
+    serviceFee: number;
+    originalShipmentCost?: number | null;
+    shippingCost?: number | null;
+    items: Array<{
+      quantity: number;
+      price: number;
+      disc: number;
+      discAmount: number;
+      taxAmount: number;
+      amount: number;
+      itemId: number;
+    }>;
+  },
+  expected: JubelioSalesExpectedEnvelope | null = null
+): void {
   const envelopeViolations: string[] = [];
+  // A whole-line discount is allowed ONLY on the validated contract-v2 path
+  // (`expected` present). The legacy branch keeps its evidenced zero-discount
+  // envelope unchanged.
+  const versioned = expected !== null;
   for (const line of edit.items) {
-    if (line.disc !== 0 || line.discAmount !== 0 || line.taxAmount !== 0) {
-      envelopeViolations.push(`item ${line.itemId} carries a nonzero discount or tax amount`);
+    const gross = line.price * line.quantity;
+    if (line.taxAmount !== 0) {
+      envelopeViolations.push(`item ${line.itemId} carries a nonzero tax amount`);
     }
-    const expected = line.price * line.quantity;
-    if (!moneyEqualsSafe(line.amount, expected)) {
+    if (line.discAmount < 0 || line.discAmount > gross) {
       envelopeViolations.push(
-        `item ${line.itemId} amount ${line.amount} does not equal price × quantity (${expected})`
+        `item ${line.itemId} whole-line discount ${line.discAmount} is outside 0..gross(${gross})`
+      );
+    }
+    if (!versioned && (line.disc !== 0 || line.discAmount !== 0)) {
+      envelopeViolations.push(
+        `item ${line.itemId} carries a nonzero discount on the unversioned legacy contract`
+      );
+    }
+    // The provider line amount is gross - whole-line discount (tax is 0).
+    const expectedAmount = gross - line.discAmount + line.taxAmount;
+    if (!moneyEqualsSafe(line.amount, expectedAmount)) {
+      envelopeViolations.push(
+        `item ${line.itemId} amount ${line.amount} does not equal gross ${gross} - discount ${line.discAmount} (${expectedAmount})`
       );
     }
   }
@@ -646,8 +1026,21 @@ function assertEditableMoneyEnvelope(edit: {
     (sum, line) => sum + line.price * line.quantity,
     0
   );
-  if (edit.totalDisc !== 0 || edit.totalTax !== 0) {
-    envelopeViolations.push("header carries a nonzero discount or tax total");
+  const expectedTotalDisc = edit.items.reduce(
+    (sum, line) => sum + line.discAmount,
+    0
+  );
+  if (edit.totalTax !== 0) {
+    envelopeViolations.push("header carries a nonzero tax total");
+  }
+  if (versioned) {
+    if (!moneyEqualsSafe(edit.totalDisc, expectedTotalDisc)) {
+      envelopeViolations.push(
+        `total_disc ${edit.totalDisc} does not equal the sum of line discounts (${expectedTotalDisc})`
+      );
+    }
+  } else if (edit.totalDisc !== 0) {
+    envelopeViolations.push("header carries a nonzero discount total on the legacy contract");
   }
   if (edit.addFee !== 0 || edit.addDisc !== 0 || edit.serviceFee !== 0) {
     envelopeViolations.push("header carries a nonzero fee/discount field");
@@ -657,14 +1050,43 @@ function assertEditableMoneyEnvelope(edit: {
       `sub_total ${edit.subTotal} does not equal the item lines (${expectedSubTotal})`
     );
   }
-  if (!moneyEqualsSafe(edit.grandTotal, expectedSubTotal)) {
+  if (expected) {
+    if (
+      edit.originalShipmentCost === undefined ||
+      edit.originalShipmentCost === null ||
+      !moneyEqualsSafe(edit.originalShipmentCost, expected.originalShipmentCost)
+    ) {
+      envelopeViolations.push(
+        `original shipping ${String(edit.originalShipmentCost)} does not equal the stored original shipping ${expected.originalShipmentCost}`
+      );
+    }
+    if (
+      edit.shippingCost === undefined ||
+      edit.shippingCost === null ||
+      !moneyEqualsSafe(edit.shippingCost, expected.shippingCost)
+    ) {
+      envelopeViolations.push(
+        `net shipping ${String(edit.shippingCost)} does not equal the stored net shipping ${expected.shippingCost}`
+      );
+    }
+  }
+  const expectedGrandTotal =
+    expectedSubTotal - edit.totalDisc + edit.totalTax + (expected?.shippingCost ?? 0);
+  if (!moneyEqualsSafe(edit.grandTotal, expectedGrandTotal)) {
     envelopeViolations.push(
-      `grand_total ${edit.grandTotal} does not equal sub_total ${expectedSubTotal}`
+      expected
+        ? `grand_total ${edit.grandTotal} does not equal net goods ${expectedSubTotal} + net shipping ${expected.shippingCost} (${expectedGrandTotal})`
+        : `grand_total ${edit.grandTotal} does not equal sub_total ${expectedSubTotal}`
+    );
+  }
+  if (expected && !moneyEqualsSafe(edit.grandTotal, expected.expectedProviderPayable)) {
+    envelopeViolations.push(
+      `grand_total ${edit.grandTotal} does not equal the stored expected provider payable ${expected.expectedProviderPayable}`
     );
   }
   if (envelopeViolations.length > 0) {
     throw new JubelioSalesGatewayError(
-      `Jubelio sales order edit refused: the money envelope is not evidenced (zero disc/tax only) — ${envelopeViolations.join("; ")}`,
+      `Jubelio sales order edit refused: the money envelope does not match its validated contract — ${envelopeViolations.join("; ")}`,
       { code: "EDIT_ENVELOPE_UNEVIDENCED", ambiguous: false, retryable: false }
     );
   }
@@ -684,26 +1106,39 @@ export function moneyEqualsSafe(a: number, b: number): boolean {
 
 export type JubelioSalesGateway = {
   createSalesOrder(
-    input: JubelioSalesOrderCreateInput & { operationId?: string }
+    input: JubelioSalesOrderCreateInput & {
+      operationId?: string;
+      /**
+       * Awaited with the returned SO id immediately after the POST id is
+       * parsed and BEFORE the confirmation GET. A rejection is ambiguous
+       * (the write may exist) and is never retried; the id stays on the error.
+       */
+      onSalesOrderId?: JubelioSalesReturnedIdPersistence;
+    }
   ): Promise<JubelioSalesCreateResult>;
   getSalesOrder(salesOrderId: number): Promise<JubelioSalesOrderSnapshot>;
   /**
    * Strict edit pre-read (ticket #03): parses every documented
    * `saveSalesOrderRequest` field plus the item detail ids and fee fields,
-   * fail-closed on any shape that must never become an edit POST.
+   * fail-closed on any shape that must never become an edit POST. Pass the
+   * order's explicit contract-v2 `expected` envelope so the pre-read also
+   * proves the stored original/net shipping and provider payable.
    */
   getSalesOrderForEdit(
-    salesOrderId: number
+    salesOrderId: number,
+    expected?: JubelioSalesExpectedEnvelope
   ): Promise<JubelioSalesOrderEditSnapshot>;
   /**
    * Full-payload channel-status edit (at most one POST). Built ONLY from the
    * verified pre-edit snapshot; confirmed by an independent GET. Never
-   * re-POSTed on any ambiguous outcome.
+   * re-POSTed on any ambiguous outcome. `expected` (contract v2) is OPTIONAL:
+   * without it the legacy zero-disc/zero-fee rules apply unchanged.
    */
   editSalesOrder(input: {
     edit: JubelioSalesOrderEditSnapshot;
     targetChannelStatus: string;
     operationId?: string;
+    expected?: JubelioSalesExpectedEnvelope;
   }): Promise<JubelioSalesEditResult>;
   cancelSalesOrder(input: {
     salesOrderId: number;
@@ -713,6 +1148,11 @@ export type JubelioSalesGateway = {
   createInvoice(input: {
     salesOrderId: number;
     operationId?: string;
+    /**
+     * Awaited with the returned invoice id BEFORE the invoice/SO verification
+     * GETs. A rejection is ambiguous and is never retried.
+     */
+    onInvoiceId?: JubelioSalesReturnedIdPersistence;
   }): Promise<JubelioInvoiceCreateResult>;
   getInvoice(invoiceId: number): Promise<JubelioInvoiceSnapshot>;
   /**
@@ -731,6 +1171,11 @@ export type JubelioSalesGateway = {
       note?: string;
     };
     operationId?: string;
+    /**
+     * Awaited with the returned payment id BEFORE the payment verification
+     * GET. A rejection is ambiguous and is never retried.
+     */
+    onPaymentId?: JubelioSalesReturnedIdPersistence;
   }): Promise<JubelioPaymentCreateResult>;
   getPayment(paymentId: number): Promise<JubelioPaymentSnapshot>;
 };
@@ -1061,6 +1506,45 @@ export function createJubelioSalesGateway(options: {
     return { status: response.status, body };
   }
 
+  /**
+   * Hands a returned provider id to the caller's awaited persistence hook
+   * IMMEDIATELY after the valid POST id is parsed and BEFORE any independent
+   * verification GET (ticket 01 / spec §10.2): the handle must be durable
+   * before a crash or a failing verification can lose it.
+   *
+   * A rejecting hook means the handle could NOT be stored while the write may
+   * already exist remotely → ambiguous, never retried, and the known id stays
+   * on the error for reconciliation. The hook receives only the provider id:
+   * it is never serialized into the provider request.
+   */
+  async function persistReturnedProviderId(input: {
+    hook?: JubelioSalesReturnedIdPersistence;
+    providerId: number;
+    label: string;
+    ids: { salesOrderId?: number; invoiceId?: number; paymentId?: number };
+    context?: Record<string, unknown>;
+  }): Promise<void> {
+    if (!input.hook) return;
+    try {
+      await input.hook(input.providerId);
+    } catch (error) {
+      log.error("Jubelio returned provider id was not persisted before verification", {
+        ...input.context,
+        providerId: input.providerId,
+        error: serializeError(error),
+      });
+      throw new JubelioSalesGatewayError(
+        `Jubelio ${input.label} ${input.providerId} could not be persisted before verification; the outcome is unknown`,
+        {
+          code: "RETURNED_ID_PERSIST_FAILED",
+          ambiguous: true,
+          retryable: false,
+          ...input.ids,
+        }
+      );
+    }
+  }
+
   function writeRejection(input: {
     path: string;
     status: number;
@@ -1170,6 +1654,12 @@ export function createJubelioSalesGateway(options: {
       }
       items.push({ itemId, quantity, price, amount, unit });
     }
+    // Contract v2 header shipping money is ADDITIVE: the keys are only returned
+    // when the GET actually carried them, so the legacy response shape stays
+    // byte-for-byte what it was before contract v2. A v2 confirmation treats a
+    // missing key as a failed-closed mismatch, never as zero.
+    const originalShipmentCost = optionalNumber(body, ["original_shipment_cost"]);
+    const shippingCost = optionalNumber(body, ["shipping_cost"]);
     return {
       salesorderId,
       salesorderNo: typeof body.salesorder_no === "string" ? body.salesorder_no : "",
@@ -1187,6 +1677,8 @@ export function createJubelioSalesGateway(options: {
       totalDisc,
       totalTax,
       grandTotal,
+      ...(originalShipmentCost === null ? {} : { originalShipmentCost }),
+      ...(shippingCost === null ? {} : { shippingCost }),
       items,
     };
   }
@@ -1206,7 +1698,8 @@ export function createJubelioSalesGateway(options: {
    */
   function parseSalesOrderEditSnapshot(
     id: number,
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
+    expected: JubelioSalesExpectedEnvelope | null = null
   ): JubelioSalesOrderEditSnapshot {
     const salesorderId = Number(body.salesorder_id);
     const contactId = Number(body.contact_id);
@@ -1225,6 +1718,8 @@ export function createJubelioSalesGateway(options: {
     const addFee = optionalNumber(body, ["add_fee"]);
     const addDisc = optionalNumber(body, ["add_disc"]);
     const serviceFee = optionalNumber(body, ["service_fee"]);
+    const originalShipmentCost = optionalNumber(body, ["original_shipment_cost"]);
+    const shippingCost = optionalNumber(body, ["shipping_cost"]);
     if (
       !Number.isInteger(salesorderId) ||
       salesorderId !== id ||
@@ -1347,11 +1842,17 @@ export function createJubelioSalesGateway(options: {
       addFee,
       addDisc,
       serviceFee,
+      // Contract v2 shipping money is ADDITIVE: only returned when the GET
+      // actually carried it, so the legacy edit snapshot shape is unchanged.
+      ...(originalShipmentCost === null ? {} : { originalShipmentCost }),
+      ...(shippingCost === null ? {} : { shippingCost }),
       items,
     };
     // Reuse the shared envelope rule so a GET showing nonzero disc/tax/fee
-    // money fails closed exactly like the payload builder would.
-    assertEditableMoneyEnvelope(snapshot);
+    // money fails closed exactly like the payload builder would. With an
+    // explicit contract-v2 envelope the GET must also prove the stored
+    // original/net shipping and expected provider payable.
+    assertEditableMoneyEnvelope(snapshot, expected);
     return snapshot;
   }
 
@@ -1422,6 +1923,7 @@ export function createJubelioSalesGateway(options: {
     requested: JubelioSalesOrderCreateInput;
     snapshot: JubelioSalesOrderSnapshot;
     salesOrderId: number;
+    expectedEnvelope: JubelioSalesExpectedEnvelope | null;
   }): string | null {
     const snapshot = input.snapshot;
     if (snapshot.locationId !== input.requested.locationId) {
@@ -1435,6 +1937,25 @@ export function createJubelioSalesGateway(options: {
     }
     if (snapshot.isCanceled || snapshot.invoiceId !== null) {
       return "confirmed order is already canceled or invoiced";
+    }
+    if (input.expectedEnvelope) {
+      // Contract v2: the GET must prove the STORED original/net shipping.
+      // Missing fields and a Rp1 divergence both hold the next stage.
+      const expected = input.expectedEnvelope;
+      if (
+        snapshot.originalShipmentCost === undefined ||
+        snapshot.originalShipmentCost === null ||
+        !moneyEquals(snapshot.originalShipmentCost, expected.originalShipmentCost)
+      ) {
+        return `confirmed original shipping ${String(snapshot.originalShipmentCost)} does not match the stored original shipping ${expected.originalShipmentCost}`;
+      }
+      if (
+        snapshot.shippingCost === undefined ||
+        snapshot.shippingCost === null ||
+        !moneyEquals(snapshot.shippingCost, expected.shippingCost)
+      ) {
+        return `confirmed net shipping ${String(snapshot.shippingCost)} does not match the stored net shipping ${expected.shippingCost}`;
+      }
     }
     const requestedLines = [...input.requested.items].sort(
       (left, right) => left.itemId - right.itemId
@@ -1480,7 +2001,10 @@ export function createJubelioSalesGateway(options: {
       0
     );
     const requestedGrandTotal =
-      requestedSubTotal - requestedTotalDisc + requestedTotalTax;
+      requestedSubTotal -
+      requestedTotalDisc +
+      requestedTotalTax +
+      (input.expectedEnvelope?.shippingCost ?? 0);
     if (snapshot.subTotal !== requestedSubTotal) {
       return `confirmed sub total ${snapshot.subTotal} does not match requested sub total ${requestedSubTotal}`;
     }
@@ -1492,6 +2016,15 @@ export function createJubelioSalesGateway(options: {
     }
     if (snapshot.grandTotal !== requestedGrandTotal) {
       return `confirmed grand total ${snapshot.grandTotal} does not match requested grand total ${requestedGrandTotal}`;
+    }
+    if (
+      input.expectedEnvelope &&
+      !moneyEquals(
+        snapshot.grandTotal,
+        input.expectedEnvelope.expectedProviderPayable
+      )
+    ) {
+      return `confirmed grand total ${snapshot.grandTotal} does not match the stored provider payable ${input.expectedEnvelope.expectedProviderPayable}`;
     }
     return null;
   }
@@ -1570,6 +2103,9 @@ export function createJubelioSalesGateway(options: {
         unit: typeof row.unit === "string" ? row.unit : "",
       });
     }
+    // ADDITIVE contract-v2 observation: only returned when the GET carried it,
+    // so the legacy invoice snapshot shape stays exactly what it was.
+    const paymentAmount = optionalNumber(body, ["payment_amount"]);
     return {
       invoiceId: parsedId,
       invoiceNo: typeof body.invoice_no === "string" ? body.invoice_no : "",
@@ -1582,6 +2118,7 @@ export function createJubelioSalesGateway(options: {
       grandTotal,
       isCanceled: body.is_canceled === true,
       items,
+      ...(paymentAmount === null ? {} : { paymentAmount }),
     };
   }
 
@@ -1644,24 +2181,34 @@ export function createJubelioSalesGateway(options: {
       : Array.isArray(body.items)
         ? body.items
         : [];
-    const invoices: { invoiceId: number; paymentAmount: number; salesorderId: number | null }[] = [];
+    const invoices: JubelioPaymentInvoiceAssociation[] = [];
     for (const raw of rawLines) {
       const row = raw as Record<string, unknown>;
       const invoiceId = optionalNumber(row, ["invoice_id"]);
       const paymentAmount = optionalNumber(row, ["payment_amount", "amount"]);
       if (invoiceId === null || paymentAmount === null) continue; // tolerate unknown line shapes
+      // ADDITIVE contract-v2 observations (evidence T1/T2): absent keys keep
+      // the legacy association shape byte-for-byte.
+      const grandTotal = optionalNumber(row, ["grand_total"]);
+      const due = optionalNumber(row, ["due"]);
       invoices.push({
         invoiceId,
         paymentAmount,
         salesorderId: optionalNumber(row, ["salesorder_id"]),
+        ...(grandTotal === null ? {} : { grandTotal }),
+        ...(due === null ? {} : { due }),
       });
     }
+    const accountId = optionalNumber(body, ["account_id"]);
+    const paymentTypeValue = optionalNumber(body, ["payment_type"]);
     return {
       paymentId: parsedId,
       invoiceId: optionalNumber(body, ["invoice_id"]),
       contactId: optionalNumber(body, ["contact_id"]),
       amount,
       invoices,
+      ...(accountId === null ? {} : { accountId }),
+      ...(paymentTypeValue === null ? {} : { paymentType: paymentTypeValue }),
     };
   }
 
@@ -1688,6 +2235,9 @@ export function createJubelioSalesGateway(options: {
 
   return {
     async createSalesOrder(input): Promise<JubelioSalesCreateResult> {
+      // The version gate and the bounded v2 envelope are resolved BEFORE any
+      // request: an unknown version never reaches login/POST.
+      const expectedEnvelope = resolveContractEnvelope(input);
       const payload = buildSalesOrderPayload(input);
       const context = { operation: "sales_order_create", operationId: input.operationId };
       // Exactly one create POST; any failure is terminal for this attempt.
@@ -1703,6 +2253,15 @@ export function createJubelioSalesGateway(options: {
         throw writeRejection({ path: "/sales/orders/", status, body, context });
       }
       const salesOrderId = parsePositiveId(body);
+      // Durable handle first: the confirmation GET may fail or the process may
+      // crash, and the returned id is the only reconciliation path.
+      await persistReturnedProviderId({
+        hook: input.onSalesOrderId,
+        providerId: salesOrderId,
+        label: "sales order",
+        ids: { salesOrderId },
+        context,
+      });
       let snapshot: JubelioSalesOrderSnapshot;
       try {
         snapshot = await readSalesOrderSnapshot(salesOrderId, 5);
@@ -1716,13 +2275,14 @@ export function createJubelioSalesGateway(options: {
         });
         throw new JubelioSalesGatewayError(
           "Jubelio sales order confirmation read failed",
-          { ambiguous: true, retryable: false }
+          { ambiguous: true, retryable: false, salesOrderId }
         );
       }
       const mismatch = confirmationMismatch({
         requested: input,
         snapshot,
         salesOrderId,
+        expectedEnvelope,
       });
       if (mismatch) {
         log.error("Jubelio sales order confirmation mismatch", {
@@ -1732,7 +2292,7 @@ export function createJubelioSalesGateway(options: {
         });
         throw new JubelioSalesGatewayError(
           `Jubelio sales order ${salesOrderId} does not match the requested order: ${mismatch}`,
-          { ambiguous: true, retryable: false }
+          { ambiguous: true, retryable: false, salesOrderId }
         );
       }
       log.info("Jubelio sales order created and confirmed", {
@@ -1746,12 +2306,18 @@ export function createJubelioSalesGateway(options: {
       return readSalesOrderSnapshot(salesOrderId, 5);
     },
 
-    async getSalesOrderForEdit(salesOrderId) {
+    async getSalesOrderForEdit(salesOrderId, expected) {
+      // Validate the supplied v2 envelope BEFORE the pre-read GET: an unknown
+      // version must never reach the network.
+      const validatedExpected = assertExpectedEnvelope(expected);
       const body = await readJson(`/sales/orders/${salesOrderId}`, 5);
-      return parseSalesOrderEditSnapshot(salesOrderId, body);
+      return parseSalesOrderEditSnapshot(salesOrderId, body, validatedExpected);
     },
 
     async editSalesOrder(input): Promise<JubelioSalesEditResult> {
+      // Validate the supplied v2 envelope BEFORE any payload/POST: an unknown
+      // version must never reach the wire (the builder re-asserts it).
+      const validatedExpected = assertExpectedEnvelope(input.expected);
       const context = {
         operation: "sales_order_channel_edit",
         operationId: input.operationId,
@@ -1762,7 +2328,8 @@ export function createJubelioSalesGateway(options: {
       // snapshot — zero POST).
       const payload = buildSalesOrderEditPayload(
         input.edit,
-        input.targetChannelStatus
+        input.targetChannelStatus,
+        validatedExpected
       );
       // Exactly one edit POST; rides the read lane (5): a channel mirror edit
       // must never outrank the cancel POST (10).
@@ -1786,7 +2353,11 @@ export function createJubelioSalesGateway(options: {
       let confirmed: JubelioSalesOrderEditSnapshot;
       try {
         const confirmBody = await readJson(`/sales/orders/${salesOrderId}`, 5);
-        confirmed = parseSalesOrderEditSnapshot(salesOrderId, confirmBody);
+        confirmed = parseSalesOrderEditSnapshot(
+          salesOrderId,
+          confirmBody,
+          validatedExpected
+        );
       } catch (error) {
         log.error("Jubelio sales order edit confirmation read failed", {
           ...context,
@@ -1939,6 +2510,14 @@ export function createJubelioSalesGateway(options: {
       // The response documents `{status, id}` where id is the Sales Invoice
       // Number. An unreadable id is AMBIGUOUS: the conversion may exist.
       const invoiceId = parsePositiveId(body);
+      // Persist the conversion handle BEFORE the invoice/SO verification GETs.
+      await persistReturnedProviderId({
+        hook: input.onInvoiceId,
+        providerId: invoiceId,
+        label: "invoice",
+        ids: { invoiceId },
+        context,
+      });
       let invoice: JubelioInvoiceSnapshot;
       try {
         const verified = await readJson(`/sales/invoices/${invoiceId}`, 5);
@@ -1953,7 +2532,7 @@ export function createJubelioSalesGateway(options: {
         // can never be treated as verified. Recovery is a GET of this id.
         throw new JubelioSalesGatewayError(
           "Jubelio invoice verification read failed",
-          { code: "INVOICE_CONFIRMATION_READ_FAILED", ambiguous: true, retryable: false }
+          { code: "INVOICE_CONFIRMATION_READ_FAILED", ambiguous: true, retryable: false, invoiceId }
         );
       }
       // Cross-check the linkage on the SALES ORDER: the invoice GET exposes
@@ -1970,7 +2549,7 @@ export function createJubelioSalesGateway(options: {
         });
         throw new JubelioSalesGatewayError(
           "Jubelio invoice linkage read failed",
-          { code: "INVOICE_CONFIRMATION_READ_FAILED", ambiguous: true, retryable: false }
+          { code: "INVOICE_CONFIRMATION_READ_FAILED", ambiguous: true, retryable: false, invoiceId }
         );
       }
       const mismatch = invoiceLinkageMismatch({ invoice, order });
@@ -1978,7 +2557,7 @@ export function createJubelioSalesGateway(options: {
         log.error("Jubelio invoice verification mismatch", { ...context, invoiceId, mismatch });
         throw new JubelioSalesGatewayError(
           `Jubelio invoice ${invoiceId} does not match the converted sales order: ${mismatch}`,
-          { code: "INVOICE_VERIFY_MISMATCH", ambiguous: true, retryable: false }
+          { code: "INVOICE_VERIFY_MISMATCH", ambiguous: true, retryable: false, invoiceId }
         );
       }
       log.info("Jubelio invoice created and linked", { ...context, invoiceId });
@@ -2054,6 +2633,14 @@ export function createJubelioSalesGateway(options: {
           { code: "PAYMENT_ID_MISSING", httpStatus: 200, ambiguous: true, retryable: false }
         );
       }
+      // Persist the payment handle BEFORE the payment verification GET.
+      await persistReturnedProviderId({
+        hook: input.onPaymentId,
+        providerId: paymentId,
+        label: "payment",
+        ids: { paymentId },
+        context,
+      });
       let snapshot: JubelioPaymentSnapshot;
       try {
         const verified = await readJson(`/sales/payments/${paymentId}`, 5);
@@ -2066,7 +2653,7 @@ export function createJubelioSalesGateway(options: {
         });
         throw new JubelioSalesGatewayError(
           "Jubelio payment verification read failed",
-          { code: "PAYMENT_CONFIRMATION_READ_FAILED", ambiguous: true, retryable: false }
+          { code: "PAYMENT_CONFIRMATION_READ_FAILED", ambiguous: true, retryable: false, paymentId }
         );
       }
       const mismatch = paymentLinkageMismatch({
@@ -2078,7 +2665,7 @@ export function createJubelioSalesGateway(options: {
         log.error("Jubelio payment verification mismatch", { ...context, paymentId, mismatch });
         throw new JubelioSalesGatewayError(
           `Jubelio payment ${paymentId} does not match the verified invoice: ${mismatch}`,
-          { code: "PAYMENT_VERIFY_MISMATCH", ambiguous: true, retryable: false }
+          { code: "PAYMENT_VERIFY_MISMATCH", ambiguous: true, retryable: false, paymentId }
         );
       }
       log.info("Jubelio payment created and linked", { ...context, paymentId });

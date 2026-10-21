@@ -9,6 +9,7 @@
   index,
   check,
   uniqueIndex,
+  unique,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { clients, users } from "./auth";
@@ -87,6 +88,59 @@ export interface DeliverySnapshotPayload {
   pricing: DeliveryPricingBlock;
 }
 
+// =========================================================
+// Ticket 01 diskon — snapshot uang checkout berversi (spec §8.3).
+//
+// Tipe payload ini SELF-CONTAINED di paket schema: apps hanya membaca tipe dari
+// sini (tidak ada import app → schema), sehingga schema/type/calculator tidak
+// bisa drift. `jsonb().$type<T>()` hanya bantuan compile-time — payload runtime
+// tetap `unknown` dan WAJIB lewat decoder strict di aplikasi.
+//
+// Semua nominal adalah Rupiah utuh exact (decimal string), versi kontrak baru
+// pricing1/engine1/provider2. Baris legacy tidak punya payload ini.
+// =========================================================
+export interface PricingSnapshotLinePayload {
+  variantId: string;
+  quantity: number;
+  /** Harga source (Base Price) per unit. */
+  sourceUnitPrice: string;
+  /** Harga efektif per unit setelah Markdown (baseline = source). */
+  effectiveUnitPrice: string;
+  sourceLineAmount: string;
+  markdownAmount: string;
+  goodsDiscountAmount: string;
+  netLineAmount: string;
+  markdownRevisionId: string | null;
+}
+
+export interface PricingSnapshotPayloadV1 {
+  pricingContractVersion: 1;
+  pricingEngineVersion: 1;
+  providerContractVersion: 2;
+  currency: "IDR";
+  fulfillmentMethod: "pickup" | "delivery";
+  sourceGoodsSubtotal: string;
+  markdownTotal: string;
+  /** Subtotal setelah Markdown, sebelum kupon barang. */
+  subtotal: string;
+  goodsDiscount: string;
+  netGoods: string;
+  shippingBeforeSubsidy: string;
+  shippingSubsidy: string;
+  /** Net ongkir customer (bukan biaya quote/booking provider). */
+  shippingCost: string;
+  merchantFunding: string;
+  serviceFee: string;
+  taxableBase: string;
+  ppnRatePercent: string;
+  ppnAmount: string;
+  total: string;
+  expectedProviderPayable: string;
+  providerQuotedShippingCost: string | null;
+  providerBilledShippingCost: string | null;
+  lines: PricingSnapshotLinePayload[];
+}
+
 // Addresses table (belongs to store clients).
 // Ticket 02 (Jubelio Shipment): the origin/destination region chain is stored
 // as STRING IDs incl. leading zeros (never numbers, e.g. "01", "3174021004")
@@ -124,6 +178,7 @@ export const addresses = pgTable("address", {
 ]);
 
 // Orders table (belongs to store clients).
+// Retained transaction history: deleting a client must not erase its orders.
 // Phase 1 (pickup-in-store) uses English statuses and pickup fields.
 // addressId/shippingCarrier/trackingNumber/shippingCost are retained but
 // nullable for future Phase 2 shipping support.
@@ -131,7 +186,7 @@ export const orders = pgTable("orders", {
   id: text("id").primaryKey(),
   userId: text("user_id")
     .notNull()
-    .references(() => clients.id, { onDelete: "cascade" }),
+    .references(() => clients.id, { onDelete: "restrict" }),
   branchId: text("branch_id").references(() => branches.id),
   // Ticket 02: removing a book address must not block on this FK. The order
   // carries its own immutable address snapshot (ticket 04) — the reference
@@ -188,6 +243,30 @@ export const orders = pgTable("orders", {
     .notNull()
     .default("0"),
   total: numeric("total", { precision: 15, scale: 2 }).notNull(),
+  // ===== Ticket 01 diskon — kontrak uang berversi (spec §8.3) =====
+  // Versi default 0 = baris legacy: kolom money kontrak baru tetap NULL dan
+  // dibaca decoder legacy eksplisit, tanpa backfill fiktif.
+  pricingContractVersion: integer("pricing_contract_version").notNull().default(0),
+  pricingEngineVersion: integer("pricing_engine_version").notNull().default(0),
+  providerContractVersion: integer("provider_contract_version").notNull().default(0),
+  pricingCurrency: text("pricing_currency"),
+  sourceGoodsSubtotal: numeric("source_goods_subtotal", { precision: 15, scale: 2 }),
+  markdownTotal: numeric("markdown_total", { precision: 15, scale: 2 }),
+  // Net barang setelah Markdown + kupon barang.
+  netGoods: numeric("net_goods", { precision: 15, scale: 2 }),
+  // Ongkir quote asli sebelum subsidi (pickup = 0).
+  shippingBeforeSubsidy: numeric("shipping_before_subsidy", { precision: 15, scale: 2 }),
+  shippingSubsidy: numeric("shipping_subsidy", { precision: 15, scale: 2 }),
+  merchantFunding: numeric("merchant_funding", { precision: 15, scale: 2 }),
+  taxableBase: numeric("taxable_base", { precision: 15, scale: 2 }),
+  // Net barang + net ongkir: nominal SO/invoice/payment provider kontrak2.
+  expectedProviderPayable: numeric("expected_provider_payable", { precision: 15, scale: 2 }),
+  // Biaya kurir/provider: quote diketahui sekarang, billed menyusul lewat
+  // shipment ledger existing; keduanya terpisah dari harga customer.
+  providerQuotedShippingCost: numeric("provider_quoted_shipping_cost", { precision: 15, scale: 2 }),
+  providerBilledShippingCost: numeric("provider_billed_shipping_cost", { precision: 15, scale: 2 }),
+  // Snapshot typed+bounded; pembacaan WAJIB lewat decoder aplikasi.
+  pricingSnapshot: jsonb("pricing_snapshot").$type<PricingSnapshotPayloadV1>(),
   // Midtrans transaction_id from the authoritative GET status response
   // (repurposed legacy column from the Core API era; never written from the
   // raw webhook body), nullable until finalization.
@@ -292,6 +371,115 @@ export const orders = pgTable("orders", {
     "orders_pickup_attempts_nonnegative",
     sql`${t.pickupVerificationAttempts} >= 0`
   ),
+  // Ticket 01 — hanya kombinasi versi yang sah yang boleh tersimpan: baris
+  // legacy 0/0/0 dan baris kontrak baru pricing1/engine1/provider2. Kombinasi
+  // silang (mis. pricing0 dengan engine1) ditolak agar reader yang fail-closed
+  // tidak pernah menemukan baris yang mustahil.
+  pricingVersionsCheck: check(
+    "orders_pricing_versions_valid",
+    sql`(${t.pricingContractVersion} = 0
+          and ${t.pricingEngineVersion} = 0
+          and ${t.providerContractVersion} = 0)
+        or (${t.pricingContractVersion} = 1
+          and ${t.pricingEngineVersion} = 1
+          and ${t.providerContractVersion} = 2)`
+  ),
+  pricingCurrencyCheck: check(
+    "orders_pricing_currency_valid",
+    sql`${t.pricingCurrency} is null or ${t.pricingCurrency} = 'IDR'`
+  ),
+  pricingAmountsCheck: check(
+    "orders_pricing_amounts_nonnegative",
+    sql`(${t.sourceGoodsSubtotal} is null or ${t.sourceGoodsSubtotal} >= 0)
+        and (${t.markdownTotal} is null or ${t.markdownTotal} >= 0)
+        and (${t.netGoods} is null or ${t.netGoods} >= 0)
+        and (${t.shippingBeforeSubsidy} is null or ${t.shippingBeforeSubsidy} >= 0)
+        and (${t.shippingSubsidy} is null or ${t.shippingSubsidy} >= 0)
+        and (${t.merchantFunding} is null or ${t.merchantFunding} >= 0)
+        and (${t.taxableBase} is null or ${t.taxableBase} >= 0)
+        and (${t.expectedProviderPayable} is null or ${t.expectedProviderPayable} >= 0)
+        and (${t.providerQuotedShippingCost} is null or ${t.providerQuotedShippingCost} >= 0)
+        and (${t.providerBilledShippingCost} is null or ${t.providerBilledShippingCost} >= 0)`
+  ),
+  // Kontrak baru wajib LENGKAP dan konsisten: currency eksplisit, snapshot ada,
+  // semua money (new + kolom lama yang dipakai ulang) Rupiah utuh nonnegatif
+  // dalam bound 9999999999999, fee 0, dan biaya quote/billed bila diketahui juga
+  // exact. `<= bound` sekaligus menolak numeric NaN pada Postgres (NaN >= 0 TRUE
+  // dan NaN = trunc(NaN) TRUE, tetapi NaN <= x FALSE). Baris legacy (version 0)
+  // tidak dipaksa sehingga semantik numeric legacy (cents) tetap utuh.
+  pricingSnapshotCompleteCheck: check(
+    "orders_pricing_snapshot_complete",
+    sql`${t.pricingContractVersion} <> 1 or (
+        ${t.pricingCurrency} is not null
+        and ${t.pricingCurrency} = 'IDR'
+        and ${t.pricingSnapshot} is not null
+        and ${t.sourceGoodsSubtotal} is not null
+        and ${t.sourceGoodsSubtotal} >= 0
+        and ${t.sourceGoodsSubtotal} = trunc(${t.sourceGoodsSubtotal})
+        and ${t.sourceGoodsSubtotal} <= 9999999999999
+        and ${t.markdownTotal} is not null
+        and ${t.markdownTotal} >= 0
+        and ${t.markdownTotal} = trunc(${t.markdownTotal})
+        and ${t.markdownTotal} <= 9999999999999
+        and ${t.netGoods} is not null
+        and ${t.netGoods} >= 0
+        and ${t.netGoods} = trunc(${t.netGoods})
+        and ${t.netGoods} <= 9999999999999
+        and ${t.shippingBeforeSubsidy} is not null
+        and ${t.shippingBeforeSubsidy} >= 0
+        and ${t.shippingBeforeSubsidy} = trunc(${t.shippingBeforeSubsidy})
+        and ${t.shippingBeforeSubsidy} <= 9999999999999
+        and ${t.shippingSubsidy} is not null
+        and ${t.shippingSubsidy} >= 0
+        and ${t.shippingSubsidy} = trunc(${t.shippingSubsidy})
+        and ${t.shippingSubsidy} <= 9999999999999
+        and ${t.merchantFunding} is not null
+        and ${t.merchantFunding} >= 0
+        and ${t.merchantFunding} = trunc(${t.merchantFunding})
+        and ${t.merchantFunding} <= 9999999999999
+        and ${t.taxableBase} is not null
+        and ${t.taxableBase} >= 0
+        and ${t.taxableBase} = trunc(${t.taxableBase})
+        and ${t.taxableBase} <= 9999999999999
+        and ${t.expectedProviderPayable} is not null
+        and ${t.expectedProviderPayable} >= 0
+        and ${t.expectedProviderPayable} = trunc(${t.expectedProviderPayable})
+        and ${t.expectedProviderPayable} <= 9999999999999
+        and ${t.subtotal} >= 0
+        and ${t.subtotal} = trunc(${t.subtotal})
+        and ${t.subtotal} <= 9999999999999
+        and ${t.discount} >= 0
+        and ${t.discount} = trunc(${t.discount})
+        and ${t.discount} <= 9999999999999
+        and ${t.shippingCost} >= 0
+        and ${t.shippingCost} = trunc(${t.shippingCost})
+        and ${t.shippingCost} <= 9999999999999
+        and ${t.serviceFee} = 0
+        and ${t.ppnAmount} >= 0
+        and ${t.ppnAmount} = trunc(${t.ppnAmount})
+        and ${t.ppnAmount} <= 9999999999999
+        and ${t.total} >= 0
+        and ${t.total} = trunc(${t.total})
+        and ${t.total} <= 9999999999999
+        and (${t.providerQuotedShippingCost} is null
+          or (${t.providerQuotedShippingCost} >= 0
+              and ${t.providerQuotedShippingCost} = trunc(${t.providerQuotedShippingCost})
+              and ${t.providerQuotedShippingCost} <= 9999999999999))
+        and (${t.providerBilledShippingCost} is null
+          or (${t.providerBilledShippingCost} >= 0
+              and ${t.providerBilledShippingCost} = trunc(${t.providerBilledShippingCost})
+              and ${t.providerBilledShippingCost} <= 9999999999999))
+      )`
+  ),
+  // Snapshot typed dibatasi 256KiB per order (spec §4.3).
+  pricingSnapshotSizeCheck: check(
+    "orders_pricing_snapshot_size",
+    sql`${t.pricingSnapshot} is null or octet_length(${t.pricingSnapshot}::text) <= 262144`
+  ),
+  // Redemption ownership (ticket 07, spec §8.2): a Redemption may not name a
+  // client other than the order owner. The pair is the target of the
+  // Redemption's composite FK.
+  idUserUnique: unique("orders_id_user_id_unique").on(t.id, t.userId),
 }));
 
 // Order Items table
@@ -299,18 +487,66 @@ export const orderItems = pgTable("order_item", {
   id: text("id").primaryKey(),
   orderId: text("order_id")
     .notNull()
-    .references(() => orders.id, { onDelete: "cascade" }),
+    .references(() => orders.id, { onDelete: "restrict" }),
   variantId: text("variant_id")
     .notNull()
-    .references(() => productVariants.id),
+    .references(() => productVariants.id, { onDelete: "restrict" }),
   productName: text("product_name").notNull(),
   variantInfo: text("variant_info"), // e.g., "Hitam / XL"
   price: numeric("price", { precision: 15, scale: 2 }).notNull(),
   quantity: integer("quantity").notNull(),
+  // ===== Ticket 01 diskon — snapshot money per line (spec §8.3) =====
+  // Versi default 0 = baris legacy; kolom line hanya wajib saat version 1.
+  pricingContractVersion: integer("pricing_contract_version").notNull().default(0),
+  sourceUnitPrice: numeric("source_unit_price", { precision: 15, scale: 2 }),
+  markdownAmount: numeric("markdown_amount", { precision: 15, scale: 2 }),
+  goodsDiscountAmount: numeric("goods_discount_amount", { precision: 15, scale: 2 }),
+  netLineAmount: numeric("net_line_amount", { precision: 15, scale: 2 }),
+  markdownRevisionId: text("markdown_revision_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 }, (t) => [
   check("order_item_quantity_positive", sql`${t.quantity} > 0`),
   check("order_item_price_nonnegative", sql`${t.price} >= 0`),
+  // Redemption allocation ownership (ticket 07, spec §8.2): an allocation must
+  // point at an order item OF THE SAME ORDER. The pair is the FK target.
+  unique("order_item_order_id_unique").on(t.orderId, t.id),
+  // Satu variant hanya boleh menjadi satu canonical cart line per order.
+  uniqueIndex("order_item_order_variant_unique").on(t.orderId, t.variantId),
+  check(
+    "order_item_pricing_versions_valid",
+    sql`${t.pricingContractVersion} >= 0 and (${t.pricingContractVersion} = 0 or ${t.pricingContractVersion} = 1)`
+  ),
+  // Kontrak baru: money line lengkap, nonnegatif, Rupiah utuh, dalam bound;
+  // qty 1..99. `<= bound` menolak numeric NaN. Baris legacy tidak dipaksa.
+  check(
+    "order_item_pricing_snapshot_complete",
+    sql`${t.pricingContractVersion} <> 1 or (
+        ${t.sourceUnitPrice} is not null
+        and ${t.sourceUnitPrice} >= 0
+        and ${t.sourceUnitPrice} = trunc(${t.sourceUnitPrice})
+        and ${t.sourceUnitPrice} <= 9999999999999
+        and ${t.markdownAmount} is not null
+        and ${t.markdownAmount} >= 0
+        and ${t.markdownAmount} = trunc(${t.markdownAmount})
+        and ${t.markdownAmount} <= 9999999999999
+        and ${t.goodsDiscountAmount} is not null
+        and ${t.goodsDiscountAmount} >= 0
+        and ${t.goodsDiscountAmount} = trunc(${t.goodsDiscountAmount})
+        and ${t.goodsDiscountAmount} <= 9999999999999
+        and ${t.netLineAmount} is not null
+        and ${t.netLineAmount} >= 0
+        and ${t.netLineAmount} = trunc(${t.netLineAmount})
+        and ${t.netLineAmount} <= 9999999999999
+        and ${t.price} >= 0
+        and ${t.price} = trunc(${t.price})
+        and ${t.price} <= 9999999999999
+        and (${t.markdownRevisionId} is null or length(${t.markdownRevisionId}) <= 128)
+      )`
+  ),
+  check(
+    "order_item_pricing_quantity_bounds",
+    sql`${t.pricingContractVersion} <> 1 or (${t.quantity} >= 1 and ${t.quantity} <= 99)`
+  ),
 ]);
 
 // Relations
@@ -404,7 +640,7 @@ export const deliveryShipments = pgTable("delivery_shipment", {
   orderId: text("order_id")
     .notNull()
     .unique()
-    .references(() => orders.id, { onDelete: "cascade" }),
+    .references(() => orders.id, { onDelete: "restrict" }),
   // packed | booking_dispatched | booked | booking_unknown
   state: text("state").notNull().default("packed"),
   storedRequest: jsonb("stored_request")
@@ -497,7 +733,7 @@ export const deliveryTrackingEvents = pgTable("delivery_tracking_event", {
   // The INTERNAL ledger id — NOT the provider's integer (kept separately).
   shipmentId: text("shipment_id")
     .notNull()
-    .references(() => deliveryShipments.id, { onDelete: "cascade" }),
+    .references(() => deliveryShipments.id, { onDelete: "restrict" }),
   externalShipmentId: integer("external_shipment_id"),
   refNo: text("ref_no"),
   awb: text("awb").notNull(),
@@ -536,10 +772,10 @@ export const deliveryBookingReviews = pgTable("delivery_booking_reviews", {
   id: text("id").primaryKey(),
   orderId: text("order_id")
     .notNull()
-    .references(() => orders.id, { onDelete: "cascade" }),
+    .references(() => orders.id, { onDelete: "restrict" }),
   shipmentId: text("shipment_id")
     .notNull()
-    .references(() => deliveryShipments.id, { onDelete: "cascade" }),
+    .references(() => deliveryShipments.id, { onDelete: "restrict" }),
   attemptNumber: integer("attempt_number").notNull(),
   originalDispatchedBy: text("original_dispatched_by"),
   originalDispatchedAt: timestamp("original_dispatched_at", { withTimezone: true }),

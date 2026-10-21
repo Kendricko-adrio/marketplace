@@ -1,3 +1,4 @@
+import { deleteRetainedOrderFixtures } from "@marketplace/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import path from "node:path";
 dotenv.config({ path: path.resolve(import.meta.dirname, "../../../../.env") });
@@ -67,6 +68,7 @@ it("records marker-only divergence on a confirmed create without stopping the lo
 });
 
 afterAll(async () => {
+  await deleteRetainedOrderFixtures(pool, [orderId]);
   await pool.query('DELETE FROM "client" WHERE id = $1', [clientId]);
   await pool.query('DELETE FROM product WHERE id = $1', [productId]);
   await pool.query('DELETE FROM branch WHERE id = $1', [branchId]);

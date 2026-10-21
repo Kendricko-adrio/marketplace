@@ -29,12 +29,17 @@ import {
 import { QuoteDeliveryError, quoteDelivery } from "@/lib/delivery-quote";
 import { createJubelioShipmentGateway } from "@/lib/jubelio-shipment-client";
 import { clientAddressInputSchema } from "@/lib/client-addresses";
+import { getDiscountsContractVersion } from "@/lib/config";
+import { buildPricingSnapshot, PricingContractError } from "@/lib/versioned-pricing";
+import { readCheckoutJson, CheckoutInputError } from "@/lib/checkout-input";
 
 const log = createLogger({ module: "delivery-quote" });
 
+const itemIdsSchema = z.array(z.string().min(1).max(128)).min(1).max(50)
+  .refine((ids) => new Set(ids).size === ids.length, "Duplicate selected cart item IDs");
 const quoteRequestSchema = z.union([
-  z.strictObject({ itemIds: z.array(z.string()).min(1), addressId: z.string().min(1) }),
-  z.strictObject({ itemIds: z.array(z.string()).min(1), newAddress: clientAddressInputSchema }),
+  z.strictObject({ itemIds: itemIdsSchema, addressId: z.string().min(1).max(128) }),
+  z.strictObject({ itemIds: itemIdsSchema, newAddress: clientAddressInputSchema }),
 ]);
 
 export async function POST(request: NextRequest) {
@@ -47,7 +52,8 @@ export async function POST(request: NextRequest) {
     }
     const clientId = access.session.user.id;
 
-    const parsed = quoteRequestSchema.safeParse(await request.json());
+    const pricingContractVersion = await getDiscountsContractVersion();
+    const parsed = quoteRequestSchema.safeParse(await readCheckoutJson(request));
     if (!parsed.success) {
       requestLog.warn("delivery quote invalid payload", { outcome: "denied" });
       return NextResponse.json(
@@ -58,15 +64,23 @@ export async function POST(request: NextRequest) {
     const { itemIds } = parsed.data;
 
     const owned = await loadOwnedQuoteCartItems(clientId, itemIds);
+    const ppnRatePercent = await loadDeliveryPpnRatePercent();
+    // Source bounds must precede even address-region provider reads.
+    if (pricingContractVersion === 1) buildPricingSnapshot({
+      fulfillmentMethod: "delivery", ppnRatePercent,
+      lines: owned.items.map((item) => ({ variantId: item.variantId ?? "", quantity: item.quantity,
+        sourceUnitPrice: item.value, effectiveUnitPrice: item.effectiveValue ?? item.value,
+        markdownRevisionId: item.markdownRevisionId ?? null })),
+    });
     const branch = await loadQuoteOriginBranch(owned.branchId);
     const destination = "addressId" in parsed.data
       ? await loadRevalidatedDestination(clientId, parsed.data.addressId)
       : await loadRevalidatedNewDestination(parsed.data.newAddress);
     const parcelConfig = await loadShipmentParcelConfig();
-    const ppnRatePercent = await loadDeliveryPpnRatePercent();
 
     const quote = await quoteDelivery(
       {
+        pricingContractVersion,
         branch,
         items: owned.items,
         destination,
@@ -92,6 +106,11 @@ export async function POST(request: NextRequest) {
       data: { services: quote.services },
     });
   } catch (error) {
+    if (error instanceof CheckoutInputError || error instanceof PricingContractError) {
+      const status = error instanceof CheckoutInputError ? error.status : 400;
+      requestLog.warn("delivery quote input rejected", { status });
+      return NextResponse.json({ success: false, error: "Data checkout tidak valid." }, { status });
+    }
     if (error instanceof DeliveryQuoteDataError) {
       requestLog.error("delivery quote data failed", {
         code: error.code,

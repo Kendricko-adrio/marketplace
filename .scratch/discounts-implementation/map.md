@@ -111,9 +111,15 @@ Tabel ini mengarahkan verifikasi, bukan status register atau pengurangan scope. 
 | D03 | 01 decoder;06 publication;10/11 benefit versions |
 | R01 | 12 pause/ops;13 staging UAT/release evidence |
 
+## Eksekusi berizin — sesi implementasi
+
+Pemilik meminta implementasi seluruh13 tickets dan mengizinkan subagent development, penulisan unit tests/Playwright E2E, serta parallel work pada kontrak independen. Hanya main agent menjalankan bash testing dan menerima hasil review. Izin ini menggantikan status execution/delegation yang belum diminta pada catatan publikasi historis di atas, bukan izin provider requests, commit/push, remote/deployment atau launch.
+
+Frontier awal01 dikerjakan melalui lane snapshot uang/gateway/checkout/retention terisolasi. **Update21Oktober2026:**01 sudah resolved oleh main berdasarkan source review, types/lint, full unit dan focused+regression mock evidence; lihat Answer01. Frontier02 dan06 kini claimed dan berjalan paralel di `../discounts-checkout-02` serta `../discounts-offers-06`. Approval scope/spec tidak berubah. Map tetap navigasi, bukan status tracker kedua; lihat masing-masing ticket dan execution.md untuk evidence serta batas.
+
 ## Completion dan handoff berikutnya
 
-Eksekusi belum diminta. Sesi berikutnya mulai dari frontier open/unclaimed setelah izin eksekusi pemilik; baca ticket, complete spec dan kontrak bersama ini, jangan memakai ringkasan saja sebagai substitusi. Tidak mengubah feature/plan menjadi In Progress hanya karena tickets dipublikasikan.
+Lanjutkan dari frontier open/unclaimed dengan prerequisite resolved; baca ticket, complete spec dan kontrak bersama ini, jangan memakai ringkasan sebagai substitusi. Plan sekarang In Progress karena implementasi memang diminta dan dimulai, bukan karena publikasi ticket saja.
 
 Sesudah seluruh ticket verified/resolved dan semua gates terpenuhi, extract enduring docs, retire plan sesuai checklist dan update plan index Done. Staging UAT, deployment dan launch memerlukan environment/izin/sign-off terpisah. Jika belum tersedia, catat blocked; jangan mengarang acceptance atau menyatakan production activated. Decision/evidence scratch tidak dihapus otomatis.
 

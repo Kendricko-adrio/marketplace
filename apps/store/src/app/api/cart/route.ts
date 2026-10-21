@@ -10,7 +10,9 @@ import {
 } from "@/db";
 import { eq, asc } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
-import { getPpnRatePercent } from "@/lib/config";
+import { getPpnRatePercent, getDiscountsContractVersion } from "@/lib/config";
+import { buildPricingSnapshot } from "@/lib/versioned-pricing";
+import { readVariantProjections } from "@/lib/variant-price-projection";
 import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
 
 // Helper to get or create cart
@@ -93,15 +95,47 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    // Calculate totals
-    const subtotal = itemsWithImages.reduce((sum, item) => {
-      return sum + parseFloat(item.variant.price) * item.quantity;
-    }, 0);
-
+    const pricingContractVersion = await getDiscountsContractVersion();
     const ppnRatePercent = await getPpnRatePercent();
+    // One Markdown projection read for the whole (bounded) cart. The UI reads
+    // `variant.price` as the effective price, with the same variant's source
+    // kept explicit for the strikethrough.
+    const projections = await readVariantProjections(
+      itemsWithImages.map((item) => item.variantId)
+    );
+    const displayItems = itemsWithImages.map((item) => {
+      const projection = projections.get(item.variantId);
+      return {
+        ...item,
+        variant: {
+          ...item.variant,
+          price: projection?.effectiveUnitPrice ?? item.variant.price,
+          sourcePrice: projection?.sourceUnitPrice ?? item.variant.price,
+          storedTarget: projection?.storedTarget ?? null,
+          markdownActive: projection?.markdownActive ?? false,
+          markdownRevisionId: projection?.markdownRevisionId ?? null,
+        },
+      };
+    });
+    // Empty carts have no pricing snapshot. Non-empty v1 carts are validated
+    // exactly before any conversion to the existing UI's numeric DTO.
+    const snapshot = pricingContractVersion === 1 && displayItems.length
+      ? buildPricingSnapshot({
+          fulfillmentMethod: "pickup", ppnRatePercent,
+          lines: displayItems.map((item) => ({
+            variantId: item.variantId, quantity: item.quantity,
+            sourceUnitPrice: item.variant.sourcePrice,
+            effectiveUnitPrice: item.variant.price,
+            markdownRevisionId: item.variant.markdownRevisionId,
+          })),
+        })
+      : null;
+    const subtotal = pricingContractVersion === 1
+      ? Number(snapshot?.subtotal ?? "0")
+      : displayItems.reduce((sum, item) => sum + parseFloat(item.variant.price) * item.quantity, 0);
     log.info("cart served", {
       userId: session.user.id,
-      itemCount: itemsWithImages.length,
+      itemCount: displayItems.length,
       subtotal,
       ppnRatePercent,
     });
@@ -109,8 +143,9 @@ export async function GET(request: NextRequest) {
       success: true,
       data: {
         id: cart.id,
-        items: itemsWithImages,
-        itemCount: itemsWithImages.length,
+        pricingContractVersion,
+        items: displayItems,
+        itemCount: displayItems.length,
         subtotal,
         ppnRatePercent: Number(ppnRatePercent),
       },

@@ -1,3 +1,4 @@
+import { deleteRetainedOrderFixtures } from "@marketplace/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import path from "node:path";
 dotenv.config({ path: path.resolve(import.meta.dirname, "../../../../.env") });
@@ -153,14 +154,7 @@ interface OrderOverrides {
 async function seedOrder(id: string, overrides: OrderOverrides = {}): Promise<void> {
   if (!pool) return;
   // FK-ordered per-order cleanup, then a fresh row + its ledger.
-  await pool.query(
-    "DELETE FROM delivery_tracking_event te USING delivery_shipment s WHERE te.shipment_id = s.id AND s.order_id = $1",
-    [id]
-  );
-  await pool.query("DELETE FROM delivery_booking_reviews WHERE order_id = $1", [id]);
-  await pool.query("DELETE FROM delivery_shipment WHERE order_id = $1", [id]);
-  await pool.query("DELETE FROM jubelio_sales_operation WHERE order_id = $1", [id]);
-  await pool.query("DELETE FROM orders WHERE id = $1", [id]);
+  await deleteRetainedOrderFixtures(pool, [id]);
 
   await pool.query(
     `INSERT INTO orders
@@ -623,14 +617,9 @@ describe("createDeliveryFollowUp — finishManually", () => {
 
 beforeAll(async () => {
   if (!pool) return;
-  // Parent rows first (cascades), then the identities: FK-ordered.
-  await pool.query(
-    `DELETE FROM delivery_tracking_event te USING delivery_shipment s WHERE te.shipment_id = s.id AND s.order_id LIKE '${PREFIX}order-%'`
-  );
-  await pool.query(`DELETE FROM delivery_shipment WHERE order_id LIKE '${PREFIX}order-%'`);
-  await pool.query(`DELETE FROM delivery_booking_reviews WHERE order_id LIKE '${PREFIX}order-%'`);
-  await pool.query(`DELETE FROM jubelio_sales_operation WHERE order_id LIKE '${PREFIX}order-%'`);
-  await pool.query(`DELETE FROM orders WHERE id LIKE '${PREFIX}order-%'`);
+  // Retained evidence before orders, then fixture identities.
+  const fixtureOrders = await pool.query("SELECT id FROM orders WHERE id LIKE $1", [`${PREFIX}order-%`]);
+  await deleteRetainedOrderFixtures(pool, fixtureOrders.rows.map((row) => row.id));
   await pool.query("DELETE FROM admin_session WHERE user_id LIKE 'followup-%'");
   await pool.query("DELETE FROM admin_account WHERE user_id LIKE 'followup-%'");
   await pool.query(`DELETE FROM "user" WHERE id LIKE '${PREFIX}user-%'`);
@@ -679,13 +668,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!pool) return;
-  await pool.query(
-    `DELETE FROM delivery_tracking_event te USING delivery_shipment s WHERE te.shipment_id = s.id AND s.order_id LIKE '${PREFIX}order-%'`
-  );
-  await pool.query(`DELETE FROM delivery_shipment WHERE order_id LIKE '${PREFIX}order-%'`);
-  await pool.query(`DELETE FROM delivery_booking_reviews WHERE order_id LIKE '${PREFIX}order-%'`);
-  await pool.query(`DELETE FROM jubelio_sales_operation WHERE order_id LIKE '${PREFIX}order-%'`);
-  await pool.query(`DELETE FROM orders WHERE id LIKE '${PREFIX}order-%'`);
+  const fixtureOrders = await pool.query("SELECT id FROM orders WHERE id LIKE $1", [`${PREFIX}order-%`]);
+  await deleteRetainedOrderFixtures(pool, fixtureOrders.rows.map((row) => row.id));
   await pool.query("DELETE FROM admin_session WHERE user_id LIKE 'followup-%'");
   await pool.query("DELETE FROM admin_account WHERE user_id LIKE 'followup-%'");
   await pool.query(`DELETE FROM "user" WHERE id LIKE '${PREFIX}user-%'`);

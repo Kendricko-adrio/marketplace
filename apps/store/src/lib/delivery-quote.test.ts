@@ -111,6 +111,17 @@ const BASE_INPUT = {
   // goods subtotal = 40000 × 2 + 20000 = 100000 — the spec's controlled case.
 } as const;
 
+describe("versioned delivery quote", () => {
+  it.each(["150000.00", "150000.0000"])("taxes only goods and keeps the original service quote distinct for %s", async (source) => {
+    const quote = await quoteDelivery({
+      ...BASE_INPUT, pricingContractVersion: 1,
+      items: [{ ...ITEMS[0], variantId: "variant1", value: source, quantity: 1 }],
+    }, { rates: async () => [{ ...JNE_REG, rates: 30000 }] });
+    expect(quote.services[0].shippingCost).toBe(30000);
+    expect(quote.services[0].pricing).toMatchObject({ subtotal: "150000", taxableBase: "150000", shippingCost: "30000", serviceFee: "0", ppnRatePercent: "11", ppnAmount: "16500", total: "196500" });
+  });
+});
+
 const JNE_REG = {
   courier_id: 13,
   courier_name: "JNE",

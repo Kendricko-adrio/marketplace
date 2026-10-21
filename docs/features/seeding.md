@@ -75,3 +75,21 @@ full-access/all-branch bypass is owned by the policy code.
 
 Cleanup order respects the FKs: grants are deleted before Roles, and Roles
 after users (`users.role_id` is `ON DELETE RESTRICT`).
+
+## Demo Coupon dan Redemption (ticket 07)
+
+`SEED_MODE=demo` membuat satu Offer publik **enabled** (fixed goods Rp25.000,
+kuota 50, budget Rp1.000.000, per-account 1) dengan revision published/benefit,
+plus tiga snapshot Redemption yang konsisten dengan counter:
+
+- order `completed`/paid → Redemption `consumed` (dihitung);
+- order `pending_payment` → Redemption `reserved` (dihitung);
+- order `failed_payment`/failed → Redemption `released` (tidak dihitung,
+  retained sebagai evidence).
+
+Global usage `reserved1/consumed1` (amount Rp25.000 masing-masing), client usage
+untuk `john@example.com` sama, dan satu allocation `offer_goods` per order.
+`discounts.contractVersion` tetap `0` pada seed, jadi data ini adalah demo, bukan
+rollout aktif. Seeder `SEED_MODE=jubelio` tetap tidak membuat katalog/transaksi
+dummy. Cleanup FK-ordered menghapus events → allocations → Redemptions →
+client usage sebelum orders/Offer.

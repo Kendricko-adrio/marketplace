@@ -52,6 +52,8 @@ interface OrderDetail {
   paymentMethod: string | null;
   paymentStatus: string;
   paymentFailureReason: string | null;
+  /** Ticket 07 — paid but settlement/fulfillment is blocked for review. */
+  fulfillmentBlockedReason: string | null;
   pickupCode: string | null;
   pickupDate: string | null;
   pickupTime: string | null;
@@ -69,6 +71,14 @@ interface OrderDetail {
   // Ticket 04 — the fulfillment method + the immutable delivery snapshot.
   fulfillmentMethod: string;
   deliverySnapshot: DeliverySnapshotPayload | null;
+  /** Ticket 07 — this customer's own Coupon redemption (public, no code). */
+  promo: {
+    name: string | null;
+    benefitAmount: string;
+    status: string;
+    consumedAt: string | null;
+    releasedAt: string | null;
+  } | null;
   // Ticket 06 — the customer-safe tracking DTO (nullable until booked).
   shipment: {
     awb: string;
@@ -241,6 +251,20 @@ export default function OrderDetailPage() {
           {status.label}
         </Badge>
       </div>
+
+      {/* Honest paid-but-blocked state: Midtrans already charged the customer. */}
+      {order.paymentStatus === "paid" && order.fulfillmentBlockedReason && (
+        <div
+          role="status"
+          className="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100"
+        >
+          <p className="font-semibold">Pembayaran diterima, pesanan menunggu verifikasi</p>
+          <p className="mt-1">
+            Pembayaran Anda sudah tercatat. Pesanan belum dapat diproses sampai tim
+            kami menyelesaikan verifikasi. Tidak perlu membayar ulang.
+          </p>
+        </div>
+      )}
 
       {/* Order ID */}
       <div className="flex items-center gap-2 mb-6 text-sm">
@@ -558,10 +582,26 @@ export default function OrderDetailPage() {
                 <span className="text-muted-foreground">Subtotal</span>
                 <span>{formatRupiah(order.subtotal)}</span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Diskon</span>
-                <span>-{formatRupiah(order.discount)}</span>
-              </div>
+              {Number(order.discount) > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">
+                    Diskon promo{order.promo?.name ? ` (${order.promo.name})` : ""}
+                  </span>
+                  <span className="text-green-600">-{formatRupiah(order.discount)}</span>
+                </div>
+              )}
+              {order.promo && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Status promo</span>
+                  <span>
+                    {order.promo.status === "consumed"
+                      ? "Dipakai (lunas)"
+                      : order.promo.status === "released"
+                        ? "Dibatalkan (kapasitas dilepas)"
+                        : "Direservasi sampai batas pembayaran"}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">PPN ({parseFloat(order.ppnRate)}%)</span>
                 <span>{formatRupiah(order.ppnAmount)}</span>
@@ -570,10 +610,13 @@ export default function OrderDetailPage() {
                 <span className="text-muted-foreground">Ongkos Kirim</span>
                 <span>{formatRupiah(order.shippingCost)}</span>
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Biaya Layanan</span>
-                <span>{formatRupiah(order.serviceFee)}</span>
-              </div>
+              {/* Zero is not a charge: a legacy order with a real fee keeps the row. */}
+              {Number(order.serviceFee) > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Biaya Layanan</span>
+                  <span>{formatRupiah(order.serviceFee)}</span>
+                </div>
+              )}
               <Separator />
               <div className="flex justify-between font-bold text-lg">
                 <span>Total</span>

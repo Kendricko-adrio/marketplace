@@ -9,8 +9,11 @@ import {
   products,
   jubelioStockOperations,
   jubelioSalesOperations,
+  discountRedemptions,
+  discountOfferRevisions,
 } from "@/db";
 import {
+  and,
   asc,
   eq,
 } from "drizzle-orm";
@@ -25,6 +28,12 @@ import { deliverySettlementVerified } from "@/lib/delivery-settlement";
 import { inspectDeliveryEligibility } from "@/lib/shipment-fulfillment";
 import { createShipmentTracking } from "@marketplace/db/src/shipment-tracking";
 import { createDeliveryFollowUp } from "@/lib/delivery-follow-up";
+// Ticket 01 diskon — decoder uang versi yang sama dengan store (pure, tanpa
+// runtime shared DB).
+import {
+  readOrderPricing,
+  PricingContractError,
+} from "@marketplace/db/src/versioned-pricing";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +90,12 @@ export async function GET(
           ppnRate: orders.ppnRate,
           ppnAmount: orders.ppnAmount,
           total: orders.total,
+          // Ticket 01 diskon — versi kontrak uang + snapshot JSONB; nominal
+          // dibaca lewat decoder yang sama dengan store, bukan kolom mentah.
+          pricingContractVersion: orders.pricingContractVersion,
+          pricingEngineVersion: orders.pricingEngineVersion,
+          providerContractVersion: orders.providerContractVersion,
+          pricingSnapshot: orders.pricingSnapshot,
           midtransTransactionId: orders.midtransTransactionId,
           // Remote Jubelio ids + fulfillment-block reason (Sales-Order flow).
           // A paid-but-ambiguous order shows these instead of a pickup code.
@@ -161,6 +176,48 @@ export async function GET(
       );
     }
 
+    // Ticket 01 diskon — paired reader. Setelah RBAC/branch scope lolos, admin
+    // men-decode snapshot tersimpan dengan decoder shared yang sama dengan
+    // store, SEBELUM DTO uang atau workflow delivery dibangun. Uang diproyeksikan
+    // dari snapshot, bukan dari kolom relational/master price/config terbaru;
+    // baris legacy tetap memakai decoder legacy eksplisit (cents). Route ini
+    // read-only: tidak ada reprice maupun provider write.
+    const persistedOrder = order[0].order;
+    let pricing: ReturnType<typeof readOrderPricing>;
+    try {
+      pricing = readOrderPricing(persistedOrder);
+    } catch (pricingError) {
+      // Versi unknown/corrupt fail closed: error generik 500 + konteks terstruktur
+      // (kode kontrak + ketiga kolom versi tersimpan), tanpa menyentuh provider.
+      orderLog.error("orders.detail.pricing_failclosed", {
+        outcome: "error",
+        pricingErrorCode:
+          pricingError instanceof PricingContractError ? pricingError.code : null,
+        pricingContractVersion: persistedOrder.pricingContractVersion,
+        pricingEngineVersion: persistedOrder.pricingEngineVersion,
+        providerContractVersion: persistedOrder.providerContractVersion,
+        error: serializeError(pricingError),
+      });
+      return NextResponse.json(
+        { success: false, error: "Failed to fetch order" },
+        { status: 500 }
+      );
+    }
+    const pricedOrder = {
+      ...persistedOrder,
+      subtotal: pricing.subtotal,
+      discount:
+        pricing.pricingContractVersion === 1
+          ? pricing.goodsDiscount
+          : pricing.discount,
+      shippingCost: pricing.shippingCost,
+      serviceFee: pricing.serviceFee,
+      ppnRate: pricing.ppnRatePercent,
+      ppnAmount: pricing.ppnAmount,
+      total: pricing.total,
+      pricingSnapshot: pricing.pricingContractVersion === 1 ? pricing : null,
+    };
+
     // Get order items with variant + product thumbnail (Jubelio CDN image)
     const items = await db
       .select({
@@ -171,6 +228,8 @@ export async function GET(
         variantInfo: orderItems.variantInfo,
         price: orderItems.price,
         quantity: orderItems.quantity,
+        pricingContractVersion: orderItems.pricingContractVersion,
+        netLineAmount: orderItems.netLineAmount,
         createdAt: orderItems.createdAt,
         productId: productVariants.productId,
         thumbnail: products.thumbnail,
@@ -180,10 +239,27 @@ export async function GET(
       .innerJoin(products, eq(productVariants.productId, products.id))
       .where(eq(orderItems.orderId, id));
 
-    const itemsWithImages = items.map((item) => ({
-      ...item,
-      imageUrl: item.thumbnail ?? null,
-    }));
+    // Line kontrak `1` diambil dari snapshot (quantity, harga efektif, net line);
+    // baris versi yang tidak cocok fail closed, sama seperti pembaca store.
+    const itemsWithImages = items.map((item) => {
+      const line =
+        pricing.pricingContractVersion === 1
+          ? pricing.lines.find((candidate) => candidate.variantId === item.variantId)
+          : null;
+      if (
+        pricing.pricingContractVersion === 1 &&
+        (!line || item.pricingContractVersion !== 1)
+      ) {
+        throw new Error("Order item pricing version mismatch");
+      }
+      return {
+        ...item,
+        price: line?.effectiveUnitPrice ?? item.price,
+        quantity: line?.quantity ?? item.quantity,
+        netLineAmount: line?.netLineAmount ?? item.netLineAmount,
+        imageUrl: item.thumbnail ?? null,
+      };
+    });
 
     // Ticket 06 — the tracking timeline: receipts in order, with the applied
     // state and the ignore reason so the operator sees the diagnostics (the
@@ -254,13 +330,36 @@ export async function GET(
       workflow = { stage, access, eligibility, tracking, special };
     }
     orderLog.info("orders.detail", { outcome: "success", scope: authorization.mode, stockOperationCount: stockOperations.length });
+    // Ticket 07 — read-only Coupon redemption state for ops. No customer
+    // identities beyond this order and no Offer code literal (public only).
+    const [redemption] = await db
+      .select({
+        offerName: discountOfferRevisions.name,
+        benefitAmount: discountRedemptions.benefitAmount,
+        status: discountRedemptions.status,
+        policyVersion: discountRedemptions.policyVersion,
+        consumedAt: discountRedemptions.consumedAt,
+        releasedAt: discountRedemptions.releasedAt,
+      })
+      .from(discountRedemptions)
+      .innerJoin(
+        discountOfferRevisions,
+        and(
+          eq(discountOfferRevisions.id, discountRedemptions.revisionId),
+          eq(discountOfferRevisions.offerId, discountRedemptions.offerId)
+        )
+      )
+      .where(eq(discountRedemptions.orderId, order[0].order.id))
+      .limit(1);
+    const promo = redemption ?? null;
     return NextResponse.json({
       success: true,
       data: {
-        ...order[0].order,
+        ...pricedOrder,
         customer: order[0].customer,
         branch: order[0].branch,
         shipment: shipmentRow,
+        promo,
         actor: { allowed: homeBranchMatch },
         workflow,
         bookingReviews,

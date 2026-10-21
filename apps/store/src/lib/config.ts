@@ -1,4 +1,5 @@
 import { db } from "@/db";
+import { eq } from "drizzle-orm";
 import { systemConfig } from "@/db";
 import { createLogger, serializeError } from "@/lib/logger";
 import { DEFAULT_PPN_RATE_PERCENT, resolvePpnRate } from "@/lib/order-pricing";
@@ -55,6 +56,17 @@ async function loadConfig(): Promise<Map<string, ConfigEntry>> {
     })();
   }
   return loadPromise;
+}
+
+/** Domain writer gate: uncached, so SQL changes take effect on the next request.
+ * Missing is legacy0; malformed values and DB failures never become legacy.
+ */
+export async function getDiscountsContractVersion(): Promise<0 | 1> {
+  const [entry] = await db.select({ value: systemConfig.value }).from(systemConfig)
+    .where(eq(systemConfig.key, "discounts.contractVersion")).limit(1);
+  if (!entry || entry.value === "0") return 0;
+  if (entry.value === "1") return 1;
+  throw new Error("Unsupported discounts contract version");
 }
 
 export async function getConfigString(

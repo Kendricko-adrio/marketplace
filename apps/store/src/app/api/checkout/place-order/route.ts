@@ -20,14 +20,23 @@ import { eq, and, sql, asc, inArray } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
 import { readCheckoutJson, CheckoutInputError } from "@/lib/checkout-input";
-import { admitCheckoutRequest, CheckoutAdmissionError } from "@/lib/checkout-admission";
-import { buildCheckoutReviewContextFingerprint, verifyCheckoutReviewToken, CheckoutReviewRequiredError, CheckoutReviewUnavailableError } from "@/lib/checkout-review";
+import {
+  admitCheckoutRequest,
+  carriesManualPromoCode,
+  CheckoutAdmissionError,
+} from "@/lib/checkout-admission";
+import { buildCheckoutReviewContextFingerprint, verifyCheckoutReviewToken, CheckoutReviewRequiredError, CheckoutReviewUnavailableError, type CheckoutReviewVerification } from "@/lib/checkout-review";
+import {
+  evaluatePromoAcknowledgements,
+  type PromoAcknowledgements,
+} from "@/lib/promo-replacement";
 import { pickupDateToInstant, validatePickupSlot } from "@/lib/pickup-validation";
 import { createPayment, getMockPaymentResult } from "@/lib/midtrans";
 import { getConfigNumber, getConfigString, getPpnRatePercent, getDiscountsContractVersion } from "@/lib/config";
 import { buildPricingSnapshot, PricingContractError, type PricingSnapshot } from "@/lib/versioned-pricing";
 import { evaluatePricing } from "@marketplace/db/src/discount-pricing";
 import {
+  evaluateSelectedManualCode,
   evaluateSelectedPublicOffer,
   mapOfferReasonToHttp,
   offerReasonMessage,
@@ -76,6 +85,7 @@ import { runCheckoutTransaction } from "@/lib/checkout-transaction";
 import { finalizeRejectedCheckoutCreate } from "@/lib/checkout-recovery";
 import { AcceptedCheckoutReplay, CheckoutRequestConflictError, normalizeCheckoutApproval, checkoutIntentFingerprint, findAcceptedCheckout, checkoutResultResponse, type CheckoutRecovery } from "@/lib/checkout-request";
 import type { CheckoutReviewPromo } from "@/lib/checkout-review";
+import { applyOfferBenefitToPricing } from "@/lib/offer-pricing";
 
 /**
  * Promo kandidat ditolak authoritative di dalam transaksi (kapasitas/minimum/
@@ -117,14 +127,33 @@ const selectedIdsSchema = z.array(z.string().min(1).max(128))
 const reviewFields = {
   requestKey: z.string().uuid().transform((key) => key.toLowerCase()).optional(),
   reviewToken: z.string().min(1).max(2048).optional(),
-  // Satu slot promo: tanpa promo atau satu Coupon publik (ticket 07). Pemilihan
-  // promo delivery dan manual code dimiliki ticket 11/09.
+  /**
+   * Persetujuan penggantian/invalidation (ticket 08): selalu menunjuk candidate
+   * fingerprint review token, bukan boolean bebas. Hanya persetujuan yang
+   * ditandai token yang diperiksa; flag tambahan tidak memberi izin apa pun.
+   */
+  acknowledgements: z
+    .strictObject({
+      promoIncrease: z
+        .strictObject({ candidateFingerprint: z.string().regex(/^[a-f0-9]{64}$/) })
+        .optional(),
+      continueWithoutPromo: z
+        .strictObject({ candidateFingerprint: z.string().regex(/^[a-f0-9]{64}$/) })
+        .optional(),
+    })
+    .optional(),
+  // Satu slot promo: tanpa promo, satu Coupon publik, atau satu Manual Promo
+  // Code (ticket 09). Promo delivery dimiliki ticket 11.
   promoSelection: z
     .discriminatedUnion("kind", [
       z.strictObject({ kind: z.literal("none") }),
       z.strictObject({
         kind: z.literal("public"),
         offerId: z.string().min(1).max(128),
+      }),
+      z.strictObject({
+        kind: z.literal("manual"),
+        code: z.string().min(1).max(128),
       }),
     ])
     .optional(),
@@ -170,6 +199,30 @@ const deliveryPlaceOrderSchema = z.union([
 ]);
 
 type DeliveryPlaceOrderData = z.infer<typeof deliveryPlaceOrderSchema>;
+
+/**
+ * Persetujuan penggantian/invalidation (ticket 08) diperiksa SEBELUM order,
+ * Redemption/usage, stock hold, atau provider intent dibuat. Persyaratannya
+ * berasal dari payload token bertanda tangan, dan acknowledgement harus
+ * menunjuk candidate fingerprint yang sama — bukan boolean `confirmed` bebas.
+ */
+function requirePromoAcknowledgements(
+  reviewed: CheckoutReviewVerification,
+  candidateFingerprint: string,
+  acknowledgements: PromoAcknowledgements | undefined
+): void {
+  const requirement = reviewed.requiresPromoIncreaseAcknowledgement
+    ? "promo_increase" as const
+    : reviewed.requiresContinueWithoutPromoAcknowledgement
+      ? "continue_without_promo" as const
+      : "none" as const;
+  const decision = evaluatePromoAcknowledgements({
+    candidateFingerprint,
+    requirement,
+    acknowledgements,
+  });
+  if (!decision.ok) throw new CheckoutReviewRequiredError(decision.missing);
+}
 
 /**
  * Emergency pause switch (plan feature 4): when `checkout.paused` is set,
@@ -260,13 +313,19 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
     if (contractVersion === 0 && (parsed.data.requestKey || parsed.data.reviewToken || parsed.data.promoSelection)) {
       return withRequestId(NextResponse.json({ success: false, code: "UNSUPPORTED_VERSION", error: "Checkout berversi belum aktif." }, { status: 400 }), log);
     }
-    let reviewedFingerprint: string | null = null;
+    let reviewed: CheckoutReviewVerification | null = null;
     if (contractVersion === 1) {
       if (!parsed.data.requestKey || !parsed.data.reviewToken || !parsed.data.promoSelection) {
         throw new CheckoutReviewRequiredError();
       }
-      await admitCheckoutRequest({ clientId: session.user.id, kind: "place", headers: request.headers });
-      reviewedFingerprint = verifyCheckoutReviewToken(parsed.data.reviewToken);
+      // Place-order baru dengan manual code juga tunduk batas kode 20/120.
+      await admitCheckoutRequest({
+        clientId: session.user.id,
+        kind: "place",
+        headers: request.headers,
+        carriesManualCode: carriesManualPromoCode(parsed.data),
+      });
+      reviewed = verifyCheckoutReviewToken(parsed.data.reviewToken);
     }
 
     const deliveryBody = isDelivery
@@ -474,17 +533,13 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
     // transaction under the Offer lock.
     let offerCandidate: PublicOfferCandidate | null = null;
     let promo: CheckoutReviewPromo = { kind: "none" };
-    if (isDelivery && parsed.data.promoSelection?.kind === "public") {
-      log.warn("delivery promo selection rejected", { outcome: "invalid_input" });
-      return withRequestId(
-        NextResponse.json(
-          { success: false, code: "INPUT_INVALID", error: "Promo belum tersedia untuk pengiriman.", requestId: log.requestId },
-          { status: 400, headers: { "Cache-Control": "no-store" } }
-        ),
-        log
-      );
-    }
-    if (pricingSnapshot && !isDelivery && parsed.data.promoSelection?.kind === "public") {
+    if (
+      pricingSnapshot &&
+      !isDelivery &&
+      parsed.data.promoSelection &&
+      parsed.data.promoSelection.kind !== "none"
+    ) {
+      const requestedSelection = parsed.data.promoSelection;
       const [clientRow] = await db
         .select({ emailVerified: clients.emailVerified })
         .from(clients)
@@ -496,12 +551,20 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
           log
         );
       }
-      const evaluation = await evaluateSelectedPublicOffer({
-        offerId: parsed.data.promoSelection.offerId,
-        clientId: session.user.id,
-        verifiedEmail: clientRow.emailVerified,
-        subtotalAfterMarkdown: pricingSnapshot.subtotal,
-      });
+      const evaluation =
+        requestedSelection.kind === "manual"
+          ? await evaluateSelectedManualCode({
+              code: requestedSelection.code,
+              clientId: session.user.id,
+              verifiedEmail: clientRow.emailVerified,
+              subtotalAfterMarkdown: pricingSnapshot.subtotal,
+            })
+          : await evaluateSelectedPublicOffer({
+              offerId: requestedSelection.offerId,
+              clientId: session.user.id,
+              verifiedEmail: clientRow.emailVerified,
+              subtotalAfterMarkdown: pricingSnapshot.subtotal,
+            });
       if (!evaluation.ok) {
         const mapped = mapOfferReasonToHttp(evaluation.reason);
         log.warn("checkout promo rejected before commit", {
@@ -517,29 +580,25 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
         );
       }
       offerCandidate = evaluation.candidate;
-      pricingSnapshot = evaluatePricing({
-        fulfillmentMethod: "pickup",
-        ppnRatePercent,
-        lines: selectedItems.map((item) => ({
-          variantId: item.variantId,
-          quantity: item.quantity,
-          sourceUnitPrice: item.variantPrice,
-          effectiveUnitPrice: effectiveOf(item),
-          markdownRevisionId: markdownRevisionOf(item),
-        })),
-        benefit: {
-          kind: "fixed_goods",
-          paramsVersion: 1,
-          fixedAmount: evaluation.candidate.benefitAmount,
-        },
-      });
-      promo = {
-        kind: "public",
-        offerId: evaluation.candidate.offerId,
-        revisionId: evaluation.candidate.revisionId,
-        benefitId: evaluation.candidate.benefitId,
-        benefitAmount: evaluation.candidate.benefitAmount,
-      };
+      pricingSnapshot = applyOfferBenefitToPricing(pricingSnapshot, evaluation.candidate);
+      promo =
+        evaluation.candidate.activationKind === "manual_only" &&
+        evaluation.candidate.codeId
+          ? {
+              kind: "manual",
+              offerId: evaluation.candidate.offerId,
+              codeId: evaluation.candidate.codeId,
+              revisionId: evaluation.candidate.revisionId,
+              benefitId: evaluation.candidate.benefitId,
+              benefitAmount: evaluation.candidate.benefitAmount,
+            }
+          : {
+              kind: "public",
+              offerId: evaluation.candidate.offerId,
+              revisionId: evaluation.candidate.revisionId,
+              benefitId: evaluation.candidate.benefitId,
+              benefitAmount: evaluation.candidate.benefitAmount,
+            };
       log = log.child({ offerId: evaluation.candidate.offerId });
     }
 
@@ -555,7 +614,12 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
           sourceUnitPrice: line.sourceUnitPrice,
         })),
       });
-      if (reviewedFingerprint !== currentFingerprint) throw new CheckoutReviewRequiredError();
+      if (!reviewed || reviewed.fingerprint !== currentFingerprint) throw new CheckoutReviewRequiredError();
+      requirePromoAcknowledgements(
+        reviewed,
+        currentFingerprint,
+        (parsed.data as { acknowledgements?: PromoAcknowledgements }).acknowledgements
+      );
     }
 
     // Read the local mirror first, then verify ALL selected pairs against the
@@ -645,13 +709,8 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
         // Missing approved service → forces a step-2 reselect/retry; a moved
         // approval → the user re-approves the NEW money. Either way NOTHING
         // local has been created yet.
-        if (!chosen || chosen.originFingerprint !== deliveryBody!.originFingerprint || !compareDeliveryApproval(
-          (contractVersion === 1 ? normalizeCheckoutApproval(deliveryBody!.approvedPricing) : deliveryBody!.approvedPricing) as unknown as OrderPricing,
-          chosen.pricing
-        ).approved) {
-          log.warn("delivery quote must be re-approved", {
-            changedService: !chosen,
-          });
+        if (!chosen || chosen.originFingerprint !== deliveryBody!.originFingerprint) {
+          log.warn("delivery quote must be re-approved", { changedService: !chosen });
           return withRequestId(
             NextResponse.json(
               {
@@ -665,7 +724,124 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
             log
           );
         }
-        pricing = chosen.pricing;
+        // Baseline quote fresh: ongkir customer SEBELUM subsidi. Quote cost
+        // provider disimpan apa adanya; booking memakai nilai ORIGINAL ini,
+        // bukan net customer. Tidak ada shipping0 palsu saat quote gagal.
+        const deliveryBaseline = contractVersion === 1 ? buildPricingSnapshot({
+          fulfillmentMethod: "delivery",
+          ppnRatePercent,
+          lines: selectedItems.map((item) => ({
+            variantId: item.variantId,
+            quantity: item.quantity,
+            sourceUnitPrice: item.variantPrice,
+            effectiveUnitPrice: effectiveOf(item),
+            markdownRevisionId: markdownRevisionOf(item),
+          })),
+          shippingBeforeSubsidy: String(chosen.shippingCost),
+          providerQuotedShippingCost: String(chosen.shippingCost),
+        }) : null;
+        pricingSnapshot = deliveryBaseline;
+        // Satu slot promo yang sama dengan pickup: Coupon publik/manual goods
+        // ATAU subsidi ongkir. Eligibility dievaluasi pada subtotal/ongkir quote
+        // fresh; kapasitas tetap dievaluasi ulang di bawah lock transaksi.
+        const selection = deliveryBody!.promoSelection;
+        if (selection && selection.kind !== "none" && deliveryBaseline) {
+          const [clientRow] = await db
+            .select({ emailVerified: clients.emailVerified })
+            .from(clients)
+            .where(eq(clients.id, session.user.id))
+            .limit(1);
+          if (!clientRow) {
+            return withRequestId(
+              NextResponse.json({ success: false, code: "NOT_FOUND", error: "Akun tidak ditemukan.", requestId: log.requestId }, { status: 404, headers: { "Cache-Control": "no-store" } }),
+              log
+            );
+          }
+          const evaluation = selection.kind === "manual"
+            ? await evaluateSelectedManualCode({
+                code: selection.code,
+                clientId: session.user.id,
+                verifiedEmail: clientRow.emailVerified,
+                subtotalAfterMarkdown: deliveryBaseline.subtotal,
+                fulfillmentMethod: "delivery",
+                shippingBeforeSubsidy: String(chosen.shippingCost),
+              })
+            : await evaluateSelectedPublicOffer({
+                offerId: selection.offerId,
+                clientId: session.user.id,
+                verifiedEmail: clientRow.emailVerified,
+                subtotalAfterMarkdown: deliveryBaseline.subtotal,
+                fulfillmentMethod: "delivery",
+                shippingBeforeSubsidy: String(chosen.shippingCost),
+              });
+          if (!evaluation.ok) {
+            const mapped = mapOfferReasonToHttp(evaluation.reason);
+            log.warn("delivery promo rejected before commit", {
+              outcome: "promo_ineligible",
+              reason: evaluation.reason,
+            });
+            return withRequestId(
+              NextResponse.json(
+                { success: false, code: mapped.code, error: offerReasonMessage(evaluation.reason), requestId: log.requestId },
+                { status: mapped.status, headers: { "Cache-Control": "no-store" } }
+              ),
+              log
+            );
+          }
+          offerCandidate = evaluation.candidate;
+          pricingSnapshot = applyOfferBenefitToPricing(deliveryBaseline, evaluation.candidate);
+          promo =
+            evaluation.candidate.activationKind === "manual_only" && evaluation.candidate.codeId
+              ? {
+                  kind: "manual",
+                  offerId: evaluation.candidate.offerId,
+                  codeId: evaluation.candidate.codeId,
+                  revisionId: evaluation.candidate.revisionId,
+                  benefitId: evaluation.candidate.benefitId,
+                  benefitAmount: evaluation.candidate.benefitAmount,
+                }
+              : {
+                  kind: "public",
+                  offerId: evaluation.candidate.offerId,
+                  revisionId: evaluation.candidate.revisionId,
+                  benefitId: evaluation.candidate.benefitId,
+                  benefitAmount: evaluation.candidate.benefitAmount,
+                };
+          log = log.child({ offerId: evaluation.candidate.offerId });
+        }
+        // Approval dibandingkan dengan NET customer (subsidi sudah diterapkan),
+        // bukan harga quote original; perubahan quote/benefit memaksa approve ulang.
+        const netPricing = pricingSnapshot
+          ? {
+              subtotal: pricingSnapshot.subtotal,
+              discount: pricingSnapshot.goodsDiscount,
+              taxableBase: pricingSnapshot.taxableBase,
+              shippingCost: pricingSnapshot.shippingCost,
+              serviceFee: pricingSnapshot.serviceFee,
+              ppnRatePercent: pricingSnapshot.ppnRatePercent,
+              ppnAmount: pricingSnapshot.ppnAmount,
+              total: pricingSnapshot.total,
+            }
+          : chosen.pricing;
+        if (!compareDeliveryApproval(
+          (contractVersion === 1 ? normalizeCheckoutApproval(deliveryBody!.approvedPricing) : deliveryBody!.approvedPricing) as unknown as OrderPricing,
+          netPricing
+        ).approved) {
+          log.warn("delivery quote must be re-approved", { changed: "pricing" });
+          return withRequestId(
+            NextResponse.json(
+              {
+                success: false,
+                error: REPRICE_REQUIRED_MESSAGE,
+                code: "DELIVERY_REPRICE_REQUIRED",
+                data: { services: quote.services },
+              },
+              { status: 409 }
+            ),
+            log
+          );
+        }
+        pricing = netPricing;
         const parcel = buildShipmentParcel({
           items: selectedItems.map((item) => ({
             itemName: `${item.productName}${[item.variantColor, item.variantSize].filter(Boolean).length ? ` ${[item.variantColor, item.variantSize].filter(Boolean).join(" / ")}` : ""}`.trim(),
@@ -751,20 +927,9 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
       });
     }
     if (pricingSnapshot) {
-      if (isDelivery) {
-        pricingSnapshot = buildPricingSnapshot({
-          fulfillmentMethod: "delivery", ppnRatePercent,
-          lines: selectedItems.map((item) => ({
-            variantId: item.variantId, quantity: item.quantity,
-            sourceUnitPrice: item.variantPrice, effectiveUnitPrice: effectiveOf(item),
-            markdownRevisionId: markdownRevisionOf(item),
-          })),
-          shippingBeforeSubsidy: pricing.shippingCost,
-          // Customer quote rates are not automatically the provider's billed
-          // cost. No evidence of provider cost yet: preserve unknown as null.
-          providerQuotedShippingCost: null,
-        });
-      }
+      // Snapshot sudah final: delivery dibangun dari quote fresh + benefit, pickup
+      // dari baseline + benefit. Jangan pernah membangun ulang dari net shipping
+      // (itu akan mengurangi subsidi dua kali).
       pricing = {
         subtotal: pricingSnapshot.subtotal, discount: pricingSnapshot.goodsDiscount,
         shippingCost: pricingSnapshot.shippingCost, taxableBase: pricingSnapshot.taxableBase,
@@ -777,13 +942,18 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
       const currentFingerprint = buildCheckoutReviewContextFingerprint({
         clientId: session.user.id, contactPhone: phone, contactEmail: email,
         pickupDate: null, pickupTime: null, branchId, fulfillmentMethod: "delivery",
-        deliverySnapshot, promo: { kind: "none" }, pricing: { ...pricingSnapshot, discount: pricingSnapshot.goodsDiscount },
+        deliverySnapshot, promo, pricing: { ...pricingSnapshot, discount: pricingSnapshot.goodsDiscount },
         lines: pricingSnapshot.lines.map((line) => ({
           cartItemId: selectedItems.find((item) => item.variantId === line.variantId)!.cartItemId,
           variantId: line.variantId, branchId, quantity: line.quantity, sourceUnitPrice: line.sourceUnitPrice,
         })),
       });
-      if (reviewedFingerprint !== currentFingerprint) throw new CheckoutReviewRequiredError();
+      if (!reviewed || reviewed.fingerprint !== currentFingerprint) throw new CheckoutReviewRequiredError();
+      requirePromoAcknowledgements(
+        reviewed,
+        currentFingerprint,
+        (parsed.data as { acknowledgements?: PromoAcknowledgements }).acknowledgements
+      );
     }
     const total = Number(pricing.total);
     const paymentItemDetails = buildPaymentItemDetails({
@@ -896,6 +1066,8 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
               verifiedEmail: freshClient?.emailVerified ?? false,
               candidate: candidate,
               subtotalAfterMarkdown: pricingSnapshot.subtotal,
+              fulfillmentMethod: isDelivery ? "delivery" : "pickup",
+              shippingBeforeSubsidy: isDelivery ? pricingSnapshot.shippingBeforeSubsidy : "0",
             });
             if (!decision.ok) {
               const mapped = mapOfferReasonToHttp(decision.reason);
@@ -1441,8 +1613,21 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
         { status: error.status, headers: { "Cache-Control": "no-store", ...(error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {}) } }), log);
     }
     if (error instanceof CheckoutReviewRequiredError) {
-      log.warn("checkout review rejected", { code: error.code });
-      return withRequestId(NextResponse.json({ success: false, code: error.code, error: error.message, requestId: log.requestId }, { status: 409, headers: { "Cache-Control": "no-store" } }), log);
+      log.warn("checkout review rejected", {
+        code: error.code,
+        requiresAcknowledgement: error.requiresAcknowledgement,
+      });
+      return withRequestId(NextResponse.json(
+        {
+          success: false,
+          code: error.code,
+          error: error.message,
+          requestId: log.requestId,
+          ...(error.requiresAcknowledgement
+            ? { data: { requiresAcknowledgement: error.requiresAcknowledgement } }
+            : {}),
+        },
+        { status: 409, headers: { "Cache-Control": "no-store" } }), log);
     }
     if (error instanceof CheckoutReviewUnavailableError) {
       log.error("checkout review unavailable", { code: "PRICING_UNAVAILABLE" });

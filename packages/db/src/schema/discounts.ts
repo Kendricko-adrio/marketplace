@@ -147,10 +147,10 @@ export const discountOfferRevisions = pgTable(
   ]
 );
 
-/** Offer identity. `activation_kind` is fixed for the lifetime of the row; this
- * slice writes `public` only (a public Offer has no customer-facing code), so
- * the CHECK admits only `public` — it is widened by the slice that first owns
- * manual code activation, not silently ahead of it. */
+/** Offer identity. `activation_kind` is fixed for the lifetime of the row:
+ * moving a Coupon to the manual channel (or back) requires a NEW Offer identity,
+ * never a revision. `public` Offers carry no customer code; `manual_only`
+ * Offers are only usable with one of their reserved `discount_code` rows. */
 export const discountOffers = pgTable(
   "discount_offer",
   {
@@ -184,6 +184,9 @@ export const discountOffers = pgTable(
   },
   (t) => [
     uniqueIndex("discount_offer_key_unique").on(t.key),
+    // Composite ownership target: a manual code may only belong to a manual
+    // Offer, and a Redemption may only name a code of its own Offer.
+    unique("discount_offer_id_activation_unique").on(t.id, t.activationKind),
     // The current pointer must reference a revision OF THIS Offer; RESTRICT so
     // a published revision can never be deleted out from under a live Offer.
     foreignKey({
@@ -199,7 +202,7 @@ export const discountOffers = pgTable(
     ),
     check(
       "discount_offer_activation_kind_supported",
-      sql`${t.activationKind} = 'public'`
+      sql`${t.activationKind} in ('public', 'manual_only')`
     ),
     check(
       "discount_offer_state_valid",
@@ -298,11 +301,16 @@ export const discountOfferUsage = pgTable(
   ]
 );
 
-/** Exactly one typed benefit per revision. This slice owns the fixed-goods
- * kind only (`fixed_goods`, scope `goods`, positive whole-Rupiah nominal);
- * percentage/shipping kinds arrive with the slices that first support them.
- * `(revision_id, id)` is unique so a later redemption/allocation row can hold a
- * composite FK to the exact benefit it applied. */
+/** Exactly one typed benefit per revision, version1. Dua kind goods yang didukung:
+ * `fixed_goods` (nominal positif Rupiah utuh) dan `percentage_goods` (rate
+ * `>0..100` sampai6 digit pecahan, `cap_amount` NULL atau positif). Shipping
+ * subsidy datang dengan slice yang pertama mendukungnya (ticket 11).
+ * `(revision_id, id)` unik supaya redemption/allocation dapat memegang composite
+ * FK ke benefit persis yang dipakai.
+ *
+ * Rate disimpan `numeric(9,6)` (kontrak spec §4.3); presisi lebih dari6 digit
+ * ditolak oleh validator modul SEBELUM insert — Postgres sendiri akan membulatkan
+ * nilai berlebih ke skala kolom, jadi guard input bukan opsional. */
 export const discountBenefits = pgTable(
   "discount_benefit",
   {
@@ -314,7 +322,11 @@ export const discountBenefits = pgTable(
       }),
     kind: text("kind").notNull(),
     scope: text("scope").notNull(),
-    fixedAmount: numeric("fixed_amount", { precision: 15, scale: 2 }).notNull(),
+    fixedAmount: numeric("fixed_amount", { precision: 15, scale: 2 }),
+    /** Percentage goods rate, exact decimal `numeric(9,6)`. */
+    rate: numeric("rate", { precision: 9, scale: 6 }),
+    /** Opsional cap Rupiah untuk percentage goods; NULL = tanpa cap. */
+    capAmount: numeric("cap_amount", { precision: 15, scale: 2 }),
     paramsVersion: integer("params_version").notNull().default(1),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -328,18 +340,92 @@ export const discountBenefits = pgTable(
     unique("discount_benefit_revision_id_unique").on(t.revisionId, t.id),
     check(
       "discount_benefit_kind_supported",
-      sql`${t.kind} = 'fixed_goods'`
+      sql`${t.kind} in ('fixed_goods', 'percentage_goods', 'shipping')`
     ),
-    check("discount_benefit_scope_supported", sql`${t.scope} = 'goods'`),
-    // Fixed goods nominal is POSITIVE (a zero benefit would be a no-op Offer)
-    // and whole Rupiah, bounded by the store money bound.
     check(
-      "discount_benefit_fixed_amount_positive",
-      sql`${t.fixedAmount} > 0 and ${t.fixedAmount} <= 9999999999999 and ${t.fixedAmount} = trunc(${t.fixedAmount})`
+      "discount_benefit_scope_supported",
+      sql`(${t.kind} in ('fixed_goods', 'percentage_goods') and ${t.scope} = 'goods') or (${t.kind} = 'shipping' and ${t.scope} = 'shipping')`
+    ),
+    // Bentuk TEPAT satu kind: fixed membawa nominal positif dan TIDAK membawa
+    // rate/cap; percentage membawa rate positif <=100 dan cap NULL/positif tanpa
+    // nominal fixed. Campuran field antar-kind tidak pernah bisa disimpan.
+    check(
+      "discount_benefit_shape_valid",
+      sql`(${t.kind} = 'fixed_goods' and ${t.fixedAmount} is not null and ${t.fixedAmount} > 0 and ${t.fixedAmount} <= 9999999999999 and ${t.fixedAmount} = trunc(${t.fixedAmount}) and ${t.rate} is null and ${t.capAmount} is null)
+        or (${t.kind} = 'percentage_goods' and ${t.fixedAmount} is null and ${t.rate} is not null and ${t.rate} > 0 and ${t.rate} <= 100 and (${t.capAmount} is null or (${t.capAmount} > 0 and ${t.capAmount} <= 9999999999999 and ${t.capAmount} = trunc(${t.capAmount}))))
+        or (${t.kind} = 'shipping' and ${t.fixedAmount} is null and ${t.rate} is null and ${t.capAmount} is not null and ${t.capAmount} > 0 and ${t.capAmount} <= 9999999999999 and ${t.capAmount} = trunc(${t.capAmount}))`
     ),
     check(
       "discount_benefit_params_version_supported",
       sql`${t.paramsVersion} = 1`
+    ),
+  ]
+);
+
+/** Reserved Manual Promo Code (ticket 09, spec §7.1/§8.1).
+ *
+ * The canonical literal is UNIQUE GLOBALLY: two Offers can never reserve the
+ * same spelling. A code belongs to exactly one manual-only Offer forever — the
+ * literal and owner are immutable once published (module guarantee; the
+ * composite FK only proves the owner is a manual Offer). Active/inactive/
+ * archived follow the Offer window; a code has NO sub-quota, separate expiry or
+ * customer binding, and it shares the Offer's global/budget/per-account usage.
+ *
+ * `published_at` is set when the add-code/publish transaction commits, never
+ * when an admin merely types a draft proposal. */
+export const discountCodes = pgTable(
+  "discount_code",
+  {
+    id: text("id").primaryKey(),
+    offerId: text("offer_id").notNull(),
+    // Fixed `manual_only` activation ownership (see composite FK below).
+    activationKind: text("activation_kind").notNull().default("manual_only"),
+    canonicalCode: text("canonical_code").notNull(),
+    state: text("state").notNull().default("active"),
+    version: integer("version").notNull().default(1),
+    publishedAt: timestamp("published_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    actorId: text("actor_id").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    actorIdentity: text("actor_identity").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    // Exact canonical uniqueness ACROSS Offers (no case/space aliasing).
+    uniqueIndex("discount_code_canonical_unique").on(t.canonicalCode),
+    // Composite ownership target for Redemption `(offer_id, code_id)`.
+    unique("discount_code_offer_id_unique").on(t.offerId, t.id),
+    foreignKey({
+      name: "discount_code_manual_offer_fk",
+      columns: [t.offerId, t.activationKind],
+      foreignColumns: [discountOffers.id, discountOffers.activationKind],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
+    index("discount_code_offer_state_idx").on(t.offerId, t.state),
+    check(
+      "discount_code_canonical_shape",
+      sql`${t.canonicalCode} ~ '^[A-Z0-9][A-Z0-9_-]{2,63}$'`
+    ),
+    check(
+      "discount_code_activation_manual",
+      sql`${t.activationKind} = 'manual_only'`
+    ),
+    check(
+      "discount_code_state_valid",
+      sql`${t.state} in ('active', 'inactive', 'archived')`
+    ),
+    check("discount_code_version_positive", sql`${t.version} >= 1`),
+    check(
+      "discount_code_actor_identity_shape",
+      sql`char_length(${t.actorIdentity}) between 1 and 128`
     ),
   ]
 );
@@ -474,8 +560,12 @@ export const discountRedemptions = pgTable(
     offerId: text("offer_id").notNull(),
     revisionId: text("revision_id").notNull(),
     benefitId: text("benefit_id").notNull(),
-    // Fixed for the lifetime of the Offer; this slice writes public only.
+    // Exactly one activation channel per Redemption: a public Coupon carries no
+    // code, a manual Redemption names the code the customer actually used. Both
+    // columns are fixed for the lifetime of the row and share the SAME Offer
+    // usage counters (no per-code capacity).
     activationKind: text("activation_kind").notNull().default("public"),
+    codeId: text("code_id"),
     status: text("status").notNull().default("reserved"),
     // Actual benefit applied to this order (positive whole Rupiah, clipped to
     // the subtotal after Markdown). Zero-benefit configurations never reserve.
@@ -532,6 +622,15 @@ export const discountRedemptions = pgTable(
     })
       .onDelete("restrict")
       .onUpdate("restrict"),
+    // The manual code belongs to the named Offer (and the composite FK to
+    // `(offer_id, activation_kind)` proved that Offer is manual-only).
+    foreignKey({
+      name: "discount_redemption_code_ownership_fk",
+      columns: [t.offerId, t.codeId],
+      foreignColumns: [discountCodes.offerId, discountCodes.id],
+    })
+      .onDelete("restrict")
+      .onUpdate("restrict"),
     // Lifecycle lookups: released-but-expiring holds and per-Offer history.
     index("discount_redemption_status_deadline_idx").on(t.status, t.deadline),
     index("discount_redemption_offer_client_idx").on(
@@ -540,8 +639,9 @@ export const discountRedemptions = pgTable(
       t.createdAt
     ),
     check(
-      "discount_redemption_activation_public",
-      sql`${t.activationKind} = 'public'`
+      "discount_redemption_activation_kind",
+      sql`(${t.activationKind} = 'public' and ${t.codeId} is null)
+        or (${t.activationKind} = 'manual_only' and ${t.codeId} is not null)`
     ),
     check(
       "discount_redemption_status_valid",
@@ -731,8 +831,16 @@ export const orderDiscountAllocations = pgTable(
 // Relations
 // =========================================================
 
+export const discountCodesRelations = relations(discountCodes, ({ one }) => ({
+  offer: one(discountOffers, {
+    fields: [discountCodes.offerId],
+    references: [discountOffers.id],
+  }),
+}));
+
 export const discountOffersRelations = relations(discountOffers, ({ many, one }) => ({
   revisions: many(discountOfferRevisions),
+  codes: many(discountCodes),
   usage: one(discountOfferUsage, {
     fields: [discountOffers.id],
     references: [discountOfferUsage.offerId],
@@ -801,6 +909,10 @@ export const discountRedemptionsRelations = relations(
     offer: one(discountOffers, {
       fields: [discountRedemptions.offerId],
       references: [discountOffers.id],
+    }),
+    code: one(discountCodes, {
+      fields: [discountRedemptions.codeId],
+      references: [discountCodes.id],
     }),
     events: many(discountRedemptionEvents),
     allocations: many(orderDiscountAllocations),

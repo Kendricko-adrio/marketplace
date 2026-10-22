@@ -21,6 +21,9 @@ export const seedCleanupEntries: ReadonlyArray<
   // pointer, so the seeder resets `state = 'draft'` together with the pointer
   // before this FK-ordered DELETE loop (see seed.ts).
   ["discountAdminRequests", schema.discountAdminRequests],
+  // Reserved manual codes (ticket 09) reference the Offer with RESTRICT; they
+  // are cleared before Offer usage/revisions/identity.
+  ["discountCodes", schema.discountCodes],
   ["discountOfferUsage", schema.discountOfferUsage],
   ["discountBenefits", schema.discountBenefits],
   ["discountOfferRevisions", schema.discountOfferRevisions],

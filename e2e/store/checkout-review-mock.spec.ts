@@ -1321,3 +1321,280 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
     ).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Ticket 11 — subsidi ongkir delivery lewat app HTTP nyata (gate1, mock
+// provider). Literal independen: goods150000, ongkir30000, cap20000 → subsidi
+// 20000, ongkir net10000, PPN16500, total176500, provider payable160000;
+// booking/quote cost tetap original30000.
+// ---------------------------------------------------------------------------
+test.describe("shipping subsidy delivery (ticket 11)", () => {
+  const SHIP_PUBLIC_ID = `${FIXTURE_PREFIX}-ship-public`;
+  const SHIP_PUBLIC_REV = `${SHIP_PUBLIC_ID}-rev`;
+  const SHIP_PUBLIC_BEN = `${SHIP_PUBLIC_ID}-ben`;
+  const SHIP_MANUAL_ID = `${FIXTURE_PREFIX}-ship-manual`;
+  const SHIP_MANUAL_REV = `${SHIP_MANUAL_ID}-rev`;
+  const SHIP_MANUAL_BEN = `${SHIP_MANUAL_ID}-ben`;
+  const SHIP_MANUAL_CODE = `${SHIP_MANUAL_ID}-code`;
+  const SHIP_CODE = "ONGKIRMOCK15";
+  const GOODS_SMALL_ID = `${FIXTURE_PREFIX}-ship-goods-small`;
+  const GOODS_SMALL_REV = `${GOODS_SMALL_ID}-rev`;
+  const GOODS_SMALL_BEN = `${GOODS_SMALL_ID}-ben`;
+  const SHIP_OFFERS = [SHIP_PUBLIC_ID, SHIP_MANUAL_ID, GOODS_SMALL_ID];
+  const SHIP_TOTAL = 176_500;
+  const SHIP_NET = 10_000;
+  const SHIP_SUBSIDY = 20_000;
+  const SHIP_PAYABLE = 160_000;
+
+  test.beforeAll(async () => {
+    await pool.query(
+      `INSERT INTO discount_offer (id,key,activation_kind,actor_identity) VALUES
+         ($1,$4,'public','fixture'), ($2,$5,'manual_only','fixture'), ($3,$6,'public','fixture')`,
+      [SHIP_PUBLIC_ID, SHIP_MANUAL_ID, GOODS_SMALL_ID,
+        `${SHIP_PUBLIC_ID}-key`, `${SHIP_MANUAL_ID}-key`, `${GOODS_SMALL_ID}-key`]
+    );
+    await pool.query(
+      `INSERT INTO discount_offer_revision
+         (id,offer_id,revision_no,name,currency,min_subtotal,published_at,actor_identity) VALUES
+         ($1,$4,1,'Subsidi Ongkir Mock','IDR','0',now(),'fixture'),
+         ($2,$5,1,'Kode Subsidi Ongkir Mock','IDR','0',now(),'fixture'),
+         ($3,$6,1,'Coupon Kecil Mock','IDR','0',now(),'fixture')`,
+      [SHIP_PUBLIC_REV, SHIP_MANUAL_REV, GOODS_SMALL_REV,
+        SHIP_PUBLIC_ID, SHIP_MANUAL_ID, GOODS_SMALL_ID]
+    );
+    await pool.query(
+      `INSERT INTO discount_benefit (id,revision_id,kind,scope,cap_amount,fixed_amount) VALUES
+         ($1,$4,'shipping','shipping','20000',null),
+         ($2,$5,'shipping','shipping','15000',null),
+         ($3,$6,'fixed_goods','goods',null,'5000')`,
+      [SHIP_PUBLIC_BEN, SHIP_MANUAL_BEN, GOODS_SMALL_BEN,
+        SHIP_PUBLIC_REV, SHIP_MANUAL_REV, GOODS_SMALL_REV]
+    );
+    await pool.query(
+      `UPDATE discount_offer SET state='enabled',current_revision_id=v.rev,quota_count=50,
+         budget_amount='1000000',per_client_limit=1
+       FROM (VALUES ($1,$2),($3,$4),($5,$6)) AS v(id,rev) WHERE discount_offer.id=v.id`,
+      [SHIP_PUBLIC_ID, SHIP_PUBLIC_REV, SHIP_MANUAL_ID, SHIP_MANUAL_REV,
+        GOODS_SMALL_ID, GOODS_SMALL_REV]
+    );
+    await pool.query(
+      `INSERT INTO discount_offer_usage (offer_id) VALUES ($1),($2),($3)`,
+      [SHIP_PUBLIC_ID, SHIP_MANUAL_ID, GOODS_SMALL_ID]
+    );
+    await pool.query(
+      `INSERT INTO discount_code (id,offer_id,activation_kind,canonical_code,state,actor_identity)
+       VALUES ($1,$2,'manual_only',$3,'active','fixture')`,
+      [SHIP_MANUAL_CODE, SHIP_MANUAL_ID, SHIP_CODE]
+    );
+  });
+
+  test.afterAll(async () => {
+    await pool.query(`DELETE FROM discount_redemption_event WHERE redemption_id IN
+      (SELECT id FROM discount_redemption WHERE offer_id = ANY($1))`, [SHIP_OFFERS]);
+    await pool.query(`DELETE FROM order_discount_allocation WHERE redemption_id IN
+      (SELECT id FROM discount_redemption WHERE offer_id = ANY($1))`, [SHIP_OFFERS]);
+    await pool.query(`DELETE FROM discount_redemption WHERE offer_id = ANY($1)`, [SHIP_OFFERS]);
+    await pool.query(`DELETE FROM discount_client_usage WHERE offer_id = ANY($1)`, [SHIP_OFFERS]);
+    await pool.query(`DELETE FROM discount_code WHERE offer_id = ANY($1)`, [SHIP_OFFERS]);
+    await pool.query(`DELETE FROM discount_offer_usage WHERE offer_id = ANY($1)`, [SHIP_OFFERS]);
+    await pool.query(
+      `UPDATE discount_offer SET state='draft',current_revision_id=null WHERE id = ANY($1)`,
+      [SHIP_OFFERS]
+    );
+    await pool.query(`DELETE FROM discount_benefit WHERE revision_id = ANY($1)`,
+      [[SHIP_PUBLIC_REV, SHIP_MANUAL_REV, GOODS_SMALL_REV]]);
+    await pool.query(`DELETE FROM discount_offer_revision WHERE id = ANY($1)`,
+      [[SHIP_PUBLIC_REV, SHIP_MANUAL_REV, GOODS_SMALL_REV]]);
+    await pool.query(`DELETE FROM discount_offer WHERE id = ANY($1)`, [SHIP_OFFERS]);
+  });
+
+  const DESTINATION = {
+    recipientName: "Shipping Fixture", phone: CONTACT_PHONE,
+    fullAddress: "Jl. Shipping Fixture No. 1", provinceId: "01", cityId: "0101",
+    districtId: "010101", areaId: "01010101", postalCode: "01234", isDefault: false,
+  };
+
+  async function deliveryIntent(promoSelection: Record<string, unknown>) {
+    await storeContext.request.delete("/api/cart");
+    expect((await storeContext.request.post("/api/cart/items", {
+      data: { variantId: FIXTURE_VARIANT_ID, branchId: DELIVERY_BRANCH_ID, quantity: 1 },
+    })).ok()).toBe(true);
+    const cart = await (await storeContext.request.get("/api/cart")).json();
+    await mockControl("POST", "/__control/reset");
+    await mockControl("POST", "/__control/stocks/ensure", {
+      locationId: DELIVERY_LOCATION_ID, itemId: MOCK_ITEM_ID, onHand: 5,
+    });
+    await mockControl("PUT", "/__control/shipment", { scenario: "rate-normal", rates: 30000 });
+    const quoteResponse = await storeContext.request.post("/api/checkout/delivery-quote", {
+      data: { itemIds: [cart.data.items[0].id], newAddress: DESTINATION },
+    });
+    expect(quoteResponse.status()).toBe(200);
+    const service = (await quoteResponse.json()).data.services[0];
+    return {
+      fulfillmentMethod: "delivery",
+      itemIds: [cart.data.items[0].id],
+      contactPhone: CONTACT_PHONE,
+      contactEmail: CONTACT_EMAIL,
+      newAddress: DESTINATION,
+      saveAddress: false,
+      saveRequestId: "b1200000-0000-4000-8000-0000000000aa",
+      courierId: service.courierId,
+      serviceId: service.serviceId,
+      originFingerprint: service.originFingerprint,
+      approvedPricing: service.pricing,
+      promoSelection,
+    } as Record<string, unknown>;
+  }
+
+  test("public shipping: preview/pickup-disabled/swap confirmation/place menyimpan snapshot original+net dan satu allocation", async () => {
+    // Pickup dengan Offer shipping → disabled dengan alasan, bukan subsidi0.
+    const { reviewToken: _pickupToken, ...pickupIntent } = await preparePickup();
+    const pickupRejected = await storeContext.request.post(PREVIEW_PATH, {
+      data: { ...pickupIntent, promoSelection: { kind: "public", offerId: SHIP_PUBLIC_ID } },
+    });
+    expect(pickupRejected.status()).toBe(409);
+    expect((await pickupRejected.json()).code).toBe("PROMO_INELIGIBLE");
+
+    const intent = await deliveryIntent({ kind: "public", offerId: SHIP_PUBLIC_ID });
+    const previewResponse = await storeContext.request.post(PREVIEW_PATH, { data: intent });
+    expect(previewResponse.status(), await previewResponse.text()).toBe(200);
+    const preview = (await previewResponse.json()).data;
+    expectRupiah(preview.pricing.total, SHIP_TOTAL, "shipping preview total");
+    expectRupiah(preview.pricing.shippingBeforeSubsidy, 30000, "original shipping");
+    expectRupiah(preview.pricing.shippingSubsidy, SHIP_SUBSIDY, "subsidy");
+    expectRupiah(preview.pricing.shippingCost, SHIP_NET, "net shipping");
+    expectRupiah(preview.pricing.ppnAmount, 16500, "goods-only PPN");
+    expect(preview.promo.kind).toBe("public");
+    expectRupiah(preview.promo.benefitAmount, SHIP_SUBSIDY, "promo amount");
+
+    // Ganti shipping → coupon kecil (5000) menaikkan total final → dialog wajib.
+    const swap = await storeContext.request.post(PREVIEW_PATH, {
+      data: {
+        ...intent,
+        promoSelection: { kind: "public", offerId: GOODS_SMALL_ID },
+        previous: {
+          reviewToken: preview.reviewToken,
+          promoSelection: { kind: "public", offerId: SHIP_PUBLIC_ID },
+        },
+      },
+    });
+    expect(swap.status(), await swap.text()).toBe(200);
+    const swapped = (await swap.json()).data;
+    expect(swapped.requiresIncreaseConfirmation).toBe(true);
+    expect(swapped.replacement.direction).toBe("increase");
+    expectRupiah(swapped.replacement.previous.total, 176500, "previous total");
+    expectRupiah(swapped.replacement.candidate.total, 190950, "candidate total");
+
+    const body = {
+      ...intent,
+      approvedPricing: preview.pricing,
+      reviewToken: preview.reviewToken,
+      requestKey: "b1200000-0000-4000-8000-0000000000a1",
+    };
+    const placed = await storeContext.request.post("/api/checkout/place-order", {
+      data: body, headers: { "x-e2e-payment-mock": "true" },
+    });
+    const result = await placed.json();
+    if (result.data?.orderId) fixtureOrderIds.add(result.data.orderId);
+    expect(placed.status(), JSON.stringify(result)).toBe(201);
+
+    const row = await pool.query(
+      `SELECT total::text AS total, shipping_cost::text AS net, shipping_subsidy::text AS subsidy,
+              shipping_before_subsidy::text AS before, merchant_funding::text AS funding,
+              delivery_snapshot, pricing_snapshot
+         FROM orders WHERE id=$1`, [result.data.orderId]);
+    expectRupiah(row.rows[0].total, SHIP_TOTAL, "order total");
+    expectRupiah(row.rows[0].net, SHIP_NET, "order net shipping");
+    expectRupiah(row.rows[0].subsidy, SHIP_SUBSIDY, "order subsidy");
+    expectRupiah(row.rows[0].before, 30000, "order original shipping");
+    expectRupiah(row.rows[0].funding, SHIP_SUBSIDY, "merchant funding");
+    expect(row.rows[0].delivery_snapshot.service.shippingCost).toBe(30000);
+    expectRupiah(row.rows[0].delivery_snapshot.pricing.shippingCost, SHIP_NET, "snapshot net");
+    expectRupiah(row.rows[0].pricing_snapshot.expectedProviderPayable, SHIP_PAYABLE, "payable");
+
+    const allocation = await pool.query(
+      `SELECT a.component, a.order_item_id, a.amount::text AS amount
+         FROM order_discount_allocation a
+         JOIN discount_redemption r ON r.id=a.redemption_id
+        WHERE r.order_id=$1`, [result.data.orderId]);
+    expect(allocation.rows).toEqual([
+      { component: "offer_shipping", order_item_id: null, amount: "20000.00" },
+    ]);
+    const redemption = await pool.query(
+      `SELECT status, activation_kind, benefit_amount::text AS amount
+         FROM discount_redemption WHERE order_id=$1`, [result.data.orderId]);
+    expect(redemption.rows[0]).toEqual({
+      status: "reserved", activation_kind: "public", amount: "20000.00",
+    });
+    const intentRow = await pool.query(
+      `SELECT payload->'create'->>'originalShipmentCost' AS original,
+              payload->'create'->>'shippingCost' AS net,
+              payload->'create'->>'expectedProviderPayable' AS payable
+         FROM jubelio_sales_operation WHERE order_id=$1 AND type='create'`,
+      [result.data.orderId]);
+    expect(intentRow.rows[0]).toEqual({
+      original: "30000", net: "10000", payable: "160000",
+    });
+
+    // Cart berubah setelah review: token lama tidak boleh membawa promo/uang
+    // invalid ke order; customer harus review ulang (bukan retry buta).
+    await storeContext.request.post("/api/cart/items", {
+      data: { variantId: FIXTURE_VARIANT_ID, branchId: DELIVERY_BRANCH_ID, quantity: 1 },
+    });
+    const stale = await storeContext.request.post(PREVIEW_PATH, {
+      data: {
+        ...intent,
+        promoSelection: { kind: "none" },
+        acknowledgeInvalidation: true,
+        previous: {
+          reviewToken: preview.reviewToken,
+          promoSelection: { kind: "public", offerId: SHIP_PUBLIC_ID },
+        },
+      },
+    });
+    // Baris lama bisa hilang (404) atau konteks berubah (409): keduanya memaksa
+    // reselect; yang dilarang adalah memakai token lama seolah masih sah.
+    expect([404, 409]).toContain(stale.status());
+    expect((await stale.json()).success).toBe(false);
+  }, 90_000);
+
+  test("manual shipping: kode aktif memakai slot yang sama dan menyimpan Redemption manual", async () => {
+    const intent = await deliveryIntent({ kind: "manual", code: SHIP_CODE });
+    const previewResponse = await storeContext.request.post(PREVIEW_PATH, { data: intent });
+    expect(previewResponse.status(), await previewResponse.text()).toBe(200);
+    const preview = (await previewResponse.json()).data;
+    expect(preview.promo.kind).toBe("manual");
+    expectRupiah(preview.pricing.shippingSubsidy, 15000, "manual subsidy");
+    expectRupiah(preview.pricing.shippingCost, 15000, "manual net shipping");
+    expectRupiah(preview.pricing.total, 181500, "manual total");
+
+    const placed = await storeContext.request.post("/api/checkout/place-order", {
+      data: {
+        ...intent,
+        approvedPricing: preview.pricing,
+        reviewToken: preview.reviewToken,
+        requestKey: "b1200000-0000-4000-8000-0000000000a2",
+      },
+      headers: { "x-e2e-payment-mock": "true" },
+    });
+    const result = await placed.json();
+    if (result.data?.orderId) fixtureOrderIds.add(result.data.orderId);
+    expect(placed.status(), JSON.stringify(result)).toBe(201);
+
+    const redemption = await pool.query(
+      `SELECT activation_kind, code_id, benefit_amount::text AS amount
+         FROM discount_redemption WHERE order_id=$1`, [result.data.orderId]);
+    expect(redemption.rows[0]).toEqual({
+      activation_kind: "manual_only", code_id: SHIP_MANUAL_CODE, amount: "15000.00",
+    });
+    const allocation = await pool.query(
+      `SELECT component, order_item_id, amount::text AS amount
+         FROM order_discount_allocation a JOIN discount_redemption r ON r.id=a.redemption_id
+        WHERE r.order_id=$1`, [result.data.orderId]);
+    expect(allocation.rows).toEqual([
+      { component: "offer_shipping", order_item_id: null, amount: "15000.00" },
+    ]);
+    const detail = await (await storeContext.request.get(`/api/orders/${result.data.orderId}`)).json();
+    expect(detail.success).toBe(true);
+  }, 90_000);
+});

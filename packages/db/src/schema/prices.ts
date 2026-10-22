@@ -322,15 +322,23 @@ export const priceChangeBatchRows = pgTable(
     ),
     check(
       "price_change_batch_row_input_sku_shape",
-      sql`char_length(${t.inputSku}) between 1 and 128`
+      // A workbook row that failed parsing can have no SKU at all; it is stored
+      // as a FINAL failed row so the report/subset can name the exact row.
+      sql`(${t.state} = 'failed' and char_length(${t.inputSku}) between 0 and 128) or char_length(${t.inputSku}) between 1 and 128`
     ),
     check(
       "price_change_batch_row_action_supported",
-      sql`${t.action} in ('set_price', 'restore_base')`
+      // `invalid` only ever describes an unparseable workbook row (fatal-row
+      // data, never a pending row the apply pipeline could execute).
+      sql`${t.action} in ('set_price', 'restore_base', 'invalid')`
+    ),
+    check(
+      "price_change_batch_row_invalid_action_is_failed",
+      sql`${t.action} <> 'invalid' or ${t.state} = 'failed'`
     ),
     check(
       "price_change_batch_row_target_shape",
-      sql`(${t.action} = 'set_price' and ${t.targetUnitPrice} is not null and ${t.targetUnitPrice} > 0) or (${t.action} = 'restore_base' and ${t.targetUnitPrice} is null)`
+      sql`(${t.action} = 'set_price' and ${t.targetUnitPrice} is not null and ${t.targetUnitPrice} > 0) or (${t.action} = 'restore_base' and ${t.targetUnitPrice} is null) or (${t.action} = 'invalid' and ${t.targetUnitPrice} is null) or (${t.state} = 'failed' and ${t.targetUnitPrice} is null)`
     ),
     check(
       "price_change_batch_row_preview_bounded",

@@ -30,6 +30,7 @@ const publishSchema = z.strictObject({
   expectedDraftVersion: z.number().int().positive(),
   expectedPolicyVersion: z.number().int().positive(),
   reviewFingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+  proposedCodes: z.array(z.string().min(1).max(128)).max(50).optional(),
 });
 
 export async function POST(request: NextRequest, { params }: RouteContext) {

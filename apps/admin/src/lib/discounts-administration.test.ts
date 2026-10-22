@@ -4,6 +4,7 @@ import {
   DiscountAdministrationError,
   assertCreateInput,
   classifyCapacityChange,
+  normalizeCodeProposals,
   parseOptionalInstant,
   parseWholeRupiah,
   publicDraftCommandFingerprint,
@@ -48,7 +49,11 @@ function fingerprintInput() {
       minSubtotal: "100000",
       startAt: "2026-10-01T00:00:00+07:00",
       endAt: "2026-11-01T00:00:00+07:00",
-      benefitFixedAmount: "17000",
+      benefit: {
+        kind: "fixed_goods" as const,
+        paramsVersion: 1 as const,
+        fixedAmount: "17000",
+      },
     },
     capacity: CAPACITY,
   };
@@ -101,7 +106,7 @@ describe("parseOptionalInstant — WIB input with explicit offset", () => {
   });
 });
 
-describe("validateDraftTerms — one fixed-goods benefit, IDR only", () => {
+describe("validateDraftTerms — one typed goods benefit, IDR only", () => {
   const valid = {
     name: "  Diskon Rp17.000 Sepatu  ",
     currency: "IDR",
@@ -131,9 +136,26 @@ describe("validateDraftTerms — one fixed-goods benefit, IDR only", () => {
     expect(() =>
       validateDraftTerms({
         ...valid,
+        benefit: { kind: "percentage_goods", paramsVersion: 1, capAmount: null },
+      })
+    ).toThrow(/benefit\.rate/);
+    // Fixed field yang ikut terkirim pada percentage bukan diabaikan diam-diam.
+    expect(() =>
+      validateDraftTerms({
+        ...valid,
         benefit: { ...valid.benefit, kind: "percentage_goods" },
       })
-    ).toThrow(/not supported/);
+    ).toThrow(/does not belong/);
+    expect(() =>
+      validateDraftTerms({
+        ...valid,
+        benefit: {
+          kind: "free_goods",
+          paramsVersion: 1,
+          fixedAmount: "1000",
+        },
+      })
+    ).toThrow(/does not belong/);
     expect(() =>
       validateDraftTerms({
         ...valid,
@@ -167,7 +189,78 @@ describe("validateDraftTerms — one fixed-goods benefit, IDR only", () => {
         ...valid,
         benefit: { ...valid.benefit, fixedAmount: "0" },
       })
-    ).toThrow(/greater than zero/);
+    ).toThrow(/positive Rupiah/);
+  });
+
+  it("accepts percentage goods with rate up to6 fractional digits and nullable cap", () => {
+    const terms = validateDraftTerms({
+      ...valid,
+      benefit: {
+        kind: "percentage_goods",
+        paramsVersion: 1,
+        rate: "10.000000",
+        capAmount: "20000",
+      },
+    });
+    expect(terms.benefit).toEqual({
+      kind: "percentage_goods",
+      paramsVersion: 1,
+      rate: "10",
+      capAmount: "20000",
+    });
+    expect(
+      validateDraftTerms({
+        ...valid,
+        benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "12.345678", capAmount: null },
+      }).benefit
+    ).toEqual({
+      kind: "percentage_goods",
+      paramsVersion: 1,
+      rate: "12.345678",
+      capAmount: null,
+    });
+    // Cap yang tidak diisi form = tanpa cap eksplisit, bukan default nominal.
+    expect(
+      validateDraftTerms({
+        ...valid,
+        benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "5" },
+      }).benefit
+    ).toEqual({ kind: "percentage_goods", paramsVersion: 1, rate: "5", capAmount: null });
+  });
+
+  it("refuses invalid percentage rate/cap and mixed fixed fields instead of rounding", () => {
+    for (const benefit of [
+      { kind: "percentage_goods", paramsVersion: 1, rate: "0", capAmount: null },
+      { kind: "percentage_goods", paramsVersion: 1, rate: "100.000001", capAmount: null },
+      { kind: "percentage_goods", paramsVersion: 1, rate: "10.1234567", capAmount: null },
+      { kind: "percentage_goods", paramsVersion: 1, rate: "10", capAmount: "0" },
+      { kind: "percentage_goods", paramsVersion: 1, rate: "10", capAmount: "20000.5" },
+      { kind: "percentage_goods", paramsVersion: 1, rate: "10", capAmount: null, fixedAmount: "17000" },
+    ]) {
+      expect(() => validateDraftTerms({ ...valid, benefit }), JSON.stringify(benefit)).toThrow(
+        DiscountAdministrationError
+      );
+    }
+  });
+
+  it("publish fingerprint binds the exact percentage rate and cap", () => {
+    const base = publishReviewFingerprint(fingerprintInput());
+    const percentage = publishReviewFingerprint({
+      ...fingerprintInput(),
+      terms: {
+        ...fingerprintInput().terms,
+        benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "10", capAmount: "20000" },
+      },
+    });
+    const uncapped = publishReviewFingerprint({
+      ...fingerprintInput(),
+      terms: {
+        ...fingerprintInput().terms,
+        benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "10", capAmount: null },
+      },
+    });
+    expect(percentage).not.toBe(base);
+    expect(percentage).not.toBe(uncapped);
   });
 });
 
@@ -194,7 +287,14 @@ describe("publishReviewFingerprint — server-bound review identity", () => {
       },
       {
         ...fingerprintInput(),
-        terms: { ...fingerprintInput().terms, benefitFixedAmount: "25000" },
+        terms: {
+          ...fingerprintInput().terms,
+          benefit: {
+            kind: "fixed_goods" as const,
+            paramsVersion: 1 as const,
+            fixedAmount: "25000",
+          },
+        },
       },
       {
         ...fingerprintInput(),
@@ -213,17 +313,74 @@ describe("publishReviewFingerprint — server-bound review identity", () => {
 });
 
 describe("assertCreateInput — activation kind is never defaulted", () => {
-  it("accepts only a UUID request key and the public activation kind", () => {
+  it("accepts only a UUID request key and a supported activation kind", () => {
     const key = "3f0c4a1e-9b1e-4d5a-8f2b-1c2d3e4f5a6b";
     expect(assertCreateInput({ requestKey: key, activationKind: "public" })).toBe(
       key
     );
+    expect(
+      assertCreateInput({ requestKey: key, activationKind: "manual_only" })
+    ).toBe(key);
     expect(() =>
       assertCreateInput({ requestKey: "not-a-uuid", activationKind: "public" })
     ).toThrow(DiscountAdministrationError);
+    // Nama jalur salah tidak pernah "diperbaiki" diam-diam menjadi manual_only.
     expect(() =>
       assertCreateInput({ requestKey: key, activationKind: "manual" })
-    ).toThrow(/Only public/);
+    ).toThrow(/public or manual_only/);
+  });
+});
+
+describe("normalizeCodeProposals — canonical, unique, channel-bound (ticket 09)", () => {
+  it("trims/uppercases and keeps order", () => {
+    expect(
+      normalizeCodeProposals([" hemat17agustus ", "promo_2026-ok"], "manual_only")
+    ).toEqual(["HEMAT17AGUSTUS", "PROMO_2026-OK"]);
+    expect(normalizeCodeProposals(undefined, "manual_only")).toEqual([]);
+  });
+
+  it("rejects aliases, internal spaces, and duplicates AFTER canonicalization", () => {
+    expect(() => normalizeCodeProposals(["ABCDEF1", "abcdef1"], "manual_only")).toThrow(
+      /duplicate canonical/
+    );
+    expect(() => normalizeCodeProposals(["HEMAT 17"], "manual_only")).toThrow(
+      /3-64 ASCII/
+    );
+    expect(() => normalizeCodeProposals(["hémät17"], "manual_only")).toThrow(
+      /3-64 ASCII/
+    );
+    expect(() => normalizeCodeProposals(["AB"], "manual_only")).toThrow(/3-64 ASCII/);
+    expect(() => normalizeCodeProposals("HEMAT17", "manual_only")).toThrow(
+      /array/
+    );
+    expect(() =>
+      normalizeCodeProposals(Array.from({ length: 51 }, (_, i) => `CODE${i}`), "manual_only")
+    ).toThrow(/too many/);
+  });
+
+  it("never attaches a code proposal to a public Offer", () => {
+    expect(normalizeCodeProposals([], "public")).toEqual([]);
+    expect(() => normalizeCodeProposals(["HEMAT17"], "public")).toThrow(
+      DiscountAdministrationError
+    );
+    expect(() => normalizeCodeProposals(["HEMAT17"], "public")).toThrow(
+      /public Offer has no customer code/
+    );
+  });
+
+  it("publish fingerprint binds the proposed codes", () => {
+    const base = publishReviewFingerprint(fingerprintInput());
+    const withCodes = publishReviewFingerprint({
+      ...fingerprintInput(),
+      proposedCodes: ["HEMAT17AGUSTUS"],
+    });
+    expect(withCodes).not.toBe(base);
+    expect(withCodes).toBe(
+      publishReviewFingerprint({
+        ...fingerprintInput(),
+        proposedCodes: ["HEMAT17AGUSTUS"],
+      })
+    );
   });
 });
 
@@ -287,6 +444,7 @@ describe("validatePublishable — draft is incomplete until publish requirements
     fixedAmount: "17000",
   } as unknown as Benefit;
   const offer = {
+    activationKind: "public",
     state: "draft",
     quotaCount: 10,
     budgetAmount: null,
@@ -361,5 +519,58 @@ describe("validatePublishable — draft is incomplete until publish requirements
         })
       )
     ).toContain("WINDOW_ORDERED");
+  });
+});
+
+// Ticket 11 — subsidi ongkir memakai form/draft/fingerprint yang sama, tetapi
+// hanya cap positif (tanpa rate/fixed goods).
+describe("validateDraftTerms — benefit shipping hanya cap positif", () => {
+  const valid = {
+    name: "Subsidi Ongkir",
+    currency: "IDR",
+    minSubtotal: "0",
+    startAt: "2026-10-01T00:00:00+07:00",
+    endAt: "2026-11-01T00:00:00+07:00",
+    benefit: { kind: "shipping", paramsVersion: 1, capAmount: "20000" },
+  };
+
+  it("normalizes a valid shipping cap and binds it into the publish fingerprint", () => {
+    expect(validateDraftTerms(valid).benefit).toEqual({
+      kind: "shipping",
+      paramsVersion: 1,
+      capAmount: "20000",
+    });
+    const base = publishReviewFingerprint(fingerprintInput());
+    const shipping = publishReviewFingerprint({
+      ...fingerprintInput(),
+      terms: {
+        ...fingerprintInput().terms,
+        benefit: { kind: "shipping", paramsVersion: 1, capAmount: "20000" },
+      },
+    });
+    const otherCap = publishReviewFingerprint({
+      ...fingerprintInput(),
+      terms: {
+        ...fingerprintInput().terms,
+        benefit: { kind: "shipping", paramsVersion: 1, capAmount: "25000" },
+      },
+    });
+    expect(shipping).not.toBe(base);
+    expect(shipping).not.toBe(otherCap);
+  });
+
+  it("refuses missing/zero/fractional cap, rate and fixed goods fields", () => {
+    for (const benefit of [
+      { kind: "shipping", paramsVersion: 1 },
+      { kind: "shipping", paramsVersion: 1, capAmount: "0" },
+      { kind: "shipping", paramsVersion: 1, capAmount: "20000.5" },
+      { kind: "shipping", paramsVersion: 1, capAmount: "20000", rate: "10" },
+      { kind: "shipping", paramsVersion: 1, capAmount: "20000", fixedAmount: "10000" },
+      { kind: "shipping", paramsVersion: 2, capAmount: "20000" },
+    ]) {
+      expect(() => validateDraftTerms({ ...valid, benefit }), JSON.stringify(benefit)).toThrow(
+        DiscountAdministrationError
+      );
+    }
   });
 });

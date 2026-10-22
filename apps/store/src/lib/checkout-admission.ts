@@ -21,9 +21,34 @@ function trustedIp(headers: Headers, environment: Record<string, string | undefi
   return ip;
 }
 
+/**
+ * Deteksi murni (tanpa I/O) apakah body membawa Manual Promo Code. Dipakai
+ * SEBELUM validasi shape: request dengan bentuk invalid tetap masuk bucket kode
+ * setelah authenticated admission, sehingga kesalahan bentuk tidak menjadi
+ * jalur guessing gratis. Kedalaman dibatasi karena body maksimum 256KiB.
+ */
+export function carriesManualPromoCode(value: unknown, depth = 0): boolean {
+  if (depth > 12 || value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) {
+    return value.some((item) => carriesManualPromoCode(item, depth + 1));
+  }
+  const record = value as Record<string, unknown>;
+  if (record.kind === "manual") return true;
+  // Literal kode yang diketik bisa muncul pada shape yang belum tervalidasi
+  // (mis. { promoScleection: { code } }). False positive hanya memperketat
+  // limit, jadi aman; tidak ada nilai yang dicatat/dilog.
+  if (typeof record.code === "string") return true;
+  return Object.values(record).some((item) => carriesManualPromoCode(item, depth + 1));
+}
+
 /** Counter ephemeral PG; tidak membaca/menghapus retained checkout result. */
 export async function admitCheckoutRequest(input: {
   clientId: string; kind: "preview" | "place"; headers: Headers;
+  /**
+   * True bila request membawa manual code (termasuk shape invalid). Bucket
+   * kode 20/120 menggantikan bucket preview/place biasa, sesuai spec §5.5.
+   */
+  carriesManualCode?: boolean;
   /** Clock boundary server untuk test deterministik; tidak berasal dari payload HTTP. */
   now?: Date; environment?: Record<string, string | undefined>;
 }, database = db): Promise<void> {
@@ -40,10 +65,17 @@ export async function admitCheckoutRequest(input: {
   const expiresAt = new Date(windowStart.getTime() + 60_000);
   const subjectHash = (kind: string, value: string) => createHmac("sha256", secret)
     .update(`okcir:checkout-admission:v1:${kind}:${value}`).digest("hex");
-  const buckets = [
-    { kind: `${input.kind}:account`, subjectHash: subjectHash("account", input.clientId), limit: input.kind === "place" ? 10 : 60 },
-    { kind: `${input.kind}:ip`, subjectHash: subjectHash("ip", ip), limit: input.kind === "place" ? 60 : 300 },
-  ].sort((a, b) => a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : a.subjectHash.localeCompare(b.subjectHash));
+  const buckets = (
+    input.carriesManualCode
+      ? [
+          { kind: "code:account", subjectHash: subjectHash("account", input.clientId), limit: 20 },
+          { kind: "code:ip", subjectHash: subjectHash("ip", ip), limit: 120 },
+        ]
+      : [
+          { kind: `${input.kind}:account`, subjectHash: subjectHash("account", input.clientId), limit: input.kind === "place" ? 10 : 60 },
+          { kind: `${input.kind}:ip`, subjectHash: subjectHash("ip", ip), limit: input.kind === "place" ? 60 : 300 },
+        ]
+  ).sort((a, b) => a.kind < b.kind ? -1 : a.kind > b.kind ? 1 : a.subjectHash.localeCompare(b.subjectHash));
   let allowed: boolean;
   try {
     allowed = await runCheckoutTransaction(true, async (tx, step) => {

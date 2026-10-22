@@ -104,7 +104,10 @@ berbeda hanya jumlah baris per batch dan cara memilih SKU.
   fixed dari **source (Base Price) terbaru** dengan pembulatan half-up lalu
   membekukannya di row stage, sehingga browser tidak pernah menjadi sumber angka.
   Contoh: base 300000 dengan potongan 20% → target 240000 (bukan 80% dari harga
-  Markdown 150000 yang sedang aktif); 85% dari 100001 → 85001.
+  Markdown 150000 yang sedang aktif); 85% dari 100001 → 85001. Shortcut ini
+  menghasilkan target **fixed** (half-up) dan bukan engine benefit percentage
+  goods (ticket 10), yang menghitung diskon langsung dari subtotal setelah
+  Markdown dengan pembulatan **floor** dan cap opsional.
 - Stage menulis satu batch `staged` + seluruh row `pending` + satu audit
   `PRICE_CHANGE_STAGED` per row dalam **satu transaksi**; harga live tidak
   berubah. SKU yang tidak ditemukan atau source tidak valid tetap di-stage dengan
@@ -173,21 +176,125 @@ berbeda hanya jumlah baris per batch dan cara memilih SKU.
 
 ### 3.7 Batas ticket ini
 
-Parser/validator workbook `.xlsx`, template, dan export/laporan subset adalah
-**ticket 05**. Bulk di ticket 04 hanya menerima row JSON dari UI (SKU, action,
+Parser/validator workbook `.xlsx`, template, dan export/laporan subset dibahas di
+bagian 4 (**ticket 05**). Bulk di ticket 04 hanya menerima row JSON dari UI (SKU, action,
 target fixed atau persen): tidak ada upload file, tidak ada arsip file, dan tidak
 ada klaim UAT/aktivasi provider. Bukti test bulk (L/T/B) dicatat di
 [testing](../testing/README.md).
 
-## 4. Schema dan retensi
+## 4. Excel harga: template, upload, laporan, dan retry (ticket 05)
 
-Tabel Markdown manual (migrasi `0041_even_wong.sql`), ditambah ledger apply dari
-ticket 04:
+Blok **Excel harga** di `/admin/products/harga` memakai jalur stage → review →
+apply yang sama dengan bulk; yang berbeda hanya asal baris (workbook) dan
+kelengkapan laporan/retry. Implementasi: `apps/admin/src/lib/xlsx-container.ts`
+(container ZIP bounded), `apps/admin/src/lib/price-workbook.ts` (kontrak
+workbook), dan `apps/admin/src/lib/price-changes-administration.ts`
+(`stageWorkbookPriceChange`, `exportPriceChangeWorkbook`,
+`getPriceChangeReport`).
+
+### 4.1 Format template
+
+- Satu workbook `.xlsx` dengan **satu** sheet bernama `Harga`.
+- `A1` literal `OKCIR_MARKDOWN_V1`.
+- Header row 2: `sku`, `action`, `new_price` (urutan ini), lalu hanya kolom
+  referensi resmi `row_number`, `product_name`, `variant`, `source_price`,
+  `effective_price`, `origin_row`, `status`, `error_reason`. Header asing/duplikat/hilang/bergeser
+  = fatal; kolom referensi **tidak** otoritatif.
+- Data mulai row 3. `sku` harus sel text persis (case-sensitive, spasi tidak
+  dinormalisasi); `action` literal `set_price`/`restore_base`; `new_price` angka
+  integer Rupiah. `set_price` wajib target > 0; `restore_base` wajib harga
+  kosong. Harga kosong pada `set_price` **bukan** restore.
+- Template kosong, export SKU, laporan, dan subset gagal memakai writer yang
+  sama: semua text ditulis sebagai inline string, jadi nilai berawalan `=`,
+  `+`, `-`, `@` tetap literal dan tidak pernah menjadi formula.
+
+### 4.2 Parser bounded dan aman
+
+- Container diperiksa dari bytes, bukan extension/MIME: signature ZIP, EOCD,
+  central directory, satu disk, tanpa ZIP64; OLE/legacy/encrypted ditolak.
+- Entry: maksimum 200, nama wajib aman (tanpa `..`, absolut, backslash, NUL,
+  duplikat), flag enkripsi/kompresi tak didukung ditolak, CRC dan ukuran tiap
+  entry diverifikasi.
+- Batas ditegakkan **selama** membaca: bytes terkompresi (`maxFileBytes`, default
+  5 MiB), total bytes setelah dekompresi (`maxExpandedBytes`, default 25 MiB),
+  jumlah baris data non-blank (`maxRows`, default 1000), 100 sel/row, dan 4096
+  karakter/sel. Ukuran deklarasi tiap entry dibebankan ke budget SEBELUM
+  dekompresi, dan `zlib.inflateRawSync` diberi `maxOutputLength` sebesar ukuran
+  yang sudah dibebankan itu — header ZIP yang berbohong tidak bisa berubah jadi
+  alokasi tak terbatas.
+- Macro (`vbaProject.bin`/`macroEnabled`), external relationship
+  (`TargetMode="External"`/`xl/externalLinks`), sheet tambahan, marker/header
+  salah, dan container rusak = fatal: `400 WORKBOOK_REJECTED` + `details.reason`,
+  **sebelum** transaksi stage sehingga tidak ada batch/harga yang berubah.
+- Formula tidak dievaluasi, cached value tidak dipercaya: sel formula menggagalkan
+  row-nya (termasuk formula pada kolom referensi). Baris yang seluruhnya blank
+  diabaikan; baris yang hanya berisi kolom referensi juga diabaikan; baris
+  terisi sebagian tanpa SKU gagal row. SKU duplikat menggagalkan **semua**
+  kemunculannya (bukan last-row-wins). SKU unknown tidak menghalangi baris valid:
+  ia tetap di-stage lalu difinalkan `failed` (`VARIANT_NOT_FOUND`) saat apply.
+
+### 4.3 Upload hanya staging
+
+- Upload tidak pernah mengubah harga. Row valid menjadi `pending`; row yang
+  gagal validasi menjadi **failed final** dengan nomor baris sheet, `resultCode`
+  (`FORMULA_NOT_SUPPORTED`, `DUPLICATE_SKU`, `SKU_REQUIRED`, `SKU_NOT_TEXT`,
+  `ACTION_INVALID`, `PRICE_REQUIRED`, `PRICE_INVALID`, `PRICE_NOT_ALLOWED`,
+  `ORIGIN_ROW_INVALID`), dan raw action/target untuk laporan.
+- Apply memakai pipeline ticket 04 apa adanya: maksimum 25 row/5 detik per
+  request, satu transaksi per row, source/Markdown terbaru, no-op jadi
+  `unchanged`, dan counts jujur. Contoh 100 baris input dengan 3 row error:
+  stage `pending 97 / failed 3`, apply menghasilkan `97 diterapkan / 3 gagal`
+  dan state `partially_applied` — bukan "100 sukses".
+- Batch yang belum final hanya melanjutkan row `pending`; row final
+  (applied/unchanged/failed) tidak pernah diproses ulang. Error final hanya
+  diperbaiki lewat batch koreksi baru, bukan dengan membuka kembali row lama.
+
+### 4.4 Laporan, subset gagal, dan linked retry
+
+- `GET /api/admin/price-changes/{id}/report?subset=all|failed` dibentuk dari row
+  durable (bukan arsip upload) dan memuat `row_number`, SKU, action, target,
+  `status`, dan `error_reason`. Nilai text tetap literal.
+- Subset gagal adalah input retry: tiap baris mengisi `origin_row` dengan nomor
+  baris dirinya sendiri. Setelah diperbaiki, file diunggah lewat multipart
+  dengan `parentBatchId` batch asal.
+- Server memvalidasi linkage sebelum menulis row: batch asal harus ada, setiap
+  `origin_row` unik dan menunjuk row **failed final** batch itu. Row
+  pending/applied/unchanged tidak bisa dibuka kembali (`400 ORIGIN_INVALID`);
+  `origin_row` tanpa parent juga ditolak. Row tertaut menyimpan
+  `origin_retry_row_id`, sehingga 97 row sukses batch asal tidak diulang.
+- Request key baru per koreksi; replay key+file yang sama mengembalikan batch
+  yang sama tanpa duplikasi, file berbeda dengan key lama → `409
+  REQUEST_KEY_CONFLICT`.
+- Upload workbook asli tidak diarsipkan. Byte file hanya hidup di memory request
+  (dibatasi content-length + ukuran file) dan dilepas saat request selesai; yang
+  durable hanya row input/hasil/audit.
+
+### 4.5 Izin, log, dan batas
+
+- Template/export/laporan/subset memerlukan `prices:view` global +
+  `products:view all_branches`; upload memerlukan `prices:edit`. Grant dibaca
+  per request (bukan dari UI), jadi direct API tidak bisa melewati UI.
+- Setiap endpoint mencatat structured log: `info` sukses (batch id, counts,
+  bytes — tanpa isi workbook/daftar SKU), `warn` untuk penolakan/`409`/fatal
+  dengan `reason`, dan `error` kontekstual untuk kegagalan tak terduga.
+- Batas row/byte adalah batas konfigurasi operasional (`discount.import.*`),
+  bukan SLA atau benchmark. Menurunkan limit tidak menghapus hasil committed.
+
+## 5. Schema dan retensi
+
+Tabel Markdown manual (migrasi `0041_even_wong.sql`), ledger apply ticket 04
+(`0045_young_shiva.sql`), dan constraint row workbook ticket 05
+(`0046_short_pride.sql`, `0047_rainy_captain_cross.sql`):
 
 - `price_change_batch` — command/attribution, state, counts (selalu menjumlah
-  `row_count`), receipt key `(actor_identity, request_key)`.
+  `row_count`), receipt key `(actor_identity, request_key)`, plus
+  `template_version` (workbook), `parent_batch_id` (koreksi), `source`
+  `manual|bulk|xlsx`.
 - `price_change_batch_row` — input/preview non-otoritatif, hasil final
-  before/after, `applied_revision_id`.
+  before/after, `applied_revision_id`, `origin_retry_row_id` (self-FK ke row
+  gagal batch asal). Row hasil parser workbook yang gagal disimpan sebagai
+  `failed` final: `input_sku` boleh kosong dan `action` boleh `invalid` hanya
+  pada state `failed`, dan CHECK menolak row `invalid` yang masih pending.
 - `variant_price_revision` — revision immutable: action, target, source,
   effective, previous target/effective, batch/row attribution, actor identity.
   CHECK menolak revision yang mengklaim coretan/effective tidak konsisten.
@@ -212,7 +319,7 @@ revision 2). Seeder juga membuat satu batch bulk `staged` berisi 3 row `pending`
 tidak mengubah `product_variant.price`, supaya layar bulk punya data demo. Seed
 hanya untuk database disposable.
 
-## 5. Checkout dan pembayaran
+## 6. Checkout dan pembayaran
 
 - Preview pickup/delivery dan cart membangun pricing snapshot dengan
   `sourceUnitPrice` + `effectiveUnitPrice` + `markdownRevisionId`.
@@ -231,7 +338,7 @@ hanya untuk database disposable.
 - Order/account/admin read membaca snapshot immutable; tidak ada perhitungan
   ulang dari master saat read.
 
-## 6. Otorisasi
+## 7. Otorisasi
 
 Module Global baru `prices` dengan `view`/`edit` saja:
 
@@ -245,7 +352,7 @@ sehingga revoke bersamaan menyerialkan write. Fresh seed HQ mendapat
 `prices:view/edit`; Admin tidak. Role existing/custom tidak diberi grant
 otomatis oleh migrasi. Re-sync produk (`products:edit`) bukan izin harga.
 
-## 7. Bukti verifikasi (ticket 03)
+## 8. Bukti verifikasi (ticket 03–05)
 
 - L: `packages/db/src/markdown-pricing.test.ts` (literal §4.1/§4.4, shortcut
   persen, validasi target) dan `apps/store/src/lib/versioned-pricing.test.ts`
@@ -262,11 +369,23 @@ otomatis oleh migrasi. Re-sync produk (`products:edit`) bukan izin harga.
   Snap 166500, provider gross300000/disc150000, invoice+payment 150000,
   ready_for_pickup) dan `e2e/admin/price-change-mock.spec.ts`
   (stage→review→apply→history, replay, denial direct URL/API).
+- T (ticket 05): `apps/admin/src/lib/price-workbook-administration.db.test.ts`
+  (upload staging dengan row gagal final, apply parsial + laporan, koreksi
+  tertaut dengan replay/konflik/linkage invalid, fatal tanpa batch, limit tepat
+  batas, contoh 100→97/3, export literal, izin download/upload).
+- L/H (ticket 05): `apps/admin/src/lib/price-workbook.test.ts` (kontrak
+  marker/header/row/formula/duplikat/bounds + writer literal) dan
+  `apps/admin/src/lib/xlsx-container.test.ts` (signature, traversal, duplikat,
+  entry/expanded limit, bom header bohong, CRC, enkripsi).
+- B (ticket 05): `e2e/admin/price-change-excel-mock.spec.ts` (template via
+  HTTP, upload→preview→apply parsial→laporan/subset, koreksi tertaut tanpa
+  mengulang row sukses, replay/409, workbook macro ditolak, denial Admin).
 
-## 8. Batas yang belum ditutup ticket ini
+## 9. Batas yang belum ditutup ticket ini
 
-- Bulk/Excel: bulk JSON sudah tersedia (bagian 3); parser/validator workbook dan
-export/laporan subset masih ticket 05.
+- Bulk/Excel: bulk JSON (bagian 3) dan Excel/template/laporan/retry (bagian 4)
+  sudah tersedia; keduanya tetap tunduk pada gate operasional dan grant saat
+  request.
 - Offer/Coupon dan alokasi goods allocation (ticket 07/10).
 - End-to-end provider nyata dan mirror post-invoice dengan Markdown (slice
   berikutnya + evidence bounded); standard live-provider E2E tidak dijalankan.

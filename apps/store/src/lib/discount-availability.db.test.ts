@@ -60,7 +60,11 @@ interface OfferFixture {
   id: string;
   name: string;
   minSubtotal: string;
-  fixedAmount: string;
+  /** Fixed goods nominal; diabaikan bila `rate` diisi. */
+  fixedAmount?: string;
+  /** Percentage goods rate >0..100 (ticket 10). */
+  rate?: string;
+  capAmount?: string | null;
   quotaCount?: number | null;
   budgetAmount?: string | null;
   perClientLimit?: number;
@@ -114,6 +118,19 @@ const offers: OfferFixture[] = [
     fixedAmount: "25000",
     perClientLimit: 1,
     clientUsage: { clientId: clientVerified, consumedCount: 1, consumedAmount: "25000" },
+  },
+  {
+    id: `${PREFIX}-offer-kappa`,
+    name: "Kappa",
+    minSubtotal: "0",
+    rate: "10",
+    capAmount: "20000",
+  },
+  {
+    id: `${PREFIX}-offer-lambda`,
+    name: "Lambda",
+    minSubtotal: "0",
+    rate: "12.5",
   },
   {
     id: `${PREFIX}-offer-theta`,
@@ -205,10 +222,17 @@ beforeAll(async () => {
         published ? new Date("2026-10-01T00:00:00.000Z") : null,
       ]
     );
-    await pool.query(
-      `insert into discount_benefit (id, revision_id, kind, scope, fixed_amount) values ($1,$2,'fixed_goods','goods',$3)`,
-      [`${offer.id}-benefit`, `${offer.id}-revision`, offer.fixedAmount]
-    );
+    if (offer.rate) {
+      await pool.query(
+        `insert into discount_benefit (id, revision_id, kind, scope, rate, cap_amount) values ($1,$2,'percentage_goods','goods',$3,$4)`,
+        [`${offer.id}-benefit`, `${offer.id}-revision`, offer.rate, offer.capAmount ?? null]
+      );
+    } else {
+      await pool.query(
+        `insert into discount_benefit (id, revision_id, kind, scope, fixed_amount) values ($1,$2,'fixed_goods','goods',$3)`,
+        [`${offer.id}-benefit`, `${offer.id}-revision`, offer.fixedAmount]
+      );
+    }
     await pool.query(
       `update discount_offer
          set state=$2, current_revision_id=$3, quota_count=$4, budget_amount=$5, per_client_limit=$6
@@ -283,11 +307,27 @@ describe("readAvailableOffers — discovery dan reason", () => {
     // Delta (paused), Epsilon (end lewat), Zeta (start masa depan) tidak pernah
     // didiscovery. Urutan: nama lalu Offer ID. Seed demo DB boleh punya Offer
     // lain, jadi hanya fixture milik spec ini yang diassert.
-    expect(names).toEqual(["Aardvark", "Alpha", "Beta", "Eta", "Gamma", "Iota", "Theta"]);
+    expect(names).toEqual(["Aardvark", "Alpha", "Beta", "Eta", "Gamma", "Iota", "Kappa", "Lambda", "Theta"]);
 
     const byName = Object.fromEntries(scoped.map((item) => [item.name, item]));
     expect(byName.Aardvark).toMatchObject({ eligible: true, reason: null, reasonMessage: null, benefitAmount: "25000" });
     expect(byName.Alpha).toMatchObject({ eligible: true, benefitAmount: "5000" });
+    // Percentage: nominal tampil adalah hasil floor/clip/cap untuk context ini
+    // (subtotal 250000), bukan nominal fixed atau rate mentah.
+    expect(byName.Kappa).toMatchObject({
+      eligible: true,
+      benefitKind: "percentage_goods",
+      rate: "10",
+      capAmount: "20000",
+      benefitAmount: "20000",
+    });
+    expect(byName.Lambda).toMatchObject({
+      eligible: true,
+      benefitKind: "percentage_goods",
+      rate: "12.5",
+      capAmount: null,
+      benefitAmount: "31250",
+    });
     expect(byName.Beta).toMatchObject({ eligible: false, reason: "MINIMUM_NOT_MET" });
     expect(byName.Eta).toMatchObject({ eligible: false, reason: "CAPACITY_UNAVAILABLE" });
     expect(byName.Gamma).toMatchObject({ eligible: false, reason: "CAPACITY_UNAVAILABLE" });
@@ -369,6 +409,8 @@ describe("readAvailableOffers — discovery dan reason", () => {
       "Eta",
       "Gamma",
       "Iota",
+      "Kappa",
+      "Lambda",
       "Theta",
     ]);
   });

@@ -201,7 +201,7 @@ test.afterAll(async () => {
   await pool.end();
 });
 
-// Cart & checkout — order-flow, Sales-Order reservation, vouchers:
+// Cart & checkout — order-flow, Sales-Order reservation:
 // cart → checkout → place-order → confirmed SO → Midtrans redirect.
 // Uses the authenticated store session (storageState).
 
@@ -752,30 +752,5 @@ test.describe("storefront cart & checkout", () => {
       payment_method: "gopay",
       midtrans_transaction_id: "attempt-2-txn-id",
     });
-  });
-
-  test("voucher validation API: valid, minimum-purchase, and unknown codes", async ({
-    page,
-  }) => {
-    // Valid code (case-insensitive) with subtotal → discount preview.
-    const ok = await page.request.post("/api/vouchers/validate", {
-      data: { code: "diskon10", subtotal: 100000 },
-    });
-    expect(ok.status()).toBe(200);
-    const okBody = await ok.json();
-    expect(okBody.data.discount).toBe(10000); // 10% of 100.000
-    expect(okBody.data.remainingQuota).toBe(50);
-
-    // Below minimum purchase → 400.
-    const below = await page.request.post("/api/vouchers/validate", {
-      data: { code: "DISKON10", subtotal: 40000 },
-    });
-    expect(below.status()).toBe(400);
-
-    // Unknown code → 404.
-    const unknown = await page.request.post("/api/vouchers/validate", {
-      data: { code: "TIDAKADA" },
-    });
-    expect(unknown.status()).toBe(404);
   });
 });

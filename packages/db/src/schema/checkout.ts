@@ -19,7 +19,7 @@ export const discountRequestWindows = pgTable("discount_request_window", {
   index("discount_request_window_expiry_idx").on(t.expiresAt),
   check("discount_request_window_count_valid", sql`${t.count} >= 0`),
   check("discount_request_window_subject_valid", sql`${t.subjectHash} ~ '^[a-f0-9]{64}$'`),
-  check("discount_request_window_kind_valid", sql`${t.kind} IN ('preview:account','preview:ip','place:account','place:ip')`),
+  check("discount_request_window_kind_valid", sql`${t.kind} IN ('preview:account','preview:ip','place:account','place:ip','code:account','code:ip')`),
   check("discount_request_window_expiry_valid", sql`${t.expiresAt} = ${t.windowStart} + interval '60 seconds'`),
 ]);
 

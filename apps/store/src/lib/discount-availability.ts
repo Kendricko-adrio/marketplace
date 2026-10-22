@@ -48,8 +48,17 @@ export class DiscountAvailabilityError extends Error {
 export interface AvailableOfferDto {
   offerId: string;
   name: string;
-  /** Nominal fixed goods yang dikonfigurasi (belum di-clip ke subtotal). */
+  /**
+   * Nominal benefit AKTUAL untuk context ini (sudah floor/clip/cap); "0" ketika
+   * tidak eligible. Bukan nominal fixed yang dikonfigurasi — percentage bergantung
+   * pada subtotal setelah Markdown.
+   */
   benefitAmount: string;
+  benefitKind: "fixed_goods" | "percentage_goods" | "shipping" | null;
+  /** NULL untuk fixed goods. */
+  rate: string | null;
+  /** NULL = percentage tanpa cap (atau fixed goods). */
+  capAmount: string | null;
   minSubtotal: string;
   endsAt: string | null;
   eligible: boolean;
@@ -60,6 +69,18 @@ export interface AvailableOfferDto {
 export interface AvailableOffersResult {
   items: AvailableOfferDto[];
   nextCursor: string | null;
+}
+
+/** Konteks fulfillment untuk eligibility tampilan picker (ticket 11). */
+export interface AvailableOfferFulfillmentContext {
+  fulfillmentMethod: "pickup" | "delivery";
+  /**
+   * Ongkir customer dari layanan yang sedang dipilih di browser. Nilai ini
+   * HANYA dipakai untuk menampilkan eligibility subsidi ongkir; preview/place
+   * order selalu menghitung ulang dengan quote baru. Tidak pernah menjadi
+   * sumber uang order.
+   */
+  shippingBeforeSubsidy?: string;
 }
 
 type Database = typeof db;
@@ -149,6 +170,7 @@ export async function readAvailableOffers(
     limit?: number;
     cursor?: string | null;
     now?: Date;
+    fulfillment?: AvailableOfferFulfillmentContext;
   },
   database: Database = db
 ): Promise<AvailableOffersResult> {
@@ -182,6 +204,8 @@ export async function readAvailableOffers(
       benefitKind: discountBenefits.kind,
       paramsVersion: discountBenefits.paramsVersion,
       fixedAmount: discountBenefits.fixedAmount,
+      rate: discountBenefits.rate,
+      capAmount: discountBenefits.capAmount,
       reservedCount: discountOfferUsage.reservedCount,
       consumedCount: discountOfferUsage.consumedCount,
       reservedAmount: discountOfferUsage.reservedAmount,
@@ -248,6 +272,8 @@ export async function readAvailableOffers(
       now,
       verifiedEmail: context.verifiedEmail,
       subtotalAfterMarkdown: context.subtotalAfterMarkdown.toString(),
+      fulfillmentMethod: input.fulfillment?.fulfillmentMethod ?? "pickup",
+      shippingBeforeSubsidy: input.fulfillment?.shippingBeforeSubsidy ?? "0",
       offer: {
         activationKind: "public",
         state: "enabled",
@@ -258,14 +284,7 @@ export async function readAvailableOffers(
         quotaCount: row.quotaCount,
         budgetAmount: normalizeMoney(row.budgetAmount),
         perClientLimit: row.perClientLimit,
-        benefit:
-          row.fixedAmount == null
-            ? null
-            : {
-                kind: row.benefitKind,
-                paramsVersion: row.paramsVersion,
-                fixedAmount: normalizeMoney(row.fixedAmount),
-              },
+        benefit: benefitPayloadOf(row),
         usage: {
           reservedCount: row.reservedCount,
           consumedCount: row.consumedCount,
@@ -275,10 +294,19 @@ export async function readAvailableOffers(
         clientUsage: clientUsage.get(row.offerId) ?? null,
       },
     });
+    const benefitKind =
+      row.benefitKind === "fixed_goods" ||
+      row.benefitKind === "percentage_goods" ||
+      row.benefitKind === "shipping"
+        ? row.benefitKind
+        : null;
     return {
       offerId: row.offerId,
       name: row.name ?? "",
-      benefitAmount: normalizeMoney(row.fixedAmount),
+      benefitAmount: eligibility.benefitAmount ?? "0",
+      benefitKind,
+      rate: row.rate === null ? null : normalizeRateText(row.rate),
+      capAmount: row.capAmount === null ? null : normalizeMoney(row.capAmount),
       minSubtotal,
       endsAt: row.endAt ? row.endAt.toISOString() : null,
       eligible: eligibility.eligible,
@@ -293,6 +321,58 @@ export async function readAvailableOffers(
     items,
     nextCursor: hasMore ? encodeCursor(offset + limit) : null,
   };
+}
+
+/**
+ * Payload benefit untuk evaluator bersama. Percentage tanpa cap mengirim NULL;
+ * bentuk yang tidak didukung tetap dikirim apa adanya supaya evaluator menolak
+ * (bukan dikonversi menjadi fixed goods).
+ */
+function benefitPayloadOf(row: {
+  benefitKind: string;
+  paramsVersion: number;
+  fixedAmount: string | null;
+  rate: string | null;
+  capAmount: string | null;
+}): {
+  kind: string;
+  paramsVersion: number;
+  fixedAmount?: string | null;
+  rate?: string | null;
+  capAmount?: string | null;
+} {
+  if (row.benefitKind === "fixed_goods") {
+    return {
+      kind: row.benefitKind,
+      paramsVersion: row.paramsVersion,
+      fixedAmount: row.fixedAmount === null ? null : normalizeMoney(row.fixedAmount),
+    };
+  }
+  if (row.benefitKind === "shipping") {
+    return {
+      kind: row.benefitKind,
+      paramsVersion: row.paramsVersion,
+      capAmount: row.capAmount === null ? null : normalizeMoney(row.capAmount),
+    };
+  }
+  return {
+    kind: row.benefitKind,
+    paramsVersion: row.paramsVersion,
+    rate: row.rate === null ? null : normalizeRateText(row.rate),
+    capAmount: row.capAmount === null ? null : normalizeMoney(row.capAmount),
+  };
+}
+
+/** `numeric(9,6)` → teks rate kanonik tanpa nol ekor. */
+function normalizeRateText(value: string): string {
+  const trimmed = value.trim();
+  const dot = trimmed.indexOf(".");
+  if (dot <= 0) return trimmed;
+  const whole = trimmed.slice(0, dot);
+  const fraction = trimmed.slice(dot + 1);
+  if (!/^[0-9]+$/.test(whole) || !/^[0-9]+$/.test(fraction)) return trimmed;
+  const normalizedFraction = fraction.replace(/0+$/, "");
+  return normalizedFraction ? whole + "." + normalizedFraction : whole;
 }
 
 /** DB numeric scale2 → whole-Rupiah string; null/absent → "0". */

@@ -1,5 +1,6 @@
 import { PriceChangeClient } from "./price-change-client";
 import { PriceChangeBulkClient } from "./price-change-bulk-client";
+import { PriceChangeExcelClient } from "./price-change-excel-client";
 
 // =========================================================
 // /admin/products/harga — manual Markdown per SKU + bulk lintas halaman
@@ -23,6 +24,7 @@ export default function PricesPage() {
       </div>
       <PriceChangeClient />
       <PriceChangeBulkClient />
+      <PriceChangeExcelClient />
     </div>
   );
 }

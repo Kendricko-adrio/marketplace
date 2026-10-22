@@ -1,5 +1,5 @@
 /**
- * Seam L — eligibility Offer publik fixed-goods (ticket 07, spec §5.1).
+ * Seam L — eligibility Offer publik goods (ticket 07/10, spec §5.1).
  *
  * Pure: tanpa DB/HTTP/config, tanpa mutasi usage. Fungsi ini menjawab "boleh
  * dipakai sekarang?" beserta reason aman dan nominal benefit yang AKAN
@@ -11,7 +11,17 @@
  * revision, waktu (start inklusif, end eksklusif), minimum belanja, verified
  * email, benefit positif, lalu kapasitas global/per-akun. Reason tidak
  * membocorkan kode/Offer lain.
+ *
+ * Dua bentuk benefit version1 memakai matriks yang SAMA (fixed_goods nominal,
+ * percentage_goods rate + cap opsional). Perhitungan nominal memakai helper
+ * exact dari `discount-pricing` supaya eligibility dan snapshot tidak pernah
+ * berbeda rumus.
  */
+import {
+  goodsBenefitAmount,
+  shippingSubsidyAmount,
+  tryParseOfferBenefit,
+} from "./discount-pricing";
 
 export const OFFER_ELIGIBILITY_REASONS = [
   "INPUT_INVALID",
@@ -20,6 +30,7 @@ export const OFFER_ELIGIBILITY_REASONS = [
   "MINIMUM_NOT_MET",
   "EMAIL_VERIFICATION_REQUIRED",
   "BENEFIT_UNAVAILABLE",
+  "FULFILLMENT_NOT_ELIGIBLE",
   "CAPACITY_UNAVAILABLE",
 ] as const;
 
@@ -32,12 +43,40 @@ export interface OfferEligibilityUsage {
   consumedAmount: string | number;
 }
 
+export interface OfferEligibilityBenefit {
+  kind: string;
+  paramsVersion: number;
+  /** `fixed_goods` — nominal positif Rupiah utuh. */
+  fixedAmount?: string | number | null;
+  /** `percentage_goods` — rate >0..100 maksimal6 digit pecahan. */
+  rate?: string | number | null;
+  /** `percentage_goods` — cap Rupiah utuh positif, NULL/absen = tanpa cap. */
+  capAmount?: string | number | null;
+}
+
 export interface OfferEligibilityInput {
   /** Server clock; never from the browser payload. */
   now: Date;
   verifiedEmail: boolean;
   /** Subtotal setelah Markdown (sebelum kupon), decimal string/number exact. */
   subtotalAfterMarkdown: string | number;
+  /**
+   * Metode fulfillment context ini. Default pickup supaya pemanggil lama tidak
+   * berubah perilaku; benefit shipping hanya eligible untuk delivery.
+   */
+  fulfillmentMethod?: "pickup" | "delivery";
+  /** Ongkir customer SEBELUM subsidi; wajib positif untuk benefit shipping. */
+  shippingBeforeSubsidy?: string | number;
+  /**
+   * Jalur aktivasi request ini. Default `public` supaya pemanggil lama tidak
+   * berubah perilaku; `manual` hanya membuka Offer `manual_only` ketika kode
+   * yang dikirim sudah resolve ke Offer tersebut DAN masih aktif
+   * (`manualCodeAccepted`). Tidak ada engine/counter kedua: seluruh pemeriksaan
+   * waktu/minimum/identitas/kapasitas di bawah tetap satu implementasi.
+   */
+  channel?: "public" | "manual";
+  /** Khusus channel manual: literal canonical resolve ke Offer ini & aktif. */
+  manualCodeAccepted?: boolean;
   offer: {
     activationKind: string;
     state: string;
@@ -49,11 +88,7 @@ export interface OfferEligibilityInput {
     quotaCount: number | null;
     budgetAmount: string | number | null;
     perClientLimit: number;
-    benefit: {
-      kind: string;
-      paramsVersion: number;
-      fixedAmount: string | number;
-    } | null;
+    benefit: OfferEligibilityBenefit | null;
     usage: OfferEligibilityUsage;
     /** Null = belum pernah memakai Offer ini (nol). */
     clientUsage: OfferEligibilityUsage | null;
@@ -89,6 +124,8 @@ export function describeOfferEligibilityReason(
       return "Verifikasi email akun Anda untuk memakai promo ini.";
     case "BENEFIT_UNAVAILABLE":
       return "Promo ini tidak dapat dipakai saat ini.";
+    case "FULFILLMENT_NOT_ELIGIBLE":
+      return "Promo ongkir hanya berlaku untuk pengiriman dengan ongkir.";
     case "CAPACITY_UNAVAILABLE":
       return "Kuota promo ini sudah habis.";
     case "INPUT_INVALID":
@@ -114,9 +151,21 @@ export function evaluateOfferEligibility(
   const minSubtotal = parseMoney(input.offer?.minSubtotal);
   if (subtotal === null || minSubtotal === null) return ineligible("INPUT_INVALID");
 
-  // 1. Discovery: publik, enabled, revision published. Draft/paused/archived
-  // dan manual-only tidak pernah bisa dipakai lewat jalur publik.
-  if (input.offer.activationKind !== "public" || input.offer.state !== "enabled" ||
+  const channel = input.channel ?? "public";
+  if (channel !== "public" && channel !== "manual") {
+    return ineligible("INPUT_INVALID");
+  }
+
+  // 1. Discovery/activation: jalur publik hanya untuk Offer publik; jalur manual
+  // hanya untuk Offer manual_only yang kodenya sudah resolve & aktif. Unknown,
+  // nonaktif, arsip, dan kode milik Offer lain menghasilkan reason aman yang
+  // SAMA — tidak ada code discovery lewat pesan berbeda.
+  const activationOk =
+    channel === "manual"
+      ? input.offer.activationKind === "manual_only" &&
+        input.manualCodeAccepted === true
+      : input.offer.activationKind === "public";
+  if (!activationOk || input.offer.state !== "enabled" ||
       input.offer.revisionPublished !== true) {
     return ineligible("OFFER_UNAVAILABLE");
   }
@@ -135,17 +184,53 @@ export function evaluateOfferEligibility(
   // 4. Verified email akun wajib untuk Offer; contactEmail order bukan pengganti.
   if (input.verifiedEmail !== true) return ineligible("EMAIL_VERIFICATION_REQUIRED");
 
-  // 5. Benefit harus fixed_goods paramsVersion1 dengan nominal positif valid.
+  // 5. Benefit harus bentuk goods version1 yang dikenal dan nominalnya positif.
+  // Bentuk/kind/versi/precision tak didukung ditolak (BENEFIT_UNAVAILABLE), bukan
+  // di-default ke fixed goods atau dibulatkan diam-diam.
   const benefit = input.offer.benefit;
-  if (!benefit || benefit.kind !== "fixed_goods" || benefit.paramsVersion !== 1) {
+  if (!benefit || typeof benefit !== "object") {
     return ineligible("BENEFIT_UNAVAILABLE");
   }
-  const fixedAmount = parseMoney(benefit.fixedAmount);
-  if (fixedAmount === null || fixedAmount <= ZERO) return ineligible("BENEFIT_UNAVAILABLE");
+  const parsedBenefit = tryParseOfferBenefit({
+    kind: benefit.kind,
+    paramsVersion: benefit.paramsVersion,
+    ...(benefit.kind === "fixed_goods"
+      ? { fixedAmount: benefit.fixedAmount ?? null }
+      : benefit.kind === "shipping"
+        ? { capAmount: benefit.capAmount ?? null }
+        : {
+            rate: benefit.rate ?? null,
+            // Kolom DB `cap_amount` yang NULL berarti memang tanpa cap; bentuk
+            // lain tetap ditolak oleh parser bersama.
+            capAmount: benefit.capAmount ?? null,
+          }),
+  });
+  if (!parsedBenefit) return ineligible("BENEFIT_UNAVAILABLE");
 
-  // 6. Nominal aktual = min(fixed, subtotal). Clip yang membuatnya 0 (subtotal0)
-  // tidak pernah menjadi reservation/usage.
-  const benefitAmount = fixedAmount < subtotal ? fixedAmount : subtotal;
+  // 6. Nominal aktual sekali per order:
+  // - goods: fixed di-clip ke subtotal; percentage floor dari subtotal setelah
+  //   Markdown lalu di-clip ke subtotal dan cap.
+  // - shipping: hanya delivery dengan ongkir valid positif; S=min(ongkir,cap),
+  //   sisa ongkir hangus. Pickup/ongkir0 disabled dengan alasan eksplisit.
+  // Benefit yang menjadi 0 (mis. subtotal50 rate1%) tidak pernah dipakai.
+  let benefitAmount: bigint;
+  if (parsedBenefit.kind === "shipping") {
+    const fulfillmentMethod = input.fulfillmentMethod ?? "pickup";
+    const shipping = parseMoney(input.shippingBeforeSubsidy ?? "0");
+    if (fulfillmentMethod !== "delivery" || shipping === null || shipping <= ZERO) {
+      return ineligible("FULFILLMENT_NOT_ELIGIBLE");
+    }
+    try {
+      benefitAmount = shippingSubsidyAmount(parsedBenefit, {
+        fulfillmentMethod,
+        shippingBeforeSubsidy: shipping.toString(),
+      });
+    } catch {
+      return ineligible("BENEFIT_UNAVAILABLE");
+    }
+  } else {
+    benefitAmount = goodsBenefitAmount(parsedBenefit, subtotal);
+  }
   if (benefitAmount <= ZERO) return ineligible("BENEFIT_UNAVAILABLE");
 
   // 7. Jatah akun: reserved + consumed + 1 tidak boleh melebihi limit.

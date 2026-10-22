@@ -48,6 +48,11 @@ export interface CheckoutReviewPricing {
   subtotal: string;
   discount: string;
   taxableBase: string;
+  /** Ongkir customer SEBELUM subsidi; booking/quote cost memakai nilai ini. */
+  shippingBeforeSubsidy: string;
+  /** Subsidi ongkir (funding merchant), 0 untuk pickup/tanpa promo. */
+  shippingSubsidy: string;
+  /** Ongkir NET customer (yang dibayar), quote/booking tetap original. */
   shippingCost: string;
   serviceFee: string;
   ppnRatePercent: string;
@@ -94,6 +99,19 @@ export type CheckoutReviewPromo =
   | {
       kind: "public";
       offerId: string;
+      revisionId: string;
+      benefitId: string;
+      benefitAmount: string;
+    }
+  | {
+      /**
+       * Manual Promo Code (ticket 09). Token mengikat codeId — BUKAN literal —
+       * sehingga kode tidak pernah masuk payload/token/log, tetapi pilihan
+       * tetap tidak bisa dipalsukan ke kode/Offer lain.
+       */
+      kind: "manual";
+      offerId: string;
+      codeId: string;
       revisionId: string;
       benefitId: string;
       benefitAmount: string;
@@ -172,6 +190,8 @@ export function buildCheckoutReviewContextFingerprint(
         subtotal: context.pricing.subtotal,
         discount: context.pricing.discount,
         taxableBase: context.pricing.taxableBase,
+        shippingBeforeSubsidy: context.pricing.shippingBeforeSubsidy,
+        shippingSubsidy: context.pricing.shippingSubsidy,
         shippingCost: context.pricing.shippingCost,
         serviceFee: context.pricing.serviceFee,
         ppnRatePercent: context.pricing.ppnRatePercent,
@@ -185,14 +205,26 @@ export function buildCheckoutReviewContextFingerprint(
 
 export class CheckoutReviewRequiredError extends Error {
   readonly code = "CHECKOUT_REVIEW_REQUIRED";
-  constructor() {
-    super("Periksa kembali rincian pesanan dan konfirmasikan checkout terbaru.");
+  constructor(
+    /** Persetujuan yang kurang/ tidak terikat; null untuk review stale biasa. */
+    readonly requiresAcknowledgement: "promo_increase" | "continue_without_promo" | null = null
+  ) {
+    super(
+      requiresAcknowledgement === "promo_increase"
+        ? "Konfirmasi kenaikan total setelah mengganti promo diperlukan."
+        : requiresAcknowledgement === "continue_without_promo"
+          ? "Konfirmasi lanjut tanpa promo diperlukan untuk pesanan ini."
+          : "Periksa kembali rincian pesanan dan konfirmasikan checkout terbaru."
+    );
     this.name = "CheckoutReviewRequiredError";
   }
 }
 
 /** Membaca hanya token canonical bertanda tangan; tidak menerima harga browser. */
-export function verifyCheckoutReviewToken(token: string, now = new Date()): string {
+export function verifyCheckoutReviewToken(
+  token: string,
+  now = new Date()
+): CheckoutReviewVerification {
   const secret = (process.env.BETTER_AUTH_SECRET ?? "").trim();
   if (!secret) throw new CheckoutReviewUnavailableError("Review checkout belum tersedia.");
   if (typeof token !== "string" || token.length > 2048) throw new CheckoutReviewRequiredError();
@@ -210,13 +242,26 @@ export function verifyCheckoutReviewToken(token: string, now = new Date()): stri
   catch { throw new CheckoutReviewRequiredError(); }
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new CheckoutReviewRequiredError();
   const value = payload as Record<string, unknown>;
-  if (Object.keys(value).sort().join(",") !== "exp,fp,v" || value.v !== CHECKOUT_REVIEW_TOKEN_VERSION ||
+  const allowed = ["cwo", "exp", "fp", "inc", "p", "v"];
+  const keys = Object.keys(value);
+  if (keys.some((key) => !allowed.includes(key)) ||
+      !["exp", "fp", "p", "v"].every((key) => keys.includes(key)) ||
+      value.v !== CHECKOUT_REVIEW_TOKEN_VERSION ||
       typeof value.fp !== "string" || !/^[a-f0-9]{64}$/.test(value.fp) ||
+      typeof value.p !== "string" || !/^[a-f0-9]{64}$/.test(value.p) ||
+      (value.inc !== undefined && value.inc !== 1) ||
+      (value.cwo !== undefined && value.cwo !== 1) ||
+      (value.inc === 1 && value.cwo === 1) ||
       !Number.isSafeInteger(value.exp) || (value.exp as number) * 1000 <= now.getTime() ||
       (value.exp as number) * 1000 > now.getTime() + CHECKOUT_REVIEW_TTL_MS) {
     throw new CheckoutReviewRequiredError();
   }
-  return value.fp;
+  return {
+    fingerprint: value.fp,
+    promoDigest: value.p,
+    requiresPromoIncreaseAcknowledgement: value.inc === 1,
+    requiresContinueWithoutPromoAcknowledgement: value.cwo === 1,
+  };
 }
 
 export interface CheckoutReviewToken {
@@ -226,16 +271,59 @@ export interface CheckoutReviewToken {
   expiresAt: string;
 }
 
+/**
+ * Hasil verifikasi token. `promoDigest` mengikat identitas pilihan promo yang
+ * direview (bukan fingerprint konteks), sehingga preview penggantian dapat
+ * memastikan promo "previous" yang diklaim memang promo yang pernah direview.
+ * Flag persetujuan berasal dari payload bertanda tangan, bukan dari body.
+ */
+export interface CheckoutReviewVerification {
+  fingerprint: string;
+  promoDigest: string;
+  requiresPromoIncreaseAcknowledgement: boolean;
+  requiresContinueWithoutPromoAcknowledgement: boolean;
+}
+
+/** Digest stabil pilihan promo (identitas + nominal aktual), tanpa literal kode. */
+/**
+ * Digest stabil IDENTITAS pilihan promo (jenis + Offer ID), tanpa literal kode,
+ * revisi, atau nominal. Dipakai untuk membuktikan promo "previous" yang
+ * diklaim browser memang promo yang pernah direview; revisi/nominal/total
+ * tetap diikat oleh fingerprint konteks yang ditandatangani.
+ */
+export function promoSelectionDigest(
+  promo:
+    | { kind: "none" }
+    | { kind: "public"; offerId: string }
+    | { kind: "manual"; offerId: string; codeId: string }
+): string {
+  return sha256Hex(
+    JSON.stringify(
+      promo.kind === "none"
+        ? { kind: "none" }
+        : promo.kind === "public"
+          ? { kind: "public", offerId: promo.offerId }
+          : { kind: "manual", offerId: promo.offerId, codeId: promo.codeId }
+    )
+  );
+}
+
 function reviewSigningKey(secret: string): Buffer {
   return createHmac("sha256", secret).update(REVIEW_SIGNING_DOMAIN).digest();
 }
 
 /**
  * Signs the review token for a context fingerprint. Fail closed: a blank
- * `BETTER_AUTH_SECRET` never yields a token.
+ * `BETTER_AUTH_SECRET` never yields a token. The signed payload records which
+ * acknowledgements the customer owes at place-order (a replacement that raised
+ * the final total, or an explicit continue-without-promo after the reviewed
+ * promo died) so a browser cannot add them to the request afterwards.
  */
 export function createCheckoutReviewToken(input: {
   contextFingerprint: string;
+  promo: CheckoutReviewPromo;
+  requiresPromoIncreaseAcknowledgement?: boolean;
+  requiresContinueWithoutPromoAcknowledgement?: boolean;
   now?: Date;
 }): CheckoutReviewToken {
   const secret = (process.env.BETTER_AUTH_SECRET ?? "").trim();
@@ -247,6 +335,12 @@ export function createCheckoutReviewToken(input: {
   if (!/^[a-f0-9]{64}$/.test(input.contextFingerprint)) {
     throw new Error("contextFingerprint harus berupa SHA-256 hex");
   }
+  if (
+    input.requiresPromoIncreaseAcknowledgement &&
+    input.requiresContinueWithoutPromoAcknowledgement
+  ) {
+    throw new Error("Persyaratan penggantian dan lanjut-tanpa-promo tidak boleh bersamaan.");
+  }
 
   const issuedAt = input.now ?? new Date();
   const expiresAt = new Date(issuedAt.getTime() + CHECKOUT_REVIEW_TTL_MS);
@@ -255,7 +349,10 @@ export function createCheckoutReviewToken(input: {
     JSON.stringify({
       v: CHECKOUT_REVIEW_TOKEN_VERSION,
       fp: input.contextFingerprint,
+      p: promoSelectionDigest(input.promo),
       exp: Math.floor(expiresAt.getTime() / 1000),
+      ...(input.requiresPromoIncreaseAcknowledgement ? { inc: 1 } : {}),
+      ...(input.requiresContinueWithoutPromoAcknowledgement ? { cwo: 1 } : {}),
     }),
     "utf8"
   ).toString("base64url");

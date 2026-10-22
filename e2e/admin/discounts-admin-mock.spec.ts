@@ -100,7 +100,7 @@ const CREATE_BODY = { requestKey: REQUEST_KEY, activationKind: "public" };
 // silently dropping.
 const UNKNOWN_FIELD = "discountPercent";
 const CONTRACT_VERSION_KEY = "discounts.contractVersion";
-const NEW_TABLES = ["discount_offer", "discount_offer_revision", "discount_benefit", "discount_offer_usage", "discount_admin_request"];
+const NEW_TABLES = ["discount_offer", "discount_offer_revision", "discount_benefit", "discount_offer_usage", "discount_code", "discount_admin_request"];
 
 let pool: Pool;
 let hqContext: BrowserContext;
@@ -228,6 +228,7 @@ async function deleteOfferRows(offerId: string, actorId: string): Promise<void> 
   // The Offer→current-revision pointer is RESTRICT and a non-draft Offer must
   // keep one, so the state is reset together with the pointer.
   if (has("discount_offer")) steps.push(["clear-current-pointer", "UPDATE discount_offer SET state = 'draft', current_revision_id = NULL WHERE id = $1", [offerId]]);
+  if (has("discount_code")) steps.push(["codes", "DELETE FROM discount_code WHERE offer_id = $1", [offerId]]);
   if (has("discount_benefit") && has("discount_offer_revision")) steps.push(["benefit", "DELETE FROM discount_benefit WHERE revision_id IN (SELECT id FROM discount_offer_revision WHERE offer_id = $1)", [offerId]]);
   if (has("discount_offer_revision")) steps.push(["revision", "DELETE FROM discount_offer_revision WHERE offer_id = $1", [offerId]]);
   if (has("discount_offer_usage")) steps.push(["usage", "DELETE FROM discount_offer_usage WHERE offer_id = $1", [offerId]]);
@@ -462,7 +463,7 @@ test.describe("admin discounts UI", () => {
       // 5) Review shows the server-bound validations and enables publish.
       await page.getByRole("button", { name: "Review draft" }).click();
       await expect(page.getByText(/Review siap publish/)).toBeVisible();
-      await expect(page.getByText("Benefit fixed-goods valid")).toBeVisible();
+      await expect(page.getByText("Benefit goods version1 dengan parameter valid")).toBeVisible();
 
       // 6) Publish, then pause. Pausing is only offered for a live Offer.
       await page.getByRole("button", { name: "Publish offer" }).click();
@@ -474,6 +475,247 @@ test.describe("admin discounts UI", () => {
       await expect(page.getByRole("button", { name: "Aktifkan" })).toBeVisible();
     } finally {
       await page.close();
+    }
+  });
+});
+
+// =========================================================
+// Ticket 10 — percentage goods
+// =========================================================
+test.describe("admin percentage goods UI", () => {
+  test.setTimeout(90_000);
+
+  test("HQ menyimpan draft persentase, mensimulasikan floor/cap, dan review valid", async () => {
+    const page = await hqContext.newPage();
+    try {
+      await page.goto("/admin/discounts");
+      await page.getByRole("button", { name: "Buat draft" }).click();
+      await page.waitForURL(/\/admin\/discounts\/[0-9a-f-]{36}$/, { timeout: 20_000 });
+      const offerId = page.url().split("/").pop() ?? "";
+      expect(offerId.length, "the created draft must navigate to its detail page").toBe(36);
+      uiOfferIds.push(offerId);
+
+      await page.getByLabel("Nama offer").fill("Diskon 10% maksimal Rp20.000");
+      await page.getByLabel("Minimum subtotal (Rp)").fill("0");
+      await page.getByLabel("Jenis benefit").click();
+      await page.getByRole("option", { name: "Persentase barang" }).click();
+      await page.getByLabel("Persentase (%)").fill("10");
+      await page.getByLabel("Cap (Rp, opsional)").fill("20000");
+      await page.getByRole("button", { name: "Simpan draft" }).click();
+      await expect(page.getByRole("main").getByText("Draft disimpan")).toBeVisible();
+
+      await page.getByLabel("Kuota pemakaian").fill("10");
+      await page.getByRole("button", { name: "Simpan kapasitas" }).click();
+      await expect(page.getByText("Kapasitas disimpan")).toBeVisible();
+
+      // Simulasi default 150000 unit: 10% = 15000 (cap20000 belum mengikat),
+      // net135000, PPN14850, total149850. Literal independen dari spec §4.4.
+      await page.getByRole("button", { name: "Jalankan simulasi" }).click();
+      await expect(page.getByText(/149\.850/)).toBeVisible();
+      await expect(page.getByText(/Simulasi admin: bukan quote/)).toBeVisible();
+
+      await page.getByRole("button", { name: "Review draft" }).click();
+      await expect(page.getByText(/Review siap publish/)).toBeVisible();
+      await expect(page.getByText("Benefit goods version1 dengan parameter valid")).toBeVisible();
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+// =========================================================
+// Ticket 11 — shipping subsidy administration
+// =========================================================
+test.describe("admin shipping subsidy UI", () => {
+  test.setTimeout(90_000);
+
+  test("HQ menyimpan draft shipping cap, simulasi delivery berongkir, dan review valid", async () => {
+    const page = await hqContext.newPage();
+    try {
+      await page.goto("/admin/discounts");
+      await page.getByRole("button", { name: "Buat draft" }).click();
+      await page.waitForURL(/\/admin\/discounts\/[0-9a-f-]{36}$/, { timeout: 20_000 });
+      const offerId = page.url().split("/").pop() ?? "";
+      expect(offerId.length, "the created draft must navigate to its detail page").toBe(36);
+      uiOfferIds.push(offerId);
+
+      await page.getByLabel("Nama offer").fill("Subsidi Ongkir Rp20.000");
+      await page.getByLabel("Minimum subtotal (Rp)").fill("0");
+      await page.getByLabel("Jenis benefit").click();
+      await page.getByRole("option", { name: "Subsidi ongkir (cap Rp)" }).click();
+      await page.getByLabel("Cap subsidi ongkir (Rp)").fill("20000");
+      await page.getByRole("button", { name: "Simpan draft" }).click();
+      await expect(page.getByRole("main").getByText("Draft disimpan")).toBeVisible();
+
+      await page.getByLabel("Kuota pemakaian").fill("10");
+      await page.getByRole("button", { name: "Simpan kapasitas" }).click();
+      await expect(page.getByText("Kapasitas disimpan")).toBeVisible();
+
+      // Simulasi delivery: barang150000 + ongkir30000 cap20000 → subsidi20000,
+      // net ongkir10000, PPN16500, total176500 (literal spec §4.4).
+      await page.getByRole("combobox").last().click();
+      await page.getByRole("option", { name: "Delivery" }).click();
+      await page.getByRole("textbox", { name: "Ongkir (Rp)", exact: true }).fill("30000");
+      await page.getByRole("button", { name: "Jalankan simulasi" }).click();
+      await expect(page.getByText(/176.500/)).toBeVisible();
+      await expect(page.getByText(/Subsidi ongkir: Rp 20.000/)).toBeVisible();
+      await expect(page.getByText(/Simulasi admin: bukan quote/)).toBeVisible();
+
+      await page.getByRole("button", { name: "Review draft" }).click();
+      await expect(page.getByText(/Review siap publish/)).toBeVisible();
+      await expect(page.getByText("Benefit shipping version1 (cap ongkir positif) valid")).toBeVisible();
+
+      await page.getByRole("button", { name: "Publish offer" }).click();
+      await expect(page.getByText("Offer dipublikasikan")).toBeVisible();
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+// =========================================================
+// Ticket 09 — Manual Promo Code administration
+// =========================================================
+// Create a manual_only Offer with reserved canonical codes through the public
+// admin HTTP seam, prove the editor sees the literal and the viewer channel is
+// masked, and exercise add/state from the editor UI. The viewer fixture adds a
+// TEMPORARY discounts:view grant to the seeded Admin role and removes exactly
+// that grant afterwards.
+const MANUAL_REQUEST_KEY = "6d3f8a21-4c47-4b19-a2f6-9d1b7c5e0917";
+const MANUAL_CODE = "MANUALADMIN25";
+
+test.describe("admin Manual Promo Code", () => {
+  let manualOfferId = "";
+  let viewerGrantId = "";
+  let viewerRoleId = "";
+
+  test.afterAll(async () => {
+    if (!pool) return;
+    const failures: string[] = [];
+    try {
+      if (manualOfferId && hqId) {
+        const deleted = await deleteOfferById(manualOfferId, hqId);
+        if (!deleted) failures.push(`manual offer ${manualOfferId} is not named by a receipt for actor ${hqId}`);
+      }
+    } catch (error) {
+      failures.push(cleanupFailure("manual-offer-cleanup", error));
+    }
+    try {
+      if (viewerGrantId) {
+        await pool.query("DELETE FROM admin_role_grant WHERE id = $1", [viewerGrantId]);
+      }
+    } catch (error) {
+      failures.push(cleanupFailure("viewer-grant-cleanup", error));
+    }
+    if (failures.length > 0) throw new Error(`[discounts-admin-mock] manual cleanup failed: ${failures.join("; ")}`);
+  });
+
+  test("HQ creates a manual Offer with codes, adds/changes a code in the editor, and a viewer only sees masked labels", async () => {
+    // Heal an interrupted earlier run: delete any Offer named by a receipt for
+    // THIS actor + fixture key before creating, so the canonical codes are free.
+    const leftovers = await pool.query<{ target_id: string | null }>(
+      "SELECT DISTINCT target_id FROM discount_admin_request WHERE actor_identity = $1 AND request_key = $2 AND target_id IS NOT NULL",
+      [hqId, MANUAL_REQUEST_KEY]
+    );
+    for (const row of leftovers.rows) {
+      if (row.target_id) await deleteOfferById(row.target_id, hqId);
+    }
+
+    const created = await hqContext.request.post(`${ADMIN_BASE_URL}/api/admin/discounts`, {
+      data: {
+        requestKey: MANUAL_REQUEST_KEY,
+        activationKind: "manual_only",
+        codes: ["manualadmin25", "ManualAdminOff"],
+      },
+    });
+    const createStatus = created.status();
+    expect([200, 201], await failureText(created)).toContain(createStatus);
+    const createdBody = await body(created);
+    manualOfferId = String(createdBody.data?.id ?? "");
+    expect(manualOfferId.length).toBeGreaterThan(0);
+    const createdCodes = (createdBody.data?.codes ?? []) as Array<{
+      id: string;
+      code?: string;
+      maskedCode: string;
+      state: string;
+    }>;
+    expect(createdBody.data?.codeLiteralVisible).toBe(true);
+    expect(createdCodes.map((code) => code.code)).toEqual(
+      expect.arrayContaining(["MANUALADMIN25", "MANUALADMINOFF"])
+    );
+
+    // Editor detail carries the literal; the list never does.
+    const detail = await hqContext.request.get(`${ADMIN_BASE_URL}/api/admin/discounts/${manualOfferId}`);
+    expect(detail.ok(), await failureText(detail)).toBe(true);
+    const detailBody = await body(detail);
+    expect(detailBody.data?.codeLiteralVisible).toBe(true);
+
+    // Editor UI: add a code, then archive it. Mengetik tidak menulis apa pun;
+    // tombol Tambah adalah transaksi request-key + expected version.
+    const page = await hqContext.newPage();
+    try {
+      await page.goto(`/admin/discounts/${manualOfferId}`);
+      await expect(page.getByText("Kode manual", { exact: true })).toBeVisible();
+      await expect(page.getByText(MANUAL_CODE)).toBeVisible();
+      await page.getByLabel("Tambah kode").fill("extraadmin25");
+      await page.getByRole("button", { name: "Tambah", exact: true }).click();
+      const extraRow = page.getByRole("row", { name: /EXTRAADMIN25/ });
+      await expect(extraRow).toBeVisible();
+      await extraRow.getByRole("button", { name: "Nonaktifkan" }).click();
+      await expect(extraRow.getByText("Nonaktif")).toBeVisible();
+      await extraRow.getByRole("button", { name: "Arsipkan" }).click();
+      await expect(extraRow.getByText("Arsip")).toBeVisible();
+      await expect(extraRow.getByRole("button", { name: "Aktifkan" })).toHaveCount(0);
+    } finally {
+      await page.close();
+    }
+
+    // Viewer: temporary discounts:view grant on the seeded Admin role, no edit.
+    const adminUser = await pool.query<{ id: string; role_id: string | null }>(
+      'SELECT id, role_id FROM "user" WHERE username = $1',
+      ["admintoko"]
+    );
+    viewerRoleId = adminUser.rows[0]?.role_id ?? "";
+    expect(viewerRoleId.length).toBeGreaterThan(0);
+    const grantId = `${viewerRoleId}-discounts-view-e2e-manual`;
+    const existingGrant = await pool.query(
+      "SELECT 1 FROM admin_role_grant WHERE role_id = $1 AND module = 'discounts' AND action = 'view'",
+      [viewerRoleId]
+    );
+    if ((existingGrant.rowCount ?? 0) === 0) {
+      await pool.query(
+        `INSERT INTO admin_role_grant (id, role_id, module, action, scope)
+         VALUES ($1, $2, 'discounts', 'view', 'global')`,
+        [grantId, viewerRoleId]
+      );
+      viewerGrantId = grantId;
+    }
+
+    const viewerBrowser = hqContext.browser();
+    if (!viewerBrowser) throw new Error("admin browser context is unavailable");
+    const viewer = await viewerBrowser.newContext({ baseURL: ADMIN_BASE_URL });
+    try {
+      await httpSignIn(viewer, ADMIN_BASE_URL, "admintoko", "admin123");
+      const maskedDetail = await viewer.request.get(`${ADMIN_BASE_URL}/api/admin/discounts/${manualOfferId}`);
+      expect(maskedDetail.ok(), await failureText(maskedDetail)).toBe(true);
+      const maskedBody = await body(maskedDetail);
+      expect(maskedBody.data?.codeLiteralVisible).toBe(false);
+      const maskedCodes = (maskedBody.data?.codes ?? []) as Array<Record<string, unknown>>;
+      expect(maskedCodes.length).toBeGreaterThan(0);
+      for (const code of maskedCodes) {
+        expect(code.code).toBeUndefined();
+        expect(String(code.maskedCode)).toContain("•");
+        expect(String(code.maskedCode)).not.toBe(MANUAL_CODE);
+      }
+      expect(JSON.stringify(maskedBody)).not.toContain(MANUAL_CODE);
+
+      const maskedList = await viewer.request.get(`${ADMIN_BASE_URL}/api/admin/discounts?limit=50`);
+      expect(maskedList.ok(), await failureText(maskedList)).toBe(true);
+      const listText = JSON.stringify(await maskedList.json());
+      expect(listText).not.toContain(MANUAL_CODE);
+      expect(listText).not.toContain("EXTRAADMIN25");
+    } finally {
+      await viewer.close();
     }
   });
 });

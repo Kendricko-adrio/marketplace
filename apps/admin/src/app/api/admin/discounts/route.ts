@@ -37,6 +37,9 @@ export const dynamic = "force-dynamic";
 const createDraftSchema = z.strictObject({
   requestKey: z.uuid(),
   activationKind: z.string().min(1).max(32),
+  // Usulan kode manual; hanya sah untuk manual_only dan direservasi di dalam
+  // transaksi create (bukan saat mengetik draft).
+  codes: z.array(z.string().min(1).max(128)).max(50).optional(),
 });
 
 export async function POST(request: NextRequest) {

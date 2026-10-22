@@ -58,6 +58,8 @@ interface OfferSummary {
     startAt: string | null;
     endAt: string | null;
     fixedAmount: string | null;
+    rate: string | null;
+    capAmount: string | null;
   } | null;
   draftRevisionId: string | null;
 }
@@ -76,6 +78,17 @@ const STATE_LABEL: Record<string, string> = {
   paused: "Dijeda",
   archived: "Diarsipkan",
 };
+
+/** Label benefit aman untuk list (tanpa membuka detail draft). */
+function benefitLabel(revision: OfferSummary["liveRevision"]): string {
+  if (!revision) return "—";
+  if (revision.rate !== null) {
+    const cap =
+      revision.capAmount !== null ? ` (maks Rp${rupiah(revision.capAmount)})` : "";
+    return `${revision.rate}%${cap}`;
+  }
+  return revision.fixedAmount !== null ? rupiah(revision.fixedAmount) : "—";
+}
 
 function stateVariant(state: string): "default" | "secondary" | "outline" | "destructive" {
   if (state === "enabled") return "default";
@@ -107,6 +120,9 @@ export function DiscountsListClient() {
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
+  // Activation kind adalah identitas Offer yang tetap: dipilih saat create,
+  // tidak bisa diubah lewat revision.
+  const [createKind, setCreateKind] = useState<"public" | "manual_only">("public");
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -143,7 +159,7 @@ export function DiscountsListClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           requestKey: crypto.randomUUID(),
-          activationKind: "public",
+          activationKind: createKind,
         }),
       });
       const body = (await response.json()) as {
@@ -173,8 +189,8 @@ export function DiscountsListClient() {
             Offer publik
           </CardTitle>
           <CardDescription>
-            Hanya Offer fixed-goods publik. Percentage, subsidi ongkir, dan kode
-            manual belum didukung pada slice ini.
+            Offer publik dan manual: fixed-goods, percentage dengan cap opsional,
+            atau subsidi ongkir. Kode manual dikelola pada detail Offer.
           </CardDescription>
         </div>
         <div className="flex items-center gap-2">
@@ -197,14 +213,30 @@ export function DiscountsListClient() {
             </SelectContent>
           </Select>
           {canEdit ? (
-            <Button onClick={() => void createDraft()} disabled={creating}>
-              {creating ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Plus className="mr-2 h-4 w-4" />
-              )}
-              Buat draft
-            </Button>
+            <div className="flex items-center gap-2">
+              <Select
+                value={createKind}
+                onValueChange={(value) =>
+                  setCreateKind(value === "manual_only" ? "manual_only" : "public")
+                }
+              >
+                <SelectTrigger className="w-48" aria-label="Jenis aktivasi">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="public">Coupon publik</SelectItem>
+                  <SelectItem value="manual_only">Kode manual</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button onClick={() => void createDraft()} disabled={creating}>
+                {creating ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Plus className="mr-2 h-4 w-4" />
+                )}
+                Buat draft
+              </Button>
+            </div>
           ) : null}
         </div>
       </CardHeader>
@@ -249,9 +281,7 @@ export function DiscountsListClient() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      {offer.liveRevision?.fixedAmount
-                        ? rupiah(offer.liveRevision.fixedAmount)
-                        : "—"}
+                      {benefitLabel(offer.liveRevision)}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {offer.quotaCount !== null

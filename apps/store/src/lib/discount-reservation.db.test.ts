@@ -39,6 +39,9 @@ const variantB = `${PREFIX}-variant-2`;
 const offerId = `${PREFIX}-offer`;
 const revisionId = `${PREFIX}-revision`;
 const benefitId = `${PREFIX}-benefit`;
+const pctOfferId = `${PREFIX}-pct-offer`;
+const pctRevisionId = `${PREFIX}-pct-revision`;
+const pctBenefitId = `${PREFIX}-pct-benefit`;
 const pool = url ? new Pool({ connectionString: url, max: 6 }) : null;
 const db = pool ? drizzle(pool, { schema }) : null;
 
@@ -77,16 +80,18 @@ const pricing = evaluatePricing({
       effectiveUnitPrice: "150000",
     },
   ],
-  benefit: { kind: "fixed_goods", paramsVersion: 1, fixedAmount: "25000" },
+  benefit: { kind: "fixed_goods" as const, paramsVersion: 1 as const, fixedAmount: "25000" },
 });
 
 const candidate = {
   offerId,
   offerName: "Fixture Coupon",
+  activationKind: "public" as const,
+  codeId: null,
   revisionId,
   benefitId,
   policyVersion: 1,
-  fixedAmount: "25000",
+  benefit: { kind: "fixed_goods" as const, paramsVersion: 1 as const, fixedAmount: "25000" },
   benefitAmount: "25000",
   minSubtotal: "0",
   startAt: null,
@@ -112,13 +117,30 @@ async function createOrder(clientId: string): Promise<string> {
   return orderId;
 }
 
-async function reserve(orderId: string, clientId: string) {
+async function reserve(
+  orderId: string,
+  clientId: string,
+  candidateOverride: typeof candidate | {
+    offerId: string;
+    offerName: string;
+    activationKind: "manual_only";
+    codeId: string;
+    revisionId: string;
+    benefitId: string;
+    policyVersion: number;
+    benefit: { kind: "fixed_goods"; paramsVersion: 1; fixedAmount: string };
+    benefitAmount: string;
+    minSubtotal: string;
+    startAt: null;
+    endAt: null;
+  } = candidate
+) {
   return db!.transaction((tx) =>
     reserveRedemptionForOrder(tx, {
       orderId,
       clientId,
       verifiedEmail: true,
-      candidate,
+      candidate: candidateOverride,
       deadline,
       pricing,
       subtotalAfterMarkdown: pricing.subtotal,
@@ -177,6 +199,29 @@ beforeAll(async () => {
     [offerId, revisionId]
   );
   await pool.query(`insert into discount_offer_usage (offer_id) values ($1)`, [offerId]);
+
+  // Percentage goods (ticket 10): rate10 cap20000, kuota/budget sama kontraknya.
+  await pool.query(
+    `insert into discount_offer (id, key, activation_kind, actor_identity) values ($1,$2,'public','fixture')`,
+    [pctOfferId, `${pctOfferId}-key`]
+  );
+  await pool.query(
+    `insert into discount_offer_revision
+       (id, offer_id, revision_no, name, currency, min_subtotal, published_at, actor_identity)
+     values ($1,$2,1,'Percentage Coupon','IDR','0',now(),'fixture')`,
+    [pctRevisionId, pctOfferId]
+  );
+  await pool.query(
+    `insert into discount_benefit (id, revision_id, kind, scope, rate, cap_amount)
+     values ($1,$2,'percentage_goods','goods','10.000000','20000')`,
+    [pctBenefitId, pctRevisionId]
+  );
+  await pool.query(
+    `update discount_offer set state='enabled', current_revision_id=$2, quota_count=100, budget_amount='1000000'
+      where id=$1`,
+    [pctOfferId, pctRevisionId]
+  );
+  await pool.query(`insert into discount_offer_usage (offer_id) values ($1)`, [pctOfferId]);
 }, 30_000);
 
 beforeEach(async () => {
@@ -188,6 +233,14 @@ beforeEach(async () => {
   await pool.query(`delete from order_discount_allocation where order_id like $1`, [`${PREFIX}%`]);
   await pool.query(`delete from discount_redemption where offer_id=$1`, [offerId]);
   await pool.query(`delete from discount_client_usage where offer_id=$1`, [offerId]);
+  // Fixture manual (ticket 09) memakai prefiks yang sama.
+  await pool.query(
+    `delete from discount_redemption_event where redemption_id in
+       (select id from discount_redemption where offer_id like $1)`,
+    [`${PREFIX}%`]
+  );
+  await pool.query(`delete from discount_redemption where offer_id like $1`, [`${PREFIX}%`]);
+  await pool.query(`delete from discount_client_usage where offer_id like $1`, [`${PREFIX}%`]);
   await pool.query(`delete from order_item where order_id like $1`, [`${PREFIX}%`]);
   await pool.query(`delete from orders where id like $1`, [`${PREFIX}%`]);
   await pool.query(
@@ -212,8 +265,26 @@ afterAll(async () => {
     await pool.query(`delete from order_discount_allocation where order_id like $1`, [`${PREFIX}%`]);
     await pool.query(`delete from discount_redemption where offer_id=$1`, [offerId]);
     await pool.query(`delete from discount_client_usage where offer_id=$1`, [offerId]);
+    // Fixture ticket 09 (manual Offer) memakai id berprefiks sama; bersihkan
+    // sebelum orders dihapus agar FK RESTRICT tidak menggagalkan cleanup.
+    await pool.query(
+      `delete from discount_redemption_event where redemption_id in
+         (select id from discount_redemption where offer_id like $1)`,
+      [`${PREFIX}%`]
+    );
+    await pool.query(`delete from discount_redemption where offer_id like $1`, [`${PREFIX}%`]);
+    await pool.query(`delete from discount_client_usage where offer_id like $1`, [`${PREFIX}%`]);
     await pool.query(`delete from order_item where order_id like $1`, [`${PREFIX}%`]);
     await pool.query(`delete from orders where id like $1`, [`${PREFIX}%`]);
+    // Percentage fixture (ticket 10) memakai prefiks yang sama.
+    await pool.query(`delete from discount_offer_usage where offer_id like $1`, [`${PREFIX}%`]);
+    await pool.query(`delete from discount_benefit where revision_id like $1`, [`${PREFIX}%`]);
+    await pool.query(
+      `update discount_offer set state='draft', current_revision_id=null where id like $1`,
+      [`${PREFIX}%`]
+    );
+    await pool.query(`delete from discount_offer_revision where offer_id like $1`, [`${PREFIX}%`]);
+    await pool.query(`delete from discount_offer where id like $1`, [`${PREFIX}%`]);
     await pool.query(`delete from discount_offer_usage where offer_id=$1`, [offerId]);
     await pool.query(`delete from discount_benefit where revision_id=$1`, [revisionId]);
     await pool.query(
@@ -357,6 +428,50 @@ describe("reserveRedemptionForOrder — kapasitas tidak oversell", () => {
       lockClient.release();
     }
     expect(await redemptionRows()).toHaveLength(0);
+  });
+
+  it("pause hanya menghentikan reservasi baru: hold lama tetap snapshot dan tetap bisa release", async () => {
+    const heldOrder = await createOrder(clientA);
+    const held = await reserve(heldOrder, clientA);
+    if (!held.ok) throw new Error("fixture reserve failed");
+
+    // Pause an Offer with an existing hold: nothing is mass-cancelled, repriced
+    // or force-released; the Redemption snapshot and capacity stay as they were.
+    await pool!.query(`update discount_offer set state='paused' where id=$1`, [offerId]);
+    const heldRows = await redemptionRows();
+    expect(heldRows).toHaveLength(1);
+    expect(heldRows[0]).toMatchObject({
+      order_id: heldOrder,
+      status: "reserved",
+      benefit_amount: "25000.00",
+    });
+
+    // No NEW reservation can start while paused.
+    const blockedOrder = await createOrder(clientB);
+    expect(await reserve(blockedOrder, clientB)).toMatchObject({
+      ok: false,
+      reason: "OFFER_UNAVAILABLE",
+    });
+    expect(await redemptionRows()).toHaveLength(1);
+
+    // The held order can still reach its authoritative terminal outcome: a safe
+    // release returns capacity exactly once (pause never freezes lifecycle).
+    await db!.transaction((tx) =>
+      releaseReservedRedemption(tx, {
+        identity: { offerId, clientId: clientA, benefitAmount: "25000" },
+        orderId: heldOrder,
+        source: "fixture-cancel",
+        reason: "safe cancel while paused",
+      })
+    );
+    const after = await redemptionRows();
+    expect(after[0].status).toBe("released");
+    const state = await counters();
+    expect(state.usage).toMatchObject({
+      reserved_count: 0,
+      consumed_count: 0,
+      reserved_amount: "0.00",
+    });
   });
 });
 
@@ -557,7 +672,7 @@ describe("writeOrderDiscountAllocations", () => {
           effectiveUnitPrice: "100000",
         },
       ],
-      benefit: { kind: "fixed_goods", paramsVersion: 1, fixedAmount: "25000" },
+      benefit: { kind: "fixed_goods" as const, paramsVersion: 1 as const, fixedAmount: "25000" },
     });
     await pool!.query(
       `insert into order_item (id, order_id, variant_id, product_name, price, quantity)
@@ -590,5 +705,246 @@ describe("writeOrderDiscountAllocations", () => {
       { component: "offer_goods", order_item_id: `${orderId}-item`, amount: "15000.00" },
       { component: "offer_goods", order_item_id: `${orderId}-item-2`, amount: "10000.00" },
     ]);
+  });
+});
+
+// =========================================================
+// Seam T — reservasi Manual Promo Code memakai counters bersama (ticket 09)
+// =========================================================
+describe("reserveRedemptionForOrder — Manual Promo Code", () => {
+  const manualOffer = `${PREFIX}-manual-offer`;
+  const manualRevision = `${manualOffer}-revision`;
+  const manualBenefit = `${manualOffer}-benefit`;
+  const manualCode = `${PREFIX}-manual-code`;
+
+  const manualCandidate = {
+    offerId: manualOffer,
+    offerName: "Manual Fixture",
+    activationKind: "manual_only" as const,
+    codeId: manualCode,
+    revisionId: manualRevision,
+    benefitId: manualBenefit,
+    policyVersion: 1,
+    benefit: { kind: "fixed_goods" as const, paramsVersion: 1 as const, fixedAmount: "25000" },
+    benefitAmount: "25000",
+    minSubtotal: "0",
+    startAt: null,
+    endAt: null,
+  };
+
+  beforeAll(async () => {
+    if (!pool || !schemaState.ready) return;
+    await pool.query(
+      `insert into discount_offer (id, key, activation_kind, actor_identity)
+       values ($1,$2,'manual_only','fixture')`,
+      [manualOffer, `${manualOffer}-key`]
+    );
+    await pool.query(
+      `insert into discount_offer_revision
+         (id, offer_id, revision_no, name, currency, min_subtotal, published_at, actor_identity)
+       values ($1,$2,1,'Manual Fixture','IDR','0',now(),'fixture')`,
+      [manualRevision, manualOffer]
+    );
+    await pool.query(
+      `insert into discount_benefit (id, revision_id, kind, scope, fixed_amount)
+       values ($1,$2,'fixed_goods','goods','25000')`,
+      [manualBenefit, manualRevision]
+    );
+    await pool.query(
+      `update discount_offer set state='enabled', current_revision_id=$2,
+         quota_count=1, budget_amount='1000000', per_client_limit=1 where id=$1`,
+      [manualOffer, manualRevision]
+    );
+    await pool.query(`insert into discount_offer_usage (offer_id) values ($1)`, [manualOffer]);
+    await pool.query(
+      `insert into discount_code (id, offer_id, canonical_code, state, actor_identity)
+       values ($1,$2,$3,'active','fixture')`,
+      [manualCode, manualOffer, "MANUALFIXTURE1"]
+    );
+  });
+
+  afterAll(async () => {
+    if (!pool) return;
+    try {
+      await pool.query(
+        `delete from discount_redemption_event where redemption_id in
+           (select id from discount_redemption where offer_id=$1)`,
+        [manualOffer]
+      );
+      await pool.query(`delete from order_discount_allocation where order_id like $1`, [`${PREFIX}%`]);
+      await pool.query(`delete from discount_redemption where offer_id=$1`, [manualOffer]);
+      await pool.query(`delete from discount_client_usage where offer_id=$1`, [manualOffer]);
+      await pool.query(`delete from discount_code where offer_id=$1`, [manualOffer]);
+      await pool.query(`delete from discount_offer_usage where offer_id=$1`, [manualOffer]);
+      await pool.query(`delete from discount_benefit where revision_id=$1`, [manualRevision]);
+      await pool.query(
+        `update discount_offer set state='draft', current_revision_id=null where id=$1`,
+        [manualOffer]
+      );
+      await pool.query(`delete from discount_offer_revision where offer_id=$1`, [manualOffer]);
+      await pool.query(`delete from discount_offer where id=$1`, [manualOffer]);
+    } catch {
+      // best-effort cleanup on the disposable database
+    }
+  });
+
+  it("menyimpan tepat satu Redemption manual dengan code_id dan berbagi quota/per-account", async () => {
+    const firstOrder = await createOrder(clientA);
+    const first = await reserve(firstOrder, clientA, manualCandidate);
+    expect(first).toMatchObject({ ok: true });
+
+    const stored = await pool!.query(
+      `select activation_kind, code_id, benefit_amount, status from discount_redemption
+        where order_id=$1`,
+      [firstOrder]
+    );
+    expect(stored.rows[0]).toMatchObject({
+      activation_kind: "manual_only",
+      code_id: manualCode,
+      benefit_amount: "25000.00",
+      status: "reserved",
+    });
+
+    const usage = await pool!.query(
+      `select reserved_count, reserved_amount from discount_offer_usage where offer_id=$1`,
+      [manualOffer]
+    );
+    expect(usage.rows[0]).toMatchObject({ reserved_count: 1, reserved_amount: "25000.00" });
+
+    // Akun yang sama sudah memakai jatah per-account 1 → ditolak.
+    const sameClient = await reserve(await createOrder(clientA), clientA, manualCandidate);
+    expect(sameClient).toMatchObject({ ok: false, reason: "CAPACITY_UNAVAILABLE" });
+    // Akun lain berebut quota global 1 yang sudah terpakai → ditolak.
+    const otherClient = await reserve(await createOrder(clientB), clientB, manualCandidate);
+    expect(otherClient).toMatchObject({ ok: false, reason: "CAPACITY_UNAVAILABLE" });
+
+    const count = await pool!.query(
+      `select count(*)::int as count from discount_redemption where offer_id=$1`,
+      [manualOffer]
+    );
+    expect(count.rows[0].count).toBe(1);
+  });
+
+  it("kode yang dinonaktifkan setelah preview menggugurkan reservasi tanpa usage parsial", async () => {
+    await pool!.query(`update discount_offer_usage set reserved_count=0, reserved_amount='0' where offer_id=$1`, [
+      manualOffer,
+    ]);
+    await pool!.query(`delete from discount_redemption where offer_id=$1`, [manualOffer]);
+    await pool!.query(`delete from discount_client_usage where offer_id=$1`, [manualOffer]);
+    await pool!.query(`update discount_code set state='inactive', version=version+1 where id=$1`, [
+      manualCode,
+    ]);
+    const rejected = await reserve(await createOrder(clientB), clientB, manualCandidate);
+    expect(rejected).toMatchObject({ ok: false, reason: "OFFER_UNAVAILABLE" });
+    const usage = await pool!.query(
+      `select reserved_count, consumed_count from discount_offer_usage where offer_id=$1`,
+      [manualOffer]
+    );
+    expect(usage.rows[0]).toMatchObject({ reserved_count: 0, consumed_count: 0 });
+    await pool!.query(`update discount_code set state='active', version=version+1 where id=$1`, [
+      manualCode,
+    ]);
+  });
+});
+
+
+// =========================================================
+// Seam T — percentage goods reservation (ticket 10)
+// =========================================================
+describe("reserveRedemptionForOrder — percentage goods cap opsional", () => {
+  const pctPricing = evaluatePricing({
+    fulfillmentMethod: "pickup",
+    ppnRatePercent: "11",
+    lines: [
+      {
+        variantId,
+        quantity: 1,
+        sourceUnitPrice: "450000",
+        effectiveUnitPrice: "450000",
+      },
+    ],
+    benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "10", capAmount: "20000" },
+  });
+
+  const pctCandidate = {
+    offerId: pctOfferId,
+    offerName: "Percentage Coupon",
+    activationKind: "public" as const,
+    codeId: null,
+    revisionId: pctRevisionId,
+    benefitId: pctBenefitId,
+    policyVersion: 1,
+    benefit: { kind: "percentage_goods" as const, paramsVersion: 1 as const, rate: "10", capAmount: "20000" },
+    benefitAmount: "20000",
+    minSubtotal: "0",
+    startAt: null,
+    endAt: null,
+  };
+
+  it("rate10 cap20000 pada subtotal450000 mereservasi20000, menulis allocation exact, dan consume memakai nominal itu", async () => {
+    // Literal independen spec §4.4: cap sekali per order.
+    expect(pctPricing.subtotal).toBe("450000");
+    expect(pctPricing.goodsDiscount).toBe("20000");
+    expect(pctPricing.netGoods).toBe("430000");
+    expect(pctPricing.ppnAmount).toBe("47300");
+    expect(pctPricing.total).toBe("477300");
+
+    const orderId = await createOrder(clientA);
+    const result = await db!.transaction((tx) =>
+      reserveRedemptionForOrder(tx, {
+        orderId,
+        clientId: clientA,
+        verifiedEmail: true,
+        candidate: pctCandidate,
+        deadline,
+        pricing: pctPricing,
+        subtotalAfterMarkdown: pctPricing.subtotal,
+      })
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const row = await pool!.query(
+      `select benefit_amount, terms_snapshot->'benefit' as benefit, result_snapshot->'benefit' as result_benefit
+         from discount_redemption where id=$1`,
+      [result.redemptionId]
+    );
+    expect(row.rows[0].benefit_amount).toBe("20000.00");
+    expect(row.rows[0].benefit).toEqual({ kind: "percentage_goods", paramsVersion: 1, rate: "10", capAmount: "20000" });
+    expect(row.rows[0].result_benefit).toEqual({ kind: "percentage_goods", paramsVersion: 1, rate: "10", capAmount: "20000" });
+
+    await db!.transaction(async (tx) => {
+      await writeOrderDiscountAllocations(tx, {
+        orderId,
+        orderItemIdByVariant: new Map([[variantId, `${orderId}-item`]]),
+        pricing: pctPricing,
+        redemption: { id: result.redemptionId, benefitId: pctBenefitId },
+      });
+    });
+    const allocation = await pool!.query(
+      `select component, amount from order_discount_allocation where order_id=$1`,
+      [orderId]
+    );
+    expect(allocation.rows).toEqual([{ component: "offer_goods", amount: "20000.00" }]);
+
+    await db!.transaction((tx) =>
+      consumeReservedRedemption(tx, {
+        identity: { offerId: pctOfferId, clientId: clientA, benefitAmount: "20000" },
+        orderId,
+        redemptionId: result.redemptionId,
+        source: "payment_settled",
+      })
+    );
+    const usage = await pool!.query(
+      `select reserved_count, consumed_count, reserved_amount, consumed_amount
+         from discount_offer_usage where offer_id=$1`,
+      [pctOfferId]
+    );
+    expect(usage.rows[0]).toMatchObject({
+      reserved_count: 0,
+      consumed_count: 1,
+      reserved_amount: "0.00",
+      consumed_amount: "20000.00",
+    });
   });
 });

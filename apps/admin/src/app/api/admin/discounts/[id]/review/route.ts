@@ -26,6 +26,8 @@ type RouteContext = { params: Promise<{ id: string }> };
 const reviewSchema = z.strictObject({
   expectedOfferVersion: z.number().int().positive(),
   expectedDraftVersion: z.number().int().positive(),
+  // Usulan kode yang direservasi saat publish berhasil (terikat fingerprint).
+  proposedCodes: z.array(z.string().min(1).max(128)).max(50).optional(),
 });
 
 export async function POST(request: NextRequest, { params }: RouteContext) {

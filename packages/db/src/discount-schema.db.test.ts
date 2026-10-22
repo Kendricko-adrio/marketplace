@@ -72,7 +72,8 @@ const OFFER_B = "zz-fx-disc-schema-offer-b";
 const REV_A = "zz-fx-disc-schema-rev-a";
 const REV_B = "zz-fx-disc-schema-rev-b";
 const OWNED_OFFERS: readonly string[] = [OFFER_A, OFFER_B];
-const OWNED_REVISIONS: readonly string[] = [REV_A, REV_B];
+const REV_PCT = "zz-fx-disc-schema-rev-pct";
+const OWNED_REVISIONS: readonly string[] = [REV_A, REV_B, REV_PCT];
 /** Immutable attribution literal; no seeded admin user is required or touched
  * (the actor FK is nullable and `actor_identity` is the durable identity). */
 const ACTOR = "zz-fx-disc-schema-actor";
@@ -291,6 +292,57 @@ describe.skipIf(!ready)(
         [OWNED_REVISIONS]
       );
       expect(rows[0]!.count).toBe("2");
+    });
+
+    it("accepts percentage_goods rate/cap and rejects mixed or out-of-range shapes", async () => {
+      // Ticket 10: one typed benefit per revision, shape exact per kind. A
+      // percentage row carries rate/cap and NO fixed nominal; mixed fields,
+      // rate 0/>100 and cap 0 are refused by the shape CHECK, not defaulted.
+      await insertRevision(REV_PCT, OFFER_A, 99, {
+        name: "Diskon persentase uji SQL",
+        currency: "IDR",
+        minSubtotal: "0",
+        published: true,
+      });
+      await pool!.query(
+        `INSERT INTO discount_benefit
+           (id, revision_id, kind, scope, rate, cap_amount, params_version)
+         VALUES ('zz-fx-ben-pct', $1, 'percentage_goods', 'goods', '10.000000', '20000', 1)`,
+        [REV_PCT]
+      );
+      const { rows } = await pool!.query<{ rate: string; cap_amount: string; fixed_amount: string | null }>(
+        `SELECT rate, cap_amount, fixed_amount FROM discount_benefit WHERE id = 'zz-fx-ben-pct'`
+      );
+      expect(rows[0]).toEqual({ rate: "10.000000", cap_amount: "20000.00", fixed_amount: null });
+
+      const invalid: ReadonlyArray<{ label: string; rate: string | null; cap: string | null; fixed: string | null }> = [
+        { label: "percentage dengan fixed_amount", rate: "10", cap: null, fixed: "1000" },
+        { label: "rate 0", rate: "0", cap: null, fixed: null },
+        { label: "rate di atas 100", rate: "100.5", cap: null, fixed: null },
+        { label: "rate NULL", rate: null, cap: null, fixed: null },
+        { label: "cap 0", rate: "10", cap: "0", fixed: null },
+        { label: "cap pecahan", rate: "10", cap: "20000.50", fixed: null },
+      ];
+      let index = 0;
+      for (const testCase of invalid) {
+        index += 1;
+        const revisionId = `${REV_PCT}-invalid-${index}`;
+        await insertRevision(revisionId, OFFER_A, 100 + index, {
+          name: "Invalid percentage",
+          currency: "IDR",
+          minSubtotal: "0",
+          published: true,
+        });
+        const error = await expectCheckViolation(testCase.label, () =>
+          pool!.query(
+            `INSERT INTO discount_benefit
+               (id, revision_id, kind, scope, fixed_amount, rate, cap_amount, params_version)
+             VALUES ($1, $2, 'percentage_goods', 'goods', $3, $4, $5, 1)`,
+            [`${revisionId}-benefit`, revisionId, testCase.fixed, testCase.rate, testCase.cap]
+          )
+        );
+        expect(error.code).toBe("23514");
+      }
     });
 
     it("rejects a second benefit for the same revision", async () => {

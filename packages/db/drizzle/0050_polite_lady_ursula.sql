@@ -1,0 +1,8 @@
+ALTER TABLE "discount_benefit" DROP CONSTRAINT "discount_benefit_fixed_amount_positive";--> statement-breakpoint
+ALTER TABLE "discount_benefit" DROP CONSTRAINT "discount_benefit_kind_supported";--> statement-breakpoint
+ALTER TABLE "discount_benefit" ALTER COLUMN "fixed_amount" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "discount_benefit" ADD COLUMN "rate" numeric(9, 6);--> statement-breakpoint
+ALTER TABLE "discount_benefit" ADD COLUMN "cap_amount" numeric(15, 2);--> statement-breakpoint
+ALTER TABLE "discount_benefit" ADD CONSTRAINT "discount_benefit_shape_valid" CHECK (("discount_benefit"."kind" = 'fixed_goods' and "discount_benefit"."fixed_amount" is not null and "discount_benefit"."fixed_amount" > 0 and "discount_benefit"."fixed_amount" <= 9999999999999 and "discount_benefit"."fixed_amount" = trunc("discount_benefit"."fixed_amount") and "discount_benefit"."rate" is null and "discount_benefit"."cap_amount" is null)
+        or ("discount_benefit"."kind" = 'percentage_goods' and "discount_benefit"."fixed_amount" is null and "discount_benefit"."rate" is not null and "discount_benefit"."rate" > 0 and "discount_benefit"."rate" <= 100 and ("discount_benefit"."cap_amount" is null or ("discount_benefit"."cap_amount" > 0 and "discount_benefit"."cap_amount" <= 9999999999999 and "discount_benefit"."cap_amount" = trunc("discount_benefit"."cap_amount")))));--> statement-breakpoint
+ALTER TABLE "discount_benefit" ADD CONSTRAINT "discount_benefit_kind_supported" CHECK ("discount_benefit"."kind" in ('fixed_goods', 'percentage_goods'));

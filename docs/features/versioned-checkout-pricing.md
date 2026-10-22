@@ -392,3 +392,30 @@ alokasi Coupon (tidak dikalikan quantity dua kali); `amount` = gross line −
 disc. Detail Midtrans memakai harga efektif + adjustment `discount` (Coupon)
 sehingga jumlahnya tetap sama dengan total. Lifecycle paid/consume/release
 dijelaskan di [Coupon/Redemption](discount-redemption.md).
+
+## Subsidi ongkir pada kontrak pricing1 (ticket 11)
+
+`shipping_subsidy` kini dapat bernilai positif untuk delivery: `S =
+min(shipping_before, cap)`, `shipping_net = shipping_before − S`, dan
+`merchant_funding = S`. PPN tetap atas `net_goods`; `total_customer = net_goods +
+PPN + shipping_net`; `expected_provider_payable = net_goods + shipping_net`.
+Snapshot/decoder menolak `merchant_funding ≠ shipping_subsidy`, subsidi kedua,
+pickup berongkir, dan komponen yang tidak konsisten.
+
+Yang WAJIB dibedakan:
+
+- `shipping_before_subsidy` / `service.shippingCost` delivery snapshot:
+  ongkir quote/booking ORIGINAL (contoh 30000).
+- `shipping_subsidy` + `merchant_funding`: subsidi merchant (contoh 20000).
+- `shippingCost` / `pricing.shippingCost`: ongkir NET customer (contoh 10000).
+- `providerQuotedShippingCost`: quote cost yang diketahui (delivery: nilai quote).
+- `providerBilledShippingCost`: NULL sampai ada evidence billed; diisi lewat
+  ledger shipment existing, bukan ditebak.
+
+Packing/booking/recovery membaca komponen original (`service.shippingCost`),
+sedangkan invoice/payment/Midtrans/recovery expected membaca net
+(`pricing.shippingCost` + `netGoods`). Tidak ada guard yang membandingkan
+original quote dengan net customer, dan nilai kurir tidak pernah diubah sebagai
+workaround. Literal: barang150000 + ongkir30000 cap20000 → total customer
+176500, provider payable160000, booking cost tetap30000; ongkir12000 cap20000 →
+total166500, payable150000, sisa8000 hangus.

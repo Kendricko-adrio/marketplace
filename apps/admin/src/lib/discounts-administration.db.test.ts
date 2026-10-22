@@ -7,11 +7,15 @@ import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
 
 import {
+  addDiscountCode,
   createPublicDraftOffer,
+  DiscountAdministrationError,
   getDiscountOfferDetail,
+  listDiscountOffers,
   publishDiscountOffer,
   reviewDiscountOffer,
   saveDiscountOfferDraft,
+  setDiscountCodeState,
   setDiscountOfferPolicy,
   setDiscountOfferState,
   simulateDiscountOffer,
@@ -57,7 +61,9 @@ const ROLE = "zz-fx-disc-admin-role";
 const ACTOR = "zz-fx-disc-admin-user";
 const NO_CAP_ROLE = "zz-fx-disc-nocap-role";
 const NO_CAP_ACTOR = "zz-fx-disc-nocap-user";
-const ACTORS = [ACTOR, NO_CAP_ACTOR];
+const VIEW_ROLE = "zz-fx-disc-view-role";
+const VIEW_ACTOR = "zz-fx-disc-view-user";
+const ACTORS = [ACTOR, NO_CAP_ACTOR, VIEW_ACTOR];
 
 const pool = url ? new Pool({ connectionString: url, max: 4 }) : null;
 
@@ -90,6 +96,11 @@ async function cleanupOwnedRows(): Promise<void> {
     [ACTORS]
   );
   await pool.query(
+    `DELETE FROM discount_code
+      WHERE offer_id IN (SELECT id FROM discount_offer WHERE actor_id = ANY($1::text[]))`,
+    [ACTORS]
+  );
+  await pool.query(
     `DELETE FROM discount_offer_usage
       WHERE offer_id IN (SELECT id FROM discount_offer WHERE actor_id = ANY($1::text[]))`,
     [ACTORS]
@@ -118,6 +129,7 @@ async function insertActor(input: {
   roleName: string;
   email: string;
   withCapacity: boolean;
+  withEdit?: boolean;
 }): Promise<void> {
   await pool!.query(
     `INSERT INTO admin_role (id, key, name, description, is_system, version)
@@ -133,7 +145,7 @@ async function insertActor(input: {
   );
   const grants = [
     ["discounts", "view"],
-    ["discounts", "edit"],
+    ...(input.withEdit === false ? [] : [["discounts", "edit"] as const]),
     ...(input.withCapacity
       ? [
           ["discount_capacity", "view"],
@@ -260,19 +272,374 @@ describe.skipIf(!dbReady)(
         email: "zz-discount-promo@example.test",
         withCapacity: false,
       });
+      await insertActor({
+        roleId: VIEW_ROLE,
+        userId: VIEW_ACTOR,
+        roleName: "ZZ Discount Viewer",
+        email: "zz-discount-viewer@example.test",
+        withCapacity: false,
+        withEdit: false,
+      });
       await setGate("1");
     });
+
+    // =========================================================
+// Seam T — Manual Promo Code administration (ticket 09)
+// =========================================================
+// Semua assertion lewat interface domain (bukan SQL) kecuali query bukti audit
+// dan hitungan baris. Expected literal kode independen dari implementasi:
+// trim+uppercase, ASCII, unik global, reserved saat add/publish berhasil.
+describe("manual promo code administration (disposable DB)", () => {
+  let manualOfferId: string;
+
+  async function createManualDraft(codes?: string[], actor = ACTOR) {
+    return createPublicDraftOffer(
+      {
+        requestKey: uuid(),
+        activationKind: "manual_only",
+        ...(codes ? { codes } : {}),
+      },
+      actor
+    );
+  }
+
+  function inputInvalid(error: unknown): boolean {
+    return (
+      error instanceof DiscountAdministrationError &&
+      error.code === "INPUT_INVALID"
+    );
+  }
+
+  it("membuat draft manual dengan kode yang langsung direservasi, label masked di audit", async () => {
+    const created = await createManualDraft([" zzfixmanual17 ", "zzfixpromo2026"]);
+    manualOfferId = created.data.id;
+    expect(created.status).toBe(201);
+    expect(created.data.activationKind).toBe("manual_only");
+    expect(created.data.codeLiteralVisible).toBe(true);
+    expect(created.data.codes.map((code) => code.code)).toEqual([
+      "ZZFIXMANUAL17",
+      "ZZFIXPROMO2026",
+    ]);
+    // Viewer channel (list) hanya menerima label masked.
+    const list = await listDiscountOffers({ limit: 50 }, VIEW_ACTOR);
+    const listed = list.data.find((row) => row.id === manualOfferId);
+    expect(listed?.codeCount).toBe(2);
+    expect(listed?.codes.map((code) => code.maskedCode)).not.toContain(
+      "ZZFIXMANUAL17"
+    );
+    expect(listed?.codes[0]?.maskedCode).toContain("•");
+
+    // Audit tidak membuka literal; hanya ID + label masked.
+    const audit = await pool!.query(
+      `select changes::text as changes from audit_log
+        where entity_type = 'discount_offer' and entity_id = $1
+          and action = 'DISCOUNT_OFFER_DRAFT_CREATED'`,
+      [manualOfferId]
+    );
+    const changes = audit.rows.map((row) => row.changes).join(" ");
+    expect(changes).not.toContain("ZZFIXMANUAL17");
+    expect(changes).toContain("ZZFIXMANUAL17".slice(0, 2));
+  });
+
+  it("menolak kode publik, alias/duplikat canonical dan literal salah bentuk", async () => {
+    await expect(
+      createPublicDraftOffer(
+        { requestKey: uuid(), activationKind: "public", codes: ["HEMAT17"] },
+        ACTOR
+      )
+    ).rejects.toMatchObject({ code: "CODE_NOT_SUPPORTED" });
+    await expect(
+      createManualDraft(["HEMAT17", "hemat17"])
+    ).rejects.toSatisfy(inputInvalid);
+    await expect(createManualDraft(["HEMAT 17"])).rejects.toSatisfy(inputInvalid);
+    await expect(createManualDraft(["hémät17"])).rejects.toSatisfy(inputInvalid);
+    await expect(createManualDraft(["AB"])).rejects.toSatisfy(inputInvalid);
+    await expect(createManualDraft(["_HEMAT"])).rejects.toSatisfy(inputInvalid);
+  });
+
+  it("add-code replay tidak menggandakan code/audit/version dan tidak mereset usage", async () => {
+    const before = await getDiscountOfferDetail(manualOfferId, ACTOR);
+    const command = {
+      offerId: manualOfferId,
+      requestKey: uuid(),
+      code: " zzfixmanual17 ", // canonical sama dengan kode pertama → konflik
+      expectedOfferVersion: before!.version,
+    };
+    await expect(addDiscountCode(command, ACTOR)).rejects.toMatchObject({
+      code: "CODE_CONFLICT",
+    });
+
+    const add = {
+      offerId: manualOfferId,
+      requestKey: uuid(),
+      code: "zzfixnew2026",
+      expectedOfferVersion: before!.version,
+    };
+    const first = await addDiscountCode(add, ACTOR);
+    expect(first.status).toBe(201);
+    expect(first.replayed).toBe(false);
+    expect(first.data.codes.map((code) => code.code)).toContain("ZZFIXNEW2026");
+    expect(first.data.version).toBe(before!.version + 1);
+    expect(first.data.usage).toEqual(before!.usage);
+
+    const replay = await addDiscountCode(add, ACTOR);
+    expect(replay.status).toBe(200);
+    expect(replay.replayed).toBe(true);
+    expect(replay.data.version).toBe(first.data.version);
+    expect(replay.data.codes).toHaveLength(first.data.codes.length);
+
+    await expect(
+      addDiscountCode({ ...add, code: "zzfixother2026" }, ACTOR)
+    ).rejects.toMatchObject({ code: "REQUEST_KEY_CONFLICT" });
+
+    const audit = await pool!.query(
+      `select count(*)::int as count from audit_log
+        where entity_type = 'discount_offer' and entity_id = $1
+          and action = 'DISCOUNT_CODE_ADDED'`,
+      [manualOfferId]
+    );
+    expect(audit.rows[0].count).toBe(1);
+  });
+
+  it("canonical uniqueness global dan channel mutlak pada add-code", async () => {
+    const other = await createManualDraft(["ZZFIXOTHEROFFER1"]);
+    const current = await getDiscountOfferDetail(manualOfferId, ACTOR);
+    await expect(
+      addDiscountCode(
+        {
+          offerId: other.data.id,
+          requestKey: uuid(),
+          code: "zzfixnew2026",
+          expectedOfferVersion: other.data.version,
+        },
+        ACTOR
+      )
+    ).rejects.toMatchObject({ code: "CODE_CONFLICT" });
+
+    const publicDraft = await createDraft();
+    await expect(
+      addDiscountCode(
+        {
+          offerId: publicDraft.data.id,
+          requestKey: uuid(),
+          code: "ZZFIXPUBLICADD1",
+          expectedOfferVersion: publicDraft.data.version,
+        },
+        ACTOR
+      )
+    ).rejects.toMatchObject({ code: "CODE_NOT_SUPPORTED" });
+
+    // Version guard stale juga berlaku untuk code mutation.
+    await expect(
+      addDiscountCode(
+        {
+          offerId: manualOfferId,
+          requestKey: uuid(),
+          code: "ZZFIXSTALEGUARD1",
+          expectedOfferVersion: current!.version - 1,
+        },
+        ACTOR
+      )
+    ).rejects.toMatchObject({ code: "STALE_REVISION" });
+  });
+
+  it("state kode: inactive lalu arsip terminal, version guard, dan owner tetap", async () => {
+    const detail = await getDiscountOfferDetail(manualOfferId, ACTOR);
+    const target = detail!.codes.find((code) => code.code === "ZZFIXNEW2026")!;
+    const inactive = await setDiscountCodeState(
+      {
+        offerId: manualOfferId,
+        codeId: target.id,
+        expectedOfferVersion: detail!.version,
+        expectedCodeVersion: target.version,
+        state: "inactive",
+      },
+      ACTOR
+    );
+    expect(inactive.data.codes.find((code) => code.id === target.id)?.state).toBe(
+      "inactive"
+    );
+    await expect(
+      setDiscountCodeState(
+        {
+          offerId: manualOfferId,
+          codeId: target.id,
+          expectedOfferVersion: inactive.data.version,
+          expectedCodeVersion: target.version,
+          state: "active",
+        },
+        ACTOR
+      )
+    ).rejects.toMatchObject({ code: "STALE_REVISION" });
+
+    const inactiveCode = inactive.data.codes.find((code) => code.id === target.id)!;
+    const archived = await setDiscountCodeState(
+      {
+        offerId: manualOfferId,
+        codeId: target.id,
+        expectedOfferVersion: inactive.data.version,
+        expectedCodeVersion: inactiveCode.version,
+        state: "archived",
+      },
+      ACTOR
+    );
+    expect(archived.data.codes.find((code) => code.id === target.id)?.state).toBe(
+      "archived"
+    );
+    await expect(
+      setDiscountCodeState(
+        {
+          offerId: manualOfferId,
+          codeId: target.id,
+          expectedOfferVersion: archived.data.version,
+          expectedCodeVersion:
+            archived.data.codes.find((code) => code.id === target.id)!.version,
+          state: "active",
+        },
+        ACTOR
+      )
+    ).rejects.toMatchObject({ code: "CODE_ARCHIVED" });
+
+    // Perintah state tidak menerima literal/owner baru: baris tetap milik Offer
+    // yang sama dan canonical tidak berubah.
+    const after = await getDiscountOfferDetail(manualOfferId, ACTOR);
+    expect(after!.codes.find((code) => code.id === target.id)?.code).toBe(
+      "ZZFIXNEW2026"
+    );
+  
+  });
+
+  it("viewer hanya menerima label masked pada detail dan tidak bisa mengubah state", async () => {
+    const detail = await getDiscountOfferDetail(manualOfferId, VIEW_ACTOR);
+    expect(detail!.codeLiteralVisible).toBe(false);
+    for (const code of detail!.codes) {
+      expect(code.code).toBeUndefined();
+      expect(code.maskedCode).not.toContain("ZZFIXMANUAL17");
+      expect(code.maskedCode).toContain("•");
+    }
+    const target = detail!.codes[0]!;
+    await expect(
+      setDiscountCodeState(
+        {
+          offerId: manualOfferId,
+          codeId: target.id,
+          expectedOfferVersion: detail!.version,
+          expectedCodeVersion: target.version,
+          state: "inactive",
+        },
+        VIEW_ACTOR
+      )
+    ).rejects.toMatchObject({ code: "DENIED" });
+  });
+
+  it("publish mereservasi usulan kode yang direview dan menolak usulan yang berubah", async () => {
+    const saved = await createSavedDraft();
+    const policied = await setDiscountOfferPolicy(
+      {
+        offerId: saved.id,
+        requestKey: uuid(),
+        expectedOfferVersion: saved.version,
+        expectedPolicyVersion: saved.policyVersion,
+        quotaCount: 10,
+        budgetAmount: null,
+        perClientLimit: 1,
+      },
+      ACTOR
+    );
+    // Offer publik tidak bisa membawa usulan kode.
+    await expect(
+      reviewDiscountOffer(
+        {
+          offerId: policied.data.id,
+          expectedOfferVersion: policied.data.version,
+          expectedDraftVersion: policied.data.draftVersion,
+          proposedCodes: ["ZZFIXPUBLISH1"],
+        },
+        ACTOR
+      )
+    ).rejects.toMatchObject({ code: "CODE_NOT_SUPPORTED" });
+
+    // Offer manual: review dengan usulan -> publish mereservasi tepat kode itu.
+    const manual = await createManualDraft();
+    const savedManual = await saveDiscountOfferDraft(
+      {
+        offerId: manual.data.id,
+        expectedOfferVersion: manual.data.version,
+        expectedDraftVersion: manual.data.draftVersion,
+        terms: { ...DRAFT_TERMS, benefit: { ...DRAFT_TERMS.benefit } },
+      },
+      ACTOR
+    );
+    const manualPolicied = await setDiscountOfferPolicy(
+      {
+        offerId: savedManual.id,
+        requestKey: uuid(),
+        expectedOfferVersion: savedManual.version,
+        expectedPolicyVersion: savedManual.policyVersion,
+        quotaCount: 5,
+        budgetAmount: null,
+        perClientLimit: 1,
+      },
+      ACTOR
+    );
+    const review = await reviewDiscountOffer(
+      {
+        offerId: manualPolicied.data.id,
+        expectedOfferVersion: manualPolicied.data.version,
+        expectedDraftVersion: manualPolicied.data.draftVersion,
+        proposedCodes: ["zzfixpublish2026", "ZZFIXLAIN2026"],
+      },
+      ACTOR
+    );
+    expect(review.proposedCodes).toEqual(["ZZFIXPUBLISH2026", "ZZFIXLAIN2026"]);
+
+    await expect(
+      publishDiscountOffer(
+        {
+          offerId: manualPolicied.data.id,
+          requestKey: uuid(),
+          expectedOfferVersion: review.offerVersion,
+          expectedDraftVersion: review.draftVersion,
+          expectedPolicyVersion: review.policyVersion,
+          reviewFingerprint: review.fingerprint,
+          proposedCodes: ["ZZFIXPUBLISH2026"],
+        },
+        ACTOR
+      )
+    ).rejects.toMatchObject({ code: "STALE_REVISION" });
+
+    const published = await publishDiscountOffer(
+      {
+        offerId: manualPolicied.data.id,
+        requestKey: uuid(),
+        expectedOfferVersion: review.offerVersion,
+        expectedDraftVersion: review.draftVersion,
+        expectedPolicyVersion: review.policyVersion,
+        reviewFingerprint: review.fingerprint,
+        proposedCodes: ["zzfixpublish2026", "ZZFIXLAIN2026"],
+      },
+      ACTOR
+    );
+    expect(published.data.state).toBe("enabled");
+    // Urutan DTO deterministik (createdAt, canonical): bukan urutan pengetikan.
+    expect(published.data.codes.map((code) => code.code)).toEqual([
+      "ZZFIXLAIN2026",
+      "ZZFIXPUBLISH2026",
+    ]);
+    expect(published.data.usage).toMatchObject({ reservedCount: 0, consumedCount: 0 });
+  });
+});
 
     afterAll(async () => {
       if (!pool) return;
       await cleanupOwnedRows();
       await setGate("0");
       await pool.query(`DELETE FROM admin_role_grant WHERE role_id = ANY($1::text[])`, [
-        [ROLE, NO_CAP_ROLE],
+        [ROLE, NO_CAP_ROLE, VIEW_ROLE],
       ]);
       await pool.query(`DELETE FROM "user" WHERE id = ANY($1::text[])`, [ACTORS]);
       await pool.query(`DELETE FROM admin_role WHERE id = ANY($1::text[])`, [
-        [ROLE, NO_CAP_ROLE],
+        [ROLE, NO_CAP_ROLE, VIEW_ROLE],
       ]);
       await pool.end();
     });
@@ -496,10 +863,12 @@ describe.skipIf(!dbReady)(
       expect(detail?.budgetAmount).toBeNull();
     });
 
-    it("refuses a quota/budget reduction below reserved + consumed commitments", async () => {
-      // Fixture counters are NOT a redemption proof: this test exercises the
-      // arithmetic guard only (the reserve race belongs to the redemption
-      // slices). 8 reserved + 1 consumed cannot fit into quota 5.
+    it("fails closed on projection counters that have no Redemption ledger evidence", async () => {
+      // Ticket 12 makes the append-only Redemption ledger the reconciliation
+      // source. Fixture counters alone are no longer treated as a commitment;
+      // a drifted projection is held for review instead of being used to
+      // accept/reject arithmetic. Real-ledger quota reductions are covered by
+      // discount-operations-read.db.test.ts.
       const { policied, published } = await reviewAndPublish();
       await pool!.query(
         `UPDATE discount_offer_usage
@@ -522,7 +891,7 @@ describe.skipIf(!dbReady)(
           },
           ACTOR
         )
-      ).rejects.toMatchObject({ code: "CAPACITY_BELOW_COMMITMENTS" });
+      ).rejects.toMatchObject({ code: "USAGE_DRIFT_REVIEW" });
 
       const detail = await getDiscountOfferDetail(policied.id, ACTOR);
       expect(detail?.quotaCount).toBe(10);
@@ -599,6 +968,8 @@ describe.skipIf(!dbReady)(
 
       expect(second.data.currentRevisionId).not.toBe(published.data.currentRevisionId);
       expect(second.data.liveRevision?.name).toBe("Revisi kedua");
+      // A new revision/rename never resets or reinterprets usage.
+      expect(second.data.usage).toEqual(published.data.usage);
       expect(second.data.liveRevision?.benefit?.fixedAmount).toBe("25000");
 
       const revisions = await pool!.query<{
@@ -680,5 +1051,182 @@ describe.skipIf(!dbReady)(
         setDiscountOfferState({ ...stateCommand, state: "archived" }, ACTOR)
       ).rejects.toMatchObject({ code: "REQUEST_KEY_CONFLICT" });
     });
+  // =========================================================
+  // Seam T — percentage goods administration (ticket 10)
+  // =========================================================
+  // Literal expected dari spec §4.2/§4.4. Draft/review/publish/simulasi wajib
+  // memakai bentuk benefit yang sama dengan evaluator customer.
+  describe("percentage goods administration", () => {
+    const PERCENT_TERMS = {
+      name: "Diskon 10% maksimal Rp20.000",
+      currency: "IDR",
+      minSubtotal: "100000",
+      startAt: null,
+      endAt: null,
+      benefit: {
+        kind: "percentage_goods",
+        paramsVersion: 1,
+        rate: "10.000000",
+        capAmount: "20000",
+      },
+    } as const;
+
+    async function createPercentageDraft() {
+      const created = await createDraft();
+      const saved = await saveDiscountOfferDraft(
+        {
+          offerId: created.data.id,
+          expectedOfferVersion: created.data.version,
+          expectedDraftVersion: created.data.draftVersion,
+          terms: {
+            ...PERCENT_TERMS,
+            benefit: { ...PERCENT_TERMS.benefit },
+          },
+        },
+        ACTOR
+      );
+      const policied = await setDiscountOfferPolicy(
+        {
+          offerId: saved.id,
+          requestKey: uuid(),
+          expectedOfferVersion: saved.version,
+          expectedPolicyVersion: saved.policyVersion,
+          quotaCount: 10,
+          budgetAmount: null,
+          perClientLimit: 1,
+        },
+        ACTOR
+      );
+      return policied.data;
+    }
+
+    it("menyimpan rate/cap percentage dan menolak precision berlebih tanpa mengubah draft", async () => {
+      const created = await createDraft();
+      await expect(
+        saveDiscountOfferDraft(
+          {
+            offerId: created.data.id,
+            expectedOfferVersion: created.data.version,
+            expectedDraftVersion: created.data.draftVersion,
+            terms: {
+              ...PERCENT_TERMS,
+              benefit: { ...PERCENT_TERMS.benefit, rate: "10.1234567" },
+            },
+          },
+          ACTOR
+        )
+      ).rejects.toMatchObject({ code: "INPUT_INVALID" });
+
+      const saved = await saveDiscountOfferDraft(
+        {
+          offerId: created.data.id,
+          expectedOfferVersion: created.data.version,
+          expectedDraftVersion: created.data.draftVersion,
+          terms: {
+            ...PERCENT_TERMS,
+            benefit: { ...PERCENT_TERMS.benefit },
+          },
+        },
+        ACTOR
+      );
+      expect(saved.draftRevision?.benefit).toMatchObject({
+        kind: "percentage_goods",
+        rate: "10",
+        capAmount: "20000",
+        fixedAmount: null,
+      });
+
+      const detail = await getDiscountOfferDetail(created.data.id, ACTOR);
+      expect(detail?.draftRevision?.benefit?.rate).toBe("10");
+    });
+
+    it("review, simulasi cap dan uncapped memakai nominal exact, lalu publish", async () => {
+      const draft = await createPercentageDraft();
+      const review = await reviewDiscountOffer(
+        {
+          offerId: draft.id,
+          expectedOfferVersion: draft.version,
+          expectedDraftVersion: draft.draftVersion,
+        },
+        ACTOR
+      );
+      expect(review.canPublish).toBe(true);
+      expect(review.diff.benefit.draft).toMatchObject({
+        kind: "percentage_goods",
+        rate: "10",
+        capAmount: "20000",
+      });
+
+      const capped = await simulateDiscountOffer(
+        {
+          offerId: draft.id,
+          expectedDraftVersion: draft.draftVersion,
+          fulfillmentMethod: "pickup",
+          lines: [{ variantId: "variant-450k", unitPrice: "450000", quantity: 1 }],
+        },
+        ACTOR
+      );
+      expect(capped.applied).toBe(true);
+      expect(capped.benefit).toEqual({
+        kind: "percentage_goods",
+        paramsVersion: 1,
+        rate: "10",
+        capAmount: "20000",
+      });
+      expect(capped.breakdown).toMatchObject({
+        subtotal: "450000",
+        goodsDiscount: "20000",
+        netGoods: "430000",
+        ppnAmount: "47300",
+        total: "477300",
+        expectedProviderPayable: "430000",
+      });
+
+      const published = await publishDiscountOffer(
+        {
+          offerId: draft.id,
+          requestKey: uuid(),
+          expectedOfferVersion: review.offerVersion,
+          expectedDraftVersion: review.draftVersion,
+          expectedPolicyVersion: review.policyVersion,
+          reviewFingerprint: review.fingerprint,
+        },
+        ACTOR
+      );
+      expect(published.data.liveRevision?.benefit).toMatchObject({
+        kind: "percentage_goods",
+        rate: "10",
+        capAmount: "20000",
+        fixedAmount: null,
+      });
+
+      // Simulasi ulang memakai revision live; uncapped dihitung dari rate.
+      const uncapped = await simulateDiscountOffer(
+        {
+          offerId: draft.id,
+          expectedDraftVersion: published.data.draftVersion,
+          fulfillmentMethod: "pickup",
+          lines: [{ variantId: "variant-450k", unitPrice: "450000", quantity: 1 }],
+        },
+        ACTOR
+      );
+      expect(uncapped.applied).toBe(true);
+      expect(uncapped.breakdown.goodsDiscount).toBe("20000");
+
+      // Simulasi subtotal di bawah minimum tidak menerapkan benefit.
+      const belowMinimum = await simulateDiscountOffer(
+        {
+          offerId: draft.id,
+          expectedDraftVersion: published.data.draftVersion,
+          fulfillmentMethod: "pickup",
+          lines: [{ variantId: "variant-50", unitPrice: "50", quantity: 1 }],
+        },
+        ACTOR
+      );
+      expect(belowMinimum.applied).toBe(false);
+      expect(belowMinimum.breakdown.goodsDiscount).toBe("0");
+    });
+  });
+
   }
 );

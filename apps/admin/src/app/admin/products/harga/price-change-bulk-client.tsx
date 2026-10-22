@@ -64,11 +64,15 @@ type Pagination = {
 
 type CandidatePage = { rows: Candidate[]; pagination: Pagination };
 
-type Preview = {
+export type Preview = {
   inputSku: string;
-  action: "set_price" | "restore_base";
+  action: "set_price" | "restore_base" | "invalid";
   variantLabel: string | null;
   targetUnitPrice: string | null;
+  /** Workbook-only raw action/target text (kept for review and the report). */
+  inputActionRaw?: string | null;
+  inputTargetRaw?: string | null;
+  errorReason?: string | null;
   sourceUnitPrice: string | null;
   storedTargetBefore: string | null;
   effectiveUnitPriceBefore: string | null;
@@ -80,12 +84,12 @@ type Preview = {
   warnings: string[];
 };
 
-type BatchRow = {
+export type BatchRow = {
   id: string;
   rowNumber: number;
   inputSku: string;
   variantId: string | null;
-  action: "set_price" | "restore_base";
+  action: "set_price" | "restore_base" | "invalid";
   targetUnitPrice: string | null;
   state: "pending" | "applied" | "unchanged" | "failed";
   resultCode: string | null;
@@ -101,8 +105,11 @@ type BatchRow = {
   appliedRevisionId: string | null;
 };
 
-type Batch = {
+export type Batch = {
   id: string;
+  source: "manual" | "bulk" | "xlsx";
+  templateVersion: string | null;
+  parentBatchId: string | null;
   state: string;
   rowCount: number;
   appliedCount: number;
@@ -114,7 +121,7 @@ type Batch = {
   pagination?: Pagination;
 };
 
-function rupiah(value: string | null): string {
+export function rupiah(value: string | null): string {
   if (value === null || value === "") return "—";
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return value;
@@ -151,7 +158,7 @@ function warningLabel(warning: string): string {
   }
 }
 
-function rowStatus(row: BatchRow): string {
+export function rowStatus(row: BatchRow): string {
   const parts: string[] = [];
   if (row.action === "restore_base") {
     parts.push(
@@ -171,7 +178,7 @@ function rowStatus(row: BatchRow): string {
   return parts.length === 0 ? "—" : parts.join(" · ");
 }
 
-function haltMessage(reason: string | null): string | null {
+export function haltMessage(reason: string | null): string | null {
   switch (reason) {
     case null:
     case "":
@@ -185,7 +192,7 @@ function haltMessage(reason: string | null): string | null {
   }
 }
 
-function statusMessage(batch: Batch): { tone: "info" | "success" | "error"; text: string } {
+export function statusMessage(batch: Batch): { tone: "info" | "success" | "error"; text: string } {
   const { rowCount, appliedCount, unchangedCount, failedCount, pendingCount } = batch;
   if (pendingCount > 0) {
     return {
@@ -206,7 +213,7 @@ function statusMessage(batch: Batch): { tone: "info" | "success" | "error"; text
   return { tone: "success", text: `${appliedCount} baris diterapkan.` };
 }
 
-async function reviewDigest(rows: readonly BatchRow[]): Promise<string | null> {
+export async function reviewDigest(rows: readonly BatchRow[]): Promise<string | null> {
   // Review fingerprint for the audit trail (not an authorization token).
   if (typeof crypto === "undefined" || !crypto.subtle) return null;
   const bytes = new TextEncoder().encode(
@@ -218,7 +225,7 @@ async function reviewDigest(rows: readonly BatchRow[]): Promise<string | null> {
     .join("");
 }
 
-async function loadBatchRows(batchId: string): Promise<BatchRow[]> {
+export async function loadBatchRows(batchId: string): Promise<BatchRow[]> {
   // The batch DTO is paginated; the review and result tables need every row so
   // the aggregates and the per-row audit view are not silently truncated.
   const collected: BatchRow[] = [];
@@ -441,6 +448,37 @@ export function PriceChangeBulkClient() {
     }
   };
 
+  const exportSelected = async () => {
+    if (selected.size === 0) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/admin/price-changes/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Only the ids are sent: base/effective price comes from the server.
+        body: JSON.stringify({ variantIds: [...selected.keys()] }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Gagal export SKU");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "harga-export.xlsx";
+      document.body.append(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`Export ${selected.size} SKU diunduh.`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Gagal export SKU");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const processed = batch
     ? batch.appliedCount + batch.unchangedCount + batch.failedCount
     : 0;
@@ -496,15 +534,27 @@ export function PriceChangeBulkClient() {
             <p className="text-sm font-medium" data-testid="bulk-selection-count">
               Terpilih: {selected.size} SKU
             </p>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setSelected(new Map())}
-              disabled={selected.size === 0}
-            >
-              Bersihkan pilihan
-            </Button>
+            <div className="flex gap-2">
+              <Button
+                data-testid="bulk-export"
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void exportSelected()}
+                disabled={busy || selected.size === 0}
+              >
+                Export SKU terpilih
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelected(new Map())}
+                disabled={selected.size === 0}
+              >
+                Bersihkan pilihan
+              </Button>
+            </div>
           </div>
 
           {appliedSearch === "" ? (

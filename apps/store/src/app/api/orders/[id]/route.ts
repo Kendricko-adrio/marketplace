@@ -8,6 +8,7 @@ import {
   productVariants,
   products,
   branches,
+  discountCodes,
   discountRedemptions,
   discountOfferRevisions,
 } from "@/db";
@@ -145,11 +146,14 @@ export async function GET(
       .select({
         offerName: discountOfferRevisions.name,
         benefitAmount: discountRedemptions.benefitAmount,
+        activationKind: discountRedemptions.activationKind,
+        canonicalCode: discountCodes.canonicalCode,
         status: discountRedemptions.status,
         consumedAt: discountRedemptions.consumedAt,
         releasedAt: discountRedemptions.releasedAt,
       })
       .from(discountRedemptions)
+      .leftJoin(discountCodes, eq(discountCodes.id, discountRedemptions.codeId))
       .innerJoin(
         discountOfferRevisions,
         and(
@@ -159,10 +163,19 @@ export async function GET(
       )
       .where(eq(discountRedemptions.orderId, orderData.id))
       .limit(1);
+    /**
+     * Order detail hanya mengungkap kode yang DIPAKAI order milik customer ini
+     * (spec §7.1), bukan daftar kode Offer. Public Coupon tidak membawa kode.
+     */
     const promo = redemption
       ? {
           name: redemption.offerName,
           benefitAmount: redemption.benefitAmount,
+          activationKind: redemption.activationKind,
+          code:
+            redemption.activationKind === "manual_only"
+              ? redemption.canonicalCode
+              : null,
           status: redemption.status,
           consumedAt: redemption.consumedAt,
           releasedAt: redemption.releasedAt,

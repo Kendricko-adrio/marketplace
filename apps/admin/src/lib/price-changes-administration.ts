@@ -25,6 +25,14 @@ import {
 } from "@marketplace/db/src/markdown-pricing";
 import { writeAuditEvent } from "./rbac/audit-writer";
 import {
+  parsePriceWorkbook,
+  writePriceTemplate,
+  writePriceWorkbook,
+  type ParsedWorkbookRow,
+  type WorkbookLimits,
+} from "./price-workbook";
+import { WorkbookFatalError } from "./xlsx-container";
+import {
   ADMIN_LOCK_TIMEOUT_MS,
   ADMIN_STATEMENT_TIMEOUT_MS,
   beginBoundedTransaction,
@@ -151,6 +159,10 @@ const MAX_SEARCH_LENGTH = 100;
 export const MAX_STAGE_ROWS_HARD_LIMIT = 5000;
 
 export type PriceChangeAction = "set_price" | "restore_base";
+/** A workbook row whose `action` cell was not a known literal. Such a row is
+ * stored as a FINAL failed row (never pending), so the apply pipeline can never
+ * execute it. */
+export type PriceChangeRowAction = PriceChangeAction | "invalid";
 export type PriceChangeRowState = "pending" | "applied" | "unchanged" | "failed";
 export type PriceChangeBatchState =
   | "staged"
@@ -163,7 +175,9 @@ export class PriceChangeError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
-    message: string
+    message: string,
+    /** Machine-readable detail (e.g. the fatal workbook reason), never secrets. */
+    readonly details?: { reason?: string }
   ) {
     super(message);
     this.name = "PriceChangeError";
@@ -172,9 +186,14 @@ export class PriceChangeError extends Error {
 
 export function describePriceChangeError(
   error: unknown
-): { status: number; code: string; message: string } | null {
+): { status: number; code: string; message: string; details?: { reason?: string } } | null {
   if (error instanceof PriceChangeError) {
-    return { status: error.status, code: error.code, message: error.message };
+    return {
+      status: error.status,
+      code: error.code,
+      message: error.message,
+      ...(error.details ? { details: error.details } : {}),
+    };
   }
   return null;
 }
@@ -276,8 +295,13 @@ export interface PriceChangePreview {
   productName: string | null;
   /** Gabungan color/size apa adanya; null bila variant tidak punya keduanya. */
   variantLabel: string | null;
-  action: PriceChangeAction;
+  action: PriceChangeRowAction;
   targetUnitPrice: string | null;
+  /** Workbook-only raw action/target text (kept for review and the report). */
+  inputActionRaw?: string | null;
+  inputTargetRaw?: string | null;
+  /** Workbook row error that made this row fail before apply, if any. */
+  errorReason?: string | null;
   /** Latest source price observed while STAGING (not the apply authority). */
   sourceUnitPrice: string | null;
   storedTargetBefore: string | null;
@@ -307,7 +331,7 @@ export interface PriceChangeBatchRowDto {
   rowNumber: number;
   inputSku: string;
   variantId: string | null;
-  action: PriceChangeAction;
+  action: PriceChangeRowAction;
   targetUnitPrice: string | null;
   state: PriceChangeRowState;
   resultCode: string | null;
@@ -328,6 +352,7 @@ export interface PriceChangeBatchPagination {
 export interface PriceChangeBatchDto {
   id: string;
   source: "manual" | "bulk" | "xlsx";
+  templateVersion: string | null;
   state: PriceChangeBatchState;
   reason: string | null;
   parentBatchId: string | null;
@@ -546,11 +571,19 @@ function buildPreview(input: {
   inputSku: string;
   /** null = SKU tidak ditemukan; baris tetap di-stage dengan warning. */
   variant: PreviewVariant | null;
-  action: PriceChangeAction;
+  action: PriceChangeRowAction;
   targetUnitPrice: string | null;
   pointer: Awaited<ReturnType<typeof readCurrentMarkdown>> | null;
+  inputActionRaw?: string | null;
+  inputTargetRaw?: string | null;
+  errorReason?: string | null;
 }): PriceChangePreview {
   const warnings: string[] = [];
+  const passthrough = {
+    inputActionRaw: input.inputActionRaw ?? null,
+    inputTargetRaw: input.inputTargetRaw ?? null,
+    errorReason: input.errorReason ?? null,
+  };
   if (input.variant === null) {
     warnings.push("VARIANT_NOT_FOUND");
     return {
@@ -561,6 +594,7 @@ function buildPreview(input: {
       variantLabel: null,
       action: input.action,
       targetUnitPrice: input.targetUnitPrice,
+      ...passthrough,
       sourceUnitPrice: null,
       storedTargetBefore: null,
       effectiveUnitPriceBefore: null,
@@ -591,7 +625,7 @@ function buildPreview(input: {
   const sourceAmount = source === null ? null : BigInt(source);
   const targetAmount = input.targetUnitPrice === null ? null : BigInt(input.targetUnitPrice);
   let effectiveAfter: bigint | null = null;
-  if (sourceAmount !== null) {
+  if (sourceAmount !== null && input.action !== "invalid") {
     if (input.action === "restore_base") {
       effectiveAfter = sourceAmount;
     } else if (targetAmount !== null) {
@@ -616,6 +650,7 @@ function buildPreview(input: {
     variantLabel: variantLabelOf(variant.color, variant.size),
     action: input.action,
     targetUnitPrice: input.targetUnitPrice,
+    ...passthrough,
     sourceUnitPrice: source,
     storedTargetBefore: projection?.storedTarget ?? input.pointer?.targetUnitPrice ?? null,
     effectiveUnitPriceBefore: projection?.effectiveUnitPrice ?? null,
@@ -637,7 +672,7 @@ function toBatchRowDto(
     rowNumber: row.rowNumber,
     inputSku: row.inputSku,
     variantId: row.variantId,
-    action: row.action as PriceChangeAction,
+    action: row.action as PriceChangeRowAction,
     targetUnitPrice: dbMoney(row.targetUnitPrice),
     state: row.state as PriceChangeRowState,
     resultCode: row.resultCode,
@@ -725,6 +760,7 @@ async function readBatchDto(
   return {
     id: batch.id,
     source: batch.source as PriceChangeBatchDto["source"],
+    templateVersion: batch.templateVersion,
     state: batch.state as PriceChangeBatchState,
     reason: batch.reason,
     parentBatchId: batch.parentBatchId,
@@ -773,10 +809,18 @@ export interface StagePriceChangeResult {
 
 interface NormalizedStageRow {
   sku: string;
-  action: PriceChangeAction;
+  action: PriceChangeRowAction;
   targetUnitPrice: string | null;
   /** Percent shortcut (discount off the source); resolved to a fixed target at stage. */
   discountPercent: string | null;
+  /** Workbook row number; manual/bulk derive `index + 1` instead. */
+  sheetRow: number | null;
+  /** Workbook `origin_row` reference (correction of a final failed row). */
+  originRow: number | null;
+  /** Workbook parser rejection; such a row is staged FINAL failed, never pending. */
+  rejectedReason: string | null;
+  actionRaw: string | null;
+  targetRaw: string | null;
 }
 
 function normalizeStageRow(
@@ -824,7 +868,17 @@ function normalizeStageRow(
       `${field} restore_base must not carry targetUnitPrice or discountPercent`
     );
   }
-  return { sku: raw.sku, action, targetUnitPrice, discountPercent };
+  return {
+    sku: raw.sku,
+    action,
+    targetUnitPrice,
+    discountPercent,
+    sheetRow: null,
+    originRow: null,
+    rejectedReason: null,
+    actionRaw: null,
+    targetRaw: null,
+  };
 }
 
 function normalizeStageInput(input: StagePriceChangeInput): {
@@ -873,6 +927,9 @@ function normalizeStageInput(input: StagePriceChangeInput): {
           action: row.action,
           targetUnitPrice: row.targetUnitPrice,
           discountPercent: row.discountPercent,
+          sheetRow: row.sheetRow,
+          originRow: row.originRow,
+          rejectedReason: row.rejectedReason,
         })),
       })
     )
@@ -901,8 +958,12 @@ interface PreparedStageRow {
   rowNumber: number;
   inputSku: string;
   variantId: string | null;
-  action: PriceChangeAction;
+  action: PriceChangeRowAction;
   targetUnitPrice: string | null;
+  originRow: number | null;
+  /** `failed` only for rows the workbook parser already rejected (final). */
+  state: "pending" | "failed";
+  resultCode: string | null;
   preview: PriceChangePreview;
 }
 
@@ -916,19 +977,23 @@ async function prepareStageRows(
   tx: Executor,
   rows: readonly NormalizedStageRow[]
 ): Promise<PreparedStageRow[]> {
-  const variantRows = await tx
-    .select({
-      variantId: productVariants.id,
-      sku: productVariants.sku,
-      price: productVariants.price,
-      color: productVariants.color,
-      size: productVariants.size,
-      productId: products.id,
-      productName: products.name,
-    })
-    .from(productVariants)
-    .innerJoin(products, eq(products.id, productVariants.productId))
-    .where(inArray(productVariants.sku, rows.map((row) => row.sku)));
+  const lookupSkus = [...new Set(rows.map((row) => row.sku).filter((sku) => sku.length > 0))];
+  const variantRows =
+    lookupSkus.length === 0
+      ? []
+      : await tx
+          .select({
+            variantId: productVariants.id,
+            sku: productVariants.sku,
+            price: productVariants.price,
+            color: productVariants.color,
+            size: productVariants.size,
+            productId: products.id,
+            productName: products.name,
+          })
+          .from(productVariants)
+          .innerJoin(products, eq(products.id, productVariants.productId))
+          .where(inArray(productVariants.sku, lookupSkus));
   const variantBySku = new Map(
     variantRows.map((variant) => [variant.sku, variant] as const)
   );
@@ -977,12 +1042,16 @@ async function prepareStageRows(
   );
 
   return rows.map((row, index) => {
-    const variant = variantBySku.get(row.sku) ?? null;
+    const variant = row.sku.length > 0 ? (variantBySku.get(row.sku) ?? null) : null;
     const pointer = variant
       ? (pointerByVariant.get(variant.variantId) ?? null)
       : null;
     let targetUnitPrice = row.targetUnitPrice;
-    if (row.action === "set_price" && targetUnitPrice === null) {
+    if (
+      row.action === "set_price" &&
+      targetUnitPrice === null &&
+      row.discountPercent !== null
+    ) {
       // Percent shortcut: the fixed target is frozen HERE against the source
       // read in this transaction, so apply never re-derives a percentage.
       if (!variant) {
@@ -993,7 +1062,7 @@ async function prepareStageRows(
       try {
         targetUnitPrice = computePercentTarget(
           variant.price,
-          row.discountPercent!
+          row.discountPercent
         );
       } catch (error) {
         if (error instanceof MarkdownPriceError) {
@@ -1004,20 +1073,262 @@ async function prepareStageRows(
     }
     return {
       id: randomUUID(),
-      rowNumber: index + 1,
+      rowNumber: row.sheetRow ?? index + 1,
       inputSku: row.sku,
       variantId: variant?.variantId ?? null,
       action: row.action,
       targetUnitPrice,
+      originRow: row.originRow,
+      state: row.rejectedReason === null ? ("pending" as const) : ("failed" as const),
+      resultCode: row.rejectedReason,
       preview: buildPreview({
         inputSku: row.sku,
         variant,
         action: row.action,
         targetUnitPrice,
         pointer,
+        inputActionRaw: row.actionRaw,
+        inputTargetRaw: row.targetRaw,
+        errorReason: row.rejectedReason,
       }),
     };
   });
+}
+
+/**
+ * Stage 1..N Markdown rows (manual/bulk). The preview is explicitly
+ * non-authoritative: apply re-reads the latest source/current Markdown. The
+ * batch, every row, and every `PRICE_CHANGE_STAGED` audit are committed in ONE
+ * transaction, so a request never leaves a partial batch. Same
+ * `(actor, requestKey)` replays the accepted batch; a different command under a
+ * used key is 409.
+ */
+interface StageCommand {
+  requestKey: string;
+  source: "manual" | "bulk" | "xlsx";
+  templateVersion: string | null;
+  parentBatchId: string | null;
+  reason: string | null;
+  fingerprint: string;
+  rows: readonly NormalizedStageRow[];
+}
+
+function originInvalid(message: string): never {
+  throw new PriceChangeError(400, "ORIGIN_INVALID", message);
+}
+
+/**
+ * A correction batch may only link to FINAL FAILED rows of an existing parent
+ * batch. Reopening a pending/applied/unchanged row (or linking a row of another
+ * batch) is rejected before ANY row is written, so a linked retry can never
+ * replay the 97 successful rows of the original batch.
+ */
+async function validateOriginRows(
+  tx: Executor,
+  parentBatchId: string | null,
+  rows: readonly NormalizedStageRow[]
+): Promise<Map<number, string>> {
+  const requested = new Map<number, number>();
+  for (const row of rows) {
+    if (row.originRow === null) continue;
+    requested.set(row.originRow, (requested.get(row.originRow) ?? 0) + 1);
+  }
+  if (requested.size === 0) {
+    if (parentBatchId !== null) {
+      const parent = await tx
+        .select({ id: priceChangeBatches.id })
+        .from(priceChangeBatches)
+        .where(eq(priceChangeBatches.id, parentBatchId))
+        .limit(1);
+      if (parent.length === 0) {
+        originInvalid("The parent price-change batch does not exist");
+      }
+    }
+    return new Map();
+  }
+  if (parentBatchId === null) {
+    originInvalid("origin_row requires the parent batch of the correction");
+  }
+  for (const [originRow, count] of requested) {
+    if (count > 1) {
+      originInvalid(`origin_row ${originRow} is referenced more than once`);
+    }
+  }
+  const parent = await tx
+    .select({ id: priceChangeBatches.id })
+    .from(priceChangeBatches)
+    .where(eq(priceChangeBatches.id, parentBatchId))
+    .limit(1);
+  if (parent.length === 0) {
+    originInvalid("The parent price-change batch does not exist");
+  }
+  const originRows = await tx
+    .select({
+      id: priceChangeBatchRows.id,
+      rowNumber: priceChangeBatchRows.rowNumber,
+      state: priceChangeBatchRows.state,
+    })
+    .from(priceChangeBatchRows)
+    .where(
+      and(
+        eq(priceChangeBatchRows.batchId, parentBatchId),
+        inArray(priceChangeBatchRows.rowNumber, [...requested.keys()])
+      )
+    );
+  if (originRows.length !== requested.size) {
+    originInvalid("origin_row does not reference a row of the parent batch");
+  }
+  const ids = new Map<number, string>();
+  for (const row of originRows) {
+    if (row.state !== "failed") {
+      originInvalid(
+        `origin_row ${row.rowNumber} is not a final failed row; final rows are never reopened`
+      );
+    }
+    ids.set(row.rowNumber, row.id);
+  }
+  return ids;
+}
+
+async function runStage(
+  command: StageCommand,
+  actorUserId: string
+): Promise<StagePriceChangeResult> {
+  try {
+    return await beginBoundedTransaction(async (tx) => {
+      const actor = requirePriceEditor(
+        await loadActorPolicyInTransaction(tx, actorUserId)
+      );
+
+      const existing = await tx
+        .select()
+        .from(priceChangeBatches)
+        .where(
+          and(
+            eq(priceChangeBatches.actorIdentity, actorUserId),
+            eq(priceChangeBatches.requestKey, command.requestKey)
+          )
+        )
+        .for("update")
+        .limit(1);
+      if (existing.length > 0) {
+        const batch = existing[0];
+        if (batch.fingerprint !== command.fingerprint) {
+          throw new PriceChangeError(
+            409,
+            "REQUEST_KEY_CONFLICT",
+            "This request key was already used with a different command"
+          );
+        }
+        const replayed = await readBatchDto(tx, batch.id);
+        if (!replayed) throw new Error("Accepted price-change batch is missing");
+        return { status: 200 as const, data: replayed };
+      }
+
+      const originRowIds = await validateOriginRows(
+        tx,
+        command.parentBatchId,
+        command.rows
+      );
+      const prepared = await prepareStageRows(tx, command.rows);
+      const now = new Date();
+      const batchId = randomUUID();
+      const pendingCount = prepared.filter((row) => row.state === "pending").length;
+      const failedCount = prepared.length - pendingCount;
+      const state =
+        pendingCount > 0
+          ? ("staged" as const)
+          : deriveBatchState({
+              rowCount: prepared.length,
+              applied: 0,
+              unchanged: 0,
+              failed: failedCount,
+              pending: 0,
+            });
+      const claimed = await tx
+        .insert(priceChangeBatches)
+        .values({
+          id: batchId,
+          actorIdentity: actorUserId,
+          requestKey: command.requestKey,
+          fingerprint: command.fingerprint,
+          source: command.source,
+          templateVersion: command.templateVersion,
+          parentBatchId: command.parentBatchId,
+          reason: command.reason,
+          state,
+          rowCount: prepared.length,
+          appliedCount: 0,
+          unchangedCount: 0,
+          failedCount,
+          pendingCount,
+          actorId: actorUserId,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .onConflictDoNothing({
+          target: [priceChangeBatches.actorIdentity, priceChangeBatches.requestKey],
+        })
+        .returning({ id: priceChangeBatches.id });
+      if (claimed.length === 0) throw new BatchClaimed();
+
+      await tx.insert(priceChangeBatchRows).values(
+        prepared.map((row) => ({
+          id: row.id,
+          batchId,
+          rowNumber: row.rowNumber,
+          inputSku: row.inputSku,
+          variantId: row.variantId,
+          action: row.action,
+          targetUnitPrice: row.targetUnitPrice,
+          previewJson: row.preview,
+          state: row.state,
+          resultCode: row.resultCode,
+          originRetryRowId:
+            row.originRow === null ? null : (originRowIds.get(row.originRow) ?? null),
+          createdAt: now,
+          updatedAt: now,
+        }))
+      );
+
+      for (const row of prepared) {
+        await writeAuditEvent(tx, {
+          actorId: actorUserId,
+          action: PRICE_CHANGE_AUDIT_STAGED,
+          entityType: "variant_price",
+          entityId: row.variantId,
+          changes: {
+            batchId,
+            rowId: row.id,
+            rowNumber: row.rowNumber,
+            sku: row.inputSku,
+            action: row.action,
+            targetUnitPrice: row.targetUnitPrice,
+            sourceUnitPrice: row.preview.sourceUnitPrice,
+            storedTargetBefore: row.preview.storedTargetBefore,
+            effectiveUnitPriceBefore: row.preview.effectiveUnitPriceBefore,
+            effectiveUnitPriceAfter: row.preview.effectiveUnitPriceAfter,
+            source: command.source,
+            templateVersion: command.templateVersion,
+            parentBatchId: command.parentBatchId,
+            rowError: row.resultCode,
+            reason: command.reason,
+          },
+          policyVersion: actor.policyVersion,
+          branchScope: "global",
+        });
+      }
+
+      const staged = await readBatchDto(tx, batchId);
+      if (!staged) throw new Error("Staged price-change batch could not be read");
+      return { status: 201 as const, data: staged };
+    });
+  } catch (error) {
+    if (error instanceof BatchClaimed) {
+      return replayStaged(actorUserId, command.requestKey, command.fingerprint);
+    }
+    throw mapDatabaseError(error);
+  }
 }
 
 /**
@@ -1043,115 +1354,18 @@ export async function stagePriceChangeBatch(
     );
   }
 
-  try {
-    return await beginBoundedTransaction(async (tx) => {
-      const actor = requirePriceEditor(
-        await loadActorPolicyInTransaction(tx, actorUserId)
-      );
-
-      const existing = await tx
-        .select()
-        .from(priceChangeBatches)
-        .where(
-          and(
-            eq(priceChangeBatches.actorIdentity, actorUserId),
-            eq(priceChangeBatches.requestKey, normalized.requestKey)
-          )
-        )
-        .for("update")
-        .limit(1);
-      if (existing.length > 0) {
-        const batch = existing[0];
-        if (batch.fingerprint !== normalized.fingerprint) {
-          throw new PriceChangeError(
-            409,
-            "REQUEST_KEY_CONFLICT",
-            "This request key was already used with a different command"
-          );
-        }
-        const replayed = await readBatchDto(tx, batch.id);
-        if (!replayed) throw new Error("Accepted price-change batch is missing");
-        return { status: 200 as const, data: replayed };
-      }
-
-      const prepared = await prepareStageRows(tx, normalized.rows);
-      const now = new Date();
-      const batchId = randomUUID();
-      const claimed = await tx
-        .insert(priceChangeBatches)
-        .values({
-          id: batchId,
-          actorIdentity: actorUserId,
-          requestKey: normalized.requestKey,
-          fingerprint: normalized.fingerprint,
-          source: normalized.source,
-          reason: normalized.reason,
-          state: "staged",
-          rowCount: prepared.length,
-          appliedCount: 0,
-          unchangedCount: 0,
-          failedCount: 0,
-          pendingCount: prepared.length,
-          actorId: actorUserId,
-          createdAt: now,
-          updatedAt: now,
-        })
-        .onConflictDoNothing({
-          target: [priceChangeBatches.actorIdentity, priceChangeBatches.requestKey],
-        })
-        .returning({ id: priceChangeBatches.id });
-      if (claimed.length === 0) throw new BatchClaimed();
-
-      await tx.insert(priceChangeBatchRows).values(
-        prepared.map((row) => ({
-          id: row.id,
-          batchId,
-          rowNumber: row.rowNumber,
-          inputSku: row.inputSku,
-          variantId: row.variantId,
-          action: row.action,
-          targetUnitPrice: row.targetUnitPrice,
-          previewJson: row.preview,
-          state: "pending" as const,
-          createdAt: now,
-          updatedAt: now,
-        }))
-      );
-
-      for (const row of prepared) {
-        await writeAuditEvent(tx, {
-          actorId: actorUserId,
-          action: PRICE_CHANGE_AUDIT_STAGED,
-          entityType: "variant_price",
-          entityId: row.variantId,
-          changes: {
-            batchId,
-            rowId: row.id,
-            rowNumber: row.rowNumber,
-            sku: row.inputSku,
-            action: row.action,
-            targetUnitPrice: row.targetUnitPrice,
-            sourceUnitPrice: row.preview.sourceUnitPrice,
-            storedTargetBefore: row.preview.storedTargetBefore,
-            effectiveUnitPriceBefore: row.preview.effectiveUnitPriceBefore,
-            effectiveUnitPriceAfter: row.preview.effectiveUnitPriceAfter,
-            reason: normalized.reason,
-          },
-          policyVersion: actor.policyVersion,
-          branchScope: "global",
-        });
-      }
-
-      const staged = await readBatchDto(tx, batchId);
-      if (!staged) throw new Error("Staged price-change batch could not be read");
-      return { status: 201 as const, data: staged };
-    });
-  } catch (error) {
-    if (error instanceof BatchClaimed) {
-      return replayStaged(actorUserId, normalized.requestKey, normalized.fingerprint);
-    }
-    throw mapDatabaseError(error);
-  }
+  return runStage(
+    {
+      requestKey: normalized.requestKey,
+      source: normalized.source,
+      templateVersion: null,
+      parentBatchId: null,
+      reason: normalized.reason,
+      fingerprint: normalized.fingerprint,
+      rows: normalized.rows,
+    },
+    actorUserId
+  );
 }
 
 /**
@@ -1336,6 +1550,26 @@ async function applyRow(
       markdownActive: null,
     };
     return { resultCode: PRICE_CHANGE_RESULT.variantNotFound, state: "failed", revisionId: null, revisionNo: null, actual };
+  }
+
+  if (row.action !== "set_price" && row.action !== "restore_base") {
+    // Defensive: an unparseable workbook row is staged already-failed and can
+    // never be pending, so this branch only protects the invariant.
+    return {
+      resultCode: PRICE_CHANGE_RESULT.targetInvalid,
+      state: "failed",
+      revisionId: null,
+      revisionNo: null,
+      actual: {
+        sourceUnitPrice: null,
+        previousTargetUnitPrice: null,
+        previousEffectiveUnitPrice: null,
+        previousMarkdownActive: null,
+        targetUnitPrice: null,
+        effectiveUnitPrice: null,
+        markdownActive: null,
+      },
+    };
   }
 
   // Lock order (spec §9.2 group 4): variant/source → current Markdown, sorted by
@@ -2066,5 +2300,380 @@ export async function listPriceChangeCandidates(
       };
     }),
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+  };
+}
+
+
+// =========================================================
+// Workbook upload → staged batch (xlsx)
+// =========================================================
+// Spec §6.2–§6.4. The workbook is parsed and validated in memory BEFORE any
+// transaction exists, so a fatal container/marker/header/bounds problem rejects
+// the FILE without a batch or any price write. Structurally valid files may
+// still contain bad ROWS: those are staged as final `failed` rows (with their
+// row number + reason) so the admin can download the report/subset and upload a
+// corrected batch linked to the failed rows. The workbook bytes are never
+// archived; the request scope owns them and they are released when it ends.
+
+export interface StageWorkbookInput {
+  requestKey: string;
+  file: Uint8Array | ArrayBuffer | Buffer;
+  reason?: string | null;
+  /** Parent batch for a correction; required when the sheet carries origin_row. */
+  parentBatchId?: string | null;
+}
+
+/** Limits used by the HTTP layer to bound the upload BEFORE buffering it. */
+export async function readWorkbookUploadLimits(): Promise<WorkbookLimits> {
+  return readImportLimits();
+}
+
+function normalizeParentBatchId(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
+    inputInvalid("parentBatchId must be a UUID");
+  }
+  return value;
+}
+
+function workbookRowToStageRow(row: ParsedWorkbookRow): NormalizedStageRow {
+  return {
+    sku: row.inputSku,
+    // An unparseable action is stored as `invalid` and never as an executable
+    // `set_price`/`restore_base`, even when a price cell was present.
+    action: row.action,
+    targetUnitPrice: row.action === "invalid" ? null : row.targetUnitPrice,
+    discountPercent: null,
+    sheetRow: row.rowNumber,
+    originRow: row.originRow,
+    rejectedReason: row.error,
+    actionRaw: row.actionRaw,
+    targetRaw: row.targetRaw,
+  };
+}
+
+/**
+ * Parse a versioned workbook and stage it. Fatal workbook problems are a 400
+ * `WORKBOOK_REJECTED` (with the machine reason) and never create a batch.
+ */
+export async function stageWorkbookPriceChange(
+  input: StageWorkbookInput,
+  actorUserId: string
+): Promise<StagePriceChangeResult> {
+  const requestKey = requireRequestKey(input.requestKey);
+  const reason = requireReason(input.reason);
+  const parentBatchId = normalizeParentBatchId(input.parentBatchId);
+  await requireActiveContract();
+  const limits = await readImportLimits();
+
+  let parsed;
+  try {
+    parsed = parsePriceWorkbook(input.file, limits);
+  } catch (error) {
+    if (error instanceof WorkbookFatalError) {
+      throw new PriceChangeError(400, "WORKBOOK_REJECTED", error.message, {
+        reason: error.reason,
+      });
+    }
+    throw error;
+  }
+
+  if (parsed.rows.length === 0) {
+    throw new PriceChangeError(
+      400,
+      "INPUT_INVALID",
+      "The workbook contains no data rows"
+    );
+  }
+  if (parsed.rows.length > MAX_STAGE_ROWS_HARD_LIMIT) {
+    throw new PriceChangeError(
+      400,
+      "ROW_LIMIT_EXCEEDED",
+      `A price-change batch accepts at most ${MAX_STAGE_ROWS_HARD_LIMIT} rows`
+    );
+  }
+
+  const rows = parsed.rows.map(workbookRowToStageRow);
+  const fingerprint = createHash("sha256")
+    .update(
+      JSON.stringify({
+        source: "xlsx",
+        templateVersion: parsed.templateVersion,
+        parentBatchId,
+        reason,
+        rows: rows.map((row) => ({
+          sku: row.sku,
+          action: row.action,
+          actionRaw: row.actionRaw,
+          targetUnitPrice: row.targetUnitPrice,
+          targetRaw: row.targetRaw,
+          sheetRow: row.sheetRow,
+          originRow: row.originRow,
+          rejectedReason: row.rejectedReason,
+        })),
+      })
+    )
+    .digest("hex");
+
+  return runStage(
+    {
+      requestKey,
+      source: "xlsx",
+      templateVersion: parsed.templateVersion,
+      parentBatchId,
+      reason,
+      fingerprint,
+      rows,
+    },
+    actorUserId
+  );
+}
+
+// =========================================================
+// Template, export, and report/failed-subset workbooks
+// =========================================================
+
+/** Blank versioned template; viewer grants are checked per current policy. */
+export async function getPriceChangeTemplate(
+  actorUserId: string
+): Promise<Uint8Array> {
+  requirePriceViewer(await loadPolicy(actorUserId));
+  return writePriceTemplate();
+}
+
+export interface ExportPriceChangeInput {
+  variantIds: readonly string[];
+}
+
+export interface PriceWorkbookFile {
+  filename: string;
+  bytes: Uint8Array;
+}
+
+function normalizeVariantIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    inputInvalid("variantIds must contain at least one variant");
+  }
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (typeof raw !== "string" || raw.length === 0 || raw.length > 128) {
+      inputInvalid("variantIds contains an invalid variant id");
+    }
+    if (seen.has(raw)) continue;
+    seen.add(raw);
+    ids.push(raw);
+  }
+  if (ids.length > MAX_STAGE_ROWS_HARD_LIMIT) {
+    inputInvalid(
+      `variantIds accepts at most ${MAX_STAGE_ROWS_HARD_LIMIT} variants`
+    );
+  }
+  return ids;
+}
+
+/**
+ * Export the CURRENT server data for the selected variants (never browser
+ * values). Reference columns are advisory; `new_price` is prefilled with the
+ * current effective price and `action` with `set_price`, so a re-upload is an
+ * explicit no-op until the admin edits it.
+ */
+export async function exportPriceChangeWorkbook(
+  input: ExportPriceChangeInput,
+  actorUserId: string
+): Promise<PriceWorkbookFile> {
+  requirePriceViewer(await loadPolicy(actorUserId));
+  const limits = await readImportLimits();
+  const requested = normalizeVariantIds(input.variantIds);
+  if (requested.length > limits.maxRows) {
+    throw new PriceChangeError(
+      400,
+      "ROW_LIMIT_EXCEEDED",
+      `An export accepts at most ${limits.maxRows} variants (configured limit)`
+    );
+  }
+
+  const rows = await db
+    .select({
+      variantId: productVariants.id,
+      sku: productVariants.sku,
+      price: productVariants.price,
+      color: productVariants.color,
+      size: productVariants.size,
+      productId: products.id,
+      productName: products.name,
+      revisionId: variantPriceCurrent.revisionId,
+      revisionTarget: variantPriceRevisions.targetUnitPrice,
+    })
+    .from(productVariants)
+    .innerJoin(products, eq(products.id, productVariants.productId))
+    .leftJoin(
+      variantPriceCurrent,
+      eq(variantPriceCurrent.variantId, productVariants.id)
+    )
+    .leftJoin(
+      variantPriceRevisions,
+      and(
+        eq(variantPriceRevisions.id, variantPriceCurrent.revisionId),
+        eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
+      )
+    )
+    .where(inArray(productVariants.id, requested))
+    .orderBy(asc(productVariants.sku));
+  if (rows.length !== requested.length) {
+    inputInvalid("variantIds contains a variant that does not exist");
+  }
+
+  const workbookRows = rows.map((row) => {
+    const source = variantRowSource(row.price);
+    const pointerTarget = dbMoney(row.revisionTarget ?? null);
+    let effective: string | null = source;
+    if (source !== null && pointerTarget !== null && row.revisionId) {
+      try {
+        const projection = projectMarkdownPrice({
+          sourceUnitPrice: source,
+          storedTargetUnitPrice: pointerTarget,
+          markdownRevisionId: row.revisionId,
+        });
+        effective = projection.effectiveUnitPrice;
+      } catch {
+        effective = source;
+      }
+    }
+    return {
+      rowNumber: null,
+      sku: row.sku,
+      action: "set_price",
+      newPrice: effective,
+      productName: row.productName,
+      variantLabel: variantLabelOf(row.color, row.size),
+      sourcePrice: source,
+      effectivePrice: effective,
+      originRow: null,
+      status: null,
+      errorReason: source === null ? "SOURCE_PRICE_INVALID" : null,
+    };
+  });
+
+  return {
+    filename: "harga-export.xlsx",
+    bytes: writePriceWorkbook(workbookRows, { withReferences: true }),
+  };
+}
+
+export type PriceChangeReportSubset = "all" | "failed";
+
+function normalizeReportSubset(value: unknown): PriceChangeReportSubset {
+  if (value === undefined || value === null || value === "" || value === "all") {
+    return "all";
+  }
+  if (value === "failed") return "failed";
+  inputInvalid("subset must be all or failed");
+}
+
+/** Hard bound for a report read: no stage can ever exceed this row count. */
+const REPORT_MAX_ROWS = MAX_STAGE_ROWS_HARD_LIMIT;
+
+/**
+ * Report/failed-subset workbook from DURABLE batch row records (never from an
+ * archived upload). Text is written as literal inline strings, so a SKU or
+ * reason beginning with `=`/`+`/`-`/`@` can never become a formula.
+ */
+export async function getPriceChangeReport(
+  batchId: string,
+  subset: unknown,
+  actorUserId: string
+): Promise<PriceWorkbookFile | null> {
+  if (typeof batchId !== "string" || batchId.length === 0) return null;
+  requirePriceViewer(await loadPolicy(actorUserId));
+  const normalizedSubset = normalizeReportSubset(subset);
+
+  const batches = await db
+    .select()
+    .from(priceChangeBatches)
+    .where(eq(priceChangeBatches.id, batchId))
+    .limit(1);
+  const batch = batches[0];
+  if (!batch) return null;
+  if (batch.rowCount > REPORT_MAX_ROWS) {
+    throw new PriceChangeError(
+      409,
+      "REPORT_TOO_LARGE",
+      "This batch is larger than the supported report bound"
+    );
+  }
+
+  const where =
+    normalizedSubset === "failed"
+      ? and(
+          eq(priceChangeBatchRows.batchId, batchId),
+          eq(priceChangeBatchRows.state, "failed")
+        )
+      : eq(priceChangeBatchRows.batchId, batchId);
+  const rows = await db
+    .select()
+    .from(priceChangeBatchRows)
+    .where(where)
+    .orderBy(asc(priceChangeBatchRows.rowNumber))
+    .limit(REPORT_MAX_ROWS);
+
+  const originIds = [
+    ...new Set(
+      rows
+        .map((row) => row.originRetryRowId)
+        .filter((id): id is string => typeof id === "string")
+    ),
+  ];
+  const originRows =
+    originIds.length === 0
+      ? []
+      : await db
+          .select({
+            id: priceChangeBatchRows.id,
+            rowNumber: priceChangeBatchRows.rowNumber,
+          })
+          .from(priceChangeBatchRows)
+          .where(inArray(priceChangeBatchRows.id, originIds));
+  const originNumberById = new Map(
+    originRows.map((row) => [row.id, row.rowNumber] as const)
+  );
+
+  const workbookRows = rows.map((row) => {
+    const preview = row.previewJson as PriceChangePreview;
+    const requestedTarget = dbMoney(row.targetUnitPrice);
+    return {
+      rowNumber: row.rowNumber,
+      sku: row.inputSku,
+      action:
+        row.action === "invalid"
+          ? (preview.inputActionRaw ?? "invalid")
+          : row.action,
+      // The report names the REQUESTED target; raw workbook text is used when
+      // the row never produced a usable integer.
+      newPrice: requestedTarget ?? preview.inputTargetRaw ?? null,
+      productName: preview.productName,
+      variantLabel: preview.variantLabel,
+      sourcePrice: dbMoney(row.sourceUnitPrice) ?? preview.sourceUnitPrice,
+      effectivePrice:
+        dbMoney(row.effectiveUnitPrice) ?? preview.effectiveUnitPriceAfter,
+      // The FAILED SUBSET is the retry input: each row points at ITSELF so the
+      // corrected upload can link back to this final failed row. A full report
+      // shows the existing link (if the row is itself a correction).
+      originRow: row.originRetryRowId
+        ? (originNumberById.get(row.originRetryRowId) ?? null)
+        : normalizedSubset === "failed"
+          ? row.rowNumber
+          : null,
+      status: row.state,
+      errorReason: row.resultCode ?? preview.errorReason ?? null,
+    };
+  });
+
+  return {
+    filename:
+      normalizedSubset === "failed"
+        ? `harga-${batchId}-gagal.xlsx`
+        : `harga-${batchId}-laporan.xlsx`,
+    bytes: writePriceWorkbook(workbookRows, { withReferences: true }),
   };
 }

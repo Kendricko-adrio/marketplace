@@ -12,11 +12,12 @@ import {
 // =========================================================
 // PUT /api/admin/discounts/[id]/draft                    [discounts:edit]
 // =========================================================
-// Save ONE complete draft (terms + a single fixed-goods benefit). The draft is
-// separate from the published revision, so live terms never change here. Both
-// Offer and draft versions are optimistic guards: two stale editors get 409
-// STALE_REVISION and must reload/review instead of overwriting each other.
-// Unknown benefit kinds/versions/currencies are refused, never defaulted.
+// Save ONE complete draft (terms + a single goods benefit: fixed nominal or
+// percentage rate/cap). The draft is separate from the published revision, so
+// live terms never change here. Both Offer and draft versions are optimistic
+// guards: two stale editors get 409 STALE_REVISION and must reload/review
+// instead of overwriting each other. Unknown benefit kinds/versions/currencies
+// and fields that belong to another kind are refused, never defaulted.
 export const dynamic = "force-dynamic";
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -30,11 +31,28 @@ const draftSchema = z.strictObject({
     minSubtotal: z.union([z.string(), z.number()]),
     startAt: z.string().nullable().optional(),
     endAt: z.string().nullable().optional(),
-    benefit: z.strictObject({
-      kind: z.string().min(1).max(32),
-      paramsVersion: z.number().int(),
-      fixedAmount: z.union([z.string(), z.number()]),
-    }),
+    // Exact per-kind shape: a percentage request cannot smuggle a fixed
+    // nominal (and vice versa). Precision/bounds stay in the domain validator.
+    benefit: z.union([
+      z.strictObject({
+        kind: z.literal("fixed_goods"),
+        paramsVersion: z.literal(1),
+        fixedAmount: z.union([z.string(), z.number()]),
+      }),
+      z.strictObject({
+        kind: z.literal("shipping"),
+        paramsVersion: z.literal(1),
+        capAmount: z.union([z.string(), z.number()]),
+      }),
+      z.strictObject({
+        kind: z.literal("percentage_goods"),
+        paramsVersion: z.literal(1),
+        rate: z.union([z.string(), z.number()]),
+        capAmount: z
+          .union([z.string(), z.number(), z.null()])
+          .optional(),
+      }),
+    ]),
   }),
 });
 

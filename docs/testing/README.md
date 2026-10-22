@@ -161,6 +161,34 @@ kedua `testMatch` di `playwright.mock.config.ts`; bila regex diubah, alur UI di
 atas berhenti menjadi bukti. Bukti ini **bukan** redemption/reserve race
 (ticket 07/12) dan bukan aktivasi gate produksi.
 
+## Usage, privacy, dan kapasitas (ticket 12, disposable)
+
+Suite ini memakai database disposable yang **sudah di-seed** untuk branch/client
+nyata, lalu membuat ledger Redemption run-unique (order + redemption + event +
+allocation) melalui SQL setup. Semua assertion kapasitas/privacy lewat interface
+read/mutation publik; SQL hanya untuk fixture, drift yang disengaja, dan probe
+constraint retensi.
+
+```bash
+npm run verify:types:admin
+npx vitest run apps/admin/src/lib/discount-operations-read.test.ts
+DATABASE_URL=<db-disposable> npx vitest run   apps/admin/src/lib/discount-operations-read.db.test.ts
+DATABASE_URL=<db-disposable> npm run verify:batch:e2e --   e2e/admin/discounts-usage-mock.spec.ts
+```
+
+- `discount-operations-read.db.test.ts`: agregat global consumed/held/available
+  (quota100/budget100000 + ledger nyata), aggregate-only tanpa `orders:view`,
+  scope Jakarta vs Bandung/Surabaya (direct id 404, branchId asing 403, page/count
+  tidak melebarkan), masking kode di detail/usage/history, atribusi aktor setelah
+  FK user NULL, penurunan `perClientLimit` vs komitmen per akun, serialisasi
+  policy di belakang commit reservasi, drift fail-closed + pause aman, rename/
+  email/code change tidak mereset usage, dan constraint retensi/reuse literal.
+- `discounts-usage-mock.spec.ts`: persona HQ (editor), viewer tanpa Orders, dan
+  viewer Orders own-branch Jakarta; navigasi daftar → detail → tautan order →
+  histori, plus pause aman yang tidak mengubah entry/availability.
+- File DB admin memakai gate `discounts.contractVersion`; jalankan suite DB
+  admin **serial** (satu file per proses) karena key config dipakai bersama.
+
 ## Coupon publik pickup dan lifecycle Redemption (disposable)
 
 Slice ticket 07 menguji picker Coupon, reservasi atomik di place-order, dan
@@ -173,7 +201,8 @@ cleanup.
 npm run verify:types:store
 npx vitest run packages/db/src/discount-eligibility.test.ts \
   packages/db/src/discount-pricing.test.ts \
-  apps/store/src/lib/checkout-review.test.ts
+  apps/store/src/lib/checkout-review.test.ts \
+  apps/store/src/lib/promo-replacement.test.ts
 DATABASE_URL=<db-disposable> npx vitest run \
   packages/db/src/discount-redemption-schema.db.test.ts \
   apps/store/src/lib/discount-availability.db.test.ts \
@@ -191,10 +220,87 @@ rollback penuh. `discount-lifecycle-flow.db.test.ts` membuktikan jalur public
 `claimPaidOrder`/confirmed cancel/definitive rejection/late settlement.
 `discounts-coupon-mock.spec.ts` mencakup picker + disabled reason, total review
 (138750), place order (Redemption reserved + allocation + provider
-`disc_amount` 25000/amount 125000), order detail, dan paid-but-blocked. Kedua
-`testMatch` di `playwright.mock.config.ts` wajib memuat `discounts-coupon`.
+`disc_amount` 25000/amount 125000), order detail, dan paid-but-blocked. Sejak
+ticket 08 spec yang sama juga membuktikan:
+
+- penggantian Coupon 25000→10000 membuka dialog total lama 138750 / baru 155400 /
+  selisih 16650; Batal mempertahankan pilihan & total lama, konfirmasi
+  mengirim `acknowledgements.promoIncrease.candidateFingerprint` yang sama dengan
+  fingerprint token, dan order tersimpan dengan total 155400;
+- penggantian ke benefit lebih besar (155400→138750) langsung diterapkan tanpa
+  dialog;
+- Offer yang dipause setelah review memunculkan invalidation notice, menolak
+  preview berikutnya (tanpa order), dan "Lanjut tanpa promo" eksplisit
+  menghasilkan token `cwo` + order tanpa diskon total 166500;
+- kandidat yang gugur (paused setelah daftar dimuat) tidak mengganti pilihan
+  lama, dan kuota yang habis saat commit menjawab 409
+  `PROMO_CAPACITY_UNAVAILABLE` tanpa order, Redemption, atau stock hold parsial;
+- perubahan selection (quantity 1→2) setelah review membatalkan approval lama:
+  preview penggantian menjawab 409 `CHECKOUT_REVIEW_REQUIRED`, kembali ke langkah
+  kontak tanpa total berdiskon palsu, lalu review baru memakai konteks terbaru
+  (qty2 + Coupon 10000 → 321900) tanpa dialog;
+- replay `requestKey` mengembalikan order yang sama, sedangkan acknowledgement
+  berbeda pada key yang sama menjawab 409 `REQUEST_KEY_CONFLICT`; replay setelah
+  Offer dipause tetap order/total tersimpan (bukan reprice).
+
+Kedua `testMatch` di `playwright.mock.config.ts` wajib memuat `discounts-coupon`.
 `discounts.contractVersion` tetap `0` pada seed; fixture E2E yang membukanya
 untuk DB disposable. Bukti ini bukan UAT staging/rollout ticket 13.
+
+## Percentage goods dengan cap opsional (ticket 10)
+
+Benefit `percentage_goods` memakai seam yang sama dengan fixed goods:
+`packages/db/src/discount-pricing.test.ts` membuktikan literal cap/uncapped/
+floor/fraction/tie/qty2 (450000×10% cap20000 → 20000/430000/47300/477300; tanpa
+cap → 45000/405000/44550/449550; 100005×10% → floor10000; 50×1% → 0) dan guard
+rate/cap/precision. `discount-eligibility.test.ts` membuktikan nominal aktual
+yang sama dipakai untuk budget/per-account. Real PG:
+`discounts-administration.db.test.ts` (draft percentage rate10 cap20000 → review
+→ simulasi → publish, rate 7 digit ditolak), `discount-selection.db.test.ts`
+(kandidat membawa `{rate,capAmount}`), dan `discount-reservation.db.test.ts`
+(benefit 20000 direservasi, `terms_snapshot`/`result_snapshot` menyimpan bentuk
+benefit, allocation `offer_goods` 20000, consume memakai nominal itu). Mock
+E2E: `discounts-admin-mock` (form persentase → simulasi 149850 → review) dan
+`discounts-coupon-mock` (picker menampilkan `Diskon 10% (maks Rp 20.000)`,
+place order menyimpan benefit15000/allocation15000, provider `disc_amount`
+15000 whole-line). Ini bukan bukti pembayaran/provider Rp0; kombinasi manual+
+percentage diuji pada ticket 13.
+
+## Regresi cross-slice dan kesiapan rilis (ticket 13)
+
+Setelah seluruh slice tergabung, kombinasi yang tidak dimiliki satu ticket pun
+diuji pada seam publik yang sama:
+
+```bash
+npm run verify:types:store
+DATABASE_URL=<db-disposable> npx vitest run \
+  apps/store/src/lib/discounts-integration.db.test.ts
+DATABASE_URL=<db-disposable> npm run verify:batch:e2e -- \
+  e2e/store/discounts-coupon-mock.spec.ts
+```
+
+- `discounts-integration.db.test.ts` (seam L+T) menguji Markdown + qty>1/
+  multi-line bersama **manual × percentage** (rate/cap tersimpan, allocation
+  whole-line/largest remainder 12308/7692, snapshot L == snapshot order, consume
+  sekali), public × fixed (alokasi 15385/9615, PPN 40150), manual × shipping
+  delivery (original30000/subsidi20000/net10000/quote30000/payable400000, satu
+  allocation tanpa item), serta publish revisi dan pause setelah preview yang
+  menggugurkan konfirmasi tanpa order/usage parsial. Expected literal dihitung
+  dari rumus §4.2, bukan dari engine yang diuji.
+- `discounts-coupon-mock.spec.ts` menambah kasus manual × percentage di browser:
+  kode canonical (trim/lowercase) → total149850 → place order menyimpan
+  benefit15000/allocation15000/provider `disc_amount`15000 dan detail order.
+- Rehearsal migration/seed hanya pada database disposable baru:
+  `npx drizzle-kit migrate` (52 migrasi) → `npx tsx src/seed.ts` (dua kali, untuk
+  membersihkan FK-ordered cleanup) → verifikasi gate `0`, tidak ada kolom
+  `timestamp` tanpa timezone, lalu `SEED_MODE=jubelio` pada DB disposable kedua
+  (tanpa produk/order/cart/Offer dummy). `db:reset`+`db:seed` hanya untuk DB
+  disposable. Langkah cutover staging/production ada di
+  [`docs/deployment-docs/discounts-cutover.md`](../deployment-docs/discounts-cutover.md).
+
+UAT staging, standard `npm run test:e2e`, deployment, provider live write dan
+launch tetap memerlukan izin/lingkungan terpisah; mock green bukan aktivasi
+produksi.
 
 ## Bulk Markdown harga (disposable)
 
@@ -247,6 +353,52 @@ DATABASE_URL=<db-disposable> npm run verify:batch:e2e -- \
 Seed demo bulk (`SEED_MODE=demo`) juga hanya untuk database disposable: seeder
 menambahkan satu batch `staged` berisi 3 row `pending` (`SS-WHT-41`, `SS-BLK-41`,
 `OX-BLK-41`) tanpa revision/pointer dan tanpa mengubah `product_variant.price`.
+
+## Excel harga: template, parser bounded, dan linked retry (disposable)
+
+Slice ticket 05 menambah parser/validator workbook yang bounded, template,
+export, laporan, dan linked retry. Sama seperti suite lain: **hanya DB
+disposable** dengan nama `marketplace_discounts_test_*`; fixture menaikkan
+`discounts.contractVersion` ke `1` dan mengembalikannya pada cleanup.
+
+```bash
+npm run verify:types:admin
+npx vitest run apps/admin/src/lib/xlsx-container.test.ts \
+  apps/admin/src/lib/price-workbook.test.ts
+npx vitest run apps/admin/src/lib/price-workbook-administration.db.test.ts
+npm run verify:batch:e2e -- e2e/admin/price-change-excel-mock.spec.ts
+```
+
+- `apps/admin/src/lib/xlsx-container.test.ts` dan
+  `apps/admin/src/lib/price-workbook.test.ts` memakai writer/fixture
+  **independen** (`apps/admin/src/lib/xlsx-test-support.ts`) supaya bug di kode
+  yang diuji tidak bisa membuat parser dan fixture sepakat. Cakupan: signature
+  ZIP/OLE, entry limit, traversal/duplikat, enkripsi/kompresi tak didukung, CRC,
+  header ukuran yang berbohong (bom), batas compressed/expanded/row/cell/text
+  tepat di batas vs lebih, marker/header/sheet/macro/external link fatal,
+  formula tidak dievaluasi (cached value diabaikan), SKU text exact/duplikat,
+  blank price bukan restore, dan writer yang menulis text literal.
+- `apps/admin/src/lib/price-workbook-administration.db.test.ts` (real PG):
+  upload hanya staging (harga live belum berubah), row gagal final dengan nomor
+  baris sheet, apply parsial + laporan/subset, koreksi tertaut hanya ke row
+  final gagal (replay key sama, payload beda `409`, origin pending/applied/asing
+  ditolak), fatal workbook tidak membuat batch, limit config tepat batas, contoh
+  **100 input → 97 applied + 3 failed**, export literal tanpa formula, dan
+  matriks izin download/upload.
+- `e2e/admin/price-change-excel-mock.spec.ts` berjalan di
+  `playwright.mock.config.ts` (loopback + DB disposable + gate 1): template via
+  HTTP diverifikasi reader independen, upload→preview→apply parsial→laporan
+  (status `applied`/`failed` + reason) → subset gagal dengan `origin_row`,
+  koreksi sebagai batch baru tertaut tanpa mengulang row sukses, replay upload
+  tanpa duplikasi + `409`, workbook macro ditolak sebelum write, dan Admin tanpa
+  grant `prices` ditolak pada template/report/export/upload.
+- `apps/admin/vitest.setup.ts` memuat `.env` root sebelum module test dievaluasi,
+  sehingga suite DB admin memakai `DATABASE_URL` disposable yang sama tanpa
+  harus mengekspor variabel di shell. Ini tidak mengubah gate operasional.
+- Spec mock baru **wajib** terdaftar pada kedua `testMatch` di
+  [`playwright.mock.config.ts`](../../playwright.mock.config.ts); periksa regex
+  memuat `price-change-excel`. Green mock bukan benchmark 1000 row, bukan bukti
+  parser aman untuk semua file adversarial, dan bukan UAT/aktivasi produksi.
 
 ## Prerequisites
 
@@ -341,7 +493,7 @@ e2e/
     account.spec.ts       # authenticated smoke (reuses saved session)
     products.spec.ts      # infinite scroll, sidebar filters, pricing, grey-out
     product-detail.spec.ts# metadata (brand/gender/category/price/discount/stock)
-    checkout.spec.ts      # legacy adjustment checkout → PPN snapshot → local payment boundary; vouchers
+    checkout.spec.ts      # legacy adjustment checkout → PPN snapshot → local payment boundary
     sales-recovery.spec.ts# secret-protected cron queues stale SO dispatch for manual review (no provider write)
     onboarding.spec.ts   # fresh user → /onboarding → cookie (isolated user via pg)
     static-pages.spec.ts  # CMS pages + footer rendering
@@ -551,3 +703,41 @@ and `reuseExistingServer: false` (servers are freshly started). The same
   open the `.png`/image attachments (see the pitfalls above).
 - **Stale auth state** — delete `e2e/.auth/` and re-run; Playwright regenerates
   it from the setup project.
+
+## Manual Promo Code (ticket 09)
+
+- Unit: `packages/db/src/discount-code.test.ts` (canonical/masking),
+  `discount-eligibility.test.ts` (channel manual), pure admin code rules di
+  `apps/admin/src/lib/discounts-administration.test.ts`
+  (`normalizeCodeProposals`, fingerprint `proposedCodes`).
+- Real PG: `packages/db/src/discount-code-schema.db.test.ts` (canonical unique,
+  ownership manual-only, activation shape Redemption),
+  `apps/admin/src/lib/discounts-administration.db.test.ts` (create/add/state,
+  replay, masked viewer, publish proposals, CODE_CONFLICT/CODE_ARCHIVED),
+  `apps/store/src/lib/discount-selection.db.test.ts` (resolve kode/read-only),
+  `apps/store/src/lib/discount-reservation.db.test.ts` (Redemption manual,
+  quota/per-account bersama, kode nonaktif menggugurkan),
+  `apps/store/src/lib/checkout-admission.db.test.ts` (bucket kode lintas proses,
+  shared IP, forged header, Retry-After 50 detik).
+- Mock E2E: `e2e/admin/discounts-admin-mock.spec.ts` blok Manual Promo Code (create manual,
+  add/state, masked viewer) dan `e2e/store/discounts-coupon-mock.spec.ts` (kasus Manual Promo Code)
+  (Terapkan → ganti invalid/valid → place → detail). Keduanya sudah terdaftar di
+  `testMatch` `playwright.mock.config.ts`.
+
+## Subsidi ongkir (ticket 11)
+
+- L: `packages/db/src/discount-pricing.test.ts` (clipping ongkir, PPN barang
+  saja, pickup/ongkir0 ditolak, guard bentuk cap) dan
+  `packages/db/src/discount-eligibility.test.ts` (delivery-only, nominal aktual
+  untuk budget/kuota).
+- T: `apps/store/src/lib/discount-shipping.db.test.ts` — PostgreSQL nyata:
+  satu Redemption shipping, satu allocation `offer_shipping` tanpa item,
+  `goods_discount_amount` tetap 0, counter/budget/per-account memakai subsidi
+  aktual, pickup disabled.
+- H: `apps/store/src/lib/jubelio-sales-shipping.test.ts` — snapshot subsidi vs
+  intent provider (`original_shipment_cost`/`shipping_cost`/`grand_total`,
+  `add_disc`/tax 0, tanpa `shipping_cost_discount`), plus drift 1 Rupiah ditolak.
+- B: `e2e/store/discounts-coupon-mock.spec.ts` (delivery public/manual shipping,
+  pickup invalidation, swap comparison) dan regresi checkout/delivery mock.
+- Admin: `apps/admin/src/lib/discounts-administration.test.ts` (draft shipping
+  hanya cap positif) dan `e2e/admin/discounts-admin-mock.spec.ts` (form/simulasi).

@@ -68,16 +68,18 @@ const pricing = evaluatePricing({
       effectiveUnitPrice: "150000",
     },
   ],
-  benefit: { kind: "fixed_goods", paramsVersion: 1, fixedAmount: "25000" },
+  benefit: { kind: "fixed_goods" as const, paramsVersion: 1 as const, fixedAmount: "25000" },
 });
 
 const candidate = {
   offerId,
   offerName: "Lifecycle Coupon",
+  activationKind: "public" as const,
+  codeId: null,
   revisionId,
   benefitId,
   policyVersion: 1,
-  fixedAmount: "25000",
+  benefit: { kind: "fixed_goods" as const, paramsVersion: 1 as const, fixedAmount: "25000" },
   benefitAmount: "25000",
   minSubtotal: "0",
   startAt: null,

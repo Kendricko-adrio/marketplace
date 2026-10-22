@@ -5,7 +5,9 @@ import { guard } from "@/lib/rbac/guard";
 import {
   MAX_STAGE_ROWS_HARD_LIMIT,
   PriceChangeError,
+  readWorkbookUploadLimits,
   stagePriceChangeBatch,
+  stageWorkbookPriceChange,
 } from "@/lib/price-changes-administration";
 import {
   priceChangeFailureResponse,
@@ -16,14 +18,19 @@ import {
 // =========================================================
 // POST /api/admin/price-changes   [prices:edit + products:view all_branches]
 // =========================================================
-// Stages 1..N Markdown rows (`source: "manual" | "bulk"`, default derived from
-// the row count) for review/apply on /api/admin/price-changes/{id}/apply. The
-// preview is non-authoritative: apply re-reads the latest source and current
-// Markdown, so a stale preview never blocks a still-valid target (spec §4.1).
+// Two accepted bodies:
 //
-// The static body bound is `MAX_STAGE_ROWS_HARD_LIMIT`; the EFFECTIVE bound is
-// `discount.import.maxRows`, read uncached in the domain layer (400
-// ROW_LIMIT_EXCEEDED, nothing staged) so an operator change applies immediately.
+//   application/json         1..N manual/bulk rows (source "manual"/"bulk")
+//   multipart/form-data      a versioned `.xlsx` workbook (source "xlsx"):
+//                            `workbook` file + `requestKey` + optional `reason`
+//                            and `parentBatchId` (correction of final failed
+//                            rows; per-row linkage comes from `origin_row`).
+//
+// Both paths are STAGING ONLY: nothing is applied here. The workbook is parsed
+// and bounded in memory before any transaction; a fatal container/marker/
+// header/bounds problem is a 400 `WORKBOOK_REJECTED` with the machine reason and
+// creates no batch, while bad ROWS are staged as final failed rows for the
+// report/retry flow. The uploaded bytes are never archived.
 //
 // `requestKey` (UUID) is the command key: same key + same validated command
 // returns the SAME staged batch (200); a different command under a used key is
@@ -47,12 +54,100 @@ const stageSchema = z.strictObject({
     .max(MAX_STAGE_ROWS_HARD_LIMIT),
 });
 
+/** Multipart envelope overhead allowance (boundaries/field headers). */
+const MULTIPART_OVERHEAD_BYTES = 512 * 1024;
+
+function formField(form: FormData, name: string): string | null {
+  const value = form.get(name);
+  if (value === null) return null;
+  if (typeof value !== "string") {
+    throw new PriceChangeError(400, "INPUT_INVALID", `${name} must be text`);
+  }
+  return value;
+}
+
+async function stageWorkbookUpload(
+  request: NextRequest,
+  logger: Parameters<typeof priceChangeFailureResponse>[0],
+  actorUserId: string
+) {
+  // Read the configured limits BEFORE buffering anything so an oversized body
+  // is rejected from its declared length, not after it was loaded.
+  const limits = await readWorkbookUploadLimits();
+  const contentLength = Number(request.headers.get("content-length") ?? "");
+  if (
+    Number.isFinite(contentLength) &&
+    contentLength > limits.maxFileBytes + MULTIPART_OVERHEAD_BYTES
+  ) {
+    throw new PriceChangeError(
+      413,
+      "COMPRESSED_LIMIT_EXCEEDED",
+      "The uploaded workbook exceeds the configured file-size limit"
+    );
+  }
+
+  const form = await request.formData().catch(() => null);
+  if (!form) {
+    throw new PriceChangeError(
+      400,
+      "INPUT_INVALID",
+      "The multipart body could not be read"
+    );
+  }
+  const file = form.get("workbook");
+  if (file === null || typeof file === "string") {
+    throw new PriceChangeError(400, "INPUT_INVALID", "workbook file is required");
+  }
+  if (file.size === 0) {
+    throw new PriceChangeError(400, "INPUT_INVALID", "workbook file is empty");
+  }
+  if (file.size > limits.maxFileBytes) {
+    throw new PriceChangeError(
+      413,
+      "COMPRESSED_LIMIT_EXCEEDED",
+      "The uploaded workbook exceeds the configured file-size limit"
+    );
+  }
+
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const result = await stageWorkbookPriceChange(
+    {
+      requestKey: formField(form, "requestKey") ?? "",
+      file: bytes,
+      reason: formField(form, "reason"),
+      parentBatchId: formField(form, "parentBatchId"),
+    },
+    actorUserId
+  );
+  logger.info("price_changes.stage.workbook", {
+    outcome: "success",
+    batchId: result.data.id,
+    state: result.data.state,
+    rowCount: result.data.rowCount,
+    failedCount: result.data.failedCount,
+    pendingCount: result.data.pendingCount,
+    replayed: result.status === 200,
+    bytes: bytes.length,
+    actorId: actorUserId,
+  });
+  return priceChangeSuccessResponse(logger, result.data, result.status);
+}
+
 export async function POST(request: NextRequest) {
   const guardResult = await guard("prices", "edit", { request });
   if (!guardResult.ok) return guardResult.response;
   const { logger, ctx } = guardResult;
 
   try {
+    const contentType = (request.headers.get("content-type") ?? "").toLowerCase();
+    if (contentType.startsWith("multipart/form-data")) {
+      return await stageWorkbookUpload(
+        request,
+        logger,
+        requirePriceActorId(ctx.user.id)
+      );
+    }
+
     const parsed = stageSchema.safeParse(
       await request.json().catch(() => null)
     );

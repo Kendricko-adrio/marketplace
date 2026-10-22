@@ -19,6 +19,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import {
   discountClientUsage,
+  discountCodes,
   discountOfferUsage,
   discountOffers,
   discountRedemptionEvents,
@@ -27,7 +28,7 @@ import {
 } from "@/db";
 import type { PricingSnapshot } from "./versioned-pricing";
 import {
-  evaluateSelectedPublicOffer,
+  evaluateSelectedOffer,
   offerReasonMessage,
   type PublicOfferCandidate,
 } from "./discount-selection";
@@ -58,6 +59,9 @@ export async function lockAndEvaluateOfferReservation(
     /** Kandidat yang direview di preview (identity + nominal + policy). */
     candidate: PublicOfferCandidate;
     subtotalAfterMarkdown: string;
+    /** Konteks authoritative reservasi (shipping hanya delivery berongkir). */
+    fulfillmentMethod?: "pickup" | "delivery";
+    shippingBeforeSubsidy?: string;
   }
 ): Promise<ReservationDecision> {
   const candidate = input.candidate;
@@ -81,15 +85,33 @@ export async function lockAndEvaluateOfferReservation(
       )
     )
     .for("update");
+  // Kode manual ikut dikunci di group 3 yang sama: state active/nonaktif dan
+  // ownership-nya tidak dapat berubah di tengah transaksi reservasi.
+  if (candidate.activationKind === "manual_only" && candidate.codeId) {
+    await tx
+      .select({ id: discountCodes.id })
+      .from(discountCodes)
+      .where(
+        and(
+          eq(discountCodes.id, candidate.codeId),
+          eq(discountCodes.offerId, candidate.offerId)
+        )
+      )
+      .for("update");
+  }
 
-  const fresh = await evaluateSelectedPublicOffer(
+  const fresh = await evaluateSelectedOffer(
     {
       offerId: candidate.offerId,
       clientId: input.clientId,
       verifiedEmail: input.verifiedEmail,
       subtotalAfterMarkdown: input.subtotalAfterMarkdown,
+      fulfillmentMethod: input.fulfillmentMethod ?? "pickup",
+      shippingBeforeSubsidy: input.shippingBeforeSubsidy ?? "0",
+      channel: candidate.activationKind === "manual_only" ? "manual" : "public",
+      codeId: candidate.codeId,
     },
-    tx as unknown as Parameters<typeof evaluateSelectedPublicOffer>[1]
+    tx as unknown as Parameters<typeof evaluateSelectedOffer>[1]
   );
   if (!fresh.ok) {
     return { ok: false, reason: fresh.reason, message: offerReasonMessage(fresh.reason) };
@@ -97,6 +119,9 @@ export async function lockAndEvaluateOfferReservation(
   if (
     fresh.candidate.revisionId !== candidate.revisionId ||
     fresh.candidate.benefitId !== candidate.benefitId ||
+    JSON.stringify(fresh.candidate.benefit) !== JSON.stringify(candidate.benefit) ||
+    fresh.candidate.activationKind !== candidate.activationKind ||
+    fresh.candidate.codeId !== candidate.codeId ||
     fresh.candidate.benefitAmount !== candidate.benefitAmount ||
     fresh.candidate.policyVersion !== candidate.policyVersion
   ) {
@@ -131,7 +156,8 @@ export async function insertRedemptionReservation(
     offerId: candidate.offerId,
     revisionId: candidate.revisionId,
     benefitId: candidate.benefitId,
-    activationKind: "public",
+    activationKind: candidate.activationKind,
+    codeId: candidate.codeId,
     status: "reserved",
     benefitAmount,
     deadline: input.deadline,
@@ -141,12 +167,18 @@ export async function insertRedemptionReservation(
       minSubtotal: candidate.minSubtotal,
       startAt: candidate.startAt ? candidate.startAt.toISOString() : null,
       endAt: candidate.endAt ? candidate.endAt.toISOString() : null,
+      // Bentuk benefit tersimpan (fixed nominal atau percentage rate+cap):
+      // nominal yang sudah dibulatkan saja tidak cukup untuk audit.
+      benefit: candidate.benefit,
     },
     resultSnapshot: {
       version: 1,
       offerId: candidate.offerId,
       revisionId: candidate.revisionId,
       benefitId: candidate.benefitId,
+      activationKind: candidate.activationKind,
+      codeId: candidate.codeId,
+      benefit: candidate.benefit,
       benefitAmount,
       pricing: {
         subtotal: input.pricing.subtotal,
@@ -242,6 +274,20 @@ export async function writeOrderDiscountAllocations(
     redemption: { id: string; benefitId: string } | null;
   }
 ): Promise<void> {
+  // Subsidi ongkir adalah komponen TANPA item: tepat satu allocation
+  // offer_shipping per Redemption, nominal aktual subsidi. Tidak pernah masuk
+  // goods disc_amount maupun alokasi per baris.
+  if (input.redemption && input.pricing.shippingSubsidy !== "0") {
+    await tx.insert(orderDiscountAllocations).values({
+      id: crypto.randomUUID(),
+      orderId: input.orderId,
+      orderItemId: null,
+      component: "offer_shipping",
+      redemptionId: input.redemption.id,
+      benefitId: input.redemption.benefitId,
+      amount: input.pricing.shippingSubsidy,
+    });
+  }
   for (const line of input.pricing.lines) {
     const orderItemId = input.orderItemIdByVariant.get(line.variantId);
     if (!orderItemId) throw new Error("Order line missing for discount allocation");

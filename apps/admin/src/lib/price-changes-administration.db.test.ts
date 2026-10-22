@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 import path from "node:path";
-dotenv.config({ path: path.resolve(import.meta.dirname, "../../../.env"), quiet: true });
+dotenv.config({ path: path.resolve(import.meta.dirname, "../../../../.env"), quiet: true });
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";

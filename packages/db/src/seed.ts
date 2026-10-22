@@ -238,13 +238,14 @@ async function seed() {
     await db
       .update(schema.discountOffers)
       .set({ state: "draft", currentRevisionId: null });
-    // The batch-row applied-revision FK is RESTRICT and the row's state CHECK
-    // requires `applied` to carry a revision (and only `applied` to do so), so
-    // the reset path clears BOTH together before revisions/batches are deleted.
-    // Delete-only development state; no app request reads it.
+    // Rows are deleted BEFORE revisions/pointers, so the applied-revision FK and
+    // the state/applied CHECK never need a fake `pending` reset (which would now
+    // also break the workbook-row CHECKs for parse-failed rows). Only the row's
+    // self-referencing retry FK has to be detached first. Delete-only
+    // development state; no app request reads it.
     await db
       .update(schema.priceChangeBatchRows)
-      .set({ state: "pending", appliedRevisionId: null });
+      .set({ originRetryRowId: null });
     for (const [, table] of seedCleanupEntries) {
       await db.delete(table);
     }
@@ -1371,55 +1372,60 @@ async function seed() {
         };
       })
     );
+
+    // ── Demo workbook upload (ticket 05) ─────────────────────────
+    // A staged xlsx batch proves the workbook source/template version and the
+    // row-level review data. It writes no revision/pointer and no price.
+    console.log("🧾 Creating staged workbook Markdown demo batch...");
+    const xlsxDemoBatchId = generateId();
+    const xlsxDemoRows = [
+      { sku: "SS-WHT-41", action: "set_price", target: "820000" },
+      { sku: "CS-NVY-40", action: "restore_base", target: null },
+    ] as const;
+    await db.insert(schema.priceChangeBatches).values({
+      id: xlsxDemoBatchId,
+      actorIdentity: "seed",
+      requestKey: "00000000-0000-4000-8000-000000000005",
+      fingerprint: "0".repeat(64),
+      source: "xlsx",
+      templateVersion: "OKCIR_MARKDOWN_V1",
+      reason: "Seed demo workbook (ticket 05)",
+      state: "staged",
+      rowCount: xlsxDemoRows.length,
+      appliedCount: 0,
+      unchangedCount: 0,
+      failedCount: 0,
+      pendingCount: xlsxDemoRows.length,
+    });
+    await db.insert(schema.priceChangeBatchRows).values(
+      xlsxDemoRows.map((fixture, index) => {
+        const variantId = seededVariantsBySku.get(fixture.sku);
+        if (!variantId) {
+          throw new Error(`Workbook demo SKU missing: ${fixture.sku}`);
+        }
+        return {
+          id: generateId(),
+          batchId: xlsxDemoBatchId,
+          // Workbook data starts at row 3.
+          rowNumber: index + 3,
+          inputSku: fixture.sku,
+          variantId,
+          action: fixture.action,
+          targetUnitPrice: fixture.target,
+          previewJson: {
+            inputSku: fixture.sku,
+            action: fixture.action,
+            targetUnitPrice: fixture.target,
+            warnings: [] as string[],
+            stage: "seed-workbook",
+          },
+          state: "pending" as const,
+        };
+      })
+    );
     } else {
       console.log("📦 Skipping catalog, branches, and stock (managed by Jubelio import)...");
     }
-
-    // =====================
-    // VOUCHERS
-    // =====================
-    console.log("🎟️  Creating vouchers...");
-    await db.insert(schema.vouchers).values([
-      {
-        id: generateId(),
-        code: "DISKON10",
-        discountType: "percentage",
-        value: "10",
-        maxDiscount: "50000",
-        minPurchase: "50000",
-        quota: 100,
-        used: 50,
-        isActive: true,
-        validFrom: new Date(),
-        validUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-      },
-      {
-        id: generateId(),
-        code: "HMT25RB",
-        discountType: "fixed",
-        value: "25000",
-        maxDiscount: null,
-        minPurchase: "100000",
-        quota: 50,
-        used: 10,
-        isActive: true,
-        validFrom: new Date(),
-        validUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      },
-      {
-        id: generateId(),
-        code: "ONGKIRFREE",
-        discountType: "shipping",
-        value: "20000",
-        maxDiscount: "20000",
-        minPurchase: "0",
-        quota: 200,
-        used: 200,
-        isActive: false, // Habis
-        validFrom: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-        validUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      },
-    ]);
 
     // =====================
     // HOMEPAGE SECTIONS (CMS)
@@ -2616,8 +2622,377 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
           createdAt: demoNow,
         });
       }
+
+      // =====================
+      // Manual Promo Code demo (ticket 09). Activation kind is identity: a
+      // manual_only Offer has reserved canonical codes and shares the SAME
+      // quota/budget/per-account projection. One code is inactive to show that
+      // retired codes stay reserved forever; one consumed Redemption names the
+      // code the customer actually used.
+      const manualOfferId = generateId();
+      const manualRevisionId = generateId();
+      const manualBenefitId = generateId();
+      const manualCodeActiveId = generateId();
+      const manualCodeInactiveId = generateId();
+      await db.insert(schema.discountOffers).values({
+        id: manualOfferId,
+        key: generateId(),
+        activationKind: "manual_only",
+        state: "draft",
+        currentRevisionId: null,
+        version: 1,
+        draftVersion: 1,
+        quotaCount: null,
+        budgetAmount: null,
+        perClientLimit: 1,
+        policyVersion: 1,
+        actorId: hqId,
+        actorIdentity: hqId,
+        createdAt: demoNow,
+        updatedAt: demoNow,
+      });
+      await db.insert(schema.discountOfferRevisions).values({
+        id: manualRevisionId,
+        offerId: manualOfferId,
+        revisionNo: 1,
+        name: "Kode Manual Demo Rp25.000",
+        currency: "IDR",
+        minSubtotal: "0",
+        startAt: null,
+        endAt: null,
+        schemaVersion: 1,
+        engineVersion: 1,
+        draftVersion: 1,
+        publishedAt: demoNow,
+        actorId: hqId,
+        actorIdentity: hqId,
+        createdAt: demoNow,
+        updatedAt: demoNow,
+      });
+      await db.insert(schema.discountBenefits).values({
+        id: manualBenefitId,
+        revisionId: manualRevisionId,
+        kind: "fixed_goods",
+        scope: "goods",
+        fixedAmount: String(demoCoupon),
+        paramsVersion: 1,
+        createdAt: demoNow,
+      });
+      await db.update(schema.discountOffers).set({
+        state: "enabled",
+        currentRevisionId: manualRevisionId,
+        quotaCount: 5,
+        budgetAmount: "1000000",
+        updatedAt: demoNow,
+      }).where(eq(schema.discountOffers.id, manualOfferId));
+      await db.insert(schema.discountCodes).values([
+        {
+          id: manualCodeActiveId,
+          offerId: manualOfferId,
+          activationKind: "manual_only",
+          canonicalCode: "HEMAT17AGUSTUS",
+          state: "active",
+          version: 1,
+          publishedAt: demoNow,
+          actorId: hqId,
+          actorIdentity: hqId,
+          createdAt: demoNow,
+          updatedAt: demoNow,
+        },
+        {
+          id: manualCodeInactiveId,
+          offerId: manualOfferId,
+          activationKind: "manual_only",
+          canonicalCode: "PROMO2026OFF",
+          state: "inactive",
+          version: 2,
+          publishedAt: demoNow,
+          actorId: hqId,
+          actorIdentity: hqId,
+          createdAt: demoNow,
+          updatedAt: demoNow,
+        },
+      ]);
+      await db.insert(schema.discountOfferUsage).values({
+        offerId: manualOfferId,
+        reservedCount: 0,
+        consumedCount: 1,
+        reservedAmount: "0",
+        consumedAmount: String(demoCoupon),
+        version: 2,
+        updatedAt: demoNow,
+      });
+      await db.insert(schema.discountClientUsage).values({
+        offerId: manualOfferId,
+        clientId: customer1Id,
+        reservedCount: 0,
+        consumedCount: 1,
+        reservedAmount: "0",
+        consumedAmount: String(demoCoupon),
+        version: 2,
+        updatedAt: demoNow,
+      });
+      {
+        const orderId = generateId();
+        const orderItemId = generateId();
+        await db.insert(schema.orders).values({
+          id: orderId,
+          userId: customer1Id,
+          branchId: branchIds[0],
+          status: "completed",
+          paymentMethod: "qris",
+          paymentStatus: "paid",
+          pickupCode: "M4N7QA",
+          pickupDate: new Date(demoNow.getTime() + 24 * 60 * 60_000),
+          pickupTime: "14:00",
+          contactPhone: "081234567890",
+          contactEmail: "john@example.com",
+          subtotal: String(demoGoods),
+          shippingCost: "0",
+          discount: String(demoCoupon),
+          serviceFee: "0",
+          ppnRate: "11",
+          ppnAmount: String(demoPpn),
+          total: String(demoTotal),
+        });
+        await db.insert(schema.orderItems).values({
+          id: orderItemId,
+          orderId,
+          variantId: demoVariant.id,
+          productName: demoVariant.productName,
+          price: String(demoGoods),
+          quantity: 1,
+        });
+        const redemptionId = generateId();
+        await db.insert(schema.discountRedemptions).values({
+          id: redemptionId,
+          orderId,
+          clientId: customer1Id,
+          offerId: manualOfferId,
+          revisionId: manualRevisionId,
+          benefitId: manualBenefitId,
+          activationKind: "manual_only",
+          codeId: manualCodeActiveId,
+          status: "consumed",
+          benefitAmount: String(demoCoupon),
+          deadline: demoDeadline,
+          policyVersion: 1,
+          termsSnapshot: {
+            name: "Kode Manual Demo Rp25.000",
+            minSubtotal: "0",
+            startAt: null,
+            endAt: null,
+          },
+          resultSnapshot: {
+            version: 1,
+            offerId: manualOfferId,
+            revisionId: manualRevisionId,
+            benefitId: manualBenefitId,
+            activationKind: "manual_only",
+            codeId: manualCodeActiveId,
+            benefitAmount: String(demoCoupon),
+          },
+          consumedAt: demoNow,
+          createdAt: demoNow,
+          updatedAt: demoNow,
+        });
+        await db.insert(schema.discountRedemptionEvents).values([
+          {
+            id: generateId(),
+            redemptionId,
+            eventKey: `${redemptionId}:reserved`,
+            kind: "reserved",
+            previousStatus: null,
+            nextStatus: "reserved",
+            amount: String(demoCoupon),
+            source: "checkout",
+            createdAt: demoNow,
+          },
+          {
+            id: generateId(),
+            redemptionId,
+            eventKey: `${redemptionId}:consumed`,
+            kind: "consumed",
+            previousStatus: "reserved",
+            nextStatus: "consumed",
+            amount: String(demoCoupon),
+            source: "midtrans",
+            createdAt: demoNow,
+          },
+        ]);
+        await db.insert(schema.orderDiscountAllocations).values({
+          id: generateId(),
+          orderId,
+          orderItemId,
+          component: "offer_goods",
+          redemptionId,
+          benefitId: manualBenefitId,
+          amount: String(demoCoupon),
+          createdAt: demoNow,
+        });
+      }
+    }
+    // Percentage goods demo (ticket 10): rate 10% dengan cap Rp20.000.
+    // Gate tetap 0; ini baris demo untuk picker/simulasi, bukan aktivasi rollout.
+    if (demoVariantRows.length > 0) {
+      const percentOfferId = generateId();
+      const percentRevisionId = generateId();
+      const percentNow = new Date();
+      await db.insert(schema.discountOffers).values({
+        id: percentOfferId,
+        key: generateId(),
+        activationKind: "public",
+        state: "draft",
+        currentRevisionId: null,
+        version: 1,
+        draftVersion: 1,
+        quotaCount: null,
+        budgetAmount: null,
+        perClientLimit: 1,
+        policyVersion: 1,
+        actorId: hqId,
+        actorIdentity: hqId,
+        createdAt: percentNow,
+        updatedAt: percentNow,
+      });
+      await db.insert(schema.discountOfferRevisions).values({
+        id: percentRevisionId,
+        offerId: percentOfferId,
+        revisionNo: 1,
+        name: "Diskon Demo 10% (maks Rp20.000)",
+        currency: "IDR",
+        minSubtotal: "0",
+        startAt: null,
+        endAt: null,
+        schemaVersion: 1,
+        engineVersion: 1,
+        draftVersion: 1,
+        publishedAt: percentNow,
+        actorId: hqId,
+        actorIdentity: hqId,
+        createdAt: percentNow,
+        updatedAt: percentNow,
+      });
+      await db.insert(schema.discountBenefits).values({
+        id: generateId(),
+        revisionId: percentRevisionId,
+        kind: "percentage_goods",
+        scope: "goods",
+        rate: "10.000000",
+        capAmount: "20000",
+        paramsVersion: 1,
+        createdAt: percentNow,
+      });
+      await db
+        .update(schema.discountOffers)
+        .set({
+          state: "enabled",
+          currentRevisionId: percentRevisionId,
+          quotaCount: 50,
+          budgetAmount: "1000000",
+          updatedAt: percentNow,
+        })
+        .where(eq(schema.discountOffers.id, percentOfferId));
+      await db.insert(schema.discountOfferUsage).values({
+        offerId: percentOfferId,
+      });
+
+      // Shipping subsidy demos (ticket 11): satu Offer publik dan satu Offer
+      // manual dengan kode, keduanya cap positif tanpa rate/fixed goods. Gate
+      // tetap 0; baris demo untuk picker/simulasi, bukan aktivasi rollout.
+      const shippingOffers = [
+        {
+          keyName: "Subsidi Ongkir Demo Rp20.000",
+          activationKind: "public",
+          capAmount: "20000",
+          quotaCount: 50,
+          code: null,
+        },
+        {
+          keyName: "Kode Subsidi Ongkir Demo Rp15.000",
+          activationKind: "manual_only",
+          capAmount: "15000",
+          quotaCount: 5,
+          code: "ONGKIRHEMAT",
+        },
+      ];
+      for (const shippingOffer of shippingOffers) {
+        const shippingOfferId = generateId();
+        const shippingRevisionId = generateId();
+        const shippingNow = new Date();
+        await db.insert(schema.discountOffers).values({
+          id: shippingOfferId,
+          key: generateId(),
+          activationKind: shippingOffer.activationKind,
+          state: "draft",
+          currentRevisionId: null,
+          version: 1,
+          draftVersion: 1,
+          quotaCount: null,
+          budgetAmount: null,
+          perClientLimit: 1,
+          policyVersion: 1,
+          actorId: hqId,
+          actorIdentity: hqId,
+          createdAt: shippingNow,
+          updatedAt: shippingNow,
+        });
+        await db.insert(schema.discountOfferRevisions).values({
+          id: shippingRevisionId,
+          offerId: shippingOfferId,
+          revisionNo: 1,
+          name: shippingOffer.keyName,
+          currency: "IDR",
+          minSubtotal: "0",
+          startAt: null,
+          endAt: null,
+          schemaVersion: 1,
+          engineVersion: 1,
+          draftVersion: 1,
+          publishedAt: shippingNow,
+          actorId: hqId,
+          actorIdentity: hqId,
+          createdAt: shippingNow,
+          updatedAt: shippingNow,
+        });
+        await db.insert(schema.discountBenefits).values({
+          id: generateId(),
+          revisionId: shippingRevisionId,
+          kind: "shipping",
+          scope: "shipping",
+          capAmount: shippingOffer.capAmount,
+          paramsVersion: 1,
+          createdAt: shippingNow,
+        });
+        await db.update(schema.discountOffers).set({
+          state: "enabled",
+          currentRevisionId: shippingRevisionId,
+          quotaCount: shippingOffer.quotaCount,
+          budgetAmount: "1000000",
+          updatedAt: shippingNow,
+        }).where(eq(schema.discountOffers.id, shippingOfferId));
+        await db.insert(schema.discountOfferUsage).values({
+          offerId: shippingOfferId,
+        });
+        if (shippingOffer.code) {
+          await db.insert(schema.discountCodes).values({
+            id: generateId(),
+            offerId: shippingOfferId,
+            activationKind: "manual_only",
+            canonicalCode: shippingOffer.code,
+            state: "active",
+            version: 1,
+            publishedAt: shippingNow,
+            actorId: hqId,
+            actorIdentity: hqId,
+            createdAt: shippingNow,
+            updatedAt: shippingNow,
+          });
+        }
+      }
     }
     }
+
 
     console.log("✅ Seeding completed successfully!");
     console.log("");

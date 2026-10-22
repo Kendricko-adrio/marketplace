@@ -271,3 +271,284 @@ describe("evaluatePricing — qty2 dengan Markdown dan Coupon", () => {
     expect(result.lines[0].netLineAmount).toBe("162000");
   });
 });
+
+// =========================================================
+// Ticket 10 — percentage goods dengan cap opsional
+// =========================================================
+// Expected di bawah adalah literal independen dari spec §4.2/§4.4, bukan hasil
+// memanggil engine. Cap berlaku SEKALI per order, bukan per line/unit.
+
+type PercentageInput = { rate: string | number; capAmount?: string | number | null };
+
+function percentageGoods(input: PercentageInput): EvaluatePricingInput["benefit"] {
+  return {
+    kind: "percentage_goods",
+    paramsVersion: 1,
+    rate: input.rate,
+    capAmount: input.capAmount === undefined ? null : input.capAmount,
+  } as EvaluatePricingInput["benefit"];
+}
+
+describe("evaluatePricing — percentage goods cap opsional", () => {
+  it("subtotal450000 10% cap20000 memberi benefit20000, net430000, PPN47300, total477300", () => {
+    const result = evaluatePricing(
+      pickupSimulation([{ variantId: "variant-450k", unitPrice: "450000" }], percentageGoods({ rate: "10", capAmount: "20000" })),
+    );
+
+    expect(result.subtotal).toBe("450000");
+    expect(result.goodsDiscount).toBe("20000");
+    expect(result.netGoods).toBe("430000");
+    expect(result.ppnAmount).toBe("47300");
+    expect(result.total).toBe("477300");
+    expect(result.expectedProviderPayable).toBe("430000");
+    expect(result.lines[0].goodsDiscountAmount).toBe("20000");
+    expect(result.lines[0].netLineAmount).toBe("430000");
+  });
+
+  it("subtotal450000 10% tanpa cap memberi benefit45000, net405000, PPN44550, total449550", () => {
+    const result = evaluatePricing(
+      pickupSimulation([{ variantId: "variant-450k", unitPrice: "450000" }], percentageGoods({ rate: "10" })),
+    );
+
+    expect(result.goodsDiscount).toBe("45000");
+    expect(result.netGoods).toBe("405000");
+    expect(result.ppnAmount).toBe("44550");
+    expect(result.total).toBe("449550");
+    expect(result.expectedProviderPayable).toBe("405000");
+  });
+
+  it("cap20000 pada dua baris225000 masing-masing dipotong20000 total, bukan40000", () => {
+    const result = evaluatePricing(
+      pickupSimulation(
+        [
+          { variantId: "variant-a", unitPrice: "225000" },
+          { variantId: "variant-b", unitPrice: "225000" },
+        ],
+        percentageGoods({ rate: "10", capAmount: "20000" }),
+      ),
+    );
+
+    expect(result.subtotal).toBe("450000");
+    expect(result.goodsDiscount).toBe("20000");
+    expect(discountByVariant(result)).toEqual({ "variant-a": "10000", "variant-b": "10000" });
+    expect(result.netGoods).toBe("430000");
+  });
+
+  it("10% atas100005 dibulatkan floor10000, net90005, PPN9901", () => {
+    const result = evaluatePricing(
+      pickupSimulation([{ variantId: "variant-100005", unitPrice: "100005" }], percentageGoods({ rate: "10" })),
+    );
+
+    expect(result.goodsDiscount).toBe("10000");
+    expect(result.netGoods).toBe("90005");
+    expect(result.ppnAmount).toBe("9901");
+    expect(result.total).toBe("99906");
+    expect(result.expectedProviderPayable).toBe("90005");
+  });
+
+  it("rate pecahan6 digit dihitung exact: 100000 × 0.000001% = 0, dan 12.345678% atas1000000 = 123456", () => {
+    const zero = evaluatePricing(
+      pickupSimulation([{ variantId: "variant-small-rate", unitPrice: "100000" }], percentageGoods({ rate: "0.000001" })),
+    );
+    expect(zero.goodsDiscount).toBe("0");
+    expect(zero.netGoods).toBe("100000");
+
+    const exact = evaluatePricing(
+      pickupSimulation([{ variantId: "variant-fraction", unitPrice: "1000000" }], percentageGoods({ rate: "12.345678" })),
+    );
+    expect(exact.goodsDiscount).toBe("123456");
+    expect(exact.netGoods).toBe("876544");
+  });
+
+  it("alokasi proportional largest remainder dengan tie variantId stabil, total persis benefit", () => {
+    const benefit = percentageGoods({ rate: "1.5" });
+    const forward = evaluatePricing(
+      pickupSimulation(
+        [
+          { variantId: "variant-a", unitPrice: "100" },
+          { variantId: "variant-b", unitPrice: "100" },
+        ],
+        benefit,
+      ),
+    );
+    const reversed = evaluatePricing(
+      pickupSimulation(
+        [
+          { variantId: "variant-b", unitPrice: "100" },
+          { variantId: "variant-a", unitPrice: "100" },
+        ],
+        benefit,
+      ),
+    );
+
+    expect(forward.goodsDiscount).toBe("3");
+    expect(discountByVariant(forward)).toEqual({ "variant-a": "2", "variant-b": "1" });
+    expect(discountByVariant(reversed)).toEqual({ "variant-a": "2", "variant-b": "1" });
+    expect(reversed.netGoods).toBe("197");
+  });
+
+  it("source100000 target90000 qty2 10% memberi markdown20000, coupon18000, net162000, PPN17820, total179820", () => {
+    const result = evaluatePricing({
+      fulfillmentMethod: "pickup",
+      ppnRatePercent: "11",
+      lines: [
+        {
+          variantId: "variant-qty2-percent",
+          quantity: 2,
+          sourceUnitPrice: "100000",
+          effectiveUnitPrice: "90000",
+          markdownRevisionId: "revision-qty2-percent",
+        },
+      ],
+      benefit: percentageGoods({ rate: "10" }),
+    });
+
+    expect(result.sourceGoodsSubtotal).toBe("200000");
+    expect(result.markdownTotal).toBe("20000");
+    expect(result.subtotal).toBe("180000");
+    expect(result.goodsDiscount).toBe("18000");
+    expect(result.netGoods).toBe("162000");
+    expect(result.ppnAmount).toBe("17820");
+    expect(result.total).toBe("179820");
+    expect(result.lines[0].sourceLineAmount).toBe("200000");
+    expect(result.lines[0].goodsDiscountAmount).toBe("18000");
+    expect(result.lines[0].netLineAmount).toBe("162000");
+  });
+
+  it("subtotal50 1% memberi benefit0 (tidak diterapkan), bukan pembulatan ke1", () => {
+    const result = evaluatePricing(
+      pickupSimulation([{ variantId: "variant-50", unitPrice: "50" }], percentageGoods({ rate: "1" })),
+    );
+
+    expect(result.goodsDiscount).toBe("0");
+    expect(result.netGoods).toBe("50");
+  });
+});
+
+describe("evaluatePricing — guard runtime percentage goods", () => {
+  const invalidPercentage: { label: string; benefit: unknown }[] = [
+    { label: "rate0", benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "0", capAmount: null } },
+    { label: "rate di atas100", benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "100.000001", capAmount: null } },
+    { label: "rate7 digit pecahan", benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "10.1234567", capAmount: null } },
+    { label: "rate dengan koma", benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "10,5", capAmount: null } },
+    { label: "capAmount hilang", benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "10" } },
+    { label: "cap0", benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "10", capAmount: "0" } },
+    { label: "cap pecahan Rupiah", benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "10", capAmount: "20000.5" } },
+    { label: "percentage membawa fixedAmount", benefit: { kind: "percentage_goods", paramsVersion: 1, rate: "10", capAmount: null, fixedAmount: "1000" } },
+    { label: "fixed membawa capAmount", benefit: { kind: "fixed_goods", paramsVersion: 1, fixedAmount: "1000", capAmount: "500" } },
+    { label: "paramsVersion2", benefit: { kind: "percentage_goods", paramsVersion: 2, rate: "10", capAmount: null } },
+  ];
+
+  it.each(invalidPercentage)("menolak $label", ({ benefit }) => {
+    expect(() =>
+      evaluatePricing(pickupSimulation([{ variantId: "variant-100000", unitPrice: "100000" }], benefit)),
+    ).toThrow(PricingContractError);
+  });
+});
+
+// Ticket 11 — subsidi ongkir. Literal harapan diambil dari spec §4.4 (contoh
+// shipping), bukan dari engine: barang150000, PPN11%, tanpa service fee.
+describe("evaluatePricing — subsidi ongkir (clipping, bukan pembayaran Rp0)", () => {
+  it("ongkir30000 cap20000 memberi subsidi20000, net ongkir10000, PPN16500, total176500/provider160000", () => {
+    const result = evaluatePricing({
+      fulfillmentMethod: "delivery",
+      ppnRatePercent: "11",
+      lines: [{ variantId: "variant-150000", quantity: 1, sourceUnitPrice: "150000", effectiveUnitPrice: "150000" }],
+      shippingBeforeSubsidy: "30000",
+      providerQuotedShippingCost: "30000",
+      benefit: { kind: "shipping", paramsVersion: 1, capAmount: "20000" },
+    });
+    expect(result.goodsDiscount).toBe("0");
+    expect(result.shippingBeforeSubsidy).toBe("30000");
+    expect(result.shippingSubsidy).toBe("20000");
+    expect(result.shippingCost).toBe("10000");
+    expect(result.merchantFunding).toBe("20000");
+    expect(result.ppnAmount).toBe("16500");
+    expect(result.total).toBe("176500");
+    expect(result.expectedProviderPayable).toBe("160000");
+    // Subtotal/line tidak pernah menerima alokasi barang; subsidi bukan item disc.
+    expect(result.lines[0].goodsDiscountAmount).toBe("0");
+    expect(result.lines[0].netLineAmount).toBe("150000");
+    // Quote/booking cost tetap original, bukan net customer.
+    expect(result.providerQuotedShippingCost).toBe("30000");
+  });
+
+  it("ongkir12000 cap20000 memberi subsidi12000, net ongkir0, PPN16500, total166500/provider150000; sisa8000 hangus", () => {
+    const result = evaluatePricing({
+      fulfillmentMethod: "delivery",
+      ppnRatePercent: "11",
+      lines: [{ variantId: "variant-150000", quantity: 1, sourceUnitPrice: "150000", effectiveUnitPrice: "150000" }],
+      shippingBeforeSubsidy: "12000",
+      providerQuotedShippingCost: "12000",
+      benefit: { kind: "shipping", paramsVersion: 1, capAmount: "20000" },
+    });
+    expect(result.shippingSubsidy).toBe("12000");
+    expect(result.shippingCost).toBe("0");
+    expect(result.merchantFunding).toBe("12000");
+    expect(result.ppnAmount).toBe("16500");
+    expect(result.total).toBe("166500");
+    expect(result.expectedProviderPayable).toBe("150000");
+    expect(result.providerQuotedShippingCost).toBe("12000");
+  });
+
+  it("pickup dan ongkir0 tidak eligible: evaluator menolak, bukan membagi Rp0", () => {
+    for (const fulfillmentMethod of ["pickup", "delivery"] as const) {
+      expect(() => evaluatePricing({
+        fulfillmentMethod,
+        ppnRatePercent: "11",
+        lines: [{ variantId: "variant-150000", quantity: 1, sourceUnitPrice: "150000", effectiveUnitPrice: "150000" }],
+        shippingBeforeSubsidy: fulfillmentMethod === "pickup" ? "0" : "0",
+        benefit: { kind: "shipping", paramsVersion: 1, capAmount: "20000" },
+      })).toThrow(PricingContractError);
+    }
+    expect(() => evaluatePricing({
+      fulfillmentMethod: "pickup",
+      ppnRatePercent: "11",
+      lines: [{ variantId: "variant-150000", quantity: 1, sourceUnitPrice: "150000", effectiveUnitPrice: "150000" }],
+      benefit: { kind: "shipping", paramsVersion: 1, capAmount: "20000" },
+    })).toThrow(PricingContractError);
+  });
+
+  it("guard bentuk shipping: cap wajib positif, tanpa rate/fixed goods, paramsVersion1", () => {
+    const shipping = (benefit: unknown) => () => evaluatePricing({
+      fulfillmentMethod: "delivery",
+      ppnRatePercent: "11",
+      lines: [{ variantId: "variant-150000", quantity: 1, sourceUnitPrice: "150000", effectiveUnitPrice: "150000" }],
+      shippingBeforeSubsidy: "30000",
+      benefit: benefit as EvaluatePricingInput["benefit"],
+    });
+    expect(shipping({ kind: "shipping", paramsVersion: 1, capAmount: "0" })).toThrow(PricingContractError);
+    expect(shipping({ kind: "shipping", paramsVersion: 1, capAmount: "20000.5" })).toThrow(PricingContractError);
+    expect(shipping({ kind: "shipping", paramsVersion: 1, capAmount: "20000", rate: "10" })).toThrow(PricingContractError);
+    expect(shipping({ kind: "shipping", paramsVersion: 1, capAmount: "20000", fixedAmount: "10000" })).toThrow(PricingContractError);
+    expect(shipping({ kind: "shipping", paramsVersion: 2, capAmount: "20000" })).toThrow(PricingContractError);
+    expect(shipping({ kind: "shipping", paramsVersion: 1 })).toThrow(PricingContractError);
+  });
+});
+
+describe("evaluatePricing — shipping Offer dengan Markdown qty>1", () => {
+  it("Markdown whole-line dan subsidi ongkir tidak saling menimpa: line disc tetap Markdown, goodsDiscount0", () => {
+    const result = evaluatePricing({
+      fulfillmentMethod: "delivery",
+      ppnRatePercent: "11",
+      lines: [{
+        variantId: "variant-md-ship",
+        quantity: 2,
+        sourceUnitPrice: "100000",
+        effectiveUnitPrice: "90000",
+        markdownRevisionId: "revision-md-ship",
+      }],
+      shippingBeforeSubsidy: "30000",
+      benefit: { kind: "shipping", paramsVersion: 1, capAmount: "20000" },
+    });
+    expect(result.markdownTotal).toBe("20000");
+    expect(result.goodsDiscount).toBe("0");
+    expect(result.lines[0].markdownAmount).toBe("20000");
+    expect(result.lines[0].goodsDiscountAmount).toBe("0");
+    expect(result.lines[0].netLineAmount).toBe("180000");
+    expect(result.shippingSubsidy).toBe("20000");
+    expect(result.shippingCost).toBe("10000");
+    expect(result.total).toBe("209800");
+    expect(result.expectedProviderPayable).toBe("190000");
+  });
+});

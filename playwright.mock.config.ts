@@ -80,7 +80,7 @@ export default defineConfig({
   // ONLY the mock-only specs (versioned checkout/settlement, checkout review
   // preview, pickup, delivery, shipment, admin discounts) — this config must
   // never run the live-cleanup checkout.spec.ts or the other shared-config specs.
-  testMatch: /(?:versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|markdown|markdown-settlement|price-change|price-change-bulk)-mock.spec.ts/,
+  testMatch: /(?:versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|discounts-usage|markdown|markdown-settlement|price-change|price-change-bulk|price-change-excel)-mock.spec.ts/,
   fullyParallel: false,
   workers: 1, // single fixture identity (john) — serial DB + cart ordering
   forbidOnly: true,
@@ -102,7 +102,7 @@ export default defineConfig({
     {
       name: "pickup-mock",
       testDir: "./e2e",
-      testMatch: /(?:versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|markdown|markdown-settlement|price-change|price-change-bulk)-mock.spec.ts/,
+      testMatch: /(?:versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|discounts-usage|markdown|markdown-settlement|price-change|price-change-bulk|price-change-excel)-mock.spec.ts/,
       // No storageState/project auth: sessions are created in the spec via the
       // public HTTP sign-in seam against the isolated origins.
     },

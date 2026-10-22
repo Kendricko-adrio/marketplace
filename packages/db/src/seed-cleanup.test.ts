@@ -50,6 +50,15 @@ describe("seed cleanup order", () => {
       names.indexOf("adminRoles")
     );
   });
+  it("clears reserved manual codes before the Offer identity and users (ticket 09)", () => {
+    const names = seedCleanupEntries.map(([name]) => name);
+    expect(names).toContain("discountCodes");
+    expect(names.indexOf("discountCodes")).toBeLessThan(names.indexOf("discountOffers"));
+    expect(names.indexOf("discountCodes")).toBeLessThan(names.indexOf("users"));
+    // Redemption rows reference a code (RESTRICT), so they must be deleted first.
+    expect(names.indexOf("discountRedemptions")).toBeLessThan(names.indexOf("discountCodes"));
+  });
+
   it("clears Markdown price records before variants, batches, and users", () => {
     const names = seedCleanupEntries.map(([name]) => name);
     for (const child of [

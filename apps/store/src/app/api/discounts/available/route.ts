@@ -30,8 +30,13 @@ const selectedIdsSchema = z
 
 const availableRequestSchema = z.strictObject({
   selectedItemIds: selectedIdsSchema,
-  // Ticket 07 melayani pickup; pemilihan promo delivery dimiliki ticket 11.
-  fulfillmentMethod: z.literal("pickup").optional(),
+  // Satu picker untuk pickup dan delivery (ticket 11). Pada delivery, ongkir
+  // layanan terpilih hanya dipakai untuk MENAMPILKAN eligibility subsidi;
+  // preview/place-order menghitung ulang dari quote baru.
+  fulfillmentMethod: z.enum(["pickup", "delivery"]).optional(),
+  shippingBeforeSubsidy: z
+    .union([z.string().max(32), z.number().int().nonnegative()])
+    .optional(),
   cursor: z.string().min(1).max(128).optional(),
 });
 
@@ -99,6 +104,13 @@ export async function POST(request: NextRequest) {
       clientId: session.user.id,
       selectedItemIds: parsed.data.selectedItemIds,
       cursor: parsed.data.cursor ?? null,
+      fulfillment: {
+        fulfillmentMethod: parsed.data.fulfillmentMethod ?? "pickup",
+        ...(parsed.data.fulfillmentMethod === "delivery" &&
+        parsed.data.shippingBeforeSubsidy !== undefined
+          ? { shippingBeforeSubsidy: String(parsed.data.shippingBeforeSubsidy) }
+          : {}),
+      },
     });
 
     log.info("discount availability read", {

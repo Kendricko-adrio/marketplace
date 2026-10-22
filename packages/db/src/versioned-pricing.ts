@@ -377,6 +377,9 @@ export function decodePricingSnapshot(payload: unknown): PricingSnapshot {
   if (subtotal - goodsDiscount !== netGoods) throw snapshotCorrupt("netGoods does not match subtotal minus goodsDiscount");
   if (shippingBeforeSubsidy - shippingSubsidy !== shippingCost) throw snapshotCorrupt("shippingCost does not match shippingBeforeSubsidy minus shippingSubsidy");
   if (fulfillmentMethod === "pickup" && (shippingBeforeSubsidy !== BigInt(0) || shippingCost !== BigInt(0))) throw snapshotCorrupt("pickup snapshots must not carry a shipping cost");
+  // Subsidi ongkir adalah funding merchant: tidak ada komponen pihak ketiga yang
+  // menutupnya, jadi dua field ini harus selalu sama (ticket 11).
+  if (merchantFunding !== shippingSubsidy) throw snapshotCorrupt("merchantFunding must equal the shipping subsidy");
   if (serviceFee !== BigInt(0)) throw snapshotCorrupt("this pricing contract version does not charge a service fee");
   if (taxableBase !== netGoods) throw snapshotCorrupt("taxableBase must equal netGoods: PPN is charged on goods only");
   const expectedPpnAmount = decodeBound(ceilDiv(netGoods * rateScaled, HUNDRED * RATE_SCALE), "ppnAmount");

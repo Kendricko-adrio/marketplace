@@ -11,9 +11,12 @@ import { Pool } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "@marketplace/db/src/schema";
 
-const { evaluateSelectedPublicOffer, mapOfferReasonToHttp } = await import(
-  "./discount-selection"
-);
+const {
+  evaluateSelectedManualCode,
+  evaluateSelectedOffer,
+  evaluateSelectedPublicOffer,
+  mapOfferReasonToHttp,
+} = await import("./discount-selection");
 
 const url = process.env.DATABASE_URL;
 const PREFIX = `discount-selection-${crypto.randomUUID()}`;
@@ -47,11 +50,16 @@ it.skipIf(schemaState.ready)(
   }
 );
 
+const manualCodeId = `${PREFIX}-code-active`;
 let offerId: string;
 let pausedOfferId: string;
 let minimumOfferId: string;
 let capacityOfferId: string;
 let clientLimitOfferId: string;
+let manualOfferId: string;
+let percentageOfferId: string;
+let uncappedPercentageOfferId: string;
+let manualInactiveCodeId: string;
 
 async function createOffer(input: {
   id: string;
@@ -61,10 +69,14 @@ async function createOffer(input: {
   quotaCount?: number;
   budgetAmount?: string;
   perClientLimit?: number;
+  activationKind?: "public" | "manual_only";
+  /** Percentage goods (ticket 10); bila diisi, fixedAmount tidak dipakai. */
+  rate?: string;
+  capAmount?: string | null;
 }) {
   await pool!.query(
-    `insert into discount_offer (id, key, activation_kind, actor_identity) values ($1,$2,'public','fixture')`,
-    [input.id, `${input.id}-key`]
+    `insert into discount_offer (id, key, activation_kind, actor_identity) values ($1,$2,$3,'fixture')`,
+    [input.id, `${input.id}-key`, input.activationKind ?? "public"]
   );
   await pool!.query(
     `insert into discount_offer_revision
@@ -72,10 +84,17 @@ async function createOffer(input: {
      values ($1,$2,1,$3,'IDR',$4,now(),'fixture')`,
     [`${input.id}-revision`, input.id, input.name, input.minSubtotal ?? "0"]
   );
-  await pool!.query(
-    `insert into discount_benefit (id, revision_id, kind, scope, fixed_amount) values ($1,$2,'fixed_goods','goods','25000')`,
-    [`${input.id}-benefit`, `${input.id}-revision`]
-  );
+  if (input.rate) {
+    await pool!.query(
+      `insert into discount_benefit (id, revision_id, kind, scope, rate, cap_amount) values ($1,$2,'percentage_goods','goods',$3,$4)`,
+      [`${input.id}-benefit`, `${input.id}-revision`, input.rate, input.capAmount ?? null]
+    );
+  } else {
+    await pool!.query(
+      `insert into discount_benefit (id, revision_id, kind, scope, fixed_amount) values ($1,$2,'fixed_goods','goods','25000')`,
+      [`${input.id}-benefit`, `${input.id}-revision`]
+    );
+  }
   await pool!.query(
     `update discount_offer set state=$2, current_revision_id=$3, quota_count=$4, budget_amount=$5, per_client_limit=$6
       where id=$1`,
@@ -107,6 +126,35 @@ beforeAll(async () => {
   await createOffer({ id: minimumOfferId, name: "Seleksi Minimum", minSubtotal: "250001" });
   await createOffer({ id: capacityOfferId, name: "Seleksi Kapasitas", quotaCount: 1 });
   await createOffer({ id: clientLimitOfferId, name: "Seleksi Jatah", perClientLimit: 1 });
+  percentageOfferId = `${PREFIX}-offer-percentage`;
+  uncappedPercentageOfferId = `${PREFIX}-offer-percentage-uncapped`;
+  await createOffer({
+    id: percentageOfferId,
+    name: "Seleksi Persen Cap",
+    rate: "10.000000",
+    capAmount: "20000",
+  });
+  await createOffer({
+    id: uncappedPercentageOfferId,
+    name: "Seleksi Persen Tanpa Cap",
+    rate: "12.5",
+  });
+
+  // Manual Promo Code (ticket 09): Offer manual_only + kode canonical,
+  // kode nonaktif, dan kode milik Offer lain untuk membuktikan ownership.
+  manualOfferId = `${PREFIX}-offer-manual`;
+  manualInactiveCodeId = `${PREFIX}-code-inactive`;
+  await createOffer({
+    id: manualOfferId,
+    name: "Seleksi Kode Manual",
+    activationKind: "manual_only",
+    quotaCount: 3,
+  });
+  await pool.query(
+    `insert into discount_code (id, offer_id, canonical_code, state, actor_identity)
+     values ($1,$2,'MANUAL17OK','active','fixture'), ($3,$4,'MANUAL17OFF','inactive','fixture')`,
+    [manualCodeId, manualOfferId, manualInactiveCodeId, manualOfferId]
+  );
 
   await pool.query(
     `update discount_offer_usage set reserved_count=1, reserved_amount='25000' where offer_id=$1`,
@@ -122,6 +170,7 @@ beforeAll(async () => {
 afterAll(async () => {
   if (!pool) return;
   try {
+    await pool.query(`delete from discount_code where offer_id like $1`, [`${PREFIX}%`]);
     await pool.query(`delete from discount_client_usage where offer_id like $1`, [`${PREFIX}%`]);
     await pool.query(`delete from discount_offer_usage where offer_id like $1`, [`${PREFIX}%`]);
     await pool.query(`delete from discount_benefit where revision_id like $1`, [`${PREFIX}%`]);
@@ -160,7 +209,7 @@ describe("evaluateSelectedPublicOffer", () => {
       offerName: "Seleksi Aktif",
       revisionId: `${offerId}-revision`,
       benefitId: `${offerId}-benefit`,
-      fixedAmount: "25000",
+      benefit: { kind: "fixed_goods", paramsVersion: 1, fixedAmount: "25000" },
       benefitAmount: "25000",
       policyVersion: 1,
     });
@@ -171,6 +220,44 @@ describe("evaluateSelectedPublicOffer", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.candidate.benefitAmount).toBe("10000");
+  });
+
+  it("percentage goods membawa rate/cap dan nominal floor/clip/cap pada subtotal450000", async () => {
+    const capped = await evaluate(percentageOfferId, { subtotal: "450000" });
+    expect(capped.ok).toBe(true);
+    if (!capped.ok) return;
+    expect(capped.candidate.benefit).toEqual({
+      kind: "percentage_goods",
+      paramsVersion: 1,
+      rate: "10",
+      capAmount: "20000",
+    });
+    expect(capped.candidate.benefitAmount).toBe("20000");
+
+    const uncapped = await evaluate(uncappedPercentageOfferId, { subtotal: "450000" });
+    expect(uncapped.ok).toBe(true);
+    if (!uncapped.ok) return;
+    expect(uncapped.candidate.benefit).toEqual({
+      kind: "percentage_goods",
+      paramsVersion: 1,
+      rate: "12.5",
+      capAmount: null,
+    });
+    // 450000 × 12.5% = 56250
+    expect(uncapped.candidate.benefitAmount).toBe("56250");
+  });
+
+  it("percentage dibulatkan floor dan benefit0 tidak eligible/tanpa usage", async () => {
+    const floored = await evaluate(percentageOfferId, { subtotal: "100005" });
+    expect(floored.ok).toBe(true);
+    if (!floored.ok) return;
+    expect(floored.candidate.benefitAmount).toBe("10000");
+
+    // 3 × 12.5% = 0.375 → floor 0: benefit0 tidak pernah dipakai.
+    const zero = await evaluate(uncappedPercentageOfferId, { subtotal: "3" });
+    expect(zero.ok).toBe(false);
+    if (zero.ok) return;
+    expect(zero.reason).toBe("BENEFIT_UNAVAILABLE");
   });
 
   it("paused/minimum/jatah/kuota gagal dengan reason yang benar", async () => {
@@ -225,5 +312,163 @@ describe("mapOfferReasonToHttp", () => {
       status: 409,
       code: "PROMO_UNAVAILABLE",
     });
+  });
+});
+
+describe("Manual Promo Code resolution (ticket 09)", () => {
+  function manual(input: {
+    code: unknown;
+    subtotal?: string;
+    verifiedEmail?: boolean;
+    client?: string;
+  }) {
+    return evaluateSelectedManualCode(
+      {
+        code: input.code,
+        clientId: input.client ?? clientId,
+        verifiedEmail: input.verifiedEmail ?? true,
+        subtotalAfterMarkdown: input.subtotal ?? "250000",
+        now: NOW,
+      },
+      db!
+    );
+  }
+
+  it("literal trim/uppercase resolve ke Offer manual_only dan memakai benefit fixed yang sama", async () => {
+    const result = await manual({ code: " manual17ok " });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.candidate).toMatchObject({
+      offerId: manualOfferId,
+      offerName: "Seleksi Kode Manual",
+      activationKind: "manual_only",
+      codeId: manualCodeId,
+      benefitAmount: "25000",
+    });
+    // Engine publik tidak membuka Offer manual, dan channel manual tidak
+    // membuka Offer publik walau codeId valid.
+    expect(await evaluate(manualOfferId)).toMatchObject({
+      ok: false,
+      reason: "OFFER_UNAVAILABLE",
+    });
+    expect(
+      await evaluateSelectedOffer(
+        {
+          offerId,
+          clientId,
+          verifiedEmail: true,
+          subtotalAfterMarkdown: "250000",
+          now: NOW,
+          channel: "manual",
+          codeId: manualCodeId,
+        },
+        db!
+      )
+    ).toMatchObject({ ok: false, reason: "OFFER_UNAVAILABLE" });
+  });
+
+  it("unknown/nonaktif/literal tidak sah = reason aman yang sama (tanpa discovery)", async () => {
+    for (const code of [
+      "neverissued17",
+      "manual17off",
+      "manual 17ok",
+      "mánual17ok",
+      "AB",
+      "",
+    ]) {
+      expect(await manual({ code })).toMatchObject({
+        ok: false,
+        reason: "OFFER_UNAVAILABLE",
+        message: "Promo ini sedang tidak tersedia.",
+      });
+    }
+    // Kode valid milik Offer lain juga tidak membuka apa pun.
+    expect(
+      await evaluateSelectedOffer(
+        {
+          offerId: manualOfferId,
+          clientId,
+          verifiedEmail: true,
+          subtotalAfterMarkdown: "250000",
+          now: NOW,
+          channel: "manual",
+          codeId: `${PREFIX}-code-other`,
+        },
+        db!
+      )
+    ).toMatchObject({ ok: false, reason: "OFFER_UNAVAILABLE" });
+  });
+
+  it("kapasitas, minimum, verified email dan waktu memakai pemeriksaan bersama", async () => {
+    expect(await manual({ code: "manual17ok", verifiedEmail: false })).toMatchObject({
+      ok: false,
+      reason: "EMAIL_VERIFICATION_REQUIRED",
+    });
+    await pool!.query(
+      `update discount_offer_usage set reserved_count=3, reserved_amount='75000' where offer_id=$1`,
+      [manualOfferId]
+    );
+    expect(await manual({ code: "manual17ok" })).toMatchObject({
+      ok: false,
+      reason: "CAPACITY_UNAVAILABLE",
+    });
+    await pool!.query(
+      `update discount_offer_usage set reserved_count=0, reserved_amount='0' where offer_id=$1`,
+      [manualOfferId]
+    );
+    await pool!.query(
+      `update discount_offer_revision set end_at=$2 where id=$1`,
+      [`${manualOfferId}-revision`, NOW]
+    );
+    expect(await manual({ code: "manual17ok" })).toMatchObject({
+      ok: false,
+      reason: "WINDOW_CLOSED",
+    });
+    await pool!.query(
+      `update discount_offer_revision set end_at=null where id=$1`,
+      [`${manualOfferId}-revision`]
+    );
+  });
+
+  it("perubahan email akun tidak mereset usage atau mengubah jatah kode", async () => {
+    const usageBefore = await pool!.query(
+      `select reserved_count, consumed_count, reserved_amount, consumed_amount
+         from discount_offer_usage where offer_id=$1`,
+      [manualOfferId]
+    );
+    const before = await manual({ code: "manual17ok" });
+    expect(before.ok).toBe(true);
+    await pool!.query(`update client set email=$2 where id=$1`, [
+      clientId,
+      `changed-${PREFIX}@example.test`,
+    ]);
+    const after = await manual({ code: "manual17ok" });
+    expect(after.ok).toBe(true);
+    const usageAfter = await pool!.query(
+      `select reserved_count, consumed_count, reserved_amount, consumed_amount
+         from discount_offer_usage where offer_id=$1`,
+      [manualOfferId]
+    );
+    expect(usageAfter.rows).toEqual(usageBefore.rows);
+  });
+
+  it("read-only: tidak membuat redemption/usage saat resolve kode", async () => {
+    const before = await pool!.query(
+      `select reserved_count, consumed_count, reserved_amount, consumed_amount
+         from discount_offer_usage where offer_id=$1`,
+      [manualOfferId]
+    );
+    await manual({ code: "manual17ok" });
+    const after = await pool!.query(
+      `select reserved_count, consumed_count, reserved_amount, consumed_amount
+         from discount_offer_usage where offer_id=$1`,
+      [manualOfferId]
+    );
+    expect(after.rows).toEqual(before.rows);
+    const redemptions = await pool!.query(
+      `select count(*)::int as count from discount_redemption where offer_id=$1`,
+      [manualOfferId]
+    );
+    expect(redemptions.rows[0].count).toBe(0);
   });
 });

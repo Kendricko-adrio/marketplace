@@ -9,9 +9,12 @@ import {
   products,
   jubelioStockOperations,
   jubelioSalesOperations,
+  discountCodes,
   discountRedemptions,
   discountOfferRevisions,
 } from "@/db";
+import { hasGlobalGrant } from "@/lib/admin-command";
+import { maskPromoCode } from "@marketplace/db/src/discount-code";
 import {
   and,
   asc,
@@ -73,7 +76,6 @@ export async function GET(
           userId: orders.userId,
           branchId: orders.branchId,
           addressId: orders.addressId,
-          voucherId: orders.voucherId,
           status: orders.status,
           paymentMethod: orders.paymentMethod,
           paymentStatus: orders.paymentStatus,
@@ -336,12 +338,16 @@ export async function GET(
       .select({
         offerName: discountOfferRevisions.name,
         benefitAmount: discountRedemptions.benefitAmount,
+        activationKind: discountRedemptions.activationKind,
+        codeId: discountRedemptions.codeId,
+        canonicalCode: discountCodes.canonicalCode,
         status: discountRedemptions.status,
         policyVersion: discountRedemptions.policyVersion,
         consumedAt: discountRedemptions.consumedAt,
         releasedAt: discountRedemptions.releasedAt,
       })
       .from(discountRedemptions)
+      .leftJoin(discountCodes, eq(discountCodes.id, discountRedemptions.codeId))
       .innerJoin(
         discountOfferRevisions,
         and(
@@ -351,7 +357,23 @@ export async function GET(
       )
       .where(eq(discountRedemptions.orderId, order[0].order.id))
       .limit(1);
-    const promo = redemption ?? null;
+    /**
+     * Viewer admin menerima label masked + codeId; literal hanya untuk promo
+     * editor (discounts:view+edit). Audit/export/daftar kode tetap masked.
+     */
+    const canViewCodeLiteral =
+      hasGlobalGrant(ctx.policy, "discounts", "view") &&
+      hasGlobalGrant(ctx.policy, "discounts", "edit");
+    const promo = redemption
+      ? {
+          ...redemption,
+          canonicalCode: undefined,
+          code: canViewCodeLiteral ? redemption.canonicalCode : null,
+          maskedCode: redemption.canonicalCode
+            ? maskPromoCode(redemption.canonicalCode)
+            : null,
+        }
+      : null;
     return NextResponse.json({
       success: true,
       data: {

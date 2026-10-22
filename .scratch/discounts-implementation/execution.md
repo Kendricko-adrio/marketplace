@@ -341,3 +341,168 @@ Tidak ada acceptance ticket lengkap yang dinyatakan pass/resolved pada catatan i
 - Gap tidak diklaim: delivery promo/shipping (11), replacement (08), manual
   code (09), percentage (10), usage privacy (12), UAT/rollout (13), mirror
   settlement POST (pre-existing).
+
+## Ticket 05 resolved — Excel, laporan, dan linked retry
+
+- Kontrak workbook baru: `apps/admin/src/lib/xlsx-container.ts` (ZIP bounded di
+  atas `node:zlib`, tanpa dependency parser baru; entry/expanded/cell/text/row
+  limit ditegakkan sebelum alokasi, traversal/duplikat/macro/external/enkripsi
+  fatal) dan `apps/admin/src/lib/price-workbook.ts` (marker/header/row rules,
+  formula & cached value tidak dievaluasi, writer literal inline string).
+- Domain: `stageWorkbookPriceChange` parse sebelum transaksi (fatal → 400
+  `WORKBOOK_REJECTED` tanpa batch), row error menjadi failed final dengan nomor
+  baris sheet; `runStage` dipakai bersama manual/bulk; koreksi wajib
+  `parentBatchId` + `origin_row` ke row failed final saja; report/subset/export/
+  template dengan grant view + products all-branches.
+- Schema: migrasi drizzle-kit `0046_short_pride.sql` + `0047_rainy_captain_cross.sql`
+  (action `invalid` hanya pada row failed, SKU kosong hanya failed, target null
+  hanya failed). Seed reset tidak lagi memalsukan `pending`; demo batch `xlsx`
+  2 row pending ditambahkan. `drizzle-kit push` tidak dipakai (prompt drift lama
+  `order_item_order_id_unique` di luar scope) — SQL generated diterapkan persis
+  ke DB disposable.
+- UI: kartu Excel (template/upload/review/apply/laporan/subset/koreksi) +
+  tombol export SKU terpilih di bulk; docs feature/API/testing/seeding
+  diperbarui, plus `apps/admin/vitest.setup.ts` yang memuat `.env` sebelum module
+  test sehingga suite DB admin tidak lagi bergantung ekspor shell.
+- Evidence main: types admin/store/db PASS, lint admin 0 error, `db:check` PASS,
+  focused 4 file **71 passed** (serial), batch unit **137 files/1571 passed/
+  14 skipped**, mock E2E price-change excel+bulk+manual **14 passed**, `db:seed`
+  disposable PASS. Gate akhir `0`, demo batch seed utuh, 0 fixture sisa.
+- Gap: benchmark 1000 row/25 MiB dan klaim parser aman universal tidak diklaim;
+  suite DB admin wajib serial karena berbagi key config; live-provider E2E/UAT/
+  release tetap gate ticket 13/izin terpisah.
+
+## Ticket 08 resolved — penggantian dan gugurnya promo
+
+- Preview pickup menerima `previous` (review token + pilihan lama) dan
+  `acknowledgeInvalidation`; server mengevaluasi ulang pilihan lama **dan**
+  kandidat, membandingkan total final (PPN ikut) dan mengembalikan
+  `replacement`/`requiresIncreaseConfirmation`. Token bertanda tangan menambah
+  digest pilihan `p` + flag `inc`/`cwo`; place-order mewajibkan
+  `acknowledgements.promoIncrease|continueWithoutPromo` yang mengikat candidate
+  fingerprint sebelum order/usage/stock.
+- Pure seam baru `apps/store/src/lib/promo-replacement.ts` (dipakai juga nanti
+  oleh manual09/percentage10/shipping11). UI: picker di langkah review, dialog
+  total naik (Batal mempertahankan), invalidation notice + "Lanjut tanpa promo"
+  eksplisit, breakdown tidak menampilkan diskon mati; network error tidak
+  mengubah state.
+- Evidence: types store/admin PASS, focused lint PASS (global `lint:store` gagal
+  pada error pre-existing `Header.tsx`), unit slice 17 passed, batch unit
+  **138 files / 1584 passed / 14 skipped**, `discounts-coupon-mock` **8 passed**
+  (3 lama + 5 baru), regresi 5 spec checkout/delivery/markdown **36 passed**.
+  Gate kembali `0`, fixture E2E bersih. Tanpa schema/seed/migrasi, tanpa
+  commit/push/provider nyata/remote/deploy.
+- Gap: promo delivery (11), manual code (09), percentage (10), race kuota dua
+  akun HTTP nyata (12/13), live-provider E2E/UAT/rollout (izin terpisah).
+
+## Ticket 09 resolved — Manual Promo Code dalam slot bersama
+
+- Schema: tabel `discount_code` (canonical unik global, ownership `manual_only`,
+  literal/owner immutable via modul), widen activation kind Offer/Redemption,
+  `discount_redemption.code_id` + FK komposit, kind bucket rate `code:*`.
+  Migrasi generated `0048_cooing_black_queen.sql` + `0049_dark_vapor.sql`,
+  diterapkan ke DB disposable; `db:check` PASS.
+- Pure/engine: `packages/db/src/discount-code.ts` (canonical trim+uppercase,
+  ASCII 3–64, masking), `discount-eligibility.ts` channel manual memakai
+  pemeriksaan/kapasitas bersama.
+- Admin: create manual + initial codes, add-code/state endpoint, publish
+  `proposedCodes` terikat fingerprint, detail/list masked vs literal editor,
+  audit `codeId` + label masked, UI panel kode manual.
+- Store: resolve kode (`evaluateSelectedManualCode`), kandidat manual dengan
+  `codeId`, reservation mengunci Offer→usage→client→code dan menyimpan tepat
+  satu Redemption manual; review token/previous memakai codeId (tanpa literal);
+  UI input + Terapkan, invalidation manual memakai jalur Lanjut tanpa promo.
+- Rate limit: bucket PG `code:account` 20 / `code:ip` 120 per 60 detik, termasuk
+  shape invalid; lintas dua koneksi, forged header dev diabaikan, 503 fail-closed.
+- Seed/demo manual (dua kode + Redemption consumed) dan docs feature/API/
+  testing/seeding diperbarui.
+- Evidence: types store/admin PASS; lint focused 0 error (global store hanya
+  error pre-existing `Header.tsx`); batch unit **141 files / 1628 passed / 12
+  skipped**; mock E2E coupon+admin **14 passed**; regresi checkout-review+pickup
+  **20 passed**; seed PASS; gate akhir `0`, tanpa fixture test tersisa.
+- Gap: percentage/manual cross dan shipping manual (10/11/13), usage/privacy
+  penuh (12), UAT/staging/live-provider/commit (izin terpisah).
+
+## Ticket 10 resolved — percentage goods dengan cap opsional
+
+- Benefit goods version1 kini punya dua bentuk: `fixed_goods` dan
+  `percentage_goods` (`rate >0..100` maks6 digit, `cap_amount` NULL/positif).
+  Schema `discount_benefit` + migrasi `0050_polite_lady_ursula.sql` (shape check
+  per kind, fixed/rate/cap tidak boleh campur); helper exact `floor/clip/cap`
+  dipakai bersama eligibility, admin simulation, preview, place-order.
+- Candidate store membawa bentuk benefit asli; snapshot/Redemption menyimpan
+  bentuk itu, dan preview/place-order menolak bila nominal eligibility ≠
+  `goodsDiscount` (fail closed). Allocation whole-line/largest remainder dan
+  provider `disc_amount = sourceLine − netLine` tidak berubah; test drift 1
+  Rupiah ditambahkan.
+- Admin form/list/DTO/review/publish/simulation + zod draft union mendukung
+  percentage; seed demo menambah Offer 10% cap20.000 (gate tetap 0). Docs
+  feature/API/testing/seeding diperbarui.
+- Evidence: types store/admin PASS, db:check PASS, batch unit **142 files/1669
+  passed/12 skipped**, fokus 152 passed/3 skipped, mock E2E admin+coupon **16
+  passed**, seed PASS, gate `0`, tanpa fixture sisa. Gap: kombinasi manual+
+  percentage & contract map penuh di ticket 13; tanpa live-provider/UAT/deploy.
+
+## Ticket 11 resolved — subsidi ongkir dan pemisahan biaya kurir
+
+- Benefit `shipping` version1 (cap positif, scope shipping) masuk parser/harga/eligibility/admin; snapshot membedakan original, subsidi/merchant funding, net customer, quote cost, billed null; decoder menolak funding≠subsidi.
+- Delivery memakai slot promo yang sama (public/manual), quote fresh → benefit → approval NET; booking/quote cost tetap original; satu allocation `offer_shipping` tanpa item; pickup/ongkir0 disabled.
+- Seed demo publik cap20000 + manual `ONGKIRHEMAT`; migrasi generated 0051 diterapkan ke DB disposable; docs feature/API/testing/seeding diperbarui.
+- Evidence: types store/admin PASS, db:check PASS, batch unit 144 files/1685 passed/13 skipped, shipping DB T 2 passed, provider H 3 passed, checkout-review mock 20 passed (public+manual+pickup+swap+stale), admin mock 6 passed, delivery/coupon regresi 18 passed. Gate akhir 0.
+- Gap: live provider/UAT/rollout, legacy `test:e2e`, billed cost evidence. Tanpa commit/push/remote/deploy.
+
+## Ticket 12 resolved — pemakaian, privacy, kapasitas
+
+- Baru `discount-operations-read.ts` + `discount-usage-drift.ts`: agregat global
+  consumed/held/available (`basis:"global"`), entries Redemption ter-scope
+  Orders dengan pagination/filter/entryId, masking kode, drift terarah, dan
+  histori beratribusi aman (fallback receipt setelah FK user NULL).
+- Admin: `USAGE_DRIFT_REVIEW` fail-closed pada publish/policy, penurunan
+  `perClientLimit` terhadap max komitmen per akun (indexed, Offer lock),
+  `capacitySummary` di detail, audit `actorIdentity`, `CODE_CONFLICT` stabil
+  untuk create kode yang sudah direservasi (termasuk arsip).
+- UI detail menampilkan kapasitas global, peringatan drift, tabel pemakaian +
+  filter/pagination/tautan order/badge review, histori aktor; route usage/history
+  hanya log count/scope/drift.
+- Bukti: types store/admin PASS, `db:check` PASS, batch unit **146 files /
+  1701 passed / 14 skipped**, E2E admin usage+admin **10 passed**, regresi coupon
+  **17 passed**, focused DB baru **11+1 skip** dan administrasi **18** PASS,
+  store pause/hold **15+1 skip** PASS. Gate akhir `0`, tanpa fixture sisa.
+- Gap: export diskon tidak ada; riwayat Offer tidak memuat referensi batch
+  price-change; drift per-Offer tanpa repair massal; UAT/rollout/aktivasi dan
+  live-provider tetap ticket 13/izin terpisah.
+
+## Ticket 13 claimed — integrasi dan kesiapan rilis (blocked external gates)
+
+- Cross-slice regression baru `discounts-integration.db.test.ts` (L+T): manual×
+  percentage + Markdown qty2/multi-line (alokasi12308/7692, snapshot L==order,
+  consume), public fixed (15385/9615), manual shipping delivery (original/subsidi/
+  net/quote/payable), publish revisi & pause setelah preview tanpa order/usage
+  parsial. E2E `discounts-coupon-mock` menambah kasus manual×percentage browser
+  (total149850, benefit/allocation/provider15000).
+- Evidence: types store/admin PASS; batch unit **147 file pass/2 skip, 1706 test
+  pass/15 skip**; mock E2E coupon12, admin10, checkout-review+markdown25 PASS;
+  db:check/build store+admin PASS; focused lint PASS.
+- Rehearsal disposable: 52 migrasi, seed ×2, reset55→0, gate0, 0 bare timestamp,
+  81 FK; `SEED_MODE=jubelio` tanpa transactional dummy; production seed ditolak.
+- Perbaikan deployment: `CHECKOUT_TRUST_PROXY="true"` store di compose staging/
+  production (sebelumnya production fail-closed 503). Docs cutover baru + testing
+  README. Register 40 ID: `.scratch/discounts-implementation/evidence-register.md`.
+- Gap/blocked: UAT staging+sign-off, standard `test:e2e` live-provider (izin),
+  deployment/rollback rehearsal target, keputusan hapus legacy voucher route,
+  aktivasi gate1/rilis. Gate tetap0; tanpa deploy/provider write/commit.
+
+### Ticket 13 follow-up — legacy voucher cutover (keputusan pemilik: hapus)
+
+- Dihapus: route `/api/vouchers/validate`, `lib/vouchers`+test, docs
+  `features/vouchers.md`, entri API reference, blok seed voucher, test voucher
+  E2E legacy, dan `voucherId` DTO admin. Endpoint 404, tanpa consumer/fallback
+  subtotal; tabel `voucher`/`orders.voucher_id` inert menunggu migrasi destruktif
+  terpisah. Checkbox preflight + writer-gate tiket 13 kini tercentang.
+- Re-validasi dengan `DATABASE_URL` disposable eksplisit: types store/admin PASS,
+  batch unit **148 file pass / 1703 pass / 12 skip**, build store+admin PASS,
+  seed demo disposable PASS (voucher rows0, gate0).
+- Insiden: `.env` root berubah eksternal ke `storefront`+`SEED_MODE=jubelio`;
+  satu `db:seed` mengenai DB dev storefront sebelum diketahui (2 client/2 user,
+  no katalog). Tidak di-reset; run yang memakai DB non-disposable ditolak guard
+  dan tidak dipakai sebagai evidence. Recovery menunggu keputusan pemilik.

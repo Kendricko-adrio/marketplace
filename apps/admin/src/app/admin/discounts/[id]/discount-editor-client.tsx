@@ -47,7 +47,12 @@ interface Benefit {
   id: string;
   kind: string;
   scope: string;
-  fixedAmount: string;
+  /** NULL untuk percentage_goods. */
+  fixedAmount: string | null;
+  /** NULL untuk fixed_goods. */
+  rate: string | null;
+  /** NULL = percentage tanpa cap. */
+  capAmount: string | null;
   paramsVersion: number;
 }
 
@@ -75,6 +80,17 @@ interface Usage {
   updatedAt: string;
 }
 
+interface CodeLabel {
+  id: string;
+  maskedCode: string;
+  code?: string;
+  state: "active" | "inactive" | "archived";
+  version: number;
+  publishedAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 interface Detail {
   id: string;
   key: string;
@@ -91,6 +107,8 @@ interface Detail {
   updatedAt: string;
   liveRevision: Revision | null;
   draftRevision: Revision | null;
+  codes: CodeLabel[];
+  codeLiteralVisible: boolean;
   usage: Usage | null;
 }
 
@@ -135,7 +153,10 @@ interface SimulationResult {
   offerId: string;
   draftRevisionId: string;
   draftVersion: number;
-  benefit: { kind: string; paramsVersion: number; fixedAmount: string };
+  benefit:
+    | { kind: "fixed_goods"; paramsVersion: number; fixedAmount: string }
+    | { kind: "percentage_goods"; paramsVersion: number; rate: string; capAmount: string | null }
+    | { kind: "shipping"; paramsVersion: number; capAmount: string };
   applied: boolean;
   eligible: boolean;
   minSubtotal: string;
@@ -156,6 +177,31 @@ interface SimulationResult {
   notice: string;
 }
 
+interface UsageEntry {
+  id: string;
+  orderId: string;
+  status: "reserved" | "consumed" | "released";
+  activationKind: "public" | "manual_only";
+  codeId: string | null;
+  maskedCode: string | null;
+  benefitAmount: string;
+  revisionNo: number;
+  policyVersion: number;
+  branch: { id: string; name: string } | null;
+  customer: { id: string; name: string | null } | null;
+  order: {
+    status: string;
+    paymentStatus: string;
+    fulfillmentMethod: string;
+    fulfillmentBlocked: boolean;
+    fulfillmentBlockedReason: string | null;
+  };
+  review: { latePaidReview: boolean };
+  reservedAt: string;
+  consumedAt: string | null;
+  releasedAt: string | null;
+}
+
 interface UsageResult {
   offerId: string;
   capacity: {
@@ -164,15 +210,64 @@ interface UsageResult {
     perClientLimit: number;
   };
   usage: Usage | null;
-  remaining: { count: number | null; amount: string | null };
+  availability: {
+    basis: "global";
+    consumedCount: number;
+    heldCount: number;
+    consumedAmount: string;
+    heldAmount: string;
+    availableCount: number | null;
+    availableAmount: string | null;
+  };
+  drift: {
+    detected: boolean;
+    action: "review_required" | null;
+    mismatched: string[];
+    projection: {
+      reservedCount: number;
+      consumedCount: number;
+      reservedAmount: string;
+      consumedAmount: string;
+    };
+    ledger: {
+      reservedCount: number;
+      consumedCount: number;
+      reservedAmount: string;
+      consumedAmount: string;
+    };
+  };
+  entriesAccess: "aggregate_only" | "scoped";
+  scope: { mode: "all" } | { mode: "own"; branchId: string } | null;
+  entries: {
+    items: UsageEntry[];
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  } | null;
   note: string;
 }
 
 interface HistoryEntry {
   id: string;
   action: string;
-  actorId: string | null;
+  entityType: string;
+  entityId: string | null;
   policyVersion: number | null;
+  actor: {
+    id: string | null;
+    identity: string | null;
+    label: string | null;
+    available: boolean;
+  };
+  references: {
+    revisionId: string | null;
+    revisionNo: number | null;
+    draftRevisionId: string | null;
+    draftVersion: number | null;
+    codeId: string | null;
+    maskedCode: string | null;
+  };
   changes: unknown;
   createdAt: string;
 }
@@ -207,6 +302,12 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
   return body.data as T;
 }
+
+const CODE_STATE_LABEL: Record<CodeLabel["state"], string> = {
+  active: "Aktif",
+  inactive: "Nonaktif",
+  archived: "Arsip",
+};
 
 const STATE_LABEL: Record<Detail["state"], string> = {
   draft: "Draft",
@@ -279,6 +380,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
 
   const [detail, setDetail] = useState<Detail | null>(null);
   const [usage, setUsage] = useState<UsageResult | null>(null);
+  const [usageStatus, setUsageStatus] = useState("");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -289,7 +391,13 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
     minSubtotal: "0",
     startAt: "",
     endAt: "",
+    benefitKind: "fixed_goods" as
+      | "fixed_goods"
+      | "percentage_goods"
+      | "shipping",
     fixedAmount: "",
+    rate: "",
+    capAmount: "",
   });
   const [capacityForm, setCapacityForm] = useState({
     quota: "",
@@ -305,29 +413,42 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
   });
   const [simulation, setSimulation] = useState<SimulationResult | null>(null);
   const [review, setReview] = useState<ReviewResult | null>(null);
+  const [newCode, setNewCode] = useState("");
   const [confirm, setConfirm] = useState<{
     state: "enabled" | "paused" | "archived";
     title: string;
     description: string;
   } | null>(null);
 
+  const loadUsage = useCallback(
+    async (page: number, status: string) => {
+      const params = new URLSearchParams({ page: String(page), limit: "20" });
+      if (status) params.set("status", status);
+      const nextUsage = await request<UsageResult>(
+        `/api/admin/discounts/${offerId}/usage?${params.toString()}`
+      );
+      setUsage(nextUsage);
+    },
+    [offerId]
+  );
+
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [nextDetail, nextUsage, nextHistory] = await Promise.all([
+      const [nextDetail, nextHistory] = await Promise.all([
         request<Detail>(`/api/admin/discounts/${offerId}`),
-        request<UsageResult>(`/api/admin/discounts/${offerId}/usage`),
         request<HistoryEntry[]>(`/api/admin/discounts/${offerId}/history`),
       ]);
       setDetail(nextDetail);
-      setUsage(nextUsage);
       setHistory(nextHistory);
+      await loadUsage(1, "");
+      setUsageStatus("");
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "Gagal memuat offer");
     } finally {
       setLoading(false);
     }
-  }, [offerId]);
+  }, [offerId, loadUsage]);
 
   useEffect(() => {
     void load();
@@ -343,7 +464,15 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
       minSubtotal: source?.minSubtotal ?? "0",
       startAt: toWibInput(source?.startAt),
       endAt: toWibInput(source?.endAt),
+      benefitKind:
+        source?.benefit?.kind === "percentage_goods"
+          ? "percentage_goods"
+          : source?.benefit?.kind === "shipping"
+            ? "shipping"
+            : "fixed_goods",
       fixedAmount: source?.benefit?.fixedAmount ?? "",
+      rate: source?.benefit?.rate ?? "",
+      capAmount: source?.benefit?.capAmount ?? "",
     });
     setCapacityForm({
       quota: detail.quotaCount === null ? "" : String(detail.quotaCount),
@@ -383,11 +512,27 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
             minSubtotal: draftForm.minSubtotal,
             startAt: fromWibInput(draftForm.startAt),
             endAt: fromWibInput(draftForm.endAt),
-            benefit: {
-              kind: "fixed_goods",
-              paramsVersion: 1,
-              fixedAmount: draftForm.fixedAmount,
-            },
+            // Hanya field milik kind terpilih yang dikirim: server menolak
+            // campuran fixed+percentage, bukan mengabaikannya.
+            benefit:
+              draftForm.benefitKind === "percentage_goods"
+                ? {
+                    kind: "percentage_goods",
+                    paramsVersion: 1,
+                    rate: draftForm.rate,
+                    capAmount: draftForm.capAmount === "" ? null : draftForm.capAmount,
+                  }
+                : draftForm.benefitKind === "shipping"
+                  ? {
+                      kind: "shipping",
+                      paramsVersion: 1,
+                      capAmount: draftForm.capAmount,
+                    }
+                  : {
+                      kind: "fixed_goods",
+                      paramsVersion: 1,
+                      fixedAmount: draftForm.fixedAmount,
+                    },
           },
         }),
       });
@@ -472,6 +617,52 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
       });
       toast.success("Offer dipublikasikan");
       setReview(null);
+      await load();
+    });
+  }
+
+  /**
+   * Reservasi canonical terjadi di transaksi add-code; mengetik di input tidak
+   * pernah menulis kode. Request key + expectedOfferVersion menjaga lost
+   * response tidak menggandakan code/audit atau menimpa edit stale.
+   */
+  async function addManualCode(): Promise<void> {
+    if (!detail) return;
+    const code = newCode.trim();
+    if (code.length < 3) return;
+    await run("code-add", async () => {
+      await request<Detail>(`/api/admin/discounts/${offerId}/codes`, {
+        method: "POST",
+        body: JSON.stringify({
+          requestKey: crypto.randomUUID(),
+          code,
+          expectedOfferVersion: detail.version,
+        }),
+      });
+      toast.success("Kode manual ditambahkan");
+      setNewCode("");
+      await load();
+    });
+  }
+
+  async function changeCodeState(
+    code: CodeLabel,
+    state: "active" | "inactive" | "archived"
+  ): Promise<void> {
+    if (!detail) return;
+    await run(`code-${code.id}`, async () => {
+      await request<Detail>(
+        `/api/admin/discounts/${offerId}/codes/${code.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({
+            expectedOfferVersion: detail.version,
+            expectedCodeVersion: code.version,
+            state,
+          }),
+        }
+      );
+      toast.success(`Status kode: ${CODE_STATE_LABEL[state]}`);
       await load();
     });
   }
@@ -658,6 +849,35 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                 />
               </div>
               <div className="space-y-2">
+                <Label htmlFor="offer-benefit-kind">Jenis benefit</Label>
+                <Select
+                  value={draftForm.benefitKind}
+                  disabled={!canEdit || busy !== null}
+                  onValueChange={(value) =>
+                    setDraftForm((current) => ({
+                      ...current,
+                      benefitKind:
+                        value === "percentage_goods"
+                          ? "percentage_goods"
+                          : value === "shipping"
+                            ? "shipping"
+                            : "fixed_goods",
+                    }))
+                  }
+                >
+                  <SelectTrigger id="offer-benefit-kind">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="fixed_goods">Nominal tetap (Rp)</SelectItem>
+                    <SelectItem value="percentage_goods">Persentase barang</SelectItem>
+                    <SelectItem value="shipping">Subsidi ongkir (cap Rp)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {draftForm.benefitKind === "fixed_goods" ? (
+              <div className="space-y-2">
                 <Label htmlFor="offer-fixed">Nominal fixed-goods (Rp)</Label>
                 <Input
                   id="offer-fixed"
@@ -672,8 +892,75 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                   }
                   placeholder="17000"
                 />
+                <p className="text-xs text-muted-foreground">
+                  Sekali per order, di-clip ke subtotal setelah Markdown.
+                </p>
               </div>
-            </div>
+            ) : draftForm.benefitKind === "shipping" ? (
+              <div className="space-y-2">
+                <Label htmlFor="offer-shipping-cap">Cap subsidi ongkir (Rp)</Label>
+                <Input
+                  id="offer-shipping-cap"
+                  inputMode="numeric"
+                  value={draftForm.capAmount}
+                  disabled={!canEdit || busy !== null}
+                  onChange={(event) =>
+                    setDraftForm((current) => ({
+                      ...current,
+                      capAmount: event.target.value,
+                    }))
+                  }
+                  placeholder="20000"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Wajib positif. Subsidi = min(ongkir sebelum subsidi, cap);
+                  hanya delivery dengan ongkir positif, sisa hangus, tanpa
+                  pembatasan kurir.
+                </p>
+              </div>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="offer-rate">Persentase (%)</Label>
+                  <Input
+                    id="offer-rate"
+                    inputMode="decimal"
+                    value={draftForm.rate}
+                    disabled={!canEdit || busy !== null}
+                    onChange={(event) =>
+                      setDraftForm((current) => ({
+                        ...current,
+                        rate: event.target.value,
+                      }))
+                    }
+                    placeholder="10"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    &gt;0 sampai 100, maksimal 6 digit pecahan. Benefit
+                    dibulatkan floor dari subtotal setelah Markdown.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="offer-cap">Cap (Rp, opsional)</Label>
+                  <Input
+                    id="offer-cap"
+                    inputMode="numeric"
+                    value={draftForm.capAmount}
+                    disabled={!canEdit || busy !== null}
+                    onChange={(event) =>
+                      setDraftForm((current) => ({
+                        ...current,
+                        capAmount: event.target.value,
+                      }))
+                    }
+                    placeholder="Kosongkan jika tanpa cap"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Cap berlaku sekali per order, bukan per baris/unit.
+                  </p>
+                </div>
+              </div>
+            )}
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="offer-start">Mulai (WIB, inklusif)</Label>
@@ -707,8 +994,8 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              Hanya benefit fixed-goods publik yang didukung. Percentage,
-              subsidi ongkir, dan kode manual belum tersedia.
+              Benefit goods version1: nominal tetap atau persentase dengan cap
+              opsional. Subsidi ongkir dan kode manual dikelola terpisah.
             </p>
             {canEdit ? (
               <Button onClick={() => void saveDraft()} disabled={busy !== null}>
@@ -805,20 +1092,191 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
 
             {usage ? (
               <div className="rounded-md border p-3 text-sm">
-                <p className="font-medium">Proyeksi usage</p>
+                <p className="font-medium">Kapasitas global (otoritas)</p>
                 <p className="text-muted-foreground">
-                  reserved {usage.usage?.reservedCount ?? 0} · consumed{" "}
-                  {usage.usage?.consumedCount ?? 0} · sisa{" "}
-                  {usage.remaining.count ?? "∞"} pemakaian
+                  consumed {usage.availability.consumedCount} · held{" "}
+                  {usage.availability.heldCount} · tersedia{" "}
+                  {usage.availability.availableCount ?? "∞"} pemakaian
                 </p>
                 <p className="text-muted-foreground">
-                  Amount: reserved {rupiah(usage.usage?.reservedAmount ?? "0")} ·
-                  consumed {rupiah(usage.usage?.consumedAmount ?? "0")} · sisa{" "}
-                  {usage.remaining.amount === null
+                  Amount: consumed {rupiah(usage.availability.consumedAmount)} ·
+                  held {rupiah(usage.availability.heldAmount)} · tersedia{" "}
+                  {usage.availability.availableAmount === null
                     ? "∞"
-                    : rupiah(usage.remaining.amount)}
+                    : rupiah(usage.availability.availableAmount)}
                 </p>
+                {usage.drift.detected ? (
+                  <p className="mt-2 rounded-md border border-amber-500/60 bg-amber-50 p-2 text-xs text-amber-900">
+                    Projection drift terdeteksi ({usage.drift.mismatched.join(", ")}
+                    ). Mutasi kapasitas/publish ditahan untuk review; tidak ada
+                    reset/rebuild otomatis. Hentikan penggunaan baru dengan pause
+                    bila perlu.
+                  </p>
+                ) : null}
                 <p className="mt-1 text-xs text-muted-foreground">{usage.note}</p>
+              </div>
+            ) : null}
+
+            {usage ? (
+              <div className="space-y-3 rounded-md border p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="font-medium">
+                      Pemakaian redemption{" "}
+                      {usage.entriesAccess === "aggregate_only"
+                        ? "(agregat saja)"
+                        : usage.scope?.mode === "own"
+                          ? "(cabang Anda)"
+                          : "(semua cabang)"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Global consumed/held di atas tidak sama dengan total daftar
+                      yang di-scope.
+                    </p>
+                  </div>
+                  <select
+                    aria-label="Filter status pemakaian"
+                    className="h-9 rounded-md border bg-background px-2 text-sm"
+                    value={usageStatus}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setUsageStatus(next);
+                      void loadUsage(1, next);
+                    }}
+                  >
+                    <option value="">Semua status</option>
+                    <option value="reserved">Reserved</option>
+                    <option value="consumed">Consumed</option>
+                    <option value="released">Released</option>
+                  </select>
+                </div>
+
+                {usage.entries === null ? (
+                  <p className="text-sm text-muted-foreground">
+                    Anda tidak memiliki grant Orders:view, jadi hanya agregat
+                    global yang ditampilkan — tanpa identitas order/customer.
+                  </p>
+                ) : usage.entries.items.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Tidak ada redemption pada filter ini.
+                  </p>
+                ) : (
+                  <>
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Order</TableHead>
+                            <TableHead>Cabang</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Benefit</TableHead>
+                            <TableHead>Kode</TableHead>
+                            <TableHead>Review</TableHead>
+                            <TableHead>Waktu</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {usage.entries.items.map((entry) => (
+                            <TableRow key={entry.id}>
+                              <TableCell>
+                                <Link
+                                  className="font-medium underline-offset-4 hover:underline"
+                                  href={`/admin/orders/${entry.orderId}`}
+                                >
+                                  {entry.orderId.slice(0, 8)}
+                                </Link>
+                                <p className="text-xs text-muted-foreground">
+                                  {entry.order.status} · {entry.order.paymentStatus}{" "}
+                                  · {entry.order.fulfillmentMethod}
+                                </p>
+                              </TableCell>
+                              <TableCell>
+                                {entry.branch?.name ?? "—"}
+                                {entry.customer ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    {entry.customer.name ?? "Customer"}
+                                  </p>
+                                ) : null}
+                              </TableCell>
+                              <TableCell>{entry.status}</TableCell>
+                              <TableCell>
+                                {rupiah(entry.benefitAmount)}
+                                <p className="text-xs text-muted-foreground">
+                                  rev {entry.revisionNo} · policy v
+                                  {entry.policyVersion}
+                                </p>
+                              </TableCell>
+                              <TableCell>
+                                {entry.maskedCode ?? "—"}
+                                <p className="text-xs text-muted-foreground">
+                                  {entry.activationKind}
+                                </p>
+                              </TableCell>
+                              <TableCell>
+                                {entry.review.latePaidReview ? (
+                                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-900">
+                                    late paid review
+                                  </span>
+                                ) : null}
+                                {entry.order.fulfillmentBlocked ? (
+                                  <span className="ml-1 rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-900">
+                                    fulfillment blocked
+                                  </span>
+                                ) : null}
+                                {!entry.review.latePaidReview &&
+                                !entry.order.fulfillmentBlocked
+                                  ? "—"
+                                  : null}
+                              </TableCell>
+                              <TableCell className="text-xs text-muted-foreground">
+                                reserved {formatDate(entry.reservedAt)}
+                                {entry.consumedAt
+                                  ? ` · consumed ${formatDate(entry.consumedAt)}`
+                                  : ""}
+                                {entry.releasedAt
+                                  ? ` · released ${formatDate(entry.releasedAt)}`
+                                  : ""}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>
+                        {usage.entries.total} entry · halaman{" "}
+                        {usage.entries.page}/{Math.max(1, usage.entries.totalPages)}
+                      </span>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={usage.entries.page <= 1 || busy !== null}
+                          onClick={() => {
+                            const next = usage.entries!.page - 1;
+                            void loadUsage(next, usageStatus);
+                          }}
+                        >
+                          Sebelumnya
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={
+                            usage.entries.page >= usage.entries.totalPages ||
+                            busy !== null
+                          }
+                          onClick={() => {
+                            const next = usage.entries!.page + 1;
+                            void loadUsage(next, usageStatus);
+                          }}
+                        >
+                          Berikutnya
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             ) : null}
           </CardContent>
@@ -926,7 +1384,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
           </Button>
           {!detail.draftRevision ? (
             <p className="text-sm text-muted-foreground">
-              Simpan draft dengan benefit fixed-goods terlebih dahulu.
+              Simpan draft dengan benefit goods terlebih dahulu.
             </p>
           ) : null}
 
@@ -936,7 +1394,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                 <p className="font-medium">
                   {simulation.applied
                     ? "Benefit diterapkan"
-                    : "Tidak memenuhi minimum — benefit tidak diterapkan"}
+                    : "Tidak diterapkan (minimum belum terpenuhi atau benefit Rp0)"}
                 </p>
                 <div className="mt-2 grid gap-1 sm:grid-cols-2">
                   <span>Subtotal: {rupiah(simulation.breakdown.subtotal)}</span>
@@ -944,6 +1402,12 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                     Diskon barang: {rupiah(simulation.breakdown.goodsDiscount)}
                   </span>
                   <span>Net barang: {rupiah(simulation.breakdown.netGoods)}</span>
+                  <span>
+                    Ongkir asli: {rupiah(simulation.breakdown.shippingBeforeSubsidy)}
+                  </span>
+                  <span>
+                    Subsidi ongkir: {rupiah(simulation.breakdown.shippingSubsidy)}
+                  </span>
                   <span>
                     Ongkir net: {rupiah(simulation.breakdown.shippingNet)}
                   </span>
@@ -1085,12 +1549,132 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
         </CardContent>
       </Card>
 
+      {detail.activationKind === "manual_only" ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Kode manual</CardTitle>
+            <CardDescription>
+              Literal kode direservasi saat transaksi berhasil dan tidak dapat
+              diubah atau dipindah ke Offer lain. Semua kode berbagi quota,
+              budget, dan jatah akun Offer ini; viewer hanya melihat label
+              masked.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {detail.codeLiteralVisible ? (
+              <form
+                className="flex flex-wrap items-end gap-2"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void addManualCode();
+                }}
+              >
+                <div className="space-y-2">
+                  <Label htmlFor="new-code">Tambah kode</Label>
+                  <Input
+                    id="new-code"
+                    value={newCode}
+                    disabled={!canEdit || busy !== null}
+                    onChange={(event) => setNewCode(event.target.value)}
+                    maxLength={64}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder="HEMAT17AGUSTUS"
+                    className="w-64 font-mono uppercase"
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  disabled={!canEdit || busy !== null || newCode.trim().length < 3}
+                >
+                  {busy === "code-add" ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : null}
+                  Tambah
+                </Button>
+              </form>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Anda hanya dapat melihat label masked. Literal kode hanya untuk
+                promo editor.
+              </p>
+            )}
+            {detail.codes.length === 0 ? (
+              <p className="text-sm text-muted-foreground">Belum ada kode.</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Kode</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Aksi</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {detail.codes.map((code) => (
+                    <TableRow key={code.id}>
+                      <TableCell className="font-mono text-xs">
+                        {detail.codeLiteralVisible && code.code
+                          ? code.code
+                          : code.maskedCode}
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={code.state === "active" ? "default" : "secondary"}>
+                          {CODE_STATE_LABEL[code.state]}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {canEdit && detail.codeLiteralVisible ? (
+                          <div className="flex justify-end gap-1">
+                            {code.state === "active" ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={busy !== null}
+                                onClick={() => void changeCodeState(code, "inactive")}
+                              >
+                                Nonaktifkan
+                              </Button>
+                            ) : null}
+                            {code.state === "inactive" ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={busy !== null}
+                                onClick={() => void changeCodeState(code, "active")}
+                              >
+                                Aktifkan
+                              </Button>
+                            ) : null}
+                            {code.state !== "archived" ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={busy !== null}
+                                onClick={() => void changeCodeState(code, "archived")}
+                              >
+                                Arsipkan
+                              </Button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle>Histori audit</CardTitle>
           <CardDescription>
-            Immutable: draft, publish, status, dan perubahan kapasitas tercatat
-            dengan policy version saat aksi terjadi.
+            Immutable: draft, publish, status, dan perubahan kapasitas/kode
+            tercatat dengan revision, policy version, dan aktor saat aksi
+            terjadi. Literal kode tidak pernah ditulis ke histori.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -1101,15 +1685,38 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
               {history.map((entry) => (
                 <li
                   key={entry.id}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border p-3 text-sm"
+                  className="space-y-1 rounded-md border p-3 text-sm"
                 >
-                  <span className="font-medium">
-                    {HISTORY_LABEL[entry.action] ?? entry.action}
-                  </span>
-                  <span className="text-muted-foreground">
-                    {formatDate(entry.createdAt)} · policy v
-                    {entry.policyVersion ?? "—"}
-                  </span>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium">
+                      {HISTORY_LABEL[entry.action] ?? entry.action}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {formatDate(entry.createdAt)} · policy v
+                      {entry.policyVersion ?? "—"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Aktor:{" "}
+                    {entry.actor.available
+                      ? entry.actor.label ?? entry.actor.identity ?? "—"
+                      : `tidak tersedia (${entry.actor.identity ?? "unknown"})`}
+                  </p>
+                  {entry.references.revisionId ||
+                  entry.references.draftRevisionId ||
+                  entry.references.codeId ? (
+                    <p className="text-xs text-muted-foreground">
+                      {entry.references.revisionNo !== null
+                        ? `revision ${entry.references.revisionNo} · `
+                        : ""}
+                      {entry.references.draftVersion !== null
+                        ? `draft v${entry.references.draftVersion} · `
+                        : ""}
+                      {entry.references.codeId
+                        ? `kode ${entry.references.maskedCode ?? entry.references.codeId}`
+                        : ""}
+                    </p>
+                  ) : null}
                 </li>
               ))}
             </ul>

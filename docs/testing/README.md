@@ -9,6 +9,55 @@ Unit and E2E test infrastructure for the marketplace monorepo.
 
 Run everything from the repo root.
 
+## Lokasi output Playwright
+
+Seluruh report dan dump browser sementara berada di `playwright/` pada root
+repo. Folder ini di-ignore Git; config dan test specs tetap tracked.
+
+| Output | Lokasi |
+|---|---|
+| HTML report standard / mock | `playwright/reports/default/` / `playwright/reports/mock/` |
+| Error context Markdown, trace, screenshot, video standard / mock | `playwright/results/default/` / `playwright/results/mock/` |
+| Dump manual agent / Playwright MCP | `playwright/mcp/` (boleh subfolder per run) |
+| Blob atau custom report opsional | `playwright/blob/<run>/` atau `playwright/reports/<run>/` |
+| Hasil lama yang asal standard/mock-nya tidak dapat dipastikan | `playwright/results/legacy/` |
+
+Config standard dan mock menggunakan `outputDir` terpisah agar cleanup hasil
+satu mode tidak menghapus hasil mode lainnya. Run bersamaan dalam mode yang
+sama tetap membutuhkan `--output=playwright/results/<run>` dan reporter output
+terpisah; pemisahan ini tidak mengizinkan berbagi fixture DB antar run.
+
+```bash
+npm run test:e2e:report       # HTML standard
+npm run test:e2e:report:mock  # HTML mock
+npm run test:playwright-artifacts  # regression config/path, tanpa browser/DB/server
+```
+
+Jika memakai blob/custom reporter, arahkan output-nya ke lokasi pada tabel;
+izin menjalankan suite tetap mengikuti aturan testing/provider yang berlaku.
+`--reporter=line` tidak menghasilkan HTML
+report baru, jadi report HTML existing bukan bukti run terbaru.
+
+Playwright MCP pada `.pi/mcp.json` menggunakan `--output-dir playwright/mcp`
+untuk output dengan nama otomatis. **Filename eksplisit relatif terhadap root
+workspace**, bukan output-dir: misalnya gunakan
+`playwright/mcp/discounts-review/snapshot.md`, bukan `snapshot.md` di root.
+Perubahan konfigurasi MCP berlaku setelah server dimulai ulang/reconnect pada
+sesi berikutnya; untuk server yang masih aktif, selalu berikan path eksplisit
+terpusat. Jangan force-add dump. Simpan ringkasan bukti yang perlu bertahan di
+`docs/` atau `.scratch/<feature>/`, bukan mengandalkan artifact yang bisa tertimpa.
+
+Storage state `e2e/.auth/` dan raw stdout logging fixture di temporary directory
+sistem mempertahankan kontrak existing; keduanya bukan folder report baru di
+root repo. Saat Playwright gagal, diagnosis dari Markdown/teks, bukan gambar.
+
+Referensi API yang dikonfirmasi melalui Context7: `/microsoft/playwright`
+([outputDir](https://playwright.dev/docs/api/class-testconfig#test-config-output-dir),
+[HTML outputFolder](https://playwright.dev/docs/test-reporters#html-reporter),
+[show-report](https://playwright.dev/docs/test-cli#show-report)) dan
+`/microsoft/playwright-mcp`
+([output-dir dan filename eksplisit](https://github.com/microsoft/playwright-mcp#configuration)).
+
 ## Mock-only pickup lifecycle (delivery implementation ticket 01)
 
 Run `npx playwright test --config=playwright.mock.config.ts` against a disposable,
@@ -601,7 +650,7 @@ Use `--headed`, `--ui`, or `--debug` to watch the browser do the work.
 ## Verification ladder
 
 Policy lives in [`AGENTS.md`](../../AGENTS.md) §5; this section is the operational
-how-to for multi-ticket work such as [discounts implementation](../../.scratch/discounts-implementation/map.md).
+how-to for multi-ticket work such as [discounts implementation](../../.scratch/discounts/ticket/map.md).
 The ladder separates *cheap, frequent* signal from *expensive* suites so a batch of
 tickets does not re-run the whole repository after every slice.
 

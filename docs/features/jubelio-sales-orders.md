@@ -2,7 +2,7 @@
 
 The storefront checks out through **Jubelio Sales Orders** for every new
 order. Inventory adjustments are retired from the runtime paths (plan:
-`plan/jubelio-sales-api-switching.md`). This document is the implemented
+`.scratch/jubelio-sales-api-switching/plan/jubelio-sales-api-switching.md`). This document is the implemented
 behavior plus the sandbox-observed provider contract. For pickup, the SO,
 invoice and Jubelio payment contain only goods (zero discount, item/SO tax
 and shipping); the website and Midtrans include website PPN on goods. For

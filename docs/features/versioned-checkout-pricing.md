@@ -9,8 +9,8 @@ Cakupan yang **tidak** ada di sini: Offer/Coupon, Markdown, Manual Promo Code,
 dan hasil UAT/release. Review checkout (token/fingerprint), request key/replay,
 result lookup, dan admission rate-limit dibahas pada §12. Semua itu ticket
 berikutnya pada
-[peta implementasi diskon](../../.scratch/discounts-implementation/map.md) dan
-[spec lengkap §4/§8.3/§10/§13](../../plan/discounts-spec.md). Dokumen ini tidak
+[peta implementasi diskon](../../.scratch/discounts/ticket/map.md) dan
+[spec lengkap §4/§8.3/§10/§13](../../.scratch/discounts/plan/discounts-spec.md). Dokumen ini tidak
 menyatakan satu pun acceptance ticket sudah lulus.
 
 ## 1. Gate versi kontrak

@@ -124,7 +124,7 @@ These are gaps in the **PDF**, not additional contractual requirements:
 4. Confirm cancellation rules, status transition semantics, webhook signature algorithm and event retry/ordering with signed sandbox samples. [PDF pp. 4–9, 19–21]
 5. This PDF has **no endpoint for shipping-label generation**; any label route found in a plugin or other documentation is not established by this contract. [PDF contents p. 1, endpoint sections pp. 1–21]
 
-Related: [`docs/jubelio-api/README.md`](README.md) (Omnichannel spec index), [`plan/research/pengiriman-ke-rumah-jubelio.md`](../../plan/research/pengiriman-ke-rumah-jubelio.md) (earlier research written before this PDF was available; its plugin-based endpoint and missing-contract claims should be re-evaluated against this contract).
+Related: [`docs/jubelio-api/README.md`](README.md) (Omnichannel spec index), [`.scratch/pengiriman-ke-rumah-jubelio/research/pengiriman-ke-rumah-jubelio.md`](../../.scratch/pengiriman-ke-rumah-jubelio/research/pengiriman-ke-rumah-jubelio.md) (earlier research written before this PDF was available; its plugin-based endpoint and missing-contract claims should be re-evaluated against this contract).
 
 ## Live verification notes (2026-09-27)
 

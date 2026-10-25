@@ -1,30 +1,48 @@
 # Issue tracker: Local Markdown
 
-Issues for wayfinding in this repo live as Markdown files in `.scratch/`. This tracker is separate from [`plan/index.md`](../../plan/index.md), which remains the source of truth for conceptual plan status. Publishing an actionable plan or implementation tickets still requires the approvals in [`AGENTS.md`](../../AGENTS.md) and [`development-workflow`](../../.agents/skills/development-workflow/SKILL.md).
+Tracker lokal menggunakan `.scratch/<feature>/`, sesuai
+[panduan artefak](../../.scratch/README.md). Tidak ada index status global.
+Status conceptual plan hanya ada pada `index.md` fitur; status setiap ticket
+hanya ada di file ticket. Publikasi spec dan breakdown mengikuti approval
+[`AGENTS.md`](../../AGENTS.md) dan
+[`development-workflow`](../../.agents/skills/development-workflow/SKILL.md).
 
-## Conventions
+## Lokasi
 
-- One effort per directory: `.scratch/<effort>/`.
-- The wayfinding map is `.scratch/<effort>/map.md`.
-- Child issues are `.scratch/<effort>/issues/NN-<slug>.md`, numbered from `01`.
-- A child carries `Type: research | prototype | grilling | task` and `Status: open | claimed | resolved`; its `Blocked by:` line lists the numbers of prerequisite children.
-- Comments and conversation history may be appended under `## Comments`. A decision answer belongs in the child, not duplicated in the map.
+| Artefak | Path dari root repo |
+|---|---|
+| Navigasi dan status plan | `.scratch/<feature>/index.md` |
+| Wayfinding map | `.scratch/<feature>/wayfinder/map.md` |
+| Decision ticket | `.scratch/<feature>/wayfinder/NN-<slug>.md` |
+| Implementation map | `.scratch/<feature>/ticket/map.md` |
+| Implementation ticket | `.scratch/<feature>/ticket/NN-<slug>.md` |
+| Research / spec | `.scratch/<feature>/research/` / `.scratch/<feature>/plan/` |
 
-## When a skill says "publish to the issue tracker"
+Kedua jenis ticket memiliki namespace nomor terpisah. Jangan membuat folder
+`<feature>-implementation`, `issues/`, atau tracker tambahan. Saat skill meminta
+"publish", tulis ke lokasi tahap yang sesuai setelah approval; saat meminta
+"fetch", baca named link/path ticket atau map tersebut. Tidak ada publikasi
+remote otomatis.
 
-Write the approved issue as a file under `.scratch/<effort>/`. Do not silently publish remotely or use `plan/index.md` as an issue tracker.
+## Metadata dan operasi
 
-## When a skill says "fetch the relevant ticket"
+- Pertahankan `Type: research | prototype | grilling | task`,
+  `Status: open | claimed | resolved`, `Assignee`, dan `Blocked by:`.
+- `Blocked by: NN, NN` mengacu pada ticket prerequisite dalam tahap yang sama.
+  Blocker lintas tahap/fitur harus memakai named link yang jelas, bukan nomor ambigu.
+- Ticket tanpa blocker (`none`/kosong) atau dengan seluruh blocker `resolved`
+  adalah unblocked. Frontier adalah ticket open, unblocked, unclaimed, urut nomor.
+- Temukan frontier dengan memindai ticket bernomor pada folder tahap terkait,
+  bukan seluruh Markdown (folder itu juga memuat map/handoff/evidence).
+- Claim: ubah `open` menjadi `claimed` sebelum bekerja. Resolve: tulis jawaban
+  atau hasil verifikasi di `## Answer`, lalu set `resolved` setelah gate lulus.
+- Map berlabel `wayfinder:map` atau `implementation:map` menyediakan navigasi.
+  Decision map memakai Destination, Notes, Decisions so far, Not yet specified,
+  dan Out of scope. Tautkan jawaban bernama dengan ringkasan satu baris, jangan
+  menduplikasi jawaban lengkap atau frontier status di map/index.
+- Percakapan dapat ditambahkan di `## Comments`. Jangan menganggap metadata lama
+  sebagai izin baru. Plan, decision ticket, dan implementation ticket memiliki
+  lifecycle berbeda; ticket `resolved` tidak otomatis menjadikan plan Done.
 
-Read its path under `.scratch/<effort>/issues/`; for a map, read `.scratch/<effort>/map.md`.
-
-## Wayfinding operations
-
-- **Map**: `.scratch/<effort>/map.md`, labelled `wayfinder:map`, with Destination, Notes, Decisions so far, Not yet specified, and Out of scope.
-- **Child**: `.scratch/<effort>/issues/NN-<slug>.md`, with a question, type, status, and parent map link. Child links and titles provide the identity; do not use bare issue numbers in human-facing summaries.
-- **Blocking**: `Blocked by: NN, NN` near the top of the child; absent/`none` means unblocked. A child is unblocked only when every listed child has `Status: resolved`.
-- **Frontier**: open, unblocked, unclaimed children, ordered by number. Open tickets are found by scanning `issues/`, not repeated in the map body.
-- **Claim**: change `Status: open` to `Status: claimed` before starting work, so another session skips it.
-- **Resolve**: append the answer under `## Answer`, set `Status: resolved`, then append a one-line gist and a named link to the map's Decisions so far. Record decisions in the child only; the map is an index.
-
-Research subagents, provider requests, sandbox writes, application changes, commits, and remote publication each remain subject to the repo's separate authorization rules; the presence of a ticket does not authorize them.
+Research subagents, provider requests, sandbox writes, application changes,
+commit, dan remote publication tetap membutuhkan izin sesuai aturan repo.

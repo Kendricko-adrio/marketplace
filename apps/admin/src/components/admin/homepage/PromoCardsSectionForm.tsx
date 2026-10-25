@@ -3,6 +3,7 @@ import { useState, useRef } from "react";
 import { Upload, Loader2, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type {
   PromoCardsContent,
@@ -134,13 +135,13 @@ export default function PromoCardsSectionForm({
       </div>
 
       {cards.length === 0 ? (
-        <div className="text-center py-8 border rounded-lg text-sm text-muted-foreground">
+        <div className="text-center py-8 border border-dashed rounded-lg bg-muted text-sm text-muted-foreground">
           Belum ada kartu. Klik &quot;Tambah Kartu&quot; untuk menambahkan.
         </div>
       ) : (
         <div className="space-y-4">
           {cards.map((card, index) => (
-            <div key={card.id} className="border rounded-lg p-4 space-y-3">
+            <div key={card.id} className="rounded-lg border bg-muted p-4 space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium">Kartu {index + 1}</span>
                 <Button
@@ -155,7 +156,7 @@ export default function PromoCardsSectionForm({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
-                <div className="border rounded-md p-2 space-y-2">
+                <div className="rounded-md border bg-card p-2 space-y-2">
                   {card.imageUrl ? (
                     <div className="relative h-24">
                       <Image
@@ -174,7 +175,7 @@ export default function PromoCardsSectionForm({
                       </button>
                     </div>
                   ) : (
-                    <div className="w-full h-24 bg-muted rounded flex items-center justify-center text-muted-foreground text-xs">
+                    <div className="w-full h-24 bg-card border border-dashed rounded flex items-center justify-center text-muted-foreground text-xs">
                       Belum ada gambar
                     </div>
                   )}
@@ -206,9 +207,11 @@ export default function PromoCardsSectionForm({
 
                 <div className="space-y-3">
                   <div className="space-y-1">
-                    <Label className="text-xs">Judul</Label>
-                    <input
-                      className="flex h-9 w-full rounded-md border border-input bg-field px-3 py-2 text-sm"
+                    <Label className="text-xs" htmlFor={`card-${card.id}-title`}>
+                      Judul
+                    </Label>
+                    <Input
+                      id={`card-${card.id}-title`}
                       value={card.title}
                       onChange={(e) => updateCardField(card.id, "title", e.target.value)}
                       placeholder="New Arrivals"
@@ -228,7 +231,7 @@ export default function PromoCardsSectionForm({
                         </button>
                       )}
                     </div>
-                    <div className="border rounded-md p-3 bg-muted/20">
+                    <div className="rounded-md border bg-card p-3">
                       <ProductFilterEditor
                         value={card.filter ?? {}}
                         onChange={(f) => updateCardFilter(card.id, f)}

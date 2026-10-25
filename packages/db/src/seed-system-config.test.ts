@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  discountContractSystemConfigSeedRows,
   discountImportSystemConfigSeedRows,
   shipmentSystemConfigSeedRows,
 } from "./seed-system-config";
@@ -15,6 +16,14 @@ describe("shipment system config seed", () => {
     expect(
       shipmentSystemConfigSeedRows.find((row) => row.key === "shipment.packagingWeightGrams")?.value
     ).toBe("15");
+  });
+});
+
+describe("discount contract system config seed", () => {
+  it("activates discount and price administration for seeded local databases", () => {
+    expect(discountContractSystemConfigSeedRows).toMatchObject([
+      { key: "discounts.contractVersion", value: "1", type: "number" },
+    ]);
   });
 });
 

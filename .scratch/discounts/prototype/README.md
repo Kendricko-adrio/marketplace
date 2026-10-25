@@ -1,7 +1,7 @@
 # Prototype Admin Diskon & Harga Coret
 
 Prototype executable **lokal dan terpisah** untuk menilai satu desain admin yang
-mengikuti keputusan [wireframe tiket 06](../wireframe-06-admin-discounts-and-authorization.md).
+mengikuti keputusan [wireframe tiket 06](../wayfinder/wireframe-06-admin-discounts-and-authorization.md).
 Bukan halaman dokumentasi statis: semua alur penting bisa diklik dan memberi
 feedback.
 

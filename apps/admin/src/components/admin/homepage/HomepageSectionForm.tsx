@@ -3,6 +3,14 @@ import { useEffect, useState } from "react";
 import { Loader2, Eye } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import {
@@ -63,6 +71,21 @@ interface StoreProductsResponse {
   success: boolean;
   data: StoreProduct[];
 }
+
+/**
+ * One short line per section type, rendered as the "Konten Section" card
+ * description. It says what the type actually needs from the admin, so the
+ * card header carries information instead of just repeating the field labels.
+ */
+const CONTENT_HINTS: Record<string, string> = {
+  banner: "Atur slide banner, teks tombol, dan tautan CTA.",
+  carousel_product: "Pilih produk secara manual atau pakai filter otomatis.",
+  promo_cards: "Atur kartu promosi beserta tautan filternya.",
+  announcement_bar: "Tulis pesan pengumuman dan pilih varian warnanya.",
+  store_banner: "Tidak ada konfigurasi tambahan untuk section ini.",
+};
+
+const DEFAULT_CONTENT_HINT = "Atur isi section ini.";
 
 export default function HomepageSectionForm({
   mode,
@@ -294,7 +317,7 @@ export default function HomepageSectionForm({
   }, [previewOpen, type]);
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-8">
+    <form onSubmit={handleSubmit} className="space-y-6">
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm text-muted-foreground">
           Mode: <span className="font-medium text-foreground">{mode === "create" ? "Buat baru" : "Edit"}</span>
@@ -311,62 +334,92 @@ export default function HomepageSectionForm({
       </div>
 
       {showTitleField && (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor="title">Judul</Label>
-            <input
-              id="title"
-              className="flex h-10 w-full rounded-md border border-input bg-field px-3 py-2 text-sm"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Judul section"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="subtitle">Subtitle</Label>
-            <input
-              id="subtitle"
-              className="flex h-10 w-full rounded-md border border-input bg-field px-3 py-2 text-sm"
-              value={subtitle}
-              onChange={(e) => setSubtitle(e.target.value)}
-              placeholder="Subtitle (opsional)"
-            />
-          </div>
-        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <h3>Informasi Section</h3>
+            </CardTitle>
+            <CardDescription>
+              Judul dan subtitle yang tampil di atas section.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="title">Judul</Label>
+              <Input
+                id="title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Judul section"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="subtitle">Subtitle</Label>
+              <Input
+                id="subtitle"
+                value={subtitle}
+                onChange={(e) => setSubtitle(e.target.value)}
+                placeholder="Subtitle (opsional)"
+              />
+            </div>
+          </CardContent>
+        </Card>
       )}
 
-      {type === "banner" && (
-        <BannerSectionForm
-          content={content as Record<string, unknown>}
-          onChange={setContent}
-        />
-      )}
-      {type === "carousel_product" && (
-        <CarouselProductSectionForm
-          content={content as Record<string, unknown>}
-          onChange={setContent}
-          selectedProductIds={productIds}
-          onSelectedIdsChange={setProductIds}
-        />
-      )}
-      {type === "promo_cards" && (
-        <PromoCardsSectionForm
-          content={content as Record<string, unknown>}
-          onChange={setContent}
-        />
-      )}
-      {type === "announcement_bar" && (
-        <AnnouncementBarSectionForm
-          content={content as Record<string, unknown>}
-          onChange={setContent}
-        />
-      )}
-      {type === "store_banner" && <StoreBannerSectionForm />}
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <h3>Konten Section</h3>
+          </CardTitle>
+          <CardDescription>
+            {CONTENT_HINTS[type] ?? DEFAULT_CONTENT_HINT}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {type === "banner" && (
+            <BannerSectionForm
+              content={content as Record<string, unknown>}
+              onChange={setContent}
+            />
+          )}
+          {type === "carousel_product" && (
+            <CarouselProductSectionForm
+              content={content as Record<string, unknown>}
+              onChange={setContent}
+              selectedProductIds={productIds}
+              onSelectedIdsChange={setProductIds}
+            />
+          )}
+          {type === "promo_cards" && (
+            <PromoCardsSectionForm
+              content={content as Record<string, unknown>}
+              onChange={setContent}
+            />
+          )}
+          {type === "announcement_bar" && (
+            <AnnouncementBarSectionForm
+              content={content as Record<string, unknown>}
+              onChange={setContent}
+            />
+          )}
+          {type === "store_banner" && <StoreBannerSectionForm />}
+        </CardContent>
+      </Card>
 
-      <div className="flex items-center gap-3 pt-4 border-t">
-        <Switch checked={isActive} onCheckedChange={setIsActive} id="isActive" />
-        <Label htmlFor="isActive">Aktif (tampilkan di homepage)</Label>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>
+            <h3>Status Section</h3>
+          </CardTitle>
+          <CardDescription>
+            Section nonaktif tidak tampil di storefront.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex items-center gap-3">
+          <Switch checked={isActive} onCheckedChange={setIsActive} id="isActive" />
+          <Label htmlFor="isActive">Aktif (tampilkan di homepage)</Label>
+        </CardContent>
+      </Card>
 
       {error && (
         <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-md">

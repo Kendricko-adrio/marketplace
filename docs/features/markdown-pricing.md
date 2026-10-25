@@ -349,6 +349,19 @@ revision 2). Seeder juga membuat satu batch bulk `staged` berisi 3 row `pending`
 tidak mengubah `product_variant.price`, supaya layar bulk punya data demo. Seed
 hanya untuk database disposable.
 
+Default seeder menetapkan `discounts.contractVersion="1"` melalui
+`packages/db/src/seed-system-config.ts`, sehingga pengelolaan harga dan kontrak
+diskon/checkout langsung aktif pada database seed lokal/demo, termasuk mode
+`jubelio`. Draft Offer tetap belum aktif sampai dipublish. Regression test
+berada di `packages/db/src/seed-system-config.test.ts`.
+
+Untuk database lokal yang sudah ada, ubah hanya baris konfigurasi tersebut menjadi
+`value='1', type='number'`; jangan menjalankan ulang seeder untuk aktivasi karena
+seeder menghapus dan membuat ulang data. Gate dibaca tanpa cache dan berlaku pada
+request berikutnya, tanpa restart. Aktivasi staging/production tetap memerlukan
+prasyarat dan approval pada [runbook cutover](../deployment-docs/discounts-cutover.md),
+bukan mengikuti default seeder lokal.
+
 ## 6. Checkout dan pembayaran
 
 - Preview pickup/delivery dan cart membangun pricing snapshot dengan

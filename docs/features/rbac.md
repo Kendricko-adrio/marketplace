@@ -8,7 +8,7 @@
 > map, and the `/api/admin/permissions` endpoints were all removed by the
 > slice-9 cutover (migration `0018`; deployment runbook:
 > `docs/deployment-docs/rbac-rollout.md`). The historical design notes live in
-> `docs/features/rbac-custom-roles-research.md`.
+> `.scratch/rbac/research/rbac-custom-roles-research.md`.
 
 ## Permission Catalog (code-owned)
 

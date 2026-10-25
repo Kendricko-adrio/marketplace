@@ -12,7 +12,7 @@ workspaces. Products, stock, and branch data are synced from **Jubelio**
 | `apps/store` | Storefront (customers) — http://localhost:3000 |
 | `apps/admin` | Admin dashboard (ops) — http://localhost:3001 |
 | `packages/db` | 🏛️ Shared schema owner (`@marketplace/db`) |
-| `plan/` | Conceptual multi-feature plans + status index (`plan/index.md`) |
+| `.scratch/<feature>/` | Workflow artifacts: research, plans, wayfinding, tickets + per-feature `index.md` |
 
 **Stack:** Next.js 16 (App Router) · PostgreSQL 16 + Drizzle ORM · Better Auth
 (two instances) · TypeScript · Tailwind + shadcn/ui.
@@ -138,9 +138,10 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 - **Plan → execute → review applies to any behavior-affecting change.** "Code"
   is broadly defined — no loopholes: app code, config/env files, schema files,
   seeders, middleware/route configs, files under `deployment/`. Pure research,
-  standalone planning, and research/plan documents (e.g. under `plan/` or
-  `docs/`) are exempt. Multi-feature conceptual plans live in `plan/` with
-  status tracked in `plan/index.md` — see [`plan/README.md`](plan/README.md).
+  standalone planning, and research/plan documents (e.g. under `.scratch/` or
+  `docs/`) are exempt. Workflow artifacts live in `.scratch/<feature>/` with
+  plan status tracked only in that feature's `index.md` — see
+  [`.scratch/README.md`](.scratch/README.md).
   Implement approved scope one verifiable slice at a time; review against the
   approved behavior and repo standards before accepting the result.
 - **Load the matching skill first** — the lookup is mandatory before
@@ -206,11 +207,27 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   See [`docs/deployment-docs/README.md`](docs/deployment-docs/README.md).
 - **Documentation is part of the task, not a follow-up** — every new/changed
   endpoint and feature needs a doc entry ([`docs/README.md`](docs/README.md)).
-  When a plan in `plan/` reaches Done, the plan file is deleted (git history
-  is the archive), its entry in `plan/index.md` is marked Done, and enduring
-  content is distilled into `docs/` per the `docs/README.md` destination
-  rules. Earlier plans under `.agents/` are grandfathered in place and are
-  not required to migrate; new plans go to `plan/` only.
+  When a plan reaches Done, retain its file in `.scratch/<feature>/plan/`,
+  mark its entry in `.scratch/<feature>/index.md` Done with date and evidence,
+  and distill enduring content into `docs/` per its destination rules.
+  Existing workflow artifacts, including legacy `.agents/` plans, use the
+  same centralized layout; do not recreate the old locations.
+- **Generate workflow text artifacts by feature, not by session or skill.**
+  Before generating a file, inspect `.scratch/` and reuse the existing stable
+  kebab-case feature slug (e.g. `discounts`; do not create a separate
+  `discounts-implementation` folder). Put research and supporting evidence in
+  `research/`; proposals, specs, and plans in `plan/`; decision maps, decision
+  tickets, and design decisions in `wayfinder/`; implementation maps, tickets,
+  handoffs, and verification in `ticket/`; optional prototypes in `prototype/`.
+  Create only needed subfolders. Use descriptive Markdown filenames and
+  numbered tickets (`NN-<slug>.md`); preserve machine-readable metadata.
+  Maintain one `index.md` per feature for artifact navigation, plan approval,
+  status, blockers, and verification links. There is no global status index:
+  parallel feature branches must not share a status file. Ticket status stays
+  in each ticket, never duplicated in the index. Link cross-feature evidence
+  rather than copying it; update links when moving files. Keep skill definitions
+  in `.agents/skills/` and enduring documentation in `docs/`. This placement
+  policy overrides upstream skill output-path examples, not approval gates.
 - **Jubelio research access.** Read-only GET requests to Jubelio may run during
   research without a separate user decision, using available credentials
   securely and reporting only redacted, relevant fields (never tokens, raw
@@ -273,6 +290,22 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
     they silently never run.
 - **Keep tests deterministic.** Do not depend on random data, time-of-day, or
   external services that are not mocked / controlled in the test environment.
+- **Centralize disposable Playwright output under `/playwright/` (gitignored).**
+  Standard and mock HTML reports go to `playwright/reports/{default,mock}/`;
+  runner artifacts (Markdown, traces, screenshots, video) go to
+  `playwright/results/{default,mock}/`. Manual browser/MCP dumps go to
+  `playwright/mcp/`, optionally under a descriptive run subfolder. The MCP
+  `--output-dir` applies only to automatically named files: when passing an
+  explicit filename, include `playwright/mcp/<run>/...` from the repo root,
+  never a bare root filename. Put optional blob/JSON/custom reporter output
+  under `playwright/blob/` or `playwright/reports/<run>/`; CLI/env output
+  overrides must stay inside `playwright/`. Do not create root-level
+  `playwright-report*`, `test-results`, or `.playwright-mcp` directories, and
+  never force-add generated artifacts. Keep test specs/config tracked;
+  enduring verification summaries belong in docs or the feature's `.scratch/`
+  folder, linking to disposable artifacts when helpful. `e2e/.auth/` retains
+  its existing ignored storage-state contract. See
+  [`docs/testing/README.md`](docs/testing/README.md) for report commands.
 - **When a Playwright run fails, read the Markdown output — do NOT open the
   screenshot/image file.** Playwright emits a text/Markdown report (snapshot,
   trace, error context) alongside any `.png` attachment. Diagnose from the

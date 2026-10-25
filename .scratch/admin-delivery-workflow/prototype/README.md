@@ -72,7 +72,7 @@ These are prototype smoke observations, **not** AC01–AC33 acceptance results, 
 
 - `../assets/04-guided-detail-wireframes.md`
 - `../assets/05-exception-guidance-and-read-only-access.md`
-- `../../../plan/admin-delivery-workflow-spec.md`
+- `../../../.scratch/admin-delivery-workflow/plan/admin-delivery-workflow-spec.md`
 - Local installed Next.js documentation: `node_modules/next/dist/docs/01-app/01-getting-started/01-installation.md`, `01-app/03-api-reference/01-directives/use-client.md`.
 - Context7 `/vercel/next.js`: root App Router layout and client component guidance, consulted before authoring.
 

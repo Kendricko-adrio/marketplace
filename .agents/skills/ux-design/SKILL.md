@@ -15,7 +15,7 @@ Skill ini adalah pedoman wajib development, bukan kumpulan inspirasi estetika. B
 - Baca [AGENTS.md](../../../AGENTS.md), [development-workflow](../development-workflow/SKILL.md), dan skill yang relevan, seperti `nextjs`, `tdd`, `systematic-debugging`, serta `better-auth-best-practices`. Skill ini tidak menggantikan approval, Context7, testing, atau aturan delegasi repo.
 - [frontend-design](../frontend-design/SKILL.md) boleh membantu polish visual, tetapi arahan keunikan, pergantian font/palet, layout eksperimental, atau variasi antar-design **tidak boleh mengalahkan usability, accessibility, dan konsistensi aplikasi**. Jangan memilih arah estetika baru untuk setiap halaman.
 
-Dasar riset beserta referensi primer: [Riset UX untuk pedoman design agent](../../../docs/architecture/ux-design-research.md). Dokumen riset adalah penjelasan dan konteks historis; instruksi operasional berada di skill ini dan `AGENTS.md`. Baca bagian sumber yang relevan ketika membutuhkan detail atau memeriksa sebuah klaim; tidak perlu mengulang riset yang sudah terverifikasi tanpa alasan.
+Dasar riset beserta referensi primer: [Riset UX untuk pedoman design agent](../../../.scratch/ux-design/research/ux-design-research.md). Dokumen riset adalah penjelasan dan konteks historis; instruksi operasional berada di skill ini dan `AGENTS.md`. Baca bagian sumber yang relevan ketika membutuhkan detail atau memeriksa sebuah klaim; tidak perlu mengulang riset yang sudah terverifikasi tanpa alasan.
 
 ## 2. Prioritas keputusan
 
@@ -45,7 +45,7 @@ Jika tidak ada referensi yang disepakati atau pattern lama bermasalah, usulkan p
 - Rancangan UX yang disetujui hidup di spec/plan bersama scope dan acceptance, bukan di slice notes atau ingatan percakapan. Bila bagian rancangan belum diputuskan, catat sebagai open item dan tanyakan—jangan mengarang state, komponen, atau label saat implementasi.
 - Jangan menambah state, komponen, atau variant yang tidak ada di rancangan hanya karena lebih mudah dibangun; state yang tidak ditulis tidak akan diimplementasikan, dan sebaliknya state karangan menjadi UX yang tidak pernah direview.
 - Bila pemilik meminta prototype, prototype itu menjadi referensi **mengikat** untuk struktur layar, alur, penamaan tombol/aksi, urutan informasi, dan state. Token, theme, serta komponen shared existing tetap sumber kebenaran visual: jangan menyalin CSS atau nilai ad hoc prototype, dan jangan menambah font/palet baru.
-- Contoh kasus yang harus dicegah: prototype sudah menyetujui tab pada daftar promo, tetapi implementasi memilih tone warna sendiri karena komposisi visual tidak pernah ditetapkan sebagai keputusan—akibatnya perlu plan pemulihan UX terpisah. Rujuk [`plan/admin-discounts-prototype-alignment.md`](../../../plan/admin-discounts-prototype-alignment.md) sebagai pelajaran, bukan sebagai pola yang diulang.
+- Contoh kasus yang harus dicegah: prototype sudah menyetujui tab pada daftar promo, tetapi implementasi memilih tone warna sendiri karena komposisi visual tidak pernah ditetapkan sebagai keputusan—akibatnya perlu plan pemulihan UX terpisah. Rujuk [`.scratch/discounts/plan/admin-discounts-prototype-alignment.md`](../../../.scratch/discounts/plan/admin-discounts-prototype-alignment.md) sebagai pelajaran, bukan sebagai pola yang diulang.
 
 ## 4. Aturan implementasi
 

@@ -5,7 +5,7 @@ mencatat konvensinya, **bukan** klaim bahwa kode existing sudah dimigrasikan:
 sebagian besar handler masih memuat query dan provider call sendiri. Ringkasan
 wajib untuk agent ada di
 [`.agents/skills/maintainable-code/SKILL.md`](../../.agents/skills/maintainable-code/SKILL.md).
-Research [organisasi API Next.js](nextjs-api-organization-research.md) bersifat
+Research [organisasi API Next.js](../../.scratch/maintainable-code/research/nextjs-api-organization-research.md) bersifat
 latar historis dan **superseded** di bagian mana pun yang berbeda dari dokumen
 ini. Bagian yang belum disentuh slice dokumentasi ini masih berbahasa Inggris dan
 diselaraskan saat fiturnya disentuh.

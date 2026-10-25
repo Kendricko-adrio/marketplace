@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Search, ChevronUp, ChevronDown, Loader2, Check, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -268,8 +269,8 @@ export default function CarouselProductSectionForm({
             <Label>Cari Produk</Label>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <input
-                className="flex h-10 w-full rounded-md border border-input bg-field pl-10 pr-3 py-2 text-sm"
+              <Input
+                className="pl-10"
                 placeholder="Cari produk..."
                 value={search}
                 onChange={(e) => {
@@ -286,7 +287,7 @@ export default function CarouselProductSectionForm({
             </div>
           ) : (
             <>
-              <div className="border rounded-lg max-h-80 overflow-y-auto">
+              <div className="border rounded-lg bg-card max-h-80 overflow-y-auto">
                 {allProducts.length === 0 ? (
                   <div className="p-4 text-center text-sm text-muted-foreground">
                     Tidak ada produk ditemukan
@@ -420,7 +421,7 @@ export default function CarouselProductSectionForm({
         </>
       ) : (
         <>
-          <div className="border rounded-lg p-3 space-y-3">
+          <div className="rounded-lg border bg-muted p-3 space-y-3">
             <Label className="text-xs">Filter Produk</Label>
             <ProductFilterEditor
               value={filter}
@@ -432,12 +433,12 @@ export default function CarouselProductSectionForm({
           <div className="space-y-2">
             <Label htmlFor="carousel-limit">Jumlah Produk yang Tampil (limit)</Label>
             <div className="flex items-center gap-3">
-              <input
+              <Input
                 id="carousel-limit"
                 type="number"
                 min={MIN_LIMIT}
                 max={MAX_LIMIT}
-                className="flex h-10 w-24 rounded-md border border-input bg-field px-3 py-2 text-sm"
+                className="w-24"
                 value={limit}
                 onChange={(e) =>
                   updateLimit(parseInt(e.target.value || String(DEFAULT_LIMIT), 10))
@@ -449,7 +450,7 @@ export default function CarouselProductSectionForm({
             </div>
           </div>
 
-          <div className="rounded-lg border bg-muted/30 p-4">
+          <div className="rounded-lg border bg-card p-4">
             <p className="text-xs text-muted-foreground mb-2">
               Preview produk yang akan muncul (berdasarkan filter)
             </p>

@@ -10,6 +10,7 @@ import { assertSeedEnvironmentSafe } from "./seed-safety";
 import { seedCleanupEntries } from "./seed-cleanup";
 import { resolveSeedPlan } from "./seed-mode";
 import {
+  discountContractSystemConfigSeedRows,
   discountImportSystemConfigSeedRows,
   shipmentSystemConfigSeedRows,
 } from "./seed-system-config";
@@ -2313,12 +2314,7 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
       },
       ...shipmentSystemConfigSeedRows,
       ...discountImportSystemConfigSeedRows,
-      {
-        key: "discounts.contractVersion",
-        value: "0",
-        type: "number",
-        description: "Kontrak domain diskon: default legacy0; aktivasi1 hanya setelah paired readers/writers siap. Dibaca ulang setiap request.",
-      },
+      ...discountContractSystemConfigSeedRows,
       {
         key: "tax.ppnRatePercent",
         value: "11",
@@ -2337,8 +2333,8 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
     // current revision pointer, NO benefit and NO code — so it can never be
     // launched, reserved or redeemed. The usage projection starts at zero with
     // no invented customer usage and no opening balance, and
-    // `discounts.contractVersion` stays 0 (seeded above) so this is demo data,
-    // not an activated production offer. It is catalog-dependent demo data, so
+    // Kontrak diskon aktif pada database seed lokal/demo; draft ini tetap
+    // tidak aktif karena belum dipublish. Data ini bergantung pada katalog, jadi
     // `SEED_MODE=jubelio` must not invent a campaign next to synced catalog.
     console.log("🏷️  Creating one incomplete public discount draft...");
     const demoDiscountOfferId = generateId();
@@ -2397,9 +2393,9 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
     //   completed  → consumed (counts)
     //   pending    → reserved (counts)
     //   failed     → released (capacity returned, retained as evidence)
-    // The domain gate stays 0 (seeded above): this is demo data, not an
-    // activated rollout, and no provider row is invented. Markdown is 0 here;
-    // ticket03 seeds Markdown projections separately.
+    // Gate aktif untuk database seed lokal/demo, bukan aktivasi rollout
+    // staging/production; tidak ada provider row yang dibuat. Markdown 0 di sini;
+    // ticket03 membuat proyeksi Markdown secara terpisah.
     console.log("🎟️  Creating one published demo Coupon and Redemption snapshots...");
     const demoVariantRows = await db
       .select({

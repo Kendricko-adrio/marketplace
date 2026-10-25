@@ -39,7 +39,7 @@ pi mcp add context7 -l \
 pi mcp add playwright -l \
   --exposure codemode \
   --description "Playwright browser automation for manual UI verification" \
-  -- npx @playwright/mcp@latest
+  -- npx @playwright/mcp@latest --output-dir playwright/mcp
 ```
 
 - `-l` / `--local` menulis ke `.pi/mcp.json`; tanpa `-l` menulis ke
@@ -125,7 +125,7 @@ dari script codemode, bukan dideklarasikan di awal:
 
 ```js
 await tools.mcp__playwright__browser_navigate({ url: "http://localhost:3000/products" });
-const shot = await tools.mcp__playwright__browser_take_screenshot({ filename: "products.png" });
+const shot = await tools.mcp__playwright__browser_take_screenshot({ filename: "playwright/mcp/products-review/products.png" });
 return shot.content;
 ```
 
@@ -134,8 +134,15 @@ Nama tool di script memakai identifier yang sama dengan deklarasi model
 `searchTools("playwright screenshot")` atau `describeNamespace("mcp__playwright")`
 di dalam script.
 
+Dump manual disimpan di `playwright/mcp/` (di-ignore Git). Kedua konfigurasi
+`.pi/mcp.json` dan `.mcp.json` menetapkan `--output-dir playwright/mcp` untuk
+filename otomatis. Filename eksplisit tetap relatif terhadap root workspace,
+jadi sertakan prefix `playwright/mcp/` seperti contoh di atas. Reconnect/restart
+server diperlukan agar perubahan config berlaku pada proses MCP yang sudah aktif.
+
 Untuk pekerjaan UI rutin repo ini, Playwright E2E (`npm run test:e2e:*`) tetap
-jalur utama; MCP ini untuk inspeksi manual saat mendiagnosis.
+jalur utama; MCP ini untuk inspeksi manual saat mendiagnosis. Lokasi report dan
+results dijelaskan di [panduan testing](../testing/README.md#lokasi-output-playwright).
 
 ## Alur wajib sebelum implementasi
 

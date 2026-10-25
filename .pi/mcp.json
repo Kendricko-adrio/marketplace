@@ -8,7 +8,9 @@
     "playwright": {
       "command": "npx",
       "args": [
-        "@playwright/mcp@latest"
+        "@playwright/mcp@latest",
+        "--output-dir",
+        "playwright/mcp"
       ],
       "exposure": "codemode",
       "description": "Playwright browser automation (navigate, snapshot, click, screenshot, console/network inspection) for manual UI verification."

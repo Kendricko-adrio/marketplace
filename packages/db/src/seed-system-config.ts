@@ -1,3 +1,14 @@
+// Default aktif hanya untuk database lokal/demo yang dibuat melalui seeder.
+// Aktivasi staging/production tetap mengikuti runbook cutover terpisah.
+export const discountContractSystemConfigSeedRows = [
+  {
+    key: "discounts.contractVersion",
+    value: "1",
+    type: "number",
+    description: "Kontrak domain diskon aktif untuk database seed lokal/demo. Dibaca ulang setiap request; aktivasi staging/production mengikuti runbook cutover.",
+  },
+];
+
 // Delivery seed defaults. These rows are inserted by seed.ts into system_config.
 export const shipmentSystemConfigSeedRows = [
   {

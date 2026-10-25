@@ -50,7 +50,9 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:debug": "playwright test --debug",
     "test:e2e:install": "playwright install",
-    "test:e2e:report": "playwright show-report"
+    "test:e2e:report": "playwright show-report playwright/reports/default",
+    "test:e2e:report:mock": "playwright show-report playwright/reports/mock",
+    "test:playwright-artifacts": "node --test e2e/support/playwright-artifacts.unit.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",

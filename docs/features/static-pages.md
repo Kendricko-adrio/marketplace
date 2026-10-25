@@ -66,7 +66,7 @@ Table: `static_page` (owned by `packages/db/src/schema/pages.ts`)
 
 ## Footer integration
 
-`GET /api/admin/linkable-destinations` (see [footer.md](./footer.md)) lists
+`GET /api/admin/linkable-destinations` (see [footer.md](footer.md)) lists
 **published** pages as the `pages` category of footer link targets:
 
 - Query: `isPublished = true`, ordered by `displayOrder` then `title`.
@@ -110,4 +110,4 @@ Table: `static_page` (owned by `packages/db/src/schema/pages.ts`)
 ## Related
 
 - Endpoint details: [docs/api-reference.md](./api-reference.md)
-- Footer CMS (link catalog consumer): [docs/features/footer.md](./footer.md)
+- Footer CMS (link catalog consumer): [docs/features/footer.md](footer.md)

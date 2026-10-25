@@ -31,9 +31,9 @@ function RegionPicker({ index, value, parentId, onChange }: { index: number; val
     return () => controller.abort();
   }, [index, parentId, retry]);
   return <div className="space-y-2">
-    <Label htmlFor={fields[index]}>{names[index]}</Label>
+    <Label htmlFor={fields[index]} required>{names[index]}</Label>
     <Select value={value} disabled={loading || (index > 0 && !parentId) || error} onValueChange={(id) => onChange(id, options.find((row) => row.id === id)?.postalCode)}>
-      <SelectTrigger id={fields[index]}><SelectValue placeholder={loading ? "Memuat wilayah…" : `Pilih ${names[index]}`} /></SelectTrigger>
+      <SelectTrigger id={fields[index]} aria-required="true"><SelectValue placeholder={loading ? "Memuat wilayah…" : `Pilih ${names[index]}`} /></SelectTrigger>
       <SelectContent>{options.map((row) => <SelectItem key={row.id} value={row.id}>{row.name}</SelectItem>)}</SelectContent>
     </Select>
     {error && <Button type="button" variant="outline" onClick={() => { setError(false); setLoading(true); setRetry((r) => r + 1); }}>Coba lagi</Button>}
@@ -75,10 +75,13 @@ export default function AddressBookPage() {
     {error && <div role="alert" className="mb-5 rounded border border-destructive p-4 text-sm">{error}<Button variant="ghost" onClick={() => void load()}>Coba lagi</Button></div>}
     {showForm && <form className="mb-8 space-y-5 rounded-xl border bg-card p-6" onSubmit={async (event) => { event.preventDefault(); if (await mutation(editing ? `/api/addresses/${editing}` : "/api/addresses", editing ? "PATCH" : "POST", input)) setShowForm(false); }}>
       <h2 className="text-xl font-medium">{editing ? "Edit alamat" : "Alamat baru"}</h2>
-      <div className="grid gap-5 sm:grid-cols-2">{([ ["recipientName", "Nama Penerima"], ["phone", "Nomor Telepon"] ] as const).map(([key, label]) => <div className="space-y-2" key={key}><Label htmlFor={key}>{label}</Label><Input id={key} required value={input[key]} onChange={(event) => setInput((prev) => ({ ...prev, [key]: event.target.value }))} /></div>)}
+      {/* Legenda bintang: penanda wajib harus punya arti tertulis. Kode Pos tidak
+          bertanda bintang karena terkunci dan terisi otomatis dari Kelurahan/Area. */}
+      <p className="text-xs text-muted-foreground"><span aria-hidden="true">*</span> Wajib diisi</p>
+      <div className="grid gap-5 sm:grid-cols-2">{([ ["recipientName", "Nama Penerima"], ["phone", "Nomor Telepon"] ] as const).map(([key, label]) => <div className="space-y-2" key={key}><Label htmlFor={key} required>{label}</Label><Input id={key} required value={input[key]} onChange={(event) => setInput((prev) => ({ ...prev, [key]: event.target.value }))} /></div>)}
       {fields.map((field, index) => <RegionPicker key={`${field}:${index > 0 ? input[fields[index - 1]] : "root"}`} index={index} value={input[field]} parentId={index > 0 ? input[fields[index - 1]] : undefined} onChange={(id, postal) => setInput((prev) => { const next = { ...prev, [field]: id, postalCode: postal ?? "" }; for (let n = index + 1; n < fields.length; n++) next[fields[n]] = ""; return next; })} />)}
       <div className="space-y-2"><Label htmlFor="postalCode">Kode Pos</Label><ReadOnlyInput id="postalCode" value={input.postalCode} hint="Terisi otomatis dari Kelurahan/Area." /></div></div>
-      <div className="space-y-2"><Label htmlFor="fullAddress">Alamat Lengkap</Label><Input id="fullAddress" required value={input.fullAddress} placeholder="Jalan, nomor rumah, unit, dan patokan" onChange={(event) => setInput((prev) => ({ ...prev, fullAddress: event.target.value }))} /></div>
+      <div className="space-y-2"><Label htmlFor="fullAddress" required>Alamat Lengkap</Label><Input id="fullAddress" required value={input.fullAddress} placeholder="Jalan, nomor rumah, unit, dan patokan" onChange={(event) => setInput((prev) => ({ ...prev, fullAddress: event.target.value }))} /></div>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={input.isDefault} onChange={(event) => setInput((prev) => ({ ...prev, isDefault: event.target.checked }))} />Jadikan alamat utama</label>
       <div className="flex gap-3"><Button disabled={busy || !ready}>Simpan alamat</Button><Button type="button" variant="outline" onClick={() => setShowForm(false)}>Batal</Button></div>
     </form>}

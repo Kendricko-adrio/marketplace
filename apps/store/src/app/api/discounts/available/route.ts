@@ -8,6 +8,7 @@
  * diambil dari sesi + cart milik client.
  */
 import { NextResponse, type NextRequest } from "next/server";
+import { readAvailablePromoPage } from "@/features/discounts/available-promos-service";
 import { z } from "zod";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { admitCheckoutRequest, CheckoutAdmissionError } from "@/lib/checkout-admission";
@@ -61,7 +62,10 @@ const availableRequestSchema = z.strictObject({
     .union([z.string().max(32), z.number().int().nonnegative()])
     .optional(),
   cursor: z.string().min(1).max(128).optional(),
-});
+  page: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+  selectedOfferId: z.string().min(1).max(128).optional(),
+}).refine((value) => !(value.page !== undefined && value.cursor !== undefined))
+  .refine((value) => !value.selectedOfferId || value.page !== undefined);
 
 /**
  * Amplop kegagalan route ini. `requestId` di body tetap ada dengan bentuk yang
@@ -115,7 +119,7 @@ async function readDiscountAvailability(request: NextRequest): Promise<Response>
       return failure(400, "INPUT_INVALID", "Data permintaan tidak valid.");
     }
 
-    const data = await readAvailableOffers({
+    const input = {
       clientId: session.user.id,
       selectedItemIds: parsed.data.selectedItemIds,
       cursor: parsed.data.cursor ?? null,
@@ -126,12 +130,15 @@ async function readDiscountAvailability(request: NextRequest): Promise<Response>
           ? { shippingBeforeSubsidy: String(parsed.data.shippingBeforeSubsidy) }
           : {}),
       },
-    });
+    };
+    const data = parsed.data.page !== undefined
+      ? await readAvailablePromoPage({ ...input, page: parsed.data.page, selectedOfferId: parsed.data.selectedOfferId })
+      : await readAvailableOffers(input);
 
     log.info(
       `discount availability read (outcome ok, offers ${data.items.length}, eligible ${
         data.items.filter((item) => item.eligible).length
-      }, hasNextPage ${data.nextCursor != null})`
+      }, hasNextPage ${"totalPages" in data ? data.page < data.totalPages : data.nextCursor != null})`
     );
     return NextResponse.json(
       { success: true, data },

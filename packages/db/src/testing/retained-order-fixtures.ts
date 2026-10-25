@@ -35,6 +35,38 @@ export async function deleteRetainedOrderFixtures(pool: Pool, orderIds: string[]
   if (checkout.rows[0]?.name) {
     await pool.query("DELETE FROM checkout_request WHERE order_id=ANY($1::text[])", [orderIds]);
   }
+  // Pre-order attempt evidence points at the order with RESTRICT and is owned
+  // by the attempt, so it must go before the order (and its operations).
+  const attempts = await pool.query("SELECT to_regclass('public.checkout_attempt') AS name");
+  if (attempts.rows[0]?.name) {
+    await pool.query("DELETE FROM jubelio_sales_operation WHERE checkout_attempt_id IN (SELECT id FROM checkout_attempt WHERE order_id=ANY($1::text[]))", [orderIds]);
+    await pool.query("DELETE FROM checkout_attempt WHERE order_id=ANY($1::text[])", [orderIds]);
+  }
   await pool.query("DELETE FROM order_item WHERE order_id=ANY($1::text[])", [orderIds]);
   await pool.query("DELETE FROM orders WHERE id=ANY($1::text[])", [orderIds]);
+}
+
+/**
+ * Test-only teardown for pre-order attempt evidence owned by a customer but not
+ * yet promoted (no order exists, so order-based cleanup cannot reach it).
+ * Deletes only attempt-owned rows; promoted attempts are handled by
+ * `deleteRetainedOrderFixtures`.
+ */
+export async function deleteUnpromotedCheckoutAttempts(pool: Pool, clientIds: string[]): Promise<void> {
+  if (clientIds.length === 0) return;
+  const present = await pool.query("SELECT to_regclass('public.checkout_attempt') AS name");
+  if (!present.rows[0]?.name) return;
+  await pool.query(
+    "DELETE FROM jubelio_sales_operation WHERE checkout_attempt_id IN (SELECT id FROM checkout_attempt WHERE client_id=ANY($1::text[]) AND order_id IS NULL)",
+    [clientIds]
+  );
+  await pool.query(
+    "DELETE FROM discount_redemption_event WHERE redemption_id IN (SELECT id FROM discount_redemption WHERE checkout_attempt_id IN (SELECT id FROM checkout_attempt WHERE client_id=ANY($1::text[]) AND order_id IS NULL))",
+    [clientIds]
+  );
+  await pool.query(
+    "DELETE FROM discount_redemption WHERE checkout_attempt_id IN (SELECT id FROM checkout_attempt WHERE client_id=ANY($1::text[]) AND order_id IS NULL)",
+    [clientIds]
+  );
+  await pool.query("DELETE FROM checkout_attempt WHERE client_id=ANY($1::text[]) AND order_id IS NULL", [clientIds]);
 }

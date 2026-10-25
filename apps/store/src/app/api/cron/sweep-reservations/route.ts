@@ -14,6 +14,7 @@ import { settleJubelioSalesOrder } from "@/lib/jubelio-sales-settlement";
 import { reconcileChannelStatusMirrorForSweep } from "@/lib/jubelio-channel-mirror";
 import { reconcileConfirmedSalesOrderHolds } from "@/lib/jubelio-sales-lifecycle";
 import { resumeUndispatchedCheckoutCreates } from "@/lib/checkout-recovery";
+import { recoverCheckoutAttempts } from "@/features/checkout/recover-checkout-service";
 import {
   reconcileJubelioSalesOperations,
   reconcileSettlements,
@@ -135,6 +136,14 @@ async function sweepReservations(request: NextRequest): Promise<Response> {
       log.info(`undispatched checkout create sweep completed: resumed ${resumed}`);
     } catch {
       log.error("undispatched checkout create sweep unavailable");
+    }
+    // Pre-order attempts: claim never-sent intents, finish safe local promotion,
+    // expire only never-sent reservations; possibly-sent rows stay held.
+    try {
+      const attempts = await recoverCheckoutAttempts({ limit: 50, cutoff: new Date(Date.now() - 5 * 60_000) });
+      log.info(`checkout attempt recovery finished: promoted ${attempts.promoted}, rejected ${attempts.rejected}, held ${attempts.held}`);
+    } catch {
+      log.error("checkout attempt recovery unavailable");
     }
     // 1. Reconcile in-flight durable SO operations by persisted id + GET.
     try {

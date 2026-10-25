@@ -223,6 +223,48 @@ menyimpang dari Redemption, transaksi gagal tertutup (bukan reset online).
 
 ## 6. UI dan status jujur
 
+### Modal pemilihan promo checkout
+
+Checkout pickup/delivery menampilkan ringkasan promo dan tombol **Pilih promo** /
+**Ubah promo**, bukan seluruh daftar inline. Modal memakai shared Dialog,
+Input, Button, Badge, serta pattern footer/pagination checkout existing.
+
+- Maksimal **10 promo publik per halaman**, tanpa batas jumlah halaman 10.
+  Hanya daftar yang scroll; input kode, pagination, pilihan draft, dan action
+  tetap berada di luar region daftar.
+- Radio mengubah **draft** saja. **Gunakan promo** meminta preview terbaru dan
+  baru menerapkan pilihan setelah response server sukses. Batal/X/Escape/overlay
+  membuang draft; response terlambat setelah modal ditutup diabaikan.
+- **Kode promo → Periksa** memvalidasi tanpa menerapkan. Kandidat kode menampilkan
+  kode milik customer, potongan aktual, serta status valid untuk pesanan ini.
+  Mengedit kode membatalkan kandidat kode yang diperiksa; kode salah tidak
+  mengganti promo aktif. Memilih publik/manual tetap satu slot.
+- Sorting dilakukan **global di server sebelum pagination**: eligible, estimasi
+  total bayar terendah termasuk PPN, benefit aktual terbesar, expiry terdekat,
+  nama, ID. Ineligible berada di belakang dengan reason aman. Badge
+  **Paling hemat** bukan auto-apply, dan tidak diulang pada setiap halaman.
+- Contoh subtotal Rp100.000, PPN 11%, ongkir Rp16.000: diskon barang Rp10.000
+  memberi total Rp115.900 (hemat Rp11.100), lebih hemat daripada subsidi ongkir
+  Rp11.000 dengan total Rp116.000. Cap adalah batas, bukan penghematan aktual.
+- Draft bertahan saat berpindah halaman. Ringkasan promo aktif berasal dari
+  review/projection pilihan terpisah, bukan keberadaan kartu di halaman saat ini.
+- Kenaikan total memakai tahap **Total pesanan naik** pada modal yang sama;
+  **Batal** kembali ke draft, **Ya, ganti promo** menerapkan kandidat terikat
+  fingerprint. Pelepasan promo tetap melalui konfirmasi existing bila total naik.
+- Perubahan konteks membatalkan kandidat sementara. Review-required kembali ke
+  input dan memvalidasi ulang promo aktif pada review berikutnya; kandidat gagal
+  tidak otomatis diterapkan. Tidak ada fallback order tanpa promo diam-diam.
+- Error daftar menawarkan **Coba lagi**; daftar kosong tetap menerima kode.
+  Validasi harga, kuota, kode, serta ongkir authoritative tetap preview/place-order.
+  Discovery tidak menulis hold/Redemption atau memanggil provider per promo.
+
+Modul baru: `apps/store/src/features/discounts/available-promos-service.ts`,
+`promo-ranking.ts`, `promo-picker-contract.ts`, serta komponen
+`apps/store/src/components/checkout/PromoSelectionDialog.tsx`.
+Kontrak numbered dan kompatibilitas cursor: [API reference](../api-reference.md).
+
+### Status applied dan lifecycle existing
+
 - Checkout pickup: picker Coupon, breakdown `subtotal` (setelah Markdown),
   `Diskon promo`, PPN, dan total; nama promo yang dipakai ditampilkan di review.
 - Picker tampil juga pada langkah review sehingga penggantian terjadi tanpa
@@ -398,3 +440,12 @@ bukan memotong subsidi). Verifikasi: `packages/db/src/discount-pricing.test.ts`,
 `apps/store/src/lib/discount-shipping.db.test.ts` (PostgreSQL: allocation tanpa
 item, usage, per-account, budget aktual), dan
 `apps/store/src/lib/jubelio-sales-shipping.test.ts` (intent provider).
+
+## 9. Reservation sebelum order
+
+Redemption dapat ditahan untuk `checkout_attempt` (`checkout_attempt_id`) saat
+order belum ada; `order_id` diisi saat promotion tanpa reserve ulang. Counter
+global/per-client dipakai bersama, `consumed` tetap mensyaratkan order. Pelepasan
+hanya terjadi setelah kegagalan definitif (SO ditolak sebelum diterapkan atau
+cancel SO terkonfirmasi) atau reservation kedaluwarsa yang belum pernah dikirim,
+dan baris `released` tetap disimpan sebagai bukti.

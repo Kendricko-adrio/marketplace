@@ -369,11 +369,71 @@ kredensial provider palsu, tanpa Docker, remote action, atau provider live:
 - Seluruh run memakai provider palsu/loopback dan DB disposable: dokumen ini tidak
   membuktikan perilaku provider live, deployment, atau UAT staging.
 
+## Capture log development (`logs/`)
+
+Saat development, output proses `next dev` **dan** baris JSON
+`@marketplace/logging` disalin ke file oleh script npm — bukan oleh aplikasi.
+Aplikasi tetap hanya menulis ke stdout (lihat [Catatan operasional](#catatan-operasional)).
+
+| Script | File yang ditulis |
+|---|---|
+| `npm run dev:all` | `logs/jubelio-mock.log`, `logs/store.log`, `logs/admin.log` |
+| `npm run dev:store` (dan `npm run dev`) | `logs/jubelio-mock.log`, `logs/store.log` |
+| `npm run dev:admin` | `logs/admin.log` |
+
+Sifat capture:
+
+- **Ditimpa setiap run** (bukan append), jadi isinya hanya sesi terakhir. Tidak ada
+  rotasi/retensi: ini alat debugging, bukan arsip.
+- **File bebas ANSI escape code.** `concurrently` menyuntikkan `FORCE_COLOR` ke
+  setiap anak saat stdout-nya sendiri berupa TTY, sehingga Next/Turbopack tetap
+  mengeluarkan kode warna walaupun stdout sudah dipipe ke `tee`. Karena itu file
+  ditulis lewat `tee >(sed -u -E -f scripts/strip-ansi.sed > logs/<app>.log)`:
+  terminal tetap berwarna, file bersih. `sed -u` penting agar baris langsung
+  ditulis (tanpa `-u` sed menahan output di buffer ~4 KB, jadi `tail -f` terlihat
+  kosong dan baris terakhir bisa hilang saat Ctrl+C).
+- Terminal tetap menampilkan output yang sama; `concurrently` memberi prefiks nama
+  proses (`[store]`, `[admin]`, `[jubelio-mock]`). Prefiks itu **tidak** masuk file,
+  karena `tee` berjalan di dalam perintah anak.
+- Baris JSON envelope tetap utuh di file sehingga bisa langsung dipakai:
+  `grep '"level":"error"' logs/store.log` atau
+  `jq -c 'select(.module=="checkout-service")' logs/store.log`.
+- `npm run --silent` dipakai agar banner npm (`> dev:store:app`, `> next dev`)
+  tidak mengotori file.
+- Pipeline dibungkus `bash -o pipefail -c '…'` supaya exit code proses anak tidak
+  ditelan `tee`; proses yang mati tetap dilaporkan `concurrently` dan
+  `npm run dev:all` keluar non-zero.
+- Folder `logs/` dibuat oleh `predev:all` / `predev:store` / `predev:admin`
+  (`mkdir -p logs`) dan di-ignore git (`/logs/` di `.gitignore`).
+
+Batasan yang perlu diketahui:
+
+- Jangan menjalankan `dev:store`/`dev:admin` bersamaan dengan `dev:all`: dua sesi
+  akan menulis file yang sama dan saling menimpa (gejalanya file berisi `\0` /
+  campuran dua sesi).
+- Script dev membutuhkan `bash` (Linux/macOS/WSL/Git Bash). `cmd.exe`/PowerShell
+  tidak didukung.
+- Output `next dev` tetap berisi baris non-JSON (compile/HMR); reader yang ketat
+  harus melewati baris yang gagal di-parse, seperti
+  [`e2e/support/logging-artifacts.ts`](../../e2e/support/logging-artifacts.ts).
+- Produksi tidak berubah: container tetap menulis ke stdout dan dibaca `journald`
+  ([`docker-compose.yml`](../../deployment/production/docker-compose.yml)).
+
+Kontrak konfigurasi ini dijaga test
+[`scripts/dev-log-capture.test.mts`](../../scripts/dev-log-capture.test.mts):
+
+```bash
+npm run verify:unit:slice -- scripts/dev-log-capture.test.mts
+```
+
 ## Catatan operasional
 
-- Tidak ada konfigurasi rotasi/file output di aplikasi. Log ke stdout; rotasi dan
-  retensi urusan platform (Docker `journald`). Detail pembacaan/filter level ada
-  di [`docs/deployment-docs/logging.md`](../deployment-docs/logging.md).
+- Tidak ada konfigurasi rotasi/file output di **aplikasi**; runtime hanya menulis ke
+  stdout. Rotasi dan retensi urusan platform (Docker `journald`). Detail
+  pembacaan/filter level ada di
+  [`docs/deployment-docs/logging.md`](../deployment-docs/logging.md). Capture file
+  saat development dilakukan script npm (`tee`), lihat
+  [Capture log development](#capture-log-development-logs).
 - Satu root logger per runtime app. Jangan membuat root/transport baru per module
   atau per request, dan jangan memonkey-patch `console`.
 - `AsyncLocalStorage` tidak membatalkan async resource saat scope selesai:

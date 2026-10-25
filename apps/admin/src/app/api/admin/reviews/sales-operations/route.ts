@@ -10,6 +10,7 @@ import { and, desc, eq, isNotNull, or } from "drizzle-orm";
 import { guard } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import { createModuleLogger, withRequestContext } from "@/lib/logger";
+import { listCheckoutAttemptReviews } from "@/features/orders/checkout-attempt-review-repository";
 
 export const dynamic = "force-dynamic";
 
@@ -137,9 +138,13 @@ async function salesOperationsReview(request: NextRequest): Promise<Response> {
         ? blockedRows.filter((row) => row.branchId === authorization.branchId)
         : blockedRows;
 
+    // Pre-order attempts that never became an order: visible here because they
+    // have no Orders row to link to (no fabricated order is ever created).
+    const checkoutAttempts = await listCheckoutAttemptReviews({ scope: authorization });
+
     // Tidak ada identitas customer/nilai order di log — hanya jumlah baris.
     log.info(
-      `sales review listed (operations ${scopedOps.length}, blockedOrders ${scopedBlocked.length}, mode ${authorization.mode}, outcome success)`
+      `sales review listed (operations ${scopedOps.length}, blockedOrders ${scopedBlocked.length}, checkoutAttempts ${checkoutAttempts.length}, mode ${authorization.mode}, outcome success)`
     );
 
     return NextResponse.json({
@@ -147,6 +152,7 @@ async function salesOperationsReview(request: NextRequest): Promise<Response> {
       data: {
         operations: scopedOps,
         blockedOrders: scopedBlocked,
+        checkoutAttempts,
       },
     });
   } catch {

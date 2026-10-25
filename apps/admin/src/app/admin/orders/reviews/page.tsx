@@ -34,6 +34,22 @@ type SalesOperation = {
   customerEmail: string;
 };
 
+type CheckoutAttempt = {
+  attemptId: string;
+  requestKey: string;
+  state: string;
+  paymentState: string;
+  stockHoldState: string;
+  failureCode: string | null;
+  stage: "sales_order" | "payment" | "compensation";
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  branchName: string | null;
+  customerName: string;
+  customerEmail: string;
+};
+
 type BlockedOrder = {
   orderId: string;
   status: string;
@@ -49,6 +65,19 @@ type BlockedOrder = {
   branchName: string | null;
   customerName: string;
   customerEmail: string;
+};
+
+const ATTEMPT_STATE_LABEL: Record<string, string> = {
+  preparing: "Belum selesai",
+  compensating: "Pembatalan SO",
+  processing: "Diproses",
+  manual_review: "Perlu pemeriksaan",
+};
+
+const ATTEMPT_STAGE_LABEL: Record<CheckoutAttempt["stage"], string> = {
+  sales_order: "Sales Order",
+  payment: "Pembayaran",
+  compensation: "Pembatalan Sales Order",
 };
 
 const TYPE_LABEL: Record<string, string> = {
@@ -69,6 +98,7 @@ function formatDate(value: string): string {
 export default function SalesReviewQueuePage() {
   const [operations, setOperations] = useState<SalesOperation[]>([]);
   const [blockedOrders, setBlockedOrders] = useState<BlockedOrder[]>([]);
+  const [checkoutAttempts, setCheckoutAttempts] = useState<CheckoutAttempt[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -83,6 +113,7 @@ export default function SalesReviewQueuePage() {
       }
       setOperations(body.data.operations);
       setBlockedOrders(body.data.blockedOrders);
+      setCheckoutAttempts(body.data.checkoutAttempts ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Gagal memuat antrean review");
     } finally {
@@ -119,6 +150,56 @@ export default function SalesReviewQueuePage() {
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Checkout belum selesai</CardTitle>
+          <CardDescription>
+            Checkout yang belum menghasilkan pesanan. Tidak ada tautan pesanan
+            karena baris pesanan memang belum dibuat; periksa bukti Sales Order
+            di bawah sebelum mengambil tindakan.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {checkoutAttempts.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Tidak ada checkout yang tertahan.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {checkoutAttempts.map((attempt) => (
+                <div key={attempt.attemptId} className="rounded border p-3 text-sm">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="secondary">Checkout belum selesai</Badge>
+                    <span className="font-medium">
+                      {ATTEMPT_STATE_LABEL[attempt.state] ?? attempt.state}
+                    </span>
+                    <span className="text-muted-foreground">
+                      Tahap: {ATTEMPT_STAGE_LABEL[attempt.stage]}
+                    </span>
+                  </div>
+                  <div className="mt-2">
+                    Referensi checkout: {attempt.requestKey}
+                    {attempt.branchName ? ` — ${attempt.branchName}` : ""}
+                  </div>
+                  <div>
+                    {attempt.customerName} ({attempt.customerEmail})
+                  </div>
+                  <div>
+                    Diperbarui {formatDate(attempt.updatedAt)} · kedaluwarsa{" "}
+                    {formatDate(attempt.expiresAt)}
+                  </div>
+                  {attempt.failureCode && (
+                    <div className="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-800">
+                      Kode kegagalan: {attempt.failureCode}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>

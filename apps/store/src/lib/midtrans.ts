@@ -1,5 +1,9 @@
 import { Snap, type TransactionParameter } from "midtrans-client";
 import crypto from "crypto";
+import { createModuleLogger } from "./logger";
+import type { CheckoutPaymentOutcome } from "@/features/checkout/checkout-attempt";
+
+const log = createModuleLogger("midtrans");
 
 let snapClient: Snap | null = null;
 
@@ -201,7 +205,9 @@ export async function createSnapPayment(
       redirect: "error",
       signal: AbortSignal.timeout(5000),
     });
-    if (!response.ok) throw new Error("Midtrans mock Snap request failed");
+    if (!response.ok) throw Object.assign(new Error("Midtrans mock Snap request failed"), {
+      httpStatusCode: response.status, ApiResponse: await response.json().catch(() => null),
+    });
     const transaction: unknown = await response.json();
     if (!transaction || typeof transaction !== "object" || Array.isArray(transaction)) {
       throw new Error("Invalid Midtrans mock Snap response");
@@ -227,20 +233,8 @@ export async function createSnapPayment(
       token: transaction.token,
     };
   } catch (error) {
-    // Midtrans client throws MidtransError with:
-    // .message, .httpStatusCode, .ApiResponse, .rawHttpClientData
-    const err = error as {
-      message?: string;
-      httpStatusCode?: number;
-      ApiResponse?: unknown;
-    };
-    console.error("Midtrans Snap createTransaction failed:", {
-      orderId,
-      grossAmount,
-      message: err.message,
-      httpStatusCode: err.httpStatusCode,
-      apiResponse: err.ApiResponse,
-    });
+    // SDK errors can contain customer data and credentials inside strings.
+    log.error(`Payment ${orderId}: Snap initialization unavailable`, new Error("Midtrans Snap initialization failed"));
     throw error;
   }
 }
@@ -284,6 +278,37 @@ export async function createPayment(
     expiryMinutes,
     paymentStartedAt
   );
+}
+
+/** Conservative pre-order adapter: a lost response must never trigger blind compensation. */
+export async function createCheckoutPayment(input: BuildSnapParameterInput): Promise<CheckoutPaymentOutcome> {
+  try {
+    const payment = await createPayment(input.orderId, input.grossAmount, input.customerDetails,
+      input.itemDetails, input.expiryMinutes, input.paymentStartedAt);
+    if (typeof payment.token !== "string" || !payment.token.trim() ||
+      typeof payment.redirectUrl !== "string" || !payment.redirectUrl.trim()) return { kind: "unknown" };
+    const target = new URL(payment.redirectUrl);
+    const controlledLocal = process.env.NODE_ENV !== "production" &&
+      (process.env.E2E_PROVIDER_MOCKS === "true" || process.env.MIDTRANS_E2E_MOCK === "true") &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname);
+    if (target.username || target.password || (target.protocol !== "https:" && !(controlledLocal && target.protocol === "http:"))) {
+      return { kind: "unknown" };
+    }
+    log.info(`Payment ${input.orderId}: checkout session ready`);
+    return { kind: "ready", ...payment };
+  } catch (error) {
+    // Context7 official SDK error docs identify 401 as a bad server key.
+    // Other 4xx (notably duplicate order IDs) do NOT prove session absence.
+    if (error && typeof error === "object" && "httpStatusCode" in error && error.httpStatusCode === 401 &&
+      "ApiResponse" in error && error.ApiResponse && typeof error.ApiResponse === "object" &&
+      "error_messages" in error.ApiResponse && Array.isArray(error.ApiResponse.error_messages) &&
+      error.ApiResponse.error_messages.length > 0 && error.ApiResponse.error_messages.every((value: unknown) => typeof value === "string")) {
+      log.error(`Payment ${input.orderId}: checkout initialization rejected by authentication`);
+      return { kind: "definitive_rejection" };
+    }
+    log.error(`Payment ${input.orderId}: checkout initialization result unknown`);
+    return { kind: "unknown" };
+  }
 }
 
 /**

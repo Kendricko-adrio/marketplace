@@ -242,6 +242,7 @@ beforeEach(async () => {
   await pool.query(`delete from discount_redemption where offer_id like $1`, [`${PREFIX}%`]);
   await pool.query(`delete from discount_client_usage where offer_id like $1`, [`${PREFIX}%`]);
   await pool.query(`delete from order_item where order_id like $1`, [`${PREFIX}%`]);
+  await pool.query(`delete from checkout_attempt where id like $1`, [`${PREFIX}%`]);
   await pool.query(`delete from orders where id like $1`, [`${PREFIX}%`]);
   await pool.query(
     `update discount_offer_usage set reserved_count=0, consumed_count=0,
@@ -275,6 +276,7 @@ afterAll(async () => {
     await pool.query(`delete from discount_redemption where offer_id like $1`, [`${PREFIX}%`]);
     await pool.query(`delete from discount_client_usage where offer_id like $1`, [`${PREFIX}%`]);
     await pool.query(`delete from order_item where order_id like $1`, [`${PREFIX}%`]);
+    await pool.query(`delete from checkout_attempt where id like $1`, [`${PREFIX}%`]);
     await pool.query(`delete from orders where id like $1`, [`${PREFIX}%`]);
     // Percentage fixture (ticket 10) memakai prefiks yang sama.
     await pool.query(`delete from discount_offer_usage where offer_id like $1`, [`${PREFIX}%`]);
@@ -326,6 +328,36 @@ async function redemptionRows() {
 }
 
 describe("reserveRedemptionForOrder — kapasitas tidak oversell", () => {
+  it("reserves and releases the same promo capacity for an attempt with no order", async () => {
+    const attemptId = `${PREFIX}-attempt`;
+    const now = new Date();
+    await db!.insert(schema.checkoutAttempts).values({
+      id: attemptId, clientId: clientA, branchId, requestKey: crypto.randomUUID(),
+      fingerprint: "a".repeat(64), reservedOrderId: `${PREFIX}-future-order`,
+      paymentStartedAt: now, expiresAt: new Date(now.getTime() + 900000),
+      snapshot: { version: 1, order: { branchId, contactEmail: "fixture@example.test", contactPhone: "0800000000", subtotal: "150000", total: "138750" },
+        items: [{ id: `${PREFIX}-future-item`, variantId, productName: "Fixture", price: "150000", quantity: 1 }],
+        cart: [{ itemId: "cart-line", cartId: "cart", variantId, branchId, quantity: 1, updatedAt: now.toISOString() }],
+        createRequest: { contactId: -1, customerName: "Fixture", locationId: 1, note: "attempt-create", items: [{ itemId: 1, quantity: 1, price: 150000, discAmount: 25000, taxAmount: 0, unit: "Buah", taxId: 1 }] }, addressToSave: null },
+    });
+    const owner = { kind: "attempt" as const, attemptId };
+    const reservation = await db!.transaction((tx) => reserveRedemptionForOrder(tx, {
+      owner, clientId: clientA, verifiedEmail: true, candidate, deadline, pricing, subtotalAfterMarkdown: pricing.subtotal,
+    }));
+    expect(reservation.ok).toBe(true);
+    expect((await pool!.query("SELECT order_id,checkout_attempt_id,status FROM discount_redemption WHERE offer_id=$1", [offerId])).rows)
+      .toEqual([{ order_id: null, checkout_attempt_id: attemptId, status: "reserved" }]);
+    expect((await counters()).usage).toMatchObject({ reserved_count: 1, consumed_count: 0, reserved_amount: "25000.00" });
+    const release = () => db!.transaction(async (tx) => {
+      const identity = { offerId, clientId: clientA, benefitAmount: "25000" };
+      await lockRedemptionOwners(tx, identity);
+      return releaseReservedRedemption(tx, { owner, identity, source: "sales-order-rejected", reason: "Definitive pre-apply rejection" });
+    });
+    expect(await release()).toBe(true);
+    expect(await release()).toBe(false);
+    expect((await counters()).usage).toMatchObject({ reserved_count: 0, consumed_count: 0, reserved_amount: "0.00" });
+    expect((await pool!.query("SELECT count(*)::int AS count FROM orders WHERE id=$1", [`${PREFIX}-future-order`])).rows).toEqual([{ count: 0 }]);
+  });
   it("dua akun berebut kuota terakhir: tepat satu reservasi penuh", async () => {
     await pool!.query(`update discount_offer set quota_count=1 where id=$1`, [offerId]);
     const orders = await Promise.all([createOrder(clientA), createOrder(clientB)]);

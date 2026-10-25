@@ -30,13 +30,17 @@ describe("jubelio_sales_operation schema conventions", () => {
   });
 
   it("is tied to the local order with an ON DELETE RESTRICT retention FK", () => {
-    expect(config.foreignKeys.length).toBe(1);
-    const reference = config.foreignKeys[0].reference();
-    expect(getTableName(reference.foreignTable)).toBe("orders");
+    const orderKey = config.foreignKeys.find((key) => getTableName(key.reference().foreignTable) === "orders");
+    expect(orderKey).toBeDefined();
     // RESTRICT (never cascade): the ledger is provider/transactional evidence
     // retained by spec §8.4, so a hard order delete must fail 23503 instead of
     // silently destroying the operation history.
-    expect(config.foreignKeys[0].onDelete).toBe("restrict");
+    expect(orderKey?.onDelete).toBe("restrict");
+    const attemptKeys = config.foreignKeys.filter((key) => getTableName(key.reference().foreignTable) === "checkout_attempt");
+    expect(attemptKeys).toHaveLength(2);
+    for (const key of attemptKeys) expect(key.onDelete).toBe("restrict");
+    expect(jubelioSalesOperations.orderId.notNull).toBe(false);
+    expect(checkNames).toContain("jubelio_sales_operation_owner_required");
   });
 
   it("allows exactly one create and one cancel operation per order", () => {

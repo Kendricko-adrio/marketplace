@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { jubelioSalesOperations, orders } from "@/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import {
   ensureJubelioInvoice,
   ensureJubelioPayment,
@@ -403,7 +403,7 @@ export async function reconcileJubelioSalesOperations(
   const rows = await db
     .select()
     .from(jubelioSalesOperations)
-    .where(inArray(jubelioSalesOperations.status, ["dispatched_unknown"]))
+    .where(and(inArray(jubelioSalesOperations.status, ["dispatched_unknown"]), isNotNull(jubelioSalesOperations.orderId)))
     .limit(limit);
 
   let confirmed = 0;
@@ -413,6 +413,7 @@ export async function reconcileJubelioSalesOperations(
   const gateway = getDefaultJubelioSalesGateway();
 
   for (const op of rows) {
+    if (!op.orderId) continue; // Unpromoted operations are owned by attempt recovery, not order settlement.
     const aged = op.dispatchedAt != null && op.dispatchedAt.getTime() < staleCutoff;
 
     if (op.type === "cancel" && op.salesOrderId != null) {

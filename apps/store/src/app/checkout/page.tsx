@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -31,7 +31,11 @@ import {
 import { useSession } from "@/lib/auth-client";
 import { useCart } from "@/providers/cart-provider";
 import DeliveryQuotePanel, { type DeliveryAddressPreview } from "@/components/checkout/DeliveryQuotePanel";
+import { CheckoutAttemptFeedback } from "@/components/checkout/CheckoutAttemptFeedback";
+import type { CheckoutAttemptResult } from "@/features/checkout/checkout-attempt";
 import { PromoSelector, type AvailableOffer, type PromoInvalidation } from "@/components/checkout/PromoSelector";
+import { PromoSelectionDialog } from "@/components/checkout/PromoSelectionDialog";
+import type { PromoCandidateResult, PromoDraft, PromoPageResult } from "@/features/discounts/promo-picker-contract";
 import {
   Dialog,
   DialogContent,
@@ -202,16 +206,21 @@ export default function CheckoutPage() {
   // re-evaluates capacity authoritatively at preview and place-order. Ticket 08
   // menambah penggantian (dialog hanya saat total naik) dan state gugur yang
   // tidak pernah menghapus pilihan diam-diam.
-  const [promoOffers, setPromoOffers] = useState<AvailableOffer[]>([]);
+  const [promoData, setPromoData] = useState<PromoPageResult | null>(null);
+  const [selectedPublicOffer, setSelectedPublicOffer] = useState<AvailableOffer | null>(null);
+  const [promoOpen, setPromoOpen] = useState(false);
+  const promoSession = useRef(0);
+  const promoListGeneration = useRef(0);
+  const promoKnownOffers = useRef(new Map<string, AvailableOffer>());
+  const preparedPromo = useRef<{ data: CheckoutPreviewData; intent: Record<string, unknown>; selection: PromoSelection } | null>(null);
   const [promoLoading, setPromoLoading] = useState(false);
   const [promoError, setPromoError] = useState<string | null>(null);
-  const [selectedOfferId, setSelectedOfferId] = useState<string | null>(null);
+  const [, setSelectedOfferId] = useState<string | null>(null);
   const selectedOfferIdRef = useRef<string | null>(null);
   // Manual Promo Code (ticket 09): literal hanya hidup di state browser ini dan
   // dikirim lewat Terapkan; setiap review menyimpan identitas codeId.
   const [appliedManualCode, setAppliedManualCode] = useState<AppliedManualCode | null>(null);
   const appliedManualCodeRef = useRef<AppliedManualCode | null>(null);
-  const [manualCodeError, setManualCodeError] = useState<string | null>(null);
   const [promoInvalidation, setPromoInvalidation] = useState<PromoInvalidation | null>(null);
   const [promoPendingOfferId, setPromoPendingOfferId] = useState<string | null>(null);
   const [promoReplacement, setPromoReplacement] = useState<{
@@ -258,6 +267,7 @@ export default function CheckoutPage() {
   const [review, setReview] = useState<CheckoutReview | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [pendingRequest, setPendingRequest] = useState<PendingCheckout | null>(null);
+  const [attemptFeedback, setAttemptFeedback] = useState<CheckoutAttemptResult | null>(null);
   const requestInFlight = useRef(false);
   const requestStorageKey = session?.user.id ? `checkoutRequest:${session.user.id}` : null;
 
@@ -335,7 +345,12 @@ export default function CheckoutPage() {
           try {
             const lookup = await fetch(`/api/checkout/requests/${stored.requestKey}`, { cache: "no-store" });
             const result = await lookup.json();
-            if (!cancelled && result.success && result.data?.orderId) {
+            // Only a promoted attempt has an order to open; an unresolved or
+            // rejected attempt must not navigate away from checkout.
+            if (!cancelled && result.success && result.data?.version === 2 && result.data?.state === "promoted" && result.data?.orderId) {
+              if (requestStorageKey) sessionStorage.removeItem(requestStorageKey);
+              router.replace(`/account/orders/${result.data.orderId}`);
+            } else if (!cancelled && result.success && result.data && result.data.version !== 2 && result.data.orderId) {
               if (requestStorageKey) sessionStorage.removeItem(requestStorageKey);
               router.replace(`/account/orders/${result.data.orderId}`);
             }
@@ -408,75 +423,62 @@ export default function CheckoutPage() {
   // is still re-checked at place-order; this call never reserves anything.
   // Pilihan yang hilang/tidak eligible TIDAK dihapus: ia menjadi state gugur
   // dengan alasan aman (ticket 08) agar tidak ada diskon palsu yang dipertahankan.
-  const loadPromos = useCallback(async () => {
-    if (
-      cart?.pricingContractVersion !== 1 ||
-      selectedItems.length === 0
-    ) {
-      setPromoOffers([]);
-      setPromoError(null);
-      setPromoLoading(false);
-      return;
-    }
+  const promoContextKey = JSON.stringify([selectedItems, fulfillmentMethod, deliveryService, deliveryAddressId, deliveryNewAddress, phone, email, pickupDate, pickupTime]);
+  const promoContextRef = useRef(promoContextKey);
+  const loadPromos = useCallback(async (page = 1) => {
+    if (cart?.pricingContractVersion !== 1 || selectedItems.length === 0) return;
+    const generation = ++promoListGeneration.current;
+    const contextKey = promoContextRef.current;
+    const active = selectedOfferIdRef.current;
     setPromoLoading(true);
     setPromoError(null);
     try {
       const response = await fetch("/api/discounts/available", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
+        method: "POST", headers: { "Content-Type": "application/json" }, cache: "no-store",
         body: JSON.stringify({
-          selectedItemIds: selectedItems.map((item) => item.id),
-          fulfillmentMethod,
-          // Hanya untuk menampilkan eligibility subsidi ongkir; server
-          // menghitung ulang dengan quote baru di preview/place-order.
-          ...(fulfillmentMethod === "delivery" && deliveryService
-            ? { shippingBeforeSubsidy: deliveryService.shippingCost }
-            : {}),
+          page, selectedItemIds: selectedItems.map(item => item.id), fulfillmentMethod,
+          ...(active ? { selectedOfferId: active } : {}),
+          ...(fulfillmentMethod === "delivery" && deliveryService ? { shippingBeforeSubsidy: deliveryService.shippingCost } : {}),
         }),
       });
       const result = await response.json();
-      if (!response.ok || !result.success) {
-        // Jangan mengosongkan daftar/pilihan yang sudah ditampilkan: error
-        // jaringan bukan bukti bahwa promo gugur.
-        setPromoError(result?.error ?? "Promo belum dapat dimuat.");
-        return;
-      }
-      const offers: AvailableOffer[] = result.data?.items ?? [];
-      setPromoOffers(offers);
-      const active = selectedOfferIdRef.current;
-      if (!active) {
-        // Manual Promo Code tidak dapat di-discovery dari daftar publik; state
-        // gugurnya hanya datang dari server (previous invalid), bukan dari
-        // ketidakhadiran di picker.
-        if (!appliedManualCodeRef.current) setPromoInvalidation(null);
-        return;
-      }
-      const match = offers.find((offer) => offer.offerId === active) ?? null;
-      if (!match) {
-        setPromoInvalidation({
-          offerId: active,
-          message: "Promo ini sudah tidak tersedia untuk pesanan kamu.",
-        });
-      } else if (!match.eligible) {
-        setPromoInvalidation({
-          offerId: active,
-          message:
-            match.reasonMessage ?? "Promo ini belum memenuhi syarat pesanan kamu.",
-        });
-      } else {
-        setPromoInvalidation(null);
+      if (generation !== promoListGeneration.current || contextKey !== promoContextRef.current) return;
+      if (!response.ok || !result.success) { setPromoError(result.error ?? "Promo belum dapat dimuat."); return; }
+      const data = result.data as PromoPageResult;
+      setPromoData(data);
+      for (const offer of data.items) promoKnownOffers.current.set(offer.offerId, offer);
+      if (active && active === selectedOfferIdRef.current) {
+        setSelectedPublicOffer(data.selectedOffer);
+        if (data.selectedOfferUnavailable || (data.selectedOffer && !data.selectedOffer.eligible)) {
+          setPromoInvalidation({ offerId: active, message: data.selectedOffer?.reasonMessage ?? "Promo ini sudah tidak tersedia untuk pesanan kamu." });
+        } else setPromoInvalidation(null);
       }
     } catch {
-      setPromoError("Promo belum dapat dimuat.");
+      if (generation === promoListGeneration.current) setPromoError("Promo belum dapat dimuat.");
     } finally {
-      setPromoLoading(false);
+      if (generation === promoListGeneration.current) setPromoLoading(false);
     }
   }, [fulfillmentMethod, deliveryService, cart?.pricingContractVersion, selectedItems]);
 
+  useLayoutEffect(() => {
+    if (promoContextRef.current === promoContextKey) return;
+    promoContextRef.current = promoContextKey;
+    promoSession.current++;
+    promoListGeneration.current++;
+    preparedPromo.current = null;
+    promoKnownOffers.current.clear();
+    if (step >= 2) void loadPromos(1);
+  }, [promoContextKey, loadPromos, step]);
   useEffect(() => {
-    if (step >= 2) void loadPromos();
+    if (step >= 2) void loadPromos(1);
   }, [step, loadPromos]);
+
+  function changePromoOpen(open: boolean) {
+    promoSession.current++;
+    preparedPromo.current = null;
+    setPromoOpen(open);
+    if (open) void loadPromos(1);
+  }
 
   // Order contact is required for both methods, independently of the
   // delivery recipient. Submit the same trimmed values that were validated.
@@ -586,7 +588,8 @@ export default function CheckoutPage() {
       ? {
           offerId: review.promo.offerId as string,
           name:
-            promoOffers.find((offer) => offer.offerId === review.promo.offerId)?.name ??
+            (selectedPublicOffer && selectedPublicOffer.offerId === review.promo.offerId ? selectedPublicOffer.name : null) ??
+            promoData?.items.find((offer) => offer.offerId === review.promo.offerId)?.name ??
             "Coupon",
           benefitAmount: review.promo.benefitAmount ?? review.pricing.discount,
         }
@@ -836,57 +839,62 @@ export default function CheckoutPage() {
     }
   }
 
-  /**
-   * Terapkan Manual Promo Code. Validasi selalu lewat preview server (termasuk
-   * saat belum ada review) supaya codeId/benefit berasal dari evaluasi
-   * authoritative. Kode invalid/kehabisan kapasitas TIDAK mengganti pilihan
-   * lama yang masih sah.
-   */
-  async function handleApplyManualCode(rawCode: string) {
-    const code = rawCode.trim();
-    if (!code || promoPendingOfferId) return;
-    setManualCodeError(null);
-    const selection: PromoSelection = { kind: "manual", code };
-    setPromoPendingOfferId("manual");
+  /** Prepare without applying; commit only after the explicit modal action. */
+  async function preparePromo(selection: PromoDraft, commit: boolean): Promise<PromoCandidateResult> {
+    if (selection.kind === "none") return { kind: "error", message: "Pilih promo terlebih dahulu" };
+    const sessionId = promoSession.current;
+    const contextKey = promoContextRef.current;
+    if (commit) setPromoPendingOfferId(selection.kind === "public" ? selection.offerId : "manual");
     try {
-      const baseIntent = { ...(review ? review.intent : currentIntent()), promoSelection: selection };
-      const { result } = await postPreview(
-        review
-          ? {
-              ...baseIntent,
-              previous: {
-                reviewToken: review.reviewToken,
-                promoSelection: promoSelectionOf(review.promo),
-              },
-            }
-          : baseIntent
-      );
+      const intent = { ...(review ? review.intent : currentIntent()), promoSelection: selection };
+      const { result } = await postPreview({
+        ...intent,
+        ...(review ? { previous: { reviewToken: review.reviewToken, promoSelection: promoSelectionOf(review.promo) } } : {}),
+      });
+      if (sessionId !== promoSession.current || contextKey !== promoContextRef.current) {
+        return { kind: "context_changed", message: "Pesanan berubah. Pilih promo kembali." };
+      }
       if (!result.success) {
         if (result.code === "CHECKOUT_REVIEW_REQUIRED") {
-          setReview(null);
-          setConfirmed(false);
-          setStep(1);
+          setReview(null); setConfirmed(false); setStep(1); changePromoOpen(false);
+          return { kind: "context_changed", message: "Pesanan berubah. Pilih promo kembali." };
         }
-        if (typeof result.code === "string" && result.code.startsWith("PROMO_")) {
-          setManualCodeError(String(result.error || "Kode promo belum dapat dipakai."));
-          void loadPromos();
+        if (result.data?.previous?.status === "invalid" && result.data.previous.promo?.offerId) {
+          setPromoInvalidation({ offerId: result.data.previous.promo.offerId, message: result.data.previous.message || "Promo tidak lagi berlaku." });
         }
-        toast.error(result.error || "Kode promo belum dapat dipakai.");
-        return;
+        if (String(result.code).startsWith("PROMO_")) void loadPromos(promoData?.page ?? 1);
+        return { kind: "error", message: result.code === "RATE_LIMITED"
+          ? "Terlalu banyak percobaan. Coba lagi beberapa saat lagi." : result.error || "Promo belum dapat diperiksa. Coba lagi." };
       }
       const data = result.data as CheckoutPreviewData;
-      if (data.requiresIncreaseConfirmation) {
-        setPromoReplacement({ data, intent: baseIntent, selection });
-        return;
+      if (commit && data.requiresIncreaseConfirmation && data.replacement) {
+        preparedPromo.current = { data, intent, selection };
+        return { kind: "increase_confirmation", previousTotal: data.replacement.previous.total ?? "0",
+          candidateTotal: data.replacement.candidate.total, deltaTotal: data.replacement.deltaTotal ?? "0" };
       }
-      applyPromoReview(data, baseIntent, selection);
-      toast.success("Kode promo diterapkan");
+      const name = selection.kind === "manual" ? selection.code.trim().toUpperCase()
+        : promoKnownOffers.current.get(selection.offerId)?.name ?? selectedPublicOffer?.name ?? "Promo";
+      if (commit) {
+        if (selection.kind === "public") setSelectedPublicOffer(promoKnownOffers.current.get(selection.offerId) ?? selectedPublicOffer);
+        applyPromoReview(data, intent, selection);
+        toast.success("Promo diterapkan");
+      }
+      return { kind: "ready", name, benefitAmount: data.promo?.benefitAmount ?? String(data.pricing.discount) };
     } catch {
-      // Jaringan gagal bukan bukti kode gugur: state lama dipertahankan.
-      setManualCodeError("Kode promo belum dapat diperiksa. Coba lagi.");
+      return { kind: "error", message: "Promo belum dapat diperiksa. Coba lagi." };
     } finally {
-      setPromoPendingOfferId(null);
+      if (commit) setPromoPendingOfferId(null);
     }
+  }
+
+  function confirmPreparedPromo() {
+    const candidate = preparedPromo.current;
+    if (!candidate) return;
+    const selection = candidate.selection;
+    if (selection.kind === "public") setSelectedPublicOffer(promoKnownOffers.current.get(selection.offerId) ?? selectedPublicOffer);
+    applyPromoReview(candidate.data, candidate.intent, selection);
+    changePromoOpen(false);
+    toast.success("Promo diterapkan");
   }
 
   function handleConfirmPromoReplacement() {
@@ -1007,6 +1015,30 @@ export default function CheckoutPage() {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(record.body),
       });
       const result = await response.json();
+      // Version-2 attempt contract: only a PROMOTED attempt may redirect. A
+      // rejected/unknown attempt keeps the reviewed form on screen.
+      const attempt: CheckoutAttemptResult | undefined = result.data?.version === 2 ? result.data : undefined;
+      if (attempt) {
+        setAttemptFeedback(attempt);
+        if (attempt.state === "promoted" && attempt.orderId) {
+          clearPendingRequest();
+          refreshCart();
+          if (attempt.paymentAvailable && attempt.redirectUrl) window.location.href = attempt.redirectUrl;
+          else router.push(`/account/orders/${attempt.orderId}`);
+          return;
+        }
+        if (attempt.state === "rejected") {
+          // Retry is allowed only after a definitive, fully compensated failure.
+          clearPendingRequest();
+          setConfirmed(false);
+          setReview(null);
+          setStep(2);
+          toast.error(attempt.message);
+          return;
+        }
+        toast.error(attempt.message);
+        return;
+      }
       if (result.success && result.data?.orderId) {
         clearPendingRequest();
         refreshCart();
@@ -1058,6 +1090,18 @@ export default function CheckoutPage() {
     try {
       const response = await fetch(`/api/checkout/requests/${pendingRequest.requestKey}`, { cache: "no-store" });
       const result = await response.json();
+      const attempt: CheckoutAttemptResult | undefined = result.data?.version === 2 ? result.data : undefined;
+      if (attempt) {
+        setAttemptFeedback(attempt);
+        if (attempt.state === "promoted" && attempt.orderId) {
+          clearPendingRequest(); refreshCart();
+          if (attempt.paymentAvailable && attempt.redirectUrl) window.location.href = attempt.redirectUrl;
+          else router.push(`/account/orders/${attempt.orderId}`);
+          return;
+        }
+        if (attempt.retryAllowed) clearPendingRequest();
+        return;
+      }
       if (result.success && result.data?.orderId) {
         clearPendingRequest(); router.push(`/account/orders/${result.data.orderId}`); refreshCart(); return;
       }
@@ -1106,6 +1150,10 @@ export default function CheckoutPage() {
   // ===== Place order =====
   const handlePlaceOrder = async () => {
     if (!confirmed || requestInFlight.current) return;
+    if (pendingRequest) {
+      await recoverPendingRequest();
+      return;
+    }
     if (cart?.pricingContractVersion === 1) {
       if (!review || !requestStorageKey) { toast.error("Periksa kembali rincian checkout."); return; }
       const requestKey = crypto.randomUUID();
@@ -1256,7 +1304,7 @@ export default function CheckoutPage() {
     );
   }
 
-  if (pendingRequest) {
+  if (pendingRequest && (!cart || cart.items.length === 0)) {
     return <div className="container mx-auto max-w-xl px-4 py-16">
       <Card><CardContent className="space-y-4 pt-6">
         <h1 className="text-2xl font-bold">Periksa status pesanan</h1>
@@ -1790,24 +1838,29 @@ export default function CheckoutPage() {
 
                 {/* One promo slot for pickup and delivery. */}
                 {cart?.pricingContractVersion === 1 && (
-                  <PromoSelector
-                      appliedManualCode={appliedManualCode}
-                      manualCodeError={manualCodeError}
-                      manualPending={promoPendingOfferId === "manual"}
-                      onApplyManualCode={(code) => void handleApplyManualCode(code)}
-                      onClearManual={() => void handleSelectOffer(null)}
-                    offers={promoOffers}
-                    selectedOfferId={selectedOfferId}
-                    invalidated={promoInvalidation}
-                    pendingOfferId={promoPendingOfferId}
-                    loading={promoLoading}
-                    error={promoError}
-                    disabled={submitting}
-                    onSelect={(offerId) => void handleSelectOffer(offerId)}
-                    onClear={() => void handleSelectOffer(null)}
-                    onContinueWithout={() => void handleContinueWithoutPromo()}
-                    onRetry={() => void loadPromos()}
-                  />
+                  <>
+                    <PromoSelector
+                      active={appliedManualCode && !promoInvalidation
+                        ? { name: appliedManualCode.code, benefitAmount: review?.promo.benefitAmount ?? String(review?.pricing.discount ?? "0") }
+                        : appliedPromo}
+                      invalidated={promoInvalidation}
+                      disabled={submitting || promoPendingOfferId !== null}
+                      onOpen={() => changePromoOpen(true)}
+                      onClear={() => void handleSelectOffer(null)}
+                      onContinueWithout={() => void handleContinueWithoutPromo()}
+                    />
+                    {promoOpen && <PromoSelectionDialog
+                      open={promoOpen} onOpenChange={changePromoOpen} contextKey={promoContextKey}
+                      active={requestPromoSelection()} activeName={appliedManualCode?.code ?? appliedPromo?.name ?? ""}
+                      data={promoData} loading={promoLoading} error={promoError}
+                      onPageChange={page => void loadPromos(page)}
+                      onCheckCode={code => preparePromo({ kind: "manual", code }, false)}
+                      onUsePromo={draft => preparePromo(draft, true)}
+                      onConfirmIncrease={confirmPreparedPromo}
+                      onCancelIncrease={() => { preparedPromo.current = null; }}
+                      onRetry={() => void loadPromos(promoData?.page ?? 1)}
+                    />}
+                  </>
                 )}
                 <div className="mb-6 flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
                   <CreditCard className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
@@ -1910,6 +1963,14 @@ export default function CheckoutPage() {
                   </span>
                 </label>
 
+                {attemptFeedback ? (
+                  <CheckoutAttemptFeedback
+                    result={attemptFeedback}
+                    busy={submitting}
+                    onCheckStatus={() => void recoverPendingRequest()}
+                    onReviewAgain={() => { setAttemptFeedback(null); setConfirmed(false); setReview(null); setStep(1); }}
+                  />
+                ) : null}
                 <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
                   <Button variant="outline" disabled={submitting || promoPendingOfferId != null} onClick={() => {
                     setConfirmed(false);

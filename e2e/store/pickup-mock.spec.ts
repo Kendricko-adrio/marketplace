@@ -46,7 +46,7 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import crypto from "node:crypto";
 import { Pool } from "pg";
-import { deleteRetainedOrderFixtures } from "../../packages/db/src/testing/retained-order-fixtures";
+import { deleteRetainedOrderFixtures, deleteUnpromotedCheckoutAttempts } from "../../packages/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import { TEST_USERS } from "../config";
 
@@ -317,6 +317,8 @@ test.beforeAll(async ({ browser }) => {
     [[...CONTACT_EMAILS]]
   );
   await cleanOrderRows(stale.rows.map((row) => row.id));
+  const owners = await pool.query<{ id: string }>("SELECT id FROM client WHERE email = ANY($1::text[])", [[...CONTACT_EMAILS]]);
+  await deleteUnpromotedCheckoutAttempts(pool, owners.rows.map((row) => row.id));
   await pool.query("DELETE FROM product WHERE id = $1", [FIXTURE_PRODUCT_ID]);
 
   // Precondition: the seeded PPN config (spec contract fixture).

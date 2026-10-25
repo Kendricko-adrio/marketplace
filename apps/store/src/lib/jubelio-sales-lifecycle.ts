@@ -9,7 +9,7 @@ import {
   type JubelioSalesOrderCreateRequest,
   type JubelioSalesPaymentRequest,
 } from "@/db";
-import { and, eq, isNull, inArray, sql } from "drizzle-orm";
+import { and, eq, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import {
   JubelioSalesGatewayError,
   createJubelioSalesGateway,
@@ -34,6 +34,8 @@ import {
   type VersionedSalesOrderExpectation,
 } from "./jubelio-sales-expected";
 import { createModuleLogger } from "./logger";
+import type { ProviderOperationOwner } from "@/features/checkout/checkout-attempt";
+import { accountConfirmedAttemptCreateHold, accountConfirmedAttemptCancelHold } from "@/features/checkout/checkout-attempt-repository";
 import {
   findRedemptionForOrder,
   lockRedemptionOwners,
@@ -200,12 +202,13 @@ export async function releaseConfirmedSalesOrderHold(orderId: string): Promise<v
 export async function reconcileConfirmedSalesOrderHolds(limit = 50): Promise<number> {
   const rows = await db.select({ orderId: jubelioSalesOperations.orderId, type: jubelioSalesOperations.type })
     .from(jubelioSalesOperations)
-    .where(and(eq(jubelioSalesOperations.status, "confirmed"),
+    .where(and(eq(jubelioSalesOperations.status, "confirmed"), isNotNull(jubelioSalesOperations.orderId),
       inArray(jubelioSalesOperations.type, ["create", "cancel"]),
       isNull(jubelioSalesOperations.holdAccountedAt)))
     .orderBy(jubelioSalesOperations.confirmedAt).limit(limit);
   let applied = 0;
   for (const row of rows) {
+    if (!row.orderId) continue;
     if (row.type === "cancel") await accountConfirmedHold(row.orderId, "create");
     if (await accountConfirmedHold(row.orderId, row.type as "create" | "cancel")) applied++;
   }
@@ -334,16 +337,21 @@ export type DispatchCreateResult =
  * - Unknown create results keep the hold and go to `manual_review` — never a
  *   blind retry, never a second SO.
  */
+type JubelioSalesDispatchGateway = Pick<JubelioSalesGateway, "createSalesOrder" | "cancelSalesOrder">;
+
 export async function dispatchJubelioSalesCreate(input: {
   orderId: string;
   create: JubelioSalesOrderCreateRequest;
-  gateway?: JubelioSalesGateway;
+  /** Attempt-owned creates have no order yet; the attempt is the durable owner. */
+  owner?: ProviderOperationOwner;
+  gateway?: JubelioSalesDispatchGateway;
   /** Hanya existing sweep: claim tetap memakai ledger yang sama. */
   checkoutRecovery?: boolean;
 }): Promise<DispatchCreateResult> {
   const reference = input.create.note;
+  const ownerInput = input.owner ? { owner: input.owner } : { orderId: input.orderId };
   const recorded = await recordJubelioSalesIntent(db, {
-    orderId: input.orderId,
+    ...ownerInput,
     type: "create",
     reference,
     payload: { type: "create", create: input.create },
@@ -352,7 +360,7 @@ export async function dispatchJubelioSalesCreate(input: {
   if (recorded.operation.status === "confirmed") {
     // A previous attempt already confirmed this create (crash/replay).
     if (recorded.operation.salesOrderId != null) {
-      await mirrorConfirmedSalesOrderHold(input.orderId);
+      await completeCreateAccounting(input);
       return { status: "confirmed", salesOrderId: recorded.operation.salesOrderId };
     }
   }
@@ -362,7 +370,7 @@ export async function dispatchJubelioSalesCreate(input: {
     return { status: "in_flight" };
   }
 
-  const claimed = input.checkoutRecovery
+  const claimed = input.checkoutRecovery && !input.owner
     ? await db.transaction(async (tx) => {
         await tx.execute(sql`SET LOCAL lock_timeout = '2s'`);
         await tx.execute(sql`SET LOCAL statement_timeout = '5s'`);
@@ -452,11 +460,23 @@ export async function dispatchJubelioSalesCreate(input: {
     );
   }
   if (!confirmed) return { status: "in_flight" };
-  await mirrorConfirmedSalesOrderHold(input.orderId);
+  await completeCreateAccounting(input);
   log.info(
     `Order ${input.orderId}: sales order ${result.salesOrderId} created and confirmed (operation ${recorded.operation.id})`
   );
   return { status: "confirmed", salesOrderId: result.salesOrderId };
+}
+
+/** Confirmed create accounting is owner-specific: order hold vs pre-order attempt. */
+async function completeCreateAccounting(input: {
+  orderId: string;
+  owner?: ProviderOperationOwner;
+}): Promise<void> {
+  if (input.owner?.kind === "attempt") {
+    await accountConfirmedAttemptCreateHold(input.owner.attemptId);
+    return;
+  }
+  await mirrorConfirmedSalesOrderHold(input.orderId);
 }
 
 // ---------------------------------------------------------------------------
@@ -478,10 +498,12 @@ export type DispatchCancelResult =
 export async function dispatchJubelioSalesCancel(input: {
   orderId: string;
   reason: string;
-  gateway?: JubelioSalesGateway;
+  owner?: ProviderOperationOwner;
+  gateway?: JubelioSalesDispatchGateway;
 }): Promise<DispatchCancelResult> {
+  const ownerInput = input.owner ? { owner: input.owner } : { orderId: input.orderId };
   const createOp = await getJubelioSalesOperation(db, {
-    orderId: input.orderId,
+    ...ownerInput,
     type: "create",
   });
   if (!createOp || createOp.status !== "confirmed" || createOp.salesOrderId == null) {
@@ -492,7 +514,7 @@ export async function dispatchJubelioSalesCancel(input: {
   }
   // Never cancel once an invoice exists or is being created.
   const invoiceOp = await getJubelioSalesOperation(db, {
-    orderId: input.orderId,
+    ...ownerInput,
     type: "invoice",
   });
   if (
@@ -505,10 +527,10 @@ export async function dispatchJubelioSalesCancel(input: {
     };
   }
 
-  const priorCancel = await getJubelioSalesOperation(db, { orderId: input.orderId, type: "cancel" });
+  const priorCancel = await getJubelioSalesOperation(db, { ...ownerInput, type: "cancel" });
   const reference = priorCancel?.reference ?? `OKCIR_SO_CANCEL:${input.orderId}`;
   const recorded = await recordJubelioSalesIntent(db, {
-    orderId: input.orderId,
+    ...ownerInput,
     type: "cancel",
     reference,
     salesOrderId: createOp.salesOrderId,
@@ -518,7 +540,7 @@ export async function dispatchJubelioSalesCancel(input: {
     },
   });
   if (recorded.operation.status === "confirmed") {
-    await releaseConfirmedSalesOrderHold(input.orderId);
+    await completeCancelAccounting(input, createOp.salesOrderId);
     return {
       status: "confirmed",
       salesOrderId: createOp.salesOrderId,
@@ -575,11 +597,23 @@ export async function dispatchJubelioSalesCancel(input: {
     db, recorded.operation.id, { salesOrderId: createOp.salesOrderId }
   );
   if (!confirmed) return { status: "in_flight" };
-  await releaseConfirmedSalesOrderHold(input.orderId);
+  await completeCancelAccounting(input, createOp.salesOrderId);
   log.info(
     `Order ${input.orderId}: sales order ${createOp.salesOrderId} canceled and accounting reconciled`
   );
   return { status: "confirmed", salesOrderId: createOp.salesOrderId };
+}
+
+async function completeCancelAccounting(
+  input: { orderId: string; reason: string; owner?: ProviderOperationOwner },
+  salesOrderId: number
+): Promise<void> {
+  void salesOrderId;
+  if (input.owner?.kind === "attempt") {
+    await accountConfirmedAttemptCancelHold(input.owner.attemptId);
+    return;
+  }
+  await releaseConfirmedSalesOrderHold(input.orderId);
 }
 
 // ---------------------------------------------------------------------------

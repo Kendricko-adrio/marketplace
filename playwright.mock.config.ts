@@ -104,7 +104,7 @@ export default defineConfig({
   // preview, pickup, delivery, shipment, admin discounts, real-server logging
   // correlation) — this config must never run the live-cleanup checkout.spec.ts
   // or the other shared-config specs.
-  testMatch: /(?:discounts-prototype|stock-visibility|versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|branch-form-layout|homepage-form-layout|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|discounts-usage|markdown|markdown-settlement|price-change|price-change-bulk|price-change-excel|price-change-prototype|logging)-mock.spec.ts/,
+  testMatch: /(?:discounts-prototype|stock-visibility|versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|branch-form-layout|homepage-form-layout|form-field-contrast|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|discounts-usage|checkout-attempt-review|markdown|markdown-settlement|price-change|price-change-bulk|price-change-excel|price-change-prototype|logging)-mock.spec.ts/,
   fullyParallel: false,
   workers: 1, // single fixture identity (john) — serial DB + cart ordering
   forbidOnly: true,
@@ -126,7 +126,7 @@ export default defineConfig({
     {
       name: "pickup-mock",
       testDir: "./e2e",
-      testMatch: /(?:discounts-prototype|stock-visibility|versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|branch-form-layout|homepage-form-layout|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|discounts-usage|markdown|markdown-settlement|price-change|price-change-bulk|price-change-excel|price-change-prototype|logging)-mock.spec.ts/,
+      testMatch: /(?:discounts-prototype|stock-visibility|versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|branch-form-layout|homepage-form-layout|form-field-contrast|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|discounts-usage|checkout-attempt-review|markdown|markdown-settlement|price-change|price-change-bulk|price-change-excel|price-change-prototype|logging)-mock.spec.ts/,
       // No storageState/project auth: sessions are created in the spec via the
       // public HTTP sign-in seam against the isolated origins.
     },

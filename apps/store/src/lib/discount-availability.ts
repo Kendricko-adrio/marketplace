@@ -30,6 +30,10 @@ import {
   type OfferEligibilityReason,
 } from "@marketplace/db/src/discount-eligibility";
 import { readVariantProjections } from "@/lib/variant-price-projection";
+import { buildPricingSnapshot, type PricingLineInput, type PricingSnapshot } from "./versioned-pricing";
+import { getPpnRatePercent } from "./config";
+import type { OfferBenefitInput } from "@marketplace/db/src/discount-pricing";
+import type { AvailablePromoCandidate } from "@/features/discounts/promo-picker-contract";
 
 export const AVAILABLE_OFFERS_DEFAULT_LIMIT = 25;
 export const AVAILABLE_OFFERS_MAX_LIMIT = 100;
@@ -92,7 +96,7 @@ type Database = typeof db;
 export async function loadPickupSelectionContext(
   input: { clientId: string; selectedItemIds: readonly string[] },
   database: Database = db
-): Promise<{ subtotalAfterMarkdown: bigint; branchId: string; verifiedEmail: boolean }> {
+): Promise<{ subtotalAfterMarkdown: bigint; branchId: string; verifiedEmail: boolean; lines: PricingLineInput[] }> {
   const selectedIds = [...input.selectedItemIds];
   if (selectedIds.length === 0 || selectedIds.length > 50 || new Set(selectedIds).size !== selectedIds.length) {
     throw new DiscountAvailabilityError("INPUT_INVALID", "Pilih barang yang valid.");
@@ -135,6 +139,7 @@ export async function loadPickupSelectionContext(
 
   const projections = await readVariantProjections(selected.map((row) => row.variantId));
   let subtotal = BigInt(0);
+  const lines: PricingLineInput[] = [];
   for (const row of selected) {
     const effective = projections.get(row.variantId)?.effectiveUnitPrice ?? row.variantPrice;
     const unit = parseMoney(effective);
@@ -142,6 +147,10 @@ export async function loadPickupSelectionContext(
       throw new DiscountAvailabilityError("INPUT_INVALID", "Data harga barang tidak valid.");
     }
     subtotal += unit * BigInt(row.quantity);
+    lines.push({ variantId: row.variantId, quantity: row.quantity,
+      sourceUnitPrice: normalizeMoney(row.variantPrice), effectiveUnitPrice: effective,
+      markdownRevisionId: unit < BigInt(normalizeMoney(row.variantPrice))
+        ? projections.get(row.variantId)?.markdownRevisionId ?? null : null });
   }
 
   const [client] = await database
@@ -153,6 +162,7 @@ export async function loadPickupSelectionContext(
 
   return {
     subtotalAfterMarkdown: subtotal,
+    lines,
     branchId: [...branches][0] as string,
     verifiedEmail: client.emailVerified,
   };
@@ -163,7 +173,36 @@ export async function loadPickupSelectionContext(
  * offset opak; kandidat dibatasi (limit+1) sehingga tidak pernah membaca
  * seluruh histori Offer.
  */
-export async function readAvailableOffers(
+interface AvailabilityInput {
+  clientId: string;
+  selectedItemIds: readonly string[];
+  limit?: number;
+  cursor?: string | null;
+  now?: Date;
+  fulfillment?: AvailableOfferFulfillmentContext;
+}
+
+export async function readAvailableOffers(input: AvailabilityInput, database: Database = db): Promise<AvailableOffersResult> {
+  const result = await readOfferCandidates(input, database);
+  return { items: result.items.map(({ benefit, ...dto }) => { void benefit; return dto; }), nextCursor: result.nextCursor };
+}
+
+/** Semua kandidat aktif, bukan semua histori; satu context dan satu batched usage read. */
+export async function readAvailablePromoCandidates(
+  input: AvailabilityInput & { fulfillment: AvailableOfferFulfillmentContext },
+  database: Database = db
+): Promise<{ baseline: PricingSnapshot; candidates: AvailablePromoCandidate[] }> {
+  const result = await readOfferCandidates(input, database, true);
+  const baseline = buildPricingSnapshot({
+    fulfillmentMethod: input.fulfillment.fulfillmentMethod,
+    ppnRatePercent: await getPpnRatePercent(), lines: result.lines,
+    shippingBeforeSubsidy: input.fulfillment.fulfillmentMethod === "delivery"
+      ? input.fulfillment.shippingBeforeSubsidy ?? "0" : "0",
+  });
+  return { baseline, candidates: result.items };
+}
+
+async function readOfferCandidates(
   input: {
     clientId: string;
     selectedItemIds: readonly string[];
@@ -172,8 +211,9 @@ export async function readAvailableOffers(
     now?: Date;
     fulfillment?: AvailableOfferFulfillmentContext;
   },
-  database: Database = db
-): Promise<AvailableOffersResult> {
+  database: Database,
+  all = false
+): Promise<{ items: AvailablePromoCandidate[]; nextCursor: string | null; lines: PricingLineInput[] }> {
   const now = input.now ?? new Date();
   if (!Number.isFinite(now.getTime())) {
     throw new DiscountAvailabilityError("INPUT_INVALID", "Waktu server tidak valid.");
@@ -189,7 +229,7 @@ export async function readAvailableOffers(
     database
   );
 
-  const rows = await database
+  const query = database
     .select({
       offerId: discountOffers.id,
       quotaCount: discountOffers.quotaCount,
@@ -238,12 +278,10 @@ export async function readAvailableOffers(
         )
       )
     )
-    .orderBy(asc(discountOfferRevisions.name), asc(discountOffers.id))
-    .limit(limit + 1)
-    .offset(offset);
-
-  const hasMore = rows.length > limit;
-  const page = rows.slice(0, limit);
+    .orderBy(asc(discountOfferRevisions.name), asc(discountOffers.id));
+  const rows = all ? await query : await query.limit(limit + 1).offset(offset);
+  const hasMore = !all && rows.length > limit;
+  const page = all ? rows : rows.slice(0, limit);
   const clientUsageRows = page.length === 0
     ? []
     : await database
@@ -266,7 +304,7 @@ export async function readAvailableOffers(
         );
   const clientUsage = new Map(clientUsageRows.map((row) => [row.offerId, row]));
 
-  const items: AvailableOfferDto[] = page.map((row) => {
+  const items: AvailablePromoCandidate[] = page.map((row) => {
     const minSubtotal = normalizeMoney(row.minSubtotal);
     const eligibility = evaluateOfferEligibility({
       now,
@@ -302,6 +340,7 @@ export async function readAvailableOffers(
         : null;
     return {
       offerId: row.offerId,
+      benefit: eligibility.eligible ? benefitPayloadOf(row) as OfferBenefitInput : null,
       name: row.name ?? "",
       benefitAmount: eligibility.benefitAmount ?? "0",
       benefitKind,
@@ -320,6 +359,7 @@ export async function readAvailableOffers(
   return {
     items,
     nextCursor: hasMore ? encodeCursor(offset + limit) : null,
+    lines: context.lines,
   };
 }
 

@@ -12,6 +12,8 @@ import { evaluatePricing } from "@marketplace/db/src/discount-pricing";
 import {
   JubelioSalesContractError,
   assertOrderSnapshotAgreesWithIntent,
+  readJubelioSalesOrderExpectation,
+  readSettlementAuthorityRecord,
   type VersionedSalesOrderExpectation,
 } from "./jubelio-sales-expected";
 
@@ -49,6 +51,80 @@ function intent(overrides: Partial<VersionedSalesOrderExpectation> = {}): Versio
     ...overrides,
   };
 }
+
+function signedLocationPayload(locationId: unknown) {
+  const { lines, ...create } = intent();
+  return { type: "create", create: { ...create, locationId, items: lines } };
+}
+
+describe("provider location identity", () => {
+  it.each([-27, 0, 15, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER])(
+    "preserves signed safe integer location %s",
+    (locationId) => {
+      expect(readJubelioSalesOrderExpectation(signedLocationPayload(locationId))).toMatchObject({ locationId });
+    }
+  );
+
+  it.each([
+    { label: "undefined", value: undefined },
+    { label: "null", value: null },
+    { label: "numeric string", value: "-1" },
+    { label: "boolean", value: true },
+    { label: "fraction", value: -1.5 },
+    { label: "NaN", value: NaN },
+    { label: "positive infinity", value: Infinity },
+    { label: "negative infinity", value: -Infinity },
+    { label: "unsafe positive integer", value: Number.MAX_SAFE_INTEGER + 1 },
+    { label: "unsafe negative integer", value: Number.MIN_SAFE_INTEGER - 1 },
+  ])("rejects $label without coercing the location identity", ({ value }) => {
+    expect(() => readJubelioSalesOrderExpectation(signedLocationPayload(value))).toThrow(
+      expect.objectContaining({
+        code: "SALES_CONTRACT_SHAPE_INVALID",
+        message: "sales create intent locationId must be a safe integer",
+      })
+    );
+  });
+
+  it("rejects an absent location instead of supplying a default", () => {
+    const payload = signedLocationPayload(-1);
+    const { locationId: _locationId, ...create } = payload.create;
+    expect(() => readJubelioSalesOrderExpectation({ type: "create", create })).toThrow(
+      expect.objectContaining({ code: "SALES_CONTRACT_SHAPE_INVALID" })
+    );
+  });
+
+  it.each(["itemId", "taxId", "quantity"] as const)(
+    "does not permit a negative %s when location is negative",
+    (field) => {
+      const payload = signedLocationPayload(-1);
+      payload.create.items = payload.create.items.map((line) => ({ ...line, [field]: -1 }));
+      expect(() => readJubelioSalesOrderExpectation(payload)).toThrow(
+        expect.objectContaining({ code: "SALES_CONTRACT_SHAPE_INVALID" })
+      );
+    }
+  );
+
+  it("accepts negative location in paired immutable settlement records", () => {
+    expect(readSettlementAuthorityRecord({
+      createPayload: signedLocationPayload(-1),
+      orderRow: {
+        pricingContractVersion: 1, pricingEngineVersion: 1, providerContractVersion: 2,
+        pricingSnapshot: percentageSnapshot(), fulfillmentMethod: "pickup",
+        subtotal: "180000", discount: "18000", shippingCost: "0", serviceFee: "0",
+        ppnRate: "11", ppnAmount: "17820", total: "179820",
+      },
+    })).toMatchObject({ providerContractVersion: 2, locationId: -1, expectedProviderPayable: 162_000 });
+  });
+
+  it("accepts Tangerang location -1 without remapping the stored identity", () => {
+    expect(readJubelioSalesOrderExpectation(signedLocationPayload(-1))).toMatchObject({
+      providerContractVersion: 2,
+      locationId: -1,
+      netGoods: 162_000,
+      expectedProviderPayable: 162_000,
+    });
+  });
+});
 
 describe("assertOrderSnapshotAgreesWithIntent — percentage goods", () => {
   it("snapshot percentage qty2 dan intent provider sepakat pada disc whole-line38000", () => {

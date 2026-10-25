@@ -33,7 +33,7 @@ import {
   type PublicOfferCandidate,
 } from "./discount-selection";
 import type { OfferEligibilityReason } from "@marketplace/db/src/discount-eligibility";
-import type { RedemptionTx } from "./discount-lifecycle";
+import type { RedemptionTx, RedemptionOwnerInput } from "./discount-lifecycle";
 
 /** Review context changed between preview and the authoritative commit. */
 export class RedemptionReviewChangedError extends Error {
@@ -137,8 +137,7 @@ export async function lockAndEvaluateOfferReservation(
  */
 export async function insertRedemptionReservation(
   tx: RedemptionTx,
-  input: {
-    orderId: string;
+  input: RedemptionOwnerInput & {
     clientId: string;
     candidate: PublicOfferCandidate;
     deadline: Date;
@@ -146,12 +145,14 @@ export async function insertRedemptionReservation(
   }
 ): Promise<{ redemptionId: string }> {
   const candidate = input.candidate;
+  const owner = input.owner ?? { kind: "order" as const, orderId: input.orderId };
   const benefitAmount = candidate.benefitAmount;
   const redemptionId = crypto.randomUUID();
   const now = new Date();
   await tx.insert(discountRedemptions).values({
     id: redemptionId,
-    orderId: input.orderId,
+    orderId: owner.kind === "order" ? owner.orderId : null,
+    checkoutAttemptId: owner.kind === "attempt" ? owner.attemptId : null,
     clientId: input.clientId,
     offerId: candidate.offerId,
     revisionId: candidate.revisionId,
@@ -238,8 +239,7 @@ export async function insertRedemptionReservation(
 /** Convenience composition for callers (and race tests) that own the tx. */
 export async function reserveRedemptionForOrder(
   tx: RedemptionTx,
-  input: Parameters<typeof lockAndEvaluateOfferReservation>[1] & {
-    orderId: string;
+  input: Parameters<typeof lockAndEvaluateOfferReservation>[1] & RedemptionOwnerInput & {
     deadline: Date;
     pricing: PricingSnapshot;
   }
@@ -250,7 +250,7 @@ export async function reserveRedemptionForOrder(
   const decision = await lockAndEvaluateOfferReservation(tx, input);
   if (!decision.ok) return decision;
   const inserted = await insertRedemptionReservation(tx, {
-    orderId: input.orderId,
+    ...(input.owner ? { owner: input.owner } : { orderId: input.orderId }),
     clientId: input.clientId,
     candidate: decision.candidate,
     deadline: input.deadline,

@@ -55,6 +55,7 @@ import { test, expect, type BrowserContext } from "@playwright/test";
 import bcrypt from "bcryptjs";
 import { Pool } from "pg";
 import dotenv from "dotenv";
+import { contrastRatio, readSurfaceColor, readTextColor, FAINT_PLACEHOLDER_MAX, FAINT_PLACEHOLDER_MIN } from "../support/contrast";
 dotenv.config({ path: ".env" });
 
 // ---------------------------------------------------------------------------
@@ -407,6 +408,66 @@ test.describe("mock-only client address book (ticket 02)", () => {
     );
     expect(selectBackground).toBe(editableBackground);
 
+    // Empty is not "filled": every prompt in this dialog must sit in the faint
+    // placeholder band while typed content stays strong. Before this change the
+    // prompts reused --muted-foreground (7.7:1 vs the field surface), so an
+    // untouched field looked pre-filled. "Alamat Lengkap" is the field that
+    // actually carries a placeholder here ("Nama Penerima" has none).
+    const prompted = page.getByLabel("Alamat Lengkap");
+    const fieldSurface = await readSurfaceColor(prompted);
+    const promptContrast = contrastRatio(
+      await readTextColor(prompted, "placeholder"),
+      fieldSurface
+    );
+    expect(promptContrast).toBeGreaterThanOrEqual(FAINT_PLACEHOLDER_MIN);
+    expect(promptContrast).toBeLessThanOrEqual(FAINT_PLACEHOLDER_MAX);
+    expect(
+      contrastRatio(await readTextColor(prompted), fieldSurface),
+      "typed value must stay far stronger than the prompt"
+    ).toBeGreaterThanOrEqual(12);
+
+    // An untouched Radix select carries `data-placeholder` on the trigger, so the
+    // same token must reach it (its trigger colour IS the placeholder tone here).
+    const selectPromptContrast = contrastRatio(
+      await readTextColor(regionSelect),
+      await readSurfaceColor(regionSelect)
+    );
+    expect(selectPromptContrast).toBeGreaterThanOrEqual(FAINT_PLACEHOLDER_MIN);
+    expect(selectPromptContrast).toBeLessThanOrEqual(FAINT_PLACEHOLDER_MAX);
+
+    await page.close();
+  });
+
+  test("required fields are marked with an asterisk and a written legend", async () => {
+    const page = await aliceContext!.newPage();
+    await page.goto("/account/addresses");
+    await openAddressForm(page);
+
+    // Penanda wajib harus punya arti tertulis, bukan hanya konvensi simbol.
+    await expect(page.getByText("* Wajib diisi", { exact: true })).toBeVisible();
+
+    // Setiap field wajib: bintang terlihat pada label DAN kontrak wajibnya
+    // diumumkan lewat atribut pada kontrolnya (bintang sendiri `aria-hidden`).
+    for (const label of [
+      "Nama Penerima", "Nomor Telepon", "Provinsi", "Kota/Kabupaten",
+      "Kecamatan", "Kelurahan/Area", "Alamat Lengkap",
+    ]) {
+      await expect(page.locator("label", { hasText: label }).first()).toContainText("*");
+      const control = page.getByLabel(label);
+      const announcedRequired = await control.evaluate((element) =>
+        element.hasAttribute("required") || element.getAttribute("aria-required") === "true"
+      );
+      expect(announcedRequired, `${label} must announce itself as required`).toBe(true);
+    }
+
+    // Nama aksesibel tetap bersih: bintang tidak ikut dibacakan.
+    await expect(page.getByRole("textbox", { name: "Nama Penerima", exact: true })).toBeVisible();
+
+    // Kode Pos terkunci dan terisi otomatis dari Kelurahan/Area — tanpa bintang.
+    await expect(page.locator("label", { hasText: "Kode Pos" })).not.toContainText("*");
+
+    await page.getByRole("button", { name: "Batal" }).click();
+    await expect(page.getByLabel("Nama Penerima")).toHaveCount(0);
     await page.close();
   });
 

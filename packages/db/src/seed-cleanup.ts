@@ -59,6 +59,7 @@ export const seedCleanupEntries: ReadonlyArray<
   ["deliveryShipments", schema.deliveryShipments],
   ["discountRequestWindows", schema.discountRequestWindows],
   ["checkoutRequests", schema.checkoutRequests],
+  ["checkoutAttempts", schema.checkoutAttempts],
   ["orderItems", schema.orderItems],
   ["orders", schema.orders],
   ["auditLogs", schema.auditLogs],

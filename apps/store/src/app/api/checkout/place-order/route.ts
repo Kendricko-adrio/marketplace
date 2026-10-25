@@ -87,6 +87,9 @@ import { finalizeRejectedCheckoutCreate } from "@/lib/checkout-recovery";
 import { AcceptedCheckoutReplay, CheckoutRequestConflictError, normalizeCheckoutApproval, checkoutIntentFingerprint, findAcceptedCheckout, checkoutResultResponse, type CheckoutRecovery } from "@/lib/checkout-request";
 import type { CheckoutReviewPromo } from "@/lib/checkout-review";
 import { applyOfferBenefitToPricing } from "@/lib/offer-pricing";
+import { placeCheckout, replayCheckoutAttempt } from "@/features/checkout/place-order-service";
+import { CheckoutAttemptReservationError } from "@/features/checkout/checkout-attempt";
+import { createCheckoutPayment } from "@/lib/midtrans";
 
 /**
  * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
@@ -257,6 +260,26 @@ export async function isCheckoutPaused(): Promise<boolean> {
   }
 }
 
+/** HTTP mapping for the version-2 attempt contract (no order means no redirect). */
+function checkoutAttemptResponse(result: Awaited<ReturnType<typeof placeCheckout>>): Response {
+  const { replayed, ...data } = result;
+  if (result.state === "promoted") {
+    log.info(`checkout attempt promoted: order ${data.orderId}, attempt ${data.attemptId}, replay ${replayed}`);
+    return NextResponse.json({ success: true, data, orderId: data.orderId, redirectUrl: data.redirectUrl },
+      { status: replayed ? 200 : 201, headers: { "Cache-Control": "no-store" } });
+  }
+  if (result.state === "rejected") {
+    log.warn(`checkout rejected before order creation (attempt ${data.attemptId}, ${data.failureCode})`);
+    return NextResponse.json({ success: false, code: data.failureCode, error: data.message, data,
+      orderId: null, requestId: getRequestId() },
+      { status: data.failureCode === "SALES_ORDER_REJECTED" ? 409 : 502, headers: { "Cache-Control": "no-store" } });
+  }
+  return NextResponse.json({ success: false,
+    code: data.state === "manual_review" ? "CHECKOUT_MANUAL_REVIEW" : "CHECKOUT_PROCESSING",
+    error: data.message, data, orderId: null, requestId: getRequestId() },
+    { status: 202, headers: { "Cache-Control": "no-store" } });
+}
+
 async function postPlaceOrder(request: NextRequest): Promise<Response> {
   const recovery: CheckoutRecovery = {};
   try {
@@ -288,6 +311,15 @@ async function postPlaceOrder(request: NextRequest): Promise<Response> {
 
 async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
   log.info("place order requested");
+  // E2E-only payment seam shared by the creator and replay paths.
+  const initializeCheckoutPayment = (paymentInput: Parameters<typeof createCheckoutPayment>[0]) => {
+    const mockRequested = process.env.NODE_ENV !== "production" &&
+      request.headers.get("x-e2e-payment-mock") === "true";
+    const mock = mockRequested
+      ? getMockPaymentResult(paymentInput.orderId, { MIDTRANS_E2E_MOCK: "true", NODE_ENV: "test" })
+      : null;
+    return mock ? Promise.resolve({ kind: "ready" as const, ...mock }) : createCheckoutPayment(paymentInput);
+  };
   try {
     const access = await requireOnboardedApiSession();
     if (!access.ok) return access.response;
@@ -321,6 +353,12 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
         fingerprint: checkoutIntentFingerprint(parsed.data) };
       const accepted = await findAcceptedCheckout(recovery.identity);
       if (accepted) return checkoutResultResponse(accepted, true);
+      // Pre-order replay is answered before any stock/pricing re-check: the
+      // retained attempt owns that outcome. Same key + different intent is 409.
+      const replayedAttempt = await replayCheckoutAttempt({ clientId: recovery.identity.clientId,
+        requestKey: recovery.identity.requestKey, fingerprint: recovery.identity.fingerprint },
+        { initializePayment: initializeCheckoutPayment });
+      if (replayedAttempt) return checkoutAttemptResponse(replayedAttempt);
     }
     if (await isCheckoutPaused()) {
       log.warn("checkout rejected — new checkouts are paused");
@@ -381,6 +419,7 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
     const items = await db
       .select({
         cartItemId: cartItems.id,
+        cartItemUpdatedAt: cartItems.updatedAt,
         quantity: cartItems.quantity,
         variantId: productVariants.id,
         variantColor: productVariants.color,
@@ -997,6 +1036,88 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
         taxId: Number(process.env.JUBELIO_ITEM_TAX_ID) || 1,
       })),
     };
+
+    // ===== New checkout lifecycle: reserve → SO → payment → promotion =====
+    // No order exists until the Sales Order and the payment session are ready.
+    const lifecycleSnapshot = pricingSnapshot as PricingSnapshot | null;
+    const attemptIdentity = recovery.identity as { fingerprint: string; requestKey: string } | undefined;
+    if (lifecycleSnapshot && attemptIdentity) {
+      const snapshot = lifecycleSnapshot;
+      const snapshotItems = [...selectedItems]
+        .sort((a, b) => a.variantId.localeCompare(b.variantId))
+        .map((item) => {
+          const line = snapshot.lines.find((row) => row.variantId === item.variantId);
+          return { id: crypto.randomUUID(), variantId: item.variantId, productName: item.productName,
+            variantInfo: `${item.variantColor || ""} ${item.variantSize || ""}`.trim(),
+            price: line?.effectiveUnitPrice ?? effectiveOf(item), quantity: item.quantity,
+            pricingContractVersion: 1, sourceUnitPrice: line?.sourceUnitPrice ?? item.variantPrice,
+            markdownAmount: line?.markdownAmount ?? "0", goodsDiscountAmount: line?.goodsDiscountAmount ?? "0",
+            netLineAmount: line?.netLineAmount ?? String(Number(item.variantPrice) * item.quantity),
+            markdownRevisionId: line?.markdownRevisionId ?? null };
+        });
+      try {
+        const attemptResult = await placeCheckout({
+          attemptId: crypto.randomUUID(), clientId: session.user.id, branchId,
+          requestKey: attemptIdentity.requestKey, fingerprint: attemptIdentity.fingerprint,
+          reservedOrderId: orderId, paymentStartedAt, expiresAt, stockObservedAt: stockCheck.observedAt,
+          offerCandidate, now: paymentStartedAt,
+          snapshot: {
+            version: 1,
+            order: {
+              branchId,
+              addressId: deliveryBody && "addressId" in deliveryBody ? deliveryBody.addressId : null,
+              contactPhone: phone, contactEmail: email,
+              subtotal: pricing.subtotal, shippingCost: pricing.shippingCost, discount: pricing.discount,
+              serviceFee: pricing.serviceFee, ppnRate: pricing.ppnRatePercent, ppnAmount: pricing.ppnAmount,
+              total: pricing.total, fulfillmentMethod: isDelivery ? "delivery" : "pickup",
+              deliverySnapshot: isDelivery ? deliverySnapshot : null,
+              pickupDate: isDelivery ? null : pickupDateToInstant(pickupDate!).toISOString(),
+              pickupTime: isDelivery ? null : pickupTime!,
+              pricingContractVersion: snapshot.pricingContractVersion,
+              pricingEngineVersion: snapshot.pricingEngineVersion,
+              providerContractVersion: snapshot.providerContractVersion,
+              pricingCurrency: snapshot.currency, sourceGoodsSubtotal: snapshot.sourceGoodsSubtotal,
+              markdownTotal: snapshot.markdownTotal, netGoods: snapshot.netGoods,
+              shippingBeforeSubsidy: snapshot.shippingBeforeSubsidy,
+              shippingSubsidy: snapshot.shippingSubsidy, merchantFunding: snapshot.merchantFunding,
+              taxableBase: snapshot.taxableBase, expectedProviderPayable: snapshot.expectedProviderPayable,
+              providerQuotedShippingCost: snapshot.providerQuotedShippingCost,
+              providerBilledShippingCost: snapshot.providerBilledShippingCost,
+              pricingSnapshot: snapshot,
+            },
+            items: snapshotItems,
+            cart: selectedItems.map((item) => ({ itemId: item.cartItemId, cartId: cart.id, variantId: item.variantId,
+              branchId: item.branchId!, quantity: item.quantity, updatedAt: item.cartItemUpdatedAt.toISOString() })),
+            createRequest,
+            addressToSave: isDelivery && deliveryBody && "newAddress" in deliveryBody && deliveryBody.saveAddress && verifiedNewAddress
+              ? { firstName: verifiedNewAddress.recipientName, lastName: "", phone: verifiedNewAddress.phone,
+                  fullAddress: verifiedNewAddress.fullAddress, provinceId: verifiedNewAddress.canonical.provinceId,
+                  province: verifiedNewAddress.canonical.province, cityId: verifiedNewAddress.canonical.cityId,
+                  city: verifiedNewAddress.canonical.city, districtId: verifiedNewAddress.canonical.districtId,
+                  district: verifiedNewAddress.canonical.district, areaId: verifiedNewAddress.canonical.areaId,
+                  area: verifiedNewAddress.canonical.area, postalCode: verifiedNewAddress.canonical.postalCode,
+                  isDefault: deliveryBody.newAddress.isDefault }
+              : null,
+          },
+        }, {
+          initializePayment: initializeCheckoutPayment,
+        });
+        return checkoutAttemptResponse(attemptResult);
+      } catch (attemptError) {
+        if (attemptError instanceof CheckoutAttemptReservationError) {
+          log.warn(`checkout attempt rejected (code ${attemptError.code})`);
+          return NextResponse.json({ success: false, code: attemptError.code, error: attemptError.message,
+            requestId: getRequestId(), ...(attemptError.requestKey ? { data: { requestKey: attemptError.requestKey } } : {}) },
+            { status: 409, headers: { "Cache-Control": "no-store" } });
+        }
+        // Infrastructure failure before any provider write: retry the SAME key.
+        log.error("checkout attempt unavailable (code POLICY_UNAVAILABLE)",
+          new RouteLogError("checkout attempt unavailable"));
+        return NextResponse.json({ success: false, code: "POLICY_UNAVAILABLE",
+          error: "Checkout belum dapat diselesaikan. Coba kembali dengan request yang sama.", requestId: getRequestId() },
+          { status: 503, headers: { "Cache-Control": "no-store" } });
+      }
+    }
 
     try {
       await runCheckoutTransaction(!!pricingSnapshot, async (tx, step) => {

@@ -2990,6 +2990,39 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
     }
 
 
+    if (seedPlan.seedCatalogDependentFixtures) {
+      // Failed checkout evidence is retained without manufacturing a failed order.
+      const [attemptVariant] = await db.select({ id: schema.productVariants.id,
+        price: schema.productVariants.price, itemId: schema.productVariants.jubelioItemId,
+        name: schema.products.name }).from(schema.productVariants)
+        .innerJoin(schema.products, eq(schema.products.id, schema.productVariants.productId))
+        .orderBy(asc(schema.productVariants.id)).limit(1);
+      const [attemptBranch] = await db.select().from(schema.branches).orderBy(asc(schema.branches.id)).limit(1);
+      if (attemptVariant && attemptBranch) {
+        const anchor = new Date();
+        const reservedOrderId = generateId();
+        await db.insert(schema.checkoutAttempts).values({
+          id: generateId(), clientId: customer1Id, branchId: attemptBranch.id,
+          requestKey: generateId(), fingerprint: "a".repeat(64), reservedOrderId,
+          state: "rejected", failureCode: "SALES_ORDER_REJECTED", stockHoldState: "released",
+          paymentStartedAt: anchor, expiresAt: new Date(anchor.getTime() + 15 * 60_000),
+          snapshot: { version: 1,
+            order: { branchId: attemptBranch.id, contactPhone: "081234567890",
+              contactEmail: "john@example.com", subtotal: attemptVariant.price, total: attemptVariant.price },
+            items: [{ id: generateId(), variantId: attemptVariant.id,
+              productName: attemptVariant.name, price: attemptVariant.price, quantity: 1 }],
+            cart: [{ itemId: "seed-rejected-cart-item", cartId: "seed-rejected-cart",
+              variantId: attemptVariant.id, branchId: attemptBranch.id, quantity: 1, updatedAt: anchor.toISOString() }],
+            createRequest: { contactId: -1, customerName: "Demo checkout",
+              locationId: attemptBranch.jubelioLocationId ?? 1001, note: `SEED_REJECTED:${reservedOrderId}`,
+              refNo: reservedOrderId, items: [{ itemId: attemptVariant.itemId ?? 10001, quantity: 1,
+                price: Number(attemptVariant.price), discAmount: 0, taxAmount: 0, unit: "Buah", taxId: 1 }] },
+            addressToSave: null,
+          },
+        });
+      }
+    }
+
     console.log("✅ Seeding completed successfully!");
     console.log("");
     console.log("🔑 Admin credentials:");

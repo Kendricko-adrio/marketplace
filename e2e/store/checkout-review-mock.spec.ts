@@ -414,6 +414,13 @@ test.afterEach(async () => {
   // milik spec ini dibersihkan antar kasus; jangan membawa hold ke kasus lain.
   await deleteRetainedOrderFixtures(pool, [...fixtureOrderIds]);
   fixtureOrderIds.clear();
+  // Unresolved attempts have no order to clean: drop this spec's own fixtures
+  // (disposable database only) so retained holds never leak between cases.
+  const attemptOwner = await pool.query("SELECT id FROM client WHERE email=$1", [TEST_USERS.store.email]);
+  await pool.query("DELETE FROM jubelio_sales_operation WHERE checkout_attempt_id IN (SELECT id FROM checkout_attempt WHERE client_id=$1)", [attemptOwner.rows[0].id]);
+  await pool.query("DELETE FROM discount_redemption_event WHERE redemption_id IN (SELECT id FROM discount_redemption WHERE checkout_attempt_id IN (SELECT id FROM checkout_attempt WHERE client_id=$1))", [attemptOwner.rows[0].id]);
+  await pool.query("DELETE FROM discount_redemption WHERE checkout_attempt_id IN (SELECT id FROM checkout_attempt WHERE client_id=$1)", [attemptOwner.rows[0].id]);
+  await pool.query("DELETE FROM checkout_attempt WHERE client_id=$1 AND order_id IS NULL", [attemptOwner.rows[0].id]);
   await pool.query("UPDATE branch_stock SET pending_remote_stock=0,available_stock=5,stock=5 WHERE product_variant_id=$1", [FIXTURE_VARIANT_ID]);
   const owner = await pool.query("SELECT id FROM client WHERE email=$1", [TEST_USERS.store.email]);
   const hash = (kind: string, value: string) => createHmac("sha256", "mock-e2e-only-shared-auth-secret-do-not-reuse")
@@ -778,7 +785,7 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
     })));
     const results = await Promise.all(responses.map((response) => response.json()));
     for (const result of results) if (result.data?.orderId) fixtureOrderIds.add(result.data.orderId);
-    expect(responses.map((response) => response.status()).sort()).toEqual([200, 201]);
+    expect(responses.map((response) => response.status()).sort(), JSON.stringify(results)).toEqual([200, 201]);
     expect(results[0].data.orderId).toBe(results[1].data.orderId);
     const writes = (await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path.startsWith("/sales/"));
     expect(writes).toHaveLength(1);
@@ -793,16 +800,16 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
     const result = await response.json();
     if (result.data?.orderId) fixtureOrderIds.add(result.data.orderId);
     expect(response.status()).toBe(202);
-    expect(result.success).toBe(true);
-    expect(result.data.state).toBe("manual_review");
-    expect(result.data.paymentAvailable).toBe(false);
+    expect(result.success).toBe(false);
+    expect(result.code).toBe("CHECKOUT_MANUAL_REVIEW");
+    expect(result.data).toMatchObject({ version: 2, state: "manual_review", orderId: null, paymentAvailable: false, retryAllowed: false });
     const writesBefore = (await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path.startsWith("/sales/"));
     expect(writesBefore).toHaveLength(1);
     const replay = await storeContext.request.post("/api/checkout/place-order", { data: body });
-    expect(replay.status()).toBe(200);
-    expect((await replay.json()).data.orderId).toBe(result.data.orderId);
+    expect(replay.status()).toBe(202);
+    expect((await replay.json()).data).toMatchObject({ state: "manual_review", orderId: null });
     const lookup = await (await storeContext.request.get(`/api/checkout/requests/${body.requestKey}`)).json();
-    expect(lookup.data.orderId).toBe(result.data.orderId);
+    expect(lookup.data).toMatchObject({ state: "manual_review", orderId: null, retryAllowed: false });
     expect((await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path.startsWith("/sales/"))).toHaveLength(1);
     await mockControl("PUT", "/__control/scenario", { scenario: "success" });
   });
@@ -861,16 +868,18 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
     await pool.query(`CREATE TRIGGER checkout02_reject_receipt BEFORE INSERT ON checkout_request
       FOR EACH ROW WHEN (NEW.request_key='b1200000-0000-4000-8000-000000000009') EXECUTE FUNCTION checkout02_reject_receipt()`);
     try {
-      const failed = await storeContext.request.post("/api/checkout/place-order", { data: body });
-      expect(failed.status()).toBe(503);
-      expect((await failed.json()).code).toBe("POLICY_UNAVAILABLE");
-      expect((await storeContext.request.get(`/api/checkout/requests/${body.requestKey}`)).status()).toBe(404);
-      expect((await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path.startsWith("/sales/"))).toHaveLength(0);
+      const failed = await storeContext.request.post("/api/checkout/place-order", { data: body, headers: { "x-e2e-payment-mock": "true" } });
+      // External success exists; only the local promotion failed. The customer
+      // stays on the reviewed checkout and no second provider write is made.
+      expect(failed.status()).toBe(202);
+      expect((await failed.json()).data).toMatchObject({ state: "processing", orderId: null });
+      expect((await storeContext.request.get(`/api/checkout/requests/${body.requestKey}`)).status()).toBe(200);
+      expect((await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path.startsWith("/sales/"))).toHaveLength(1);
       await pool.query("DROP TRIGGER checkout02_reject_receipt ON checkout_request");
       const retried = await storeContext.request.post("/api/checkout/place-order", { data: body, headers: { "x-e2e-payment-mock": "true" } });
       const result = await retried.json();
       if (result.data?.orderId) fixtureOrderIds.add(result.data.orderId);
-      expect(retried.status()).toBe(201);
+      expect(retried.status(), JSON.stringify(result)).toBe(200);
       expectRupiah((await (await storeContext.request.get(`/api/orders/${result.data.orderId}`)).json()).data.total, TOTAL_AMOUNT, "rollback retry amount");
     } finally {
       await pool.query("DROP TRIGGER IF EXISTS checkout02_reject_receipt ON checkout_request");
@@ -895,7 +904,7 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
       orderId = result.data?.orderId ?? "";
       if (orderId) fixtureOrderIds.add(orderId);
       expect(placed.status()).toBe(202);
-      expect(result.data.state).toBe("processing");
+      expect(result.data).toMatchObject({ state: "preparing", orderId: null });
       await storeContext.request.get(`/api/checkout/requests/${body.requestKey}`);
       expect((await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path.startsWith("/sales/"))).toHaveLength(0);
     } finally {
@@ -908,10 +917,15 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
       });
       expect(swept.status()).toBe(200);
     }
-    const writes = (await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path === "/sales/orders/" && entry.body.ref_no === orderId);
+    // Never-sent intent: the sweep claims and dispatches it exactly once, but
+    // never creates an order or a payment session on the customer's behalf.
+    const reserved = (await pool.query("SELECT reserved_order_id FROM checkout_attempt WHERE request_key=$1",
+      [body.requestKey])).rows[0].reserved_order_id as string;
+    const writes = (await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path === "/sales/orders/" && entry.body.ref_no === reserved);
     expect(writes).toHaveLength(1);
-    const result = await (await storeContext.request.get(`/api/checkout/requests/${body.requestKey}`)).json();
-    expect(result.data.orderId).toBe(orderId);
+    const swept = await (await storeContext.request.get(`/api/checkout/requests/${body.requestKey}`)).json();
+    expect(swept.data).toMatchObject({ orderId: null, retryAllowed: false });
+    expect((await pool.query("SELECT count(*)::int AS count FROM orders WHERE id=$1", [reserved])).rows).toEqual([{ count: 0 }]);
   });
 
   test("canonical item ordering does not conflict and duplicate selected IDs are rejected", async () => {
@@ -940,44 +954,46 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
     expect((await replay.json()).data.orderId).toBe(result.data.orderId);
   });
 
-  test("definitive create rejection keeps the accepted result and releases only its own hold", async () => {
+  test("definitive create rejection creates no order, keeps the cart, and allows one safe retry", async () => {
     const prepared = await preparePickup();
     const body = { ...prepared, requestKey: "b1200000-0000-4000-8000-000000000023" };
     await mockControl("PUT", "/__control/scenario", { scenario: "reject-create" });
     const rejected = await storeContext.request.post("/api/checkout/place-order", { data: body });
     const result = await rejected.json();
-    if (result.data?.orderId) fixtureOrderIds.add(result.data.orderId);
-    expect(result.success).toBe(true);
-    expect(result.data.state).toBe("failed");
-    const replay = await storeContext.request.post("/api/checkout/place-order", { data: body });
-    expect(replay.status()).toBe(200);
-    expect((await replay.json()).data.orderId).toBe(result.data.orderId);
+    expect(rejected.status()).toBe(409);
+    expect(result.success).toBe(false);
+    expect(result.code).toBe("SALES_ORDER_REJECTED");
+    expect(result.data).toMatchObject({ version: 2, state: "rejected", orderId: null, retryAllowed: true });
+    // No failed order exists for this request, and no payment page was opened.
+    const orders = await pool.query("SELECT count(*)::int AS count FROM orders WHERE id = (SELECT reserved_order_id FROM checkout_attempt WHERE request_key=$1)", [body.requestKey]);
+    expect(orders.rows).toEqual([{ count: 0 }]);
+    expect((await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path.startsWith("/snap/"))).toHaveLength(0);
+    // The retryable attempt did not consume the customer's cart.
+    const keptCart = await storeContext.request.get("/api/cart");
+    expect((await keptCart.json()).data.items.length).toBeGreaterThan(0);
     await mockControl("PUT", "/__control/scenario", { scenario: "success" });
     const next = await storeContext.request.post("/api/checkout/place-order", { data: { ...body,
       requestKey: "b1200000-0000-4000-8000-000000000024" }, headers: { "x-e2e-payment-mock": "true" } });
     const nextResult = await next.json();
     if (nextResult.data?.orderId) fixtureOrderIds.add(nextResult.data.orderId);
     expect(next.status()).toBe(201);
-    expect(nextResult.data.orderId).not.toBe(result.data.orderId);
     expect((await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path === "/sales/orders/")).toHaveLength(2);
     expect((await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path.includes("cancel"))).toHaveLength(0);
   });
 
-  test("a placement exceeding the total transaction budget rolls back before any dispatch", async () => {
+  test("a reservation exceeding the statement budget fails before any dispatch", async () => {
     test.setTimeout(60_000);
     const body = { ...await preparePickup(), requestKey: "b1200000-0000-4000-8000-000000000020" };
     await pool.query(`CREATE OR REPLACE FUNCTION checkout02_slow_transaction() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN PERFORM pg_sleep(2.7); RETURN NEW; END $$`);
+      BEGIN PERFORM pg_sleep(5.5); RETURN NEW; END $$`);
+    // The pre-order reservation is the only local commit before provider work.
     const triggers = [
-      ["orders", "NEW.contact_email='checkout-review-mock-e2e@example.com'"],
-      ["order_item", "NEW.variant_id='e2e-checkout-review-variant'"],
-      ["branch_stock", "NEW.product_variant_id='e2e-checkout-review-variant' AND NEW.pending_remote_stock > OLD.pending_remote_stock"],
-      ["checkout_request", "NEW.request_key='b1200000-0000-4000-8000-000000000020'"],
+      ["checkout_attempt", "NEW.request_key='b1200000-0000-4000-8000-000000000020'"],
     ];
     try {
       for (const [table, predicate] of triggers) {
         await pool.query(`DROP TRIGGER IF EXISTS checkout02_slow_transaction ON ${table}`);
-        await pool.query(`CREATE TRIGGER checkout02_slow_transaction BEFORE ${table === "branch_stock" ? "UPDATE" : "INSERT"} ON ${table}
+        await pool.query(`CREATE TRIGGER checkout02_slow_transaction BEFORE INSERT ON ${table}
           FOR EACH ROW WHEN (${predicate}) EXECUTE FUNCTION checkout02_slow_transaction()`);
       }
       const response = await storeContext.request.post("/api/checkout/place-order", { data: body, headers: { "x-e2e-payment-mock": "true" } });
@@ -992,67 +1008,97 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
     }
   });
 
-  test("serialization rollback is retried at most three attempts before one external dispatch", async () => {
+  test("a serialization failure before dispatch stays retryable and never duplicates the Sales Order", async () => {
     const body = { ...await preparePickup(), requestKey: "b1200000-0000-4000-8000-000000000021" };
     await pool.query("DROP SEQUENCE IF EXISTS checkout02_serialization_sequence");
     await pool.query("CREATE SEQUENCE checkout02_serialization_sequence START 1");
     await pool.query(`CREATE OR REPLACE FUNCTION checkout02_serialization_failure() RETURNS trigger LANGUAGE plpgsql AS $$
-      BEGIN IF nextval('checkout02_serialization_sequence') < 3 THEN
+      BEGIN IF nextval('checkout02_serialization_sequence') < 2 THEN
         RAISE EXCEPTION 'checkout02 serialization fixture' USING ERRCODE='40001';
       END IF; RETURN NEW; END $$`);
-    await pool.query("DROP TRIGGER IF EXISTS checkout02_serialization_failure ON checkout_request");
-    await pool.query(`CREATE TRIGGER checkout02_serialization_failure BEFORE INSERT ON checkout_request
+    await pool.query("DROP TRIGGER IF EXISTS checkout02_serialization_failure ON checkout_attempt");
+    await pool.query(`CREATE TRIGGER checkout02_serialization_failure BEFORE INSERT ON checkout_attempt
       FOR EACH ROW WHEN (NEW.request_key='b1200000-0000-4000-8000-000000000021') EXECUTE FUNCTION checkout02_serialization_failure()`);
     try {
-      const response = await storeContext.request.post("/api/checkout/place-order", { data: body, headers: { "x-e2e-payment-mock": "true" } });
-      const result = await response.json();
+      const failed = await storeContext.request.post("/api/checkout/place-order", { data: body, headers: { "x-e2e-payment-mock": "true" } });
+      expect(failed.status()).toBe(503);
+      expect((await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path.startsWith("/sales/"))).toHaveLength(0);
+      expect((await pool.query("SELECT count(*)::int AS count FROM orders WHERE id=(SELECT reserved_order_id FROM checkout_attempt WHERE request_key=$1)",
+        [body.requestKey])).rows).toEqual([{ count: 0 }]);
+      const retried = await storeContext.request.post("/api/checkout/place-order", { data: body, headers: { "x-e2e-payment-mock": "true" } });
+      const result = await retried.json();
       if (result.data?.orderId) fixtureOrderIds.add(result.data.orderId);
-      expect(response.status()).toBe(201);
-      expect(Number((await pool.query("SELECT last_value FROM checkout02_serialization_sequence")).rows[0].last_value)).toBe(3);
+      expect(retried.status()).toBe(201);
       expect((await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path === "/sales/orders/")).toHaveLength(1);
       expectRupiah((await (await storeContext.request.get(`/api/orders/${result.data.orderId}`)).json()).data.total, TOTAL_AMOUNT, "serialized retry amount");
     } finally {
-      await pool.query("DROP TRIGGER IF EXISTS checkout02_serialization_failure ON checkout_request");
+      await pool.query("DROP TRIGGER IF EXISTS checkout02_serialization_failure ON checkout_attempt");
       await pool.query("DROP FUNCTION IF EXISTS checkout02_serialization_failure()");
       await pool.query("DROP SEQUENCE IF EXISTS checkout02_serialization_sequence");
     }
   });
 
-  test("browser keeps the same request across a lost response and reload finds the committed order after cart removal", async () => {
-    await preparePickup();
-    const page = await storeContext.newPage();
-    let orderId = "";
-    let placements = 0;
-    await page.route("**/api/checkout/place-order", async (route) => {
-      placements++;
-      const response = await route.fetch({ headers: { ...route.request().headers(), "x-e2e-payment-mock": "true" } });
-      const result = await response.json();
-      orderId = result.data?.orderId ?? result.orderId ?? "";
-      if (orderId) fixtureOrderIds.add(orderId);
-      await route.abort("connectionfailed"); // Backend response hilang; bukan stub checkout.
+  for (const recovery of ["reload", "pay"] as const) {
+    test(`browser keeps the same request across a lost response (${recovery}) without a recovery panel`, async () => {
+      await preparePickup();
+      const page = await storeContext.newPage();
+      let orderId = "";
+      let placements = 0;
+      let releasePlacement!: () => void;
+      const placementGate = new Promise<void>((resolve) => { releasePlacement = resolve; });
+      // Halaman provider mock tidak boleh menavigasi ke dev server port 3000.
+      await page.route("**/checkout/payment-test?**", (route) => route.fulfill({
+        contentType: "text/html", body: "<h1>Pembayaran uji</h1>",
+      }));
+      await page.route("**/api/checkout/place-order", async (route) => {
+        placements++;
+        await placementGate;
+        const response = await route.fetch({ headers: { ...route.request().headers(), "x-e2e-payment-mock": "true" } });
+        const result = await response.json();
+        orderId = result.data?.orderId ?? result.orderId ?? "";
+        if (orderId) fixtureOrderIds.add(orderId);
+        await route.abort("connectionfailed"); // Backend response hilang; bukan stub checkout.
+      });
+      try {
+        await page.goto("/cart");
+        await page.getByRole("checkbox").first().check();
+        await page.getByRole("button", { name: "Checkout" }).click();
+        await page.waitForURL("**/checkout");
+        await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
+        await page.getByRole("combobox").click();
+        await page.getByRole("option", { name: "10:00" }).click();
+        await page.getByLabel("Nomor Telepon *").fill(CONTACT_PHONE);
+        await page.getByLabel("Email *").fill(CONTACT_EMAIL);
+        await page.getByRole("button", { name: "Lanjut" }).click();
+        await page.getByText(/Saya telah memeriksa pesanan/).click();
+        await page.getByRole("button", { name: /Bayar/ }).click();
+        await expect(page.getByRole("button", { name: "Memproses...", exact: true })).toBeDisabled();
+        await expect(page.getByText("Status checkout sebelumnya belum dapat dipastikan.", { exact: false })).toHaveCount(0);
+        await expect(page.getByRole("button", { name: "Periksa status checkout" })).toHaveCount(0);
+        await page.screenshot({ path: test.info().outputPath("checkout-loading.png"), fullPage: true });
+        releasePlacement();
+        await expect(page.getByText("Koneksi terputus. Periksa status pesanan sebelum mencoba lagi.")).toBeVisible();
+        expect(orderId).toBeTruthy();
+        if (recovery === "pay") {
+          // Tombol bayar memakai request yang tersimpan, bukan placement baru.
+          await page.getByRole("button", { name: /Bayar Sekarang/ }).click();
+          await expect(page).toHaveURL(new RegExp(`/checkout/payment-test\\?orderId=${orderId}$`));
+          await expect(page.getByRole("heading", { name: "Pembayaran uji" })).toBeVisible();
+          await page.goto(`${STORE_BASE_URL}/account/orders/${orderId}`);
+        } else {
+          await page.reload();
+        }
+        await expect(page).toHaveURL(new RegExp(`/account/orders/${orderId}$`));
+        await expect(page.getByText("Rp 166.500", { exact: true }).first()).toBeVisible();
+        expect(placements).toBe(1);
+        expect((await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path.startsWith("/sales/"))).toHaveLength(1);
+      } finally {
+        releasePlacement();
+        await page.unrouteAll({ behavior: "wait" });
+        await page.close();
+      }
     });
-    try {
-      await page.goto("/cart");
-      await page.getByRole("checkbox").first().check();
-      await page.getByRole("button", { name: "Checkout" }).click();
-      await page.waitForURL("**/checkout");
-      await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
-      await page.getByRole("combobox").click();
-      await page.getByRole("option", { name: "10:00" }).click();
-      await page.getByLabel("Nomor Telepon *").fill(CONTACT_PHONE);
-      await page.getByLabel("Email *").fill(CONTACT_EMAIL);
-      await page.getByRole("button", { name: "Lanjut" }).click();
-      await page.getByText(/Saya telah memeriksa pesanan/).click();
-      await page.getByRole("button", { name: /Bayar/ }).click();
-      await expect(page.getByRole("button", { name: "Periksa pesanan" })).toBeVisible();
-      expect(orderId).toBeTruthy();
-      await page.reload();
-      await expect(page).toHaveURL(new RegExp(`/account/orders/${orderId}$`));
-      await expect(page.getByText("Rp 166.500", { exact: true }).first()).toBeVisible();
-      expect(placements).toBe(1);
-      expect((await getMockRequests()).filter((entry) => entry.method === "POST" && entry.path.startsWith("/sales/"))).toHaveLength(1);
-    } finally { await page.close(); }
-  });
+  }
 
   test("preview enforces account admission60 and returns 429 with Retry-After despite forged IP headers", async () => {
     const prepared = await preparePickup();
@@ -1464,54 +1510,73 @@ test.describe("shipping subsidy delivery (ticket 11)", () => {
         await page.getByRole("radio", { name: /JNE REG Fixture/ }).check();
         // Delivery: kontak pemesan = email akun (read-only) + telepon penerima.
         await expect(page.locator("#contactEmail")).toHaveValue(TEST_USERS.store.email);
-        await page.screenshot({ path: `${process.env.TEMP ?? "/tmp"}/checkout-contact-${width}.png`, fullPage: true });
+        await page.screenshot({ path: `playwright/mcp/promo-modal/checkout-contact-${width}.png`, fullPage: true });
         await page.getByRole("button", { name: "Lanjut", exact: true }).click();
-        const review = page.getByRole("heading", { name: "Pembayaran", exact: true }).locator("..");
-        const code = review.getByLabel("Punya kode promo?");
-        await expect(code).toBeVisible();
+        const review = page.getByRole("heading", { name: "Pembayaran", exact: true, includeHidden: true }).locator("..");
+        const costs = review.getByRole("region", { name: "Rincian Pembayaran", includeHidden: true });
+        async function openPicker() {
+          if (!await page.getByRole("dialog").isVisible()) await review.getByRole("button", { name: /^(Pilih promo|Ubah promo)$/ }).click();
+        }
+        async function choose(name: RegExp) {
+          await openPicker();
+          await page.getByRole("radio", { name }).check();
+          await page.getByRole("button", { name: "Gunakan promo", exact: true }).click();
+        }
+        async function checkCode(value: string) {
+          await openPicker();
+          await page.getByLabel("Kode promo", { exact: true }).fill(value);
+          await page.getByRole("button", { name: "Periksa", exact: true }).click();
+          await expect(page.getByText("Kode promo valid. Pilih Gunakan promo untuk menerapkan.")).toBeVisible();
+          await page.getByRole("button", { name: "Gunakan promo", exact: true }).click();
+        }
         await expect(review.getByRole("heading", { name: "Detail Pengiriman" })).toBeVisible();
         await expect(review.getByText("Dikirim dari", { exact: true })).toBeVisible();
         await expect(review.getByText("Layanan kurir", { exact: true })).toBeVisible();
         await expect(page.getByRole("heading", { name: "Ringkasan", exact: true })).toHaveCount(0);
-        const costs = review.getByRole("region", { name: "Rincian Pembayaran" });
         await expect(costs.getByText("Rp 196.500", { exact: true })).toBeVisible();
+        await openPicker();
+        const code = page.getByLabel("Kode promo", { exact: true });
         await code.fill(SHIP_CODE);
         await code.press("Tab");
-        await expect(review.getByRole("button", { name: "Terapkan", exact: true })).toBeFocused();
+        await expect(page.getByRole("button", { name: "Periksa", exact: true })).toBeFocused();
         await page.keyboard.press("Enter");
+        await expect(page.getByText("Kode promo valid. Pilih Gunakan promo untuk menerapkan.")).toBeVisible();
+        // Checking a code is read-only; it must not change the applied total.
+        await expect(costs.getByText("Rp 196.500", { exact: true })).toBeVisible();
+        await page.getByRole("button", { name: "Gunakan promo", exact: true }).click();
+        await expect(page.getByRole("dialog")).toHaveCount(0);
         await expect(review.getByText(SHIP_CODE, { exact: true })).toBeVisible();
         await expect(costs.getByText("Rp 181.500", { exact: true })).toBeVisible();
         await expect(costs.getByText("- Rp 15.000", { exact: true })).toBeVisible();
-        // Shipping is shown once before subsidy, then subtracted exactly once.
         await expect(costs.getByText("Rp 30.000", { exact: true })).toBeVisible();
-        await page.evaluate(() => window.scrollTo(0, 0));
-        await page.screenshot({ path: `${process.env.TEMP ?? "/tmp"}/checkout-payment-${width}.png`, fullPage: true });
         await page.getByRole("checkbox").check();
+        await openPicker();
         await code.fill("TIDAKVALID123");
-        await review.getByRole("button", { name: "Terapkan", exact: true }).click();
-        await expect(review.getByRole("alert")).toBeVisible();
+        await page.getByRole("button", { name: "Periksa", exact: true }).click();
+        await expect(page.getByRole("dialog").getByRole("alert")).toBeVisible();
         await expect(costs.getByText("Rp 181.500", { exact: true })).toBeVisible();
         await expect(review.getByText(SHIP_CODE, { exact: true })).toBeVisible();
-        await review.getByRole("button", { name: /Subsidi Ongkir Mock/ }).click();
+        await page.getByRole("dialog").getByRole("button", { name: "Batal", exact: true }).click();
+        await choose(/Subsidi Ongkir Mock/);
         await expect(costs.getByText("Rp 176.500", { exact: true })).toBeVisible();
         await expect(page.getByRole("checkbox")).not.toBeChecked();
         await expect(page.getByRole("button", { name: "Bayar Sekarang" })).toBeDisabled();
-        await review.getByRole("button", { name: /Coupon Kecil Mock/ }).click();
+        await choose(/Coupon Kecil Mock/);
         await expect(page.getByRole("dialog", { name: "Total pesanan naik" })).toBeVisible();
         await page.getByRole("button", { name: "Batal", exact: true }).click();
+        await expect(page.getByRole("dialog", { name: "Pilih promo", exact: true })).toBeVisible();
         await expect(costs.getByText("Rp 176.500", { exact: true })).toBeVisible();
-        await review.getByRole("button", { name: /Coupon Kecil Mock/ }).click();
+        await choose(/Coupon Kecil Mock/);
         await page.getByRole("button", { name: "Ya, ganti promo", exact: true }).click();
         await expect(costs.getByText("Rp 190.950", { exact: true })).toBeVisible();
         await expect(costs.getByText("- Rp 5.000", { exact: true })).toBeVisible();
-        await review.getByRole("button", { name: /Subsidi Ongkir Mock/ }).click();
+        await choose(/Subsidi Ongkir Mock/);
         await expect(costs.getByText("Rp 176.500", { exact: true })).toBeVisible();
         if (width === 390) {
-          await code.fill(SHIP_CODE);
-          await review.getByRole("button", { name: "Terapkan", exact: true }).click();
+          await checkCode(SHIP_CODE);
           await page.getByRole("button", { name: "Ya, ganti promo", exact: true }).click();
           await expect(costs.getByText("Rp 181.500", { exact: true })).toBeVisible();
-          await review.getByRole("button", { name: "Lepas kode", exact: true }).click();
+          await review.getByRole("button", { name: "Lepas promo", exact: true }).click();
           await expect(page.getByRole("dialog", { name: "Total pesanan naik" })).toBeVisible();
           await page.getByRole("button", { name: "Batal", exact: true }).click();
           await expect(costs.getByText("Rp 181.500", { exact: true })).toBeVisible();

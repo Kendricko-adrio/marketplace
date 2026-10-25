@@ -455,7 +455,11 @@ export async function readDiscountOfferUsage(input: {
     throw new DiscountAdministrationError(404, "NOT_FOUND", "Redemption not found");
   }
 
-  const items: DiscountUsageEntryDto[] = rows.map((row) => ({
+  const items: DiscountUsageEntryDto[] = rows.map((row) => {
+    // This projection intentionally INNER JOINs orders; attempt-only entries
+    // are exposed through checkout review, not through fabricated order links.
+    if (row.orderId === null) throw new Error("Order-backed Redemption has no order");
+    return ({
     id: row.id,
     orderId: row.orderId,
     status: row.status as DiscountUsageEntryStatus,
@@ -486,7 +490,8 @@ export async function readDiscountOfferUsage(input: {
     releasedAt: row.releasedAt?.toISOString() ?? null,
     terminalReason: row.terminalReason,
     releaseSource: row.releaseSource,
-  }));
+    });
+  });
 
   return {
     ...baseResult,

@@ -1,6 +1,6 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { Pool } from "pg";
-import { deleteRetainedOrderFixtures } from "../../packages/db/src/testing/retained-order-fixtures";
+import { deleteRetainedOrderFixtures, deleteUnpromotedCheckoutAttempts } from "../../packages/db/src/testing/retained-order-fixtures";
 import { TEST_USERS } from "../config";
 
 // Setup SQL hanya pada DB disposable; semua assertion aplikasi lewat HTTP/UI.
@@ -39,6 +39,8 @@ const HQ = {
 
 async function cleanupOrders() {
   const ids = (await pool.query("SELECT id FROM orders WHERE contact_email=ANY($1::text[])", [contactEmails])).rows.map((row) => row.id);
+  const owners = (await pool.query("SELECT id FROM client WHERE email=ANY($1::text[])", [contactEmails])).rows.map((row: { id: string }) => row.id);
+  await deleteUnpromotedCheckoutAttempts(pool, owners);
   if (!ids.length) return;
   // FK-ordered teardown helper; only this spec's own fixture order IDs.
   await deleteRetainedOrderFixtures(pool, ids);

@@ -88,10 +88,23 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+type LedgerOwnerInput =
+  | { orderId: string; owner?: never }
+  | { owner: import("@/features/checkout/checkout-attempt").ProviderOperationOwner; orderId?: never };
+
+function resolveOperationOwner(input: LedgerOwnerInput) {
+  const owner = input.owner ?? { kind: "order" as const, orderId: input.orderId };
+  const value = owner.kind === "attempt" ? owner.attemptId : owner.orderId;
+  if (!isNonEmptyString(value) || (input.owner && input.orderId !== undefined)) {
+    throw new Error("Jubelio sales operation requires exactly one local order or attempt id");
+  }
+  return { owner, value, column: owner.kind === "attempt"
+    ? jubelioSalesOperations.checkoutAttemptId : jubelioSalesOperations.orderId };
+}
+
 export async function recordJubelioSalesIntent(
   db: JubelioSalesOperationsDb,
-  input: {
-    orderId: string;
+  input: LedgerOwnerInput & {
     type: JubelioSalesOperationType;
     reference: string;
     payload: JubelioSalesOperationPayload;
@@ -99,8 +112,9 @@ export async function recordJubelioSalesIntent(
     salesOrderId?: number;
   }
 ): Promise<{ operation: JubelioSalesOperation; created: boolean }> {
-  if (!isNonEmptyString(input.orderId)) {
-    throw new Error("Jubelio sales operation intent requires a local order id");
+  const identity = resolveOperationOwner(input);
+  if (identity.owner.kind === "attempt" && !["create", "cancel"].includes(input.type)) {
+    throw new Error("Jubelio settlement requires a promoted order");
   }
   if (!isNonEmptyString(input.reference)) {
     throw new Error("Jubelio sales operation intent requires a unique reference");
@@ -154,7 +168,8 @@ export async function recordJubelioSalesIntent(
     .insert(jubelioSalesOperations)
     .values({
       id,
-      orderId: input.orderId,
+      orderId: identity.owner.kind === "order" ? identity.owner.orderId : null,
+      checkoutAttemptId: identity.owner.kind === "attempt" ? identity.owner.attemptId : null,
       type: input.type,
       status: "intent",
       reference: input.reference,
@@ -170,7 +185,7 @@ export async function recordJubelioSalesIntent(
     // One operation per (order, type): a replayed intent record must never
     // create a second write path for the same order.
     .onConflictDoNothing({
-      target: [jubelioSalesOperations.orderId, jubelioSalesOperations.type],
+      target: [identity.column, jubelioSalesOperations.type],
     })
     .returning();
 
@@ -186,7 +201,7 @@ export async function recordJubelioSalesIntent(
     .from(jubelioSalesOperations)
     .where(
       and(
-        eq(jubelioSalesOperations.orderId, input.orderId),
+        eq(identity.column, identity.value),
         eq(jubelioSalesOperations.type, input.type)
       )
     )
@@ -662,14 +677,15 @@ export async function abortJubelioSalesOperation(
 /** Reads the (order, type) operation row, or null when the order has none. */
 export async function getJubelioSalesOperation(
   db: JubelioSalesOperationsDb,
-  input: { orderId: string; type: JubelioSalesOperationType }
+  input: LedgerOwnerInput & { type: JubelioSalesOperationType }
 ): Promise<JubelioSalesOperation | null> {
+  const identity = resolveOperationOwner(input);
   const rows = await db
     .select()
     .from(jubelioSalesOperations)
     .where(
       and(
-        eq(jubelioSalesOperations.orderId, input.orderId),
+        eq(identity.column, identity.value),
         eq(jubelioSalesOperations.type, input.type)
       )
     )

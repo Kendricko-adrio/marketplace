@@ -17,6 +17,39 @@ the goods subtotal, not the website total. Delivery checkout is not active.
 > [Kontrak provider berversi (v2)](#kontrak-provider-berversi-v2) dan
 > [delivery orders](delivery-orders.md).
 
+## ID lokasi dari Jubelio
+
+`jubelio_location_id` mengikuti `location_id` dari `GET /locations/list`,
+bukan `location_code`. Inspeksi API pada 2026-10-25 mengonfirmasi
+`ADF OUTLET TANGERANG` aktif dengan `location_id: -1` dan `location_code: "334"`.
+Import mempertahankan ID tersebut; gateway Sales Order juga meneruskannya tanpa
+remapping dan hanya memvalidasi bahwa ID berupa integer, bukan harus positif.
+Input non-integer tetap ditolak sebelum request HTTP. Regression test pada
+`apps/store/src/lib/jubelio-sales-client.test.ts` mencakup POST dan verifikasi
+GET memakai HTTP mock; ini bukan bukti keberhasilan POST nyata untuk Tangerang.
+
+Decoder contract v2 (`jubelio-sales-expected.ts`) yang dipakai settlement
+invoice/payment dan channel-status mirror juga menerima **signed safe integer**
+untuk `locationId`, termasuk `-1`, tanpa remapping atau coercion. Nol lolos
+validasi format, tetapi bukan bukti lokasi tersebut tersedia di Jubelio: mapping
+cabang dan independent provider confirmation tetap wajib. Nilai hilang, `null`,
+string numerik, pecahan, non-finite, dan integer di luar safe range ditolak.
+Validasi positif untuk item/tax ID, quantity, serta ID SO/invoice/payment tidak
+berubah; kecocokan lokasi, financial snapshot, dan invoice linkage tetap fail
+closed.
+
+Regression coverage ada di `jubelio-sales-expected.test.ts`,
+`jubelio-channel-mirror.test.ts`, dan `jubelio-sales-versioned.db.test.ts` pada
+`apps/store/src/lib/`. Integration test memakai PostgreSQL fixture terisolasi
+dan gateway fake, bukan transaksi provider nyata. Contohnya: stored location
+`-1` dengan invoice lokasi `-1` dapat dilanjutkan; invoice lokasi `15` untuk
+request `-1` tetap ditahan.
+
+Perbaikan validator **tidak otomatis memulihkan order lama** yang sudah blocked.
+Jika operation invoice belum terbentuk, recovery GET-only tidak membuat operation
+atau POST baru. Penanganan order existing perlu scope dan izin terpisah; tidak
+boleh meminta pembayaran ulang hanya karena blocker integrasi ini.
+
 ## Kontrak provider berversi (v2)
 
 Kontrak baru menambahkan versi pada dua record tersimpan: baris order
@@ -451,3 +484,34 @@ SO/invoice/payment operations and paid-but-blocked orders with remote ids,
 reasons and timestamps. It is strictly read-only: operators investigate in
 Jubelio using the remote ids; no blind writes. Order detail shows the remote
 SO/invoice/payment ids and the block reason.
+
+## Checkout attempt sebelum order (plan: checkout-attempt-before-order)
+
+Checkout baru tidak lagi membuat `orders` sebelum provider berhasil. Urutannya:
+`checkout_attempt` + hold stok/promo + SO intent di-commit dulu (tanpa order),
+lalu `POST /sales/orders/` + verifikasi GET, lalu pembuatan sesi Snap, dan baru
+setelah keduanya siap **promotion** membuat baris `orders`, `order_item`,
+alokasi diskon, `checkout_request`, serta menautkan ledger SO dan Redemption.
+
+- `checkout_attempt` menyimpan snapshot harga/fulfillment, `reserved_order_id`
+  (reference provider), `state`, `payment_state`, `stock_hold_state`, dan hasil
+  verifikasi pembayaran yang ternormalisasi. Tidak ada token/snapshot di DTO
+  publik.
+- `jubelio_sales_operation` dan `discount_redemption` dapat dimiliki attempt
+  (`checkout_attempt_id`) sebelum `order_id` ada. Constraint owner mewajibkan
+  tepat satu pemilik; `invoice`/`payment` tetap wajib sudah dipromosikan.
+- SO ditolak pasti sebelum diterapkan: hold stok/promo dilepas **sekali**, tidak
+  ada Midtrans, tidak ada order/email gagal; customer tetap di checkout.
+- Respons ambigu (timeout/5xx, klaim lokal gagal) tidak pernah dianggap gagal:
+  attempt menjadi `manual_review`/`processing`, tanpa POST ulang dan tanpa
+  pelepasan hold. Hanya rejection 401 terverifikasi dari SDK Snap (Context7
+  `midtrans-nodejs-client`, error `httpStatusCode`/`ApiResponse`) yang dianggap
+  definitive untuk pembatalan SO; 4xx lain — termasuk `order_id` duplikat —
+  tetap ambigu.
+- Cancel SO harus **confirmed** sebelum stok dikembalikan dan retry dibuka.
+- Retry key yang sama melanjutkan attempt yang tersimpan (bukan reserve ulang);
+  key berbeda saat attempt belum selesai ditolak `409 CHECKOUT_ATTEMPT_IN_PROGRESS`.
+- Sweep cron memulihkan attempt: klaim intent yang belum pernah dikirim,
+  menyelesaikan promotion lokal yang tertunda, dan meng-*abort* reservation
+  kedaluwarsa yang SO-nya belum pernah dikirim. Hasil possibly-sent hanya
+  GET/review.

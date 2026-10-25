@@ -353,6 +353,14 @@ pernah dispatched satu kali; outcome `dispatched_unknown` hanya direkonsiliasi
 lewat GET, tidak pernah re-POST, dan tidak ada worker/outbox kedua. Retry/repayment
 tidak memperpanjang expiry dan tidak membuat payment attempt/order pengganti.
 
+**Feedback saat submit.** Selama request checkout berjalan, halaman cukup
+menampilkan spinner dan label `Memproses...` pada tombol bayar yang disabled;
+panel generik “Status checkout sebelumnya belum dapat dipastikan” beserta tombol
+“Periksa status checkout” tidak ditampilkan. Jika respons hilang, klik berikutnya
+pada `Bayar Sekarang` memeriksa request tersimpan dengan key yang sama, bukan
+membuat checkout baru. Recovery saat reload dan feedback status definitif dari
+server tetap dipertahankan.
+
 **Admission.** `POST /api/checkout/preview` dan `POST /api/checkout/place-order`
 memakai counter PostgreSQL `discount_request_window` (bukan Map in-process):
 preview 60/account dan 300/IP per 60 detik; place order 10/account dan 60/IP.
@@ -419,3 +427,13 @@ original quote dengan net customer, dan nilai kurir tidak pernah diubah sebagai
 workaround. Literal: barang150000 + ongkir30000 cap20000 → total customer
 176500, provider payable160000, booking cost tetap30000; ongkir12000 cap20000 →
 total166500, payable150000, sisa8000 hangus.
+
+## 11. Batas promotion (checkout attempt)
+
+Snapshot harga yang disetujui disimpan di `checkout_attempt` sebelum provider
+dipanggil. Baris `orders` + `order_item` + `order_discount_allocation` baru
+ditulis saat **promotion**, yaitu setelah SO terkonfirmasi dan sesi pembayaran
+tersedia, dari snapshot itu — bukan hasil hitung ulang master terbaru. Karena
+itu order gagal yang lama tidak lagi dibuat untuk checkout baru; kegagalan
+tercatat sebagai attempt `rejected`/`manual_review`. Lihat
+[jubelio-sales-orders.md](jubelio-sales-orders.md#checkout-attempt-sebelum-order-plan-checkout-attempt-before-order).

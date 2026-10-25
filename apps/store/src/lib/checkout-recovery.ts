@@ -25,7 +25,7 @@ export async function resumeUndispatchedCheckoutCreates(limit: number): Promise<
   let resumed = 0;
   for (const { operation } of rows) {
     try {
-      if (operation.payload.type !== "create") continue;
+      if (!operation.orderId || operation.payload.type !== "create") continue;
       const outcome = await dispatchJubelioSalesCreate({ orderId: operation.orderId,
         create: operation.payload.create, checkoutRecovery: true });
       if (outcome.status === "confirmed") resumed++;
@@ -39,6 +39,7 @@ export async function resumeUndispatchedCheckoutCreates(limit: number): Promise<
     .where(and(eq(jubelioSalesOperations.type, "create"), eq(jubelioSalesOperations.status, "rejected"),
       isNull(jubelioSalesOperations.holdAccountedAt))).limit(Math.min(50, Math.max(1, limit)));
   for (const row of rejected) {
+    if (!row.orderId) continue; // Attempt-owned operations use the separate attempt recovery.
     try { await finalizeRejectedCheckoutCreate(row.orderId); }
     catch { log.error(`Order ${row.orderId}: rejected checkout hold accounting unavailable`); }
   }

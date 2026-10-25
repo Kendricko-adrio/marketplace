@@ -3,6 +3,7 @@ import crypto from "crypto";
 import {
   amountsMatch,
   createPayment,
+  createCheckoutPayment,
   buildSnapTransactionParameter,
   formatSnapStartTime,
   getMockPaymentResult,
@@ -27,6 +28,39 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   sdkCreate.mockClear();
+});
+
+describe("checkout payment readiness boundary", () => {
+  const input = { orderId: "future-order", grossAmount: 111000,
+    customerDetails: { first_name: "Fixture", email: "fixture@example.test", phone: "0800000000" } };
+  function sdkEnvironment() {
+    vi.stubEnv("NODE_ENV", "test");
+    vi.stubEnv("E2E_PROVIDER_MOCKS", "false");
+    vi.stubEnv("MIDTRANS_E2E_MOCK", "false");
+    vi.stubEnv("MIDTRANS_SERVER_KEY", "fixture-key");
+  }
+  it("returns a ready session, not an order", async () => {
+    sdkEnvironment();
+    sdkCreate.mockResolvedValueOnce({ token: "fixture-token", redirect_url: "https://app.sandbox.midtrans.com/snap/fixture-token" });
+    expect(await createCheckoutPayment(input)).toEqual({ kind: "ready", token: "fixture-token", redirectUrl: "https://app.sandbox.midtrans.com/snap/fixture-token" });
+  });
+  it("recognizes a verified authentication rejection before session creation", async () => {
+    sdkEnvironment();
+    sdkCreate.mockRejectedValueOnce({ httpStatusCode: 401, ApiResponse: { error_messages: ["Access denied"] } });
+    expect(await createCheckoutPayment(input)).toEqual({ kind: "definitive_rejection" });
+  });
+  it.each([
+    new Error("connection timeout"),
+    { httpStatusCode: null, ApiResponse: null },
+    { httpStatusCode: 400, ApiResponse: { error_messages: ["Order ID already taken"] } },
+    { httpStatusCode: 409 },
+    { httpStatusCode: 500 },
+    { httpStatusCode: 401 },
+  ])("does not claim a possibly-created session failed: %o", async (error) => {
+    sdkEnvironment();
+    sdkCreate.mockRejectedValueOnce(error);
+    expect(await createCheckoutPayment(input)).toEqual({ kind: "unknown" });
+  });
 });
 
 describe("createPayment controlled Snap boundary", () => {

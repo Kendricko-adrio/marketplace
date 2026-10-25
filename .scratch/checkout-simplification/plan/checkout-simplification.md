@@ -12,7 +12,7 @@ tiga langkah. Masukan user (2026-xx, screenshot checkout):
    yang memanjangkan halaman.
 2. Panel **Ringkasan** di kolom kanan step 1 sudah tidak diperlukan — semua
    perhitungan ada di step terakhir.
-3. Step **Kontak** tidak diperlukan lagi: delivery sudah membawa nama +
+3. Step **Kontak** tidak #diperlukan lagi: delivery sudah membawa nama +
    nomor telepon penerima; untuk pickup cukup tambahkan field **Telepon** dan
    **Email** di step awal.
 4. **Promo code** dipindahkan seluruhnya ke step terakhir checkout.

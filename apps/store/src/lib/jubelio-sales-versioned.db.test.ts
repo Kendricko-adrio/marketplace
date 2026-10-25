@@ -367,6 +367,9 @@ async function seedConfirmedCreateOp(
 
 type FakeProviderSpec = {
   orderId: string;
+  locationId?: number;
+  /** Independent observed invoice location for mismatch regression. */
+  invoiceLocationId?: number;
   invoiceSubTotal: number;
   invoiceGrandTotal: number;
   /** `payment_amount` observed on a PAID invoice GET (omitted when undefined). */
@@ -417,7 +420,7 @@ function invoiceSnapshot(
     // Runtime shape: the invoice GET exposes the SO link only via the SO GET.
     salesorderId: null,
     contactId: CONTACT_ID,
-    locationId: LOCATION_ID,
+    locationId: spec.invoiceLocationId ?? spec.locationId ?? LOCATION_ID,
     subTotal: spec.invoiceSubTotal,
     totalDisc: 0,
     totalTax: 0,
@@ -453,7 +456,7 @@ function paymentSnapshot(spec: FakeProviderSpec): JubelioPaymentSnapshot {
   };
 }
 
-function salesOrderSnapshot(invoiced: boolean): JubelioSalesOrderSnapshot {
+function salesOrderSnapshot(invoiced: boolean, locationId = LOCATION_ID): JubelioSalesOrderSnapshot {
   return {
     salesorderId: SO_ID,
     salesorderNo: "SO-000684410",
@@ -461,7 +464,7 @@ function salesOrderSnapshot(invoiced: boolean): JubelioSalesOrderSnapshot {
     refNo: "",
     contactId: CONTACT_ID,
     customerName: "Pelanggan Umum",
-    locationId: LOCATION_ID,
+    locationId,
     note: `${TEST_PREFIX}-note`,
     isCanceled: false,
     invoiceId: invoiced ? INVOICE_ID : null,
@@ -500,10 +503,10 @@ function fakeProvider(spec: FakeProviderSpec): FakeProvider {
         orderId: spec.orderId,
         type: "create",
       });
-      return { salesOrderId: SO_ID, order: salesOrderSnapshot(false) };
+      return { salesOrderId: SO_ID, order: salesOrderSnapshot(false, spec.locationId) };
     },
     async getSalesOrder() {
-      return salesOrderSnapshot(true);
+      return salesOrderSnapshot(true, spec.locationId);
     },
     async createInvoice(input: {
       salesOrderId: number;
@@ -661,6 +664,49 @@ describe.skipIf(!schemaState.ready)(
       expect(provider.createPosts[0].expectedProviderPayable).toBe(
         PROVIDER_PAYABLE
       );
+    });
+
+    it("settles a contract-v2 delivery at location -1 with verified invoice/payment and unchanged money", async () => {
+      const orderId = `${TEST_PREFIX}-negative-location`;
+      await seedOrder({ id: orderId });
+      await seedConfirmedCreateOp(orderId, { ...v2CreateRequest(`${orderId}-note`), locationId: -1 });
+      const provider = fakeProvider({ ...v2ProviderSpec(orderId), locationId: -1 });
+      setDefaultJubelioSalesGateway(provider.gateway);
+
+      // Assert authority first: a decoder refusal must not fall through to a
+      // default channel-mirror gateway during the RED run.
+      await expect(ensureJubelioInvoice({ orderId, gateway: provider.gateway })).resolves.toEqual({ status: "confirmed" });
+      await expect(settleJubelioSalesOrder(orderId)).resolves.toEqual({ status: "fulfilled", pickupCode: null });
+      expect(await getJubelioSalesOperation(db, { orderId, type: "invoice" })).toMatchObject({
+        status: "confirmed", salesOrderId: SO_ID, invoiceId: INVOICE_ID,
+      });
+      expect(await getJubelioSalesOperation(db, { orderId, type: "payment" })).toMatchObject({
+        status: "confirmed", salesOrderId: SO_ID, invoiceId: INVOICE_ID, paymentId: PAYMENT_ID,
+      });
+      expect(provider.paymentPosts).toEqual([{
+        invoiceId: INVOICE_ID, amount: 180_000, accountId: 2, paymentType: 0,
+      }]);
+      const [row] = await db.select().from(orders).where(eq(orders.id, orderId));
+      expect(row).toMatchObject({
+        paymentStatus: "paid", status: "processing", fulfillmentBlockedReason: null,
+        total: "196500.00", jubelioInvoiceId: INVOICE_ID, jubelioPaymentId: PAYMENT_ID,
+      });
+    });
+
+    it("still holds an invoice from another location when the stored location is -1", async () => {
+      const orderId = `${TEST_PREFIX}-negative-location-mismatch`;
+      await seedOrder({ id: orderId });
+      await seedConfirmedCreateOp(orderId, { ...v2CreateRequest(`${orderId}-note`), locationId: -1 });
+      const provider = fakeProvider({ ...v2ProviderSpec(orderId), locationId: -1, invoiceLocationId: 15 });
+
+      await expect(ensureJubelioInvoice({ orderId, gateway: provider.gateway })).resolves.toEqual({
+        status: "manual_review", message: "Invoice contact or branch differs from the Sales Order request",
+      });
+      expect(await getJubelioSalesOperation(db, { orderId, type: "invoice" })).toMatchObject({ status: "manual_review" });
+      expect(await getJubelioSalesOperation(db, { orderId, type: "payment" })).toBeNull();
+      expect(provider.paymentPosts).toEqual([]);
+      const [row] = await db.select().from(orders).where(eq(orders.id, orderId));
+      expect(row).toMatchObject({ paymentStatus: "paid", jubelioInvoiceId: null, jubelioPaymentId: null });
     });
 
     it("settles a delivery order at 180000 (goods 150000 + ongkir 30000), not at the 150000 subtotal", async () => {

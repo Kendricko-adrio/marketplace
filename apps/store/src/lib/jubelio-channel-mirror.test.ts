@@ -384,6 +384,38 @@ function v2Snapshot(
 }
 
 describe("mirrorPreReadMismatch contract-v2 envelope (ticket 01, pure unit)", () => {
+  it("accepts a matching signed location -1 on the stored request and provider header/items", () => {
+    const snapshot = v2Snapshot({ locationId: -1 });
+    snapshot.items[0].locationId = -1;
+    expect(mirrorPreReadMismatch({
+      snapshot,
+      create: confirmedCreate(v2StoredCreate({ locationId: -1 })),
+      verifiedInvoiceId: V2_INVOICE_ID,
+    })).toBeNull();
+  });
+
+  it("still rejects a different provider location when the stored location is negative", () => {
+    expect(mirrorPreReadMismatch({
+      snapshot: v2Snapshot(),
+      create: confirmedCreate(v2StoredCreate({ locationId: -1 })),
+      verifiedInvoiceId: V2_INVOICE_ID,
+    })).toBe("PRE_READ_CONTACT_OR_LOCATION_MISMATCH");
+  });
+
+  it("still rejects money drift and invoice-link mismatch at a negative location", () => {
+    const snapshot = v2Snapshot({ locationId: -1 });
+    snapshot.items[0].locationId = -1;
+    const create = confirmedCreate(v2StoredCreate({ locationId: -1 }));
+    expect(mirrorPreReadMismatch({
+      snapshot: { ...snapshot, grandTotal: V2_PAYABLE - 1 }, create,
+      verifiedInvoiceId: V2_INVOICE_ID,
+    })).toBe("PRE_READ_MONEY_MISMATCH");
+    expect(mirrorPreReadMismatch({
+      snapshot: { ...snapshot, invoiceId: null }, create,
+      verifiedInvoiceId: V2_INVOICE_ID,
+    })).toBe("PRE_READ_INVOICE_LINK_MISMATCH");
+  });
+
   it("accepts a v2 delivery pre-read whose payable is net goods + net shipping, not sub_total", () => {
     expect(
       mirrorPreReadMismatch({

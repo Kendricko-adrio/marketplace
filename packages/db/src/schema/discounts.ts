@@ -17,6 +17,7 @@ import { relations, sql } from "drizzle-orm";
 
 import { clients, users } from "./auth";
 import { orderItems, orders } from "./orders";
+import { checkoutAttempts } from "./checkout";
 
 // =========================================================
 // Discount administration — Offer identity, draft revisions, usage projection,
@@ -555,7 +556,8 @@ export const discountRedemptions = pgTable(
   "discount_redemption",
   {
     id: text("id").primaryKey(),
-    orderId: text("order_id").notNull(),
+    orderId: text("order_id"),
+    checkoutAttemptId: text("checkout_attempt_id"),
     clientId: text("client_id").notNull(),
     offerId: text("offer_id").notNull(),
     revisionId: text("revision_id").notNull(),
@@ -595,6 +597,13 @@ export const discountRedemptions = pgTable(
   (t) => [
     // ONE Redemption per order — for every status, released included.
     uniqueIndex("discount_redemption_order_unique").on(t.orderId),
+    uniqueIndex("discount_redemption_attempt_unique").on(t.checkoutAttemptId),
+    foreignKey({ name: "discount_redemption_attempt_owner_fk", columns: [t.checkoutAttemptId, t.clientId],
+      foreignColumns: [checkoutAttempts.id, checkoutAttempts.clientId] }).onDelete("restrict").onUpdate("restrict"),
+    foreignKey({ name: "discount_redemption_attempt_order_fk", columns: [t.checkoutAttemptId, t.orderId],
+      foreignColumns: [checkoutAttempts.id, checkoutAttempts.orderId] }).onDelete("restrict").onUpdate("restrict"),
+    check("discount_redemption_owner_required", sql`${t.orderId} IS NOT NULL OR ${t.checkoutAttemptId} IS NOT NULL`),
+    check("discount_redemption_consumed_order_required", sql`${t.status} <> 'consumed' OR ${t.orderId} IS NOT NULL`),
     // Composite ownership targets for `order_discount_allocation`.
     unique("discount_redemption_order_id_unique").on(t.orderId, t.id),
     unique("discount_redemption_id_benefit_unique").on(t.id, t.benefitId),

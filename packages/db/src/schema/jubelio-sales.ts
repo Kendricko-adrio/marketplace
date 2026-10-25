@@ -7,9 +7,11 @@ import {
   text,
   timestamp,
   uniqueIndex,
+  foreignKey,
 } from "drizzle-orm/pg-core";
 import { relations, sql } from "drizzle-orm";
 import { orders } from "./orders";
+import { checkoutAttempts } from "./checkout";
 
 /**
  * Durable Jubelio sales-order operation ledger (plan:
@@ -161,8 +163,9 @@ export const jubelioSalesOperations = pgTable(
   {
     id: text("id").primaryKey(),
     orderId: text("order_id")
-      .notNull()
       .references(() => orders.id, { onDelete: "restrict" }),
+    checkoutAttemptId: text("checkout_attempt_id")
+      .references(() => checkoutAttempts.id, { onDelete: "restrict" }),
     type: text("type").notNull(), // create | cancel | invoice | payment
     status: text("status").notNull().default("intent"),
     // Unique provider-facing request reference (the create `note`): the only
@@ -205,6 +208,11 @@ export const jubelioSalesOperations = pgTable(
       t.type
     ),
     uniqueIndex("jubelio_sales_operation_reference_unique").on(t.reference),
+    uniqueIndex("jubelio_sales_operation_attempt_type_unique").on(t.checkoutAttemptId, t.type),
+    foreignKey({ name: "jubelio_sales_operation_attempt_order_fk", columns: [t.checkoutAttemptId, t.orderId],
+      foreignColumns: [checkoutAttempts.id, checkoutAttempts.orderId] }).onDelete("restrict").onUpdate("restrict"),
+    check("jubelio_sales_operation_owner_required", sql`${t.orderId} IS NOT NULL OR ${t.checkoutAttemptId} IS NOT NULL`),
+    check("jubelio_sales_operation_unpromoted_type_valid", sql`${t.orderId} IS NOT NULL OR ${t.type} IN ('create','cancel')`),
     index("idx_jubelio_sales_operation_status").on(t.status),
     check(
       "jubelio_sales_operation_type_valid",
@@ -251,6 +259,10 @@ export const jubelioSalesOperationsRelations = relations(
     order: one(orders, {
       fields: [jubelioSalesOperations.orderId],
       references: [orders.id],
+    }),
+    checkoutAttempt: one(checkoutAttempts, {
+      fields: [jubelioSalesOperations.checkoutAttemptId],
+      references: [checkoutAttempts.id],
     }),
   })
 );

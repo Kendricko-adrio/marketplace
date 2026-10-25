@@ -1650,6 +1650,38 @@ describe("Jubelio sales gateway pre-POST failures are never ambiguous", () => {
 });
 
 describe("Jubelio sales gateway input validation (before any POST)", () => {
+  it("creates and verifies an order for Tangerang's provider location id -1 without remapping it", async () => {
+    const { fetchImpl, requests } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/orders/" && request.method === "POST") {
+        expect(request.body).toMatchObject({ location_id: -1 });
+        return Response.json({ id: 68378 });
+      }
+      if (request.path === "/sales/orders/68378" && request.method === "GET") {
+        return Response.json({
+          ...mockSalesOrderGet(68378),
+          location_id: -1,
+          original_shipment_cost: 0,
+          shipping_cost: 0,
+        });
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(gateway.createSalesOrder({
+      ...salesOrderCreateInput,
+      providerContractVersion: 2,
+      originalShipmentCost: 0,
+      shippingCost: 0,
+      expectedProviderPayable: 1_300_000,
+      locationId: -1,
+      operationId: "tangerang-location",
+    })).resolves.toMatchObject({ salesOrderId: 68378, order: { locationId: -1 } });
+    expect(requests.filter((request) => request.method === "POST" && request.path === "/sales/orders/"))
+      .toHaveLength(1);
+  });
+
   const invalidCases: Array<[string, Record<string, unknown>]> = [
     ["an empty item list", { items: [] }],
     ["a NaN price", { items: [{ ...salesOrderItemInput, price: NaN }] }],

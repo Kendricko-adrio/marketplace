@@ -188,10 +188,12 @@ export function readJubelioSalesOrderExpectation(
   ) {
     shapeInvalid("sales create intent contactId must be a nonzero integer");
   }
-  const locationId = requirePositiveInteger(
-    create.locationId,
-    "sales create intent locationId"
-  );
+  // Lokasi adalah identifier bertanda dari provider (Tangerang memakai -1),
+  // bukan besaran positif. Kecocokan lokasi tetap diverifikasi oleh consumer.
+  const locationId = create.locationId;
+  if (typeof locationId !== "number" || !Number.isSafeInteger(locationId)) {
+    shapeInvalid("sales create intent locationId must be a safe integer");
+  }
   const customerName = requireNonEmptyString(
     create.customerName,
     "sales create intent customerName"

@@ -16,7 +16,7 @@ import { createModuleLogger } from "./logger";
  *   Pre-send failures (missing credentials, login failure, queue rejection,
  *   invalid input) never reach the POST, so they are always NON-ambiguous.
  * - Create input is validated before anything is sent: items non-empty,
- *   integer positive quantity/item id/location, finite nonnegative money
+ *   integer positive quantity/item id, integer location id, finite nonnegative money
  *   fields. Nonzero discount/tax is fail-closed (rejected) until the money
  *   formula is evidenced: the live canary (2026-09-23) evidences only the
  *   zero-disc/zero-tax envelope.
@@ -670,9 +670,10 @@ function assertValidCreateInput(
       { ambiguous: false, retryable: false }
     );
   }
-  if (!Number.isInteger(input.locationId) || input.locationId <= 0) {
+  // Preserve provider location IDs: /locations/list identifies Tangerang as -1.
+  if (!Number.isInteger(input.locationId)) {
     throw new JubelioSalesGatewayError(
-      "Jubelio sales order input is invalid: location id must be a positive integer",
+      "Jubelio sales order input is invalid: location id must be an integer",
       { ambiguous: false, retryable: false }
     );
   }

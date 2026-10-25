@@ -1,11 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db, products, auditLogs } from "@/db";
 import { eq } from "drizzle-orm";
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
 import { syncOneProduct } from "@marketplace/db/src/jubelio-sync";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-product-sync");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari provider Jubelio
+ * maupun DB tidak pernah masuk log (bisa memuat response provider/URL).
+ */
+class ProductSyncLogError extends Error {
+  constructor() {
+    super("products sync gagal");
+    this.name = "ProductSyncLogError";
+  }
+}
 
 /**
  * Re-sync a single product from Jubelio (source of truth)   [products:edit:all]
@@ -20,20 +37,20 @@ export const dynamic = "force-dynamic";
  * product — the required scope is `edit all_branches`. The audit event is
  * classified as a global event with the policy version in force.
  */
-export async function POST(
-  request: NextRequest,
+async function syncProduct(
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
+): Promise<Response> {
   const guardResult = await guard("products", "edit", {
-    request,
     requiredScope: "all_branches",
   });
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
+  let productId: string | null = null;
   try {
     const { id } = await params;
-    const syncLog = logger.child({ productId: id });
+    productId = id;
 
     const [row] = await db
       .select({ jubelioItemGroupId: products.jubelioItemGroupId })
@@ -42,20 +59,18 @@ export async function POST(
       .limit(1);
 
     if (!row) {
-      syncLog.warn("products.sync.not_found", {
-        outcome: "denied",
-        reason: "product_not_found",
-      });
+      log.warn(
+        `products.sync.not_found (productId ${id}, reason product_not_found, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Product not found" },
         { status: 404 }
       );
     }
     if (!row.jubelioItemGroupId) {
-      syncLog.warn("products.sync.not_jubelio_product", {
-        outcome: "denied",
-        reason: "missing_item_group_id",
-      });
+      log.warn(
+        `products.sync.not_jubelio_product (productId ${id}, reason missing_item_group_id, outcome denied)`
+      );
       return NextResponse.json(
         {
           success: false,
@@ -81,20 +96,23 @@ export async function POST(
       branchScope: "global",
     });
 
-    syncLog.info("products.sync", {
-      outcome: "success",
-      policyVersion: ctx.policy.policyVersion,
-    });
+    log.info(
+      `products.sync (productId ${id}, itemGroupId ${row.jubelioItemGroupId}, auditAction JUBELIO_SYNC_ADMIN, actingUserId ${ctx.user.id}, policyVersion ${ctx.policy.policyVersion}, outcome success)`
+    );
 
     return NextResponse.json({ success: true, data: result });
-  } catch (error) {
-    logger.error("products.sync.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat response
+    // provider Jubelio atau pesan driver DB.
+    log.error(
+      `products.sync gagal (productId ${productId ?? "unknown"}, outcome error)`,
+      new ProductSyncLogError()
+    );
     return NextResponse.json(
       { success: false, error: "Sync failed" },
       { status: 500 }
     );
   }
 }
+
+export const POST = withRequestContext(syncProduct, "admin-product-sync");

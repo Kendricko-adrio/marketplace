@@ -31,6 +31,15 @@ rows.
 - `reserved_stock` is a legacy adjustment-era ledger column: historical record
   only, never part of the sellable formula, never written by the SO flow.
 
+## Batas sebelum checkout
+
+Katalog dan cart sekarang memakai snapshot stok tersedia terakhir sebagai batas
+pilihan/quantity, bukan hanya mengecek mapping. Produk/varian/cabang habis tidak
+ditawarkan. Menambah cart tidak memperoleh hold dan tidak menjamin stok saat
+bayar: live read dan atomic hold di place-order tetap wajib. Item cart lama
+tidak dihapus otomatis ketika snapshot berubah menjadi nol. Lihat
+[visibilitas storefront](jubelio-sync.md#visibilitas-stok-storefront-dan-batas-keranjang).
+
 ---
 
 # RETIRED: direct-adjustment lifecycle (historical)

@@ -1400,6 +1400,32 @@ describe.skipIf(!dbReady)("manual Markdown price changes (disposable DB)", () =>
     expect(viewerRead).toMatchObject({ appliedCount: 1, failedCount: 1 });
   });
 
+  it("target nonaktif: filter lintas halaman memakai source terbaru, count konsisten, dan query tervalidasi", async () => {
+    const staged = await stageBatch([
+      { sku: SKU_A, action: "set_price", targetUnitPrice: "200000" },
+      { sku: SKU_B, action: "set_price", targetUnitPrice: "200000" },
+    ]);
+    await apply(staged.data.id);
+    // Base turun: di bawah target dan tepat sama dengan target sama-sama nonaktif.
+    await pool!.query("UPDATE product_variant SET price='150000' WHERE id=$1", [VARIANT_A]);
+    await pool!.query("UPDATE product_variant SET price='200000' WHERE id=$1", [VARIANT_B]);
+    const query = { search: "ZZ-PRICE", markdownStatus: "inactive", limit: 1 };
+    const first = await listPriceChangeCandidates(query, ACTOR);
+    expect(first.pagination).toEqual({ page: 1, limit: 1, total: 2, totalPages: 2 });
+    expect(first.rows).toHaveLength(1);
+    expect(first.rows[0]).toMatchObject({ sku: SKU_A, basePrice: "150000", effectiveUnitPrice: "150000", storedTarget: "200000", markdownActive: false });
+    const second = await listPriceChangeCandidates({ ...query, page: 2 }, ACTOR);
+    expect(second.pagination.total).toBe(2);
+    expect(second.rows.map((row) => row.sku)).toEqual([SKU_B]);
+    await pool!.query("UPDATE product_variant SET price='300000' WHERE id=$1", [VARIANT_A]);
+    expect((await listPriceChangeCandidates(query, ACTOR)).pagination.total).toBe(1);
+    await pool!.query("UPDATE product_variant SET price='150000.50' WHERE id=$1", [VARIANT_B]);
+    expect((await listPriceChangeCandidates(query, ACTOR)).pagination.total).toBe(0);
+    const invalid = { ...query, markdownStatus: "bogus" };
+    await expect(listPriceChangeCandidates(invalid, ACTOR)).rejects.toMatchObject({ code: "INPUT_INVALID" });
+    await expect(listPriceChangeCandidates(query, NO_GRANT_ACTOR)).rejects.toMatchObject({ code: "DENIED" });
+  });
+
   it("kandidat SKU: search case-insensitive, proyeksi Markdown, pagination konsisten, dan grant wajib", async () => {
     const staged = await stageBatch(
       [{ sku: SKU_A, action: "set_price", targetUnitPrice: "150000" }],

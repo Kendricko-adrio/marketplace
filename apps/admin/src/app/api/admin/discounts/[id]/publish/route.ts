@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { guard } from "@/lib/rbac/guard";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import {
   publishDiscountOffer,
   DiscountAdministrationError,
@@ -22,6 +23,13 @@ import {
 // A public Offer has no code, and no provider is called.
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-discount-publish");
+
 type RouteContext = { params: Promise<{ id: string }> };
 
 const publishSchema = z.strictObject({
@@ -33,21 +41,23 @@ const publishSchema = z.strictObject({
   proposedCodes: z.array(z.string().min(1).max(128)).max(50).optional(),
 });
 
-export async function POST(request: NextRequest, { params }: RouteContext) {
-  const guardResult = await guard("discounts", "edit", { request });
+async function publishOffer(
+  request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("discounts", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const parsed = publishSchema.safeParse(
       await request.json().catch(() => null)
     );
     if (!parsed.success) {
-      logger.warn("discounts.publish.invalid_body", { outcome: "denied" });
+      log.warn("discounts publish ditolak: body tidak valid (outcome denied)");
       return discountFailureResponse(
-        logger,
         new DiscountAdministrationError(400, "INPUT_INVALID", "Invalid request body"),
-        "discounts.publish.denied"
+        "discounts publish ditolak"
       );
     }
 
@@ -57,18 +67,15 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       requireActorId(ctx.user.id)
     );
 
-    logger.info("discounts.publish", {
-      outcome: "success",
-      offerId: id,
-      replayed: result.replayed,
-      state: result.data.state,
-      currentRevisionId: result.data.currentRevisionId,
-      version: result.data.version,
-      actorId: ctx.user.id,
-      policyVersion: ctx.policy.policyVersion,
-    });
-    return discountSuccessResponse(logger, result.data);
+    // Request key, fingerprint, dan usulan kode tidak pernah masuk log.
+    log.info(
+      `discounts publish (offer ${id}, replayed ${result.replayed}, state ${result.data.state}, currentRevisionId ${result.data.currentRevisionId ?? "none"}, version ${result.data.version}, actor ${ctx.user.id}, policyVersion ${ctx.policy.policyVersion}, outcome success)`
+    );
+    return discountSuccessResponse(result.data);
   } catch (error) {
-    return discountFailureResponse(logger, error, "discounts.publish.failure");
+    return discountFailureResponse(error, "discounts publish gagal");
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(publishOffer, "admin-discount-publish");

@@ -57,8 +57,12 @@ export default function NoAccessPage() {
     });
   };
 
+  // This page renders INSIDE the admin shell (<main> of admin/layout.tsx), so
+  // it must not declare a second main landmark or a `min-h-screen` block:
+  // a 100vh child inside the shell's content area can never fit and makes the
+  // content area scroll for a single centered card.
   return (
-    <main className="flex min-h-screen items-center justify-center p-6">
+    <div className="flex min-h-full items-center justify-center p-6">
       <Card className="w-full max-w-lg" data-testid="safe-state">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -96,6 +100,6 @@ export default function NoAccessPage() {
           </Button>
         </CardContent>
       </Card>
-    </main>
+    </div>
   );
 }

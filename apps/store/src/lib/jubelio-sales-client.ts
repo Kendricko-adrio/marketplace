@@ -3,7 +3,7 @@ import {
   getSharedJubelioRequestScheduler,
   type JubelioRequestScheduler,
 } from "./jubelio-request-scheduler";
-import { createLogger, serializeError, type Logger } from "./logger";
+import { createModuleLogger } from "./logger";
 
 /**
  * Jubelio Sales Order HTTP gateway (create / read / cancel only).
@@ -46,6 +46,13 @@ import { createLogger, serializeError, type Logger } from "./logger";
  *   `JUBELIO_SALES_TEST_ACCOUNT_ENABLED=true` opt-in with a pinned
  *   `https://api2.jubelio.com` base URL and real test-account credentials.
  */
+
+/**
+ * Module-scope logger: only the module name is bound here. Correlation fields
+ * are read from the active scope when a line is written, so creating it once at
+ * import time (before any request scope exists) is correct.
+ */
+const log = createModuleLogger("jubelio-sales");
 
 export type JubelioSalesEnvironment = Partial<
   Record<
@@ -347,6 +354,69 @@ export class JubelioSalesGatewayError extends Error {
     super(message);
     this.name = "JubelioSalesGatewayError";
   }
+}
+
+/**
+ * Technical failure codes this module is allowed to describe in a log line.
+ * Every value is a literal owned by the gateway — never text copied from a
+ * provider, transport, persistence layer or caller.
+ */
+type JubelioSalesLogCode = "QUEUE_FULL" | "QUEUE_TIMEOUT";
+
+/**
+ * Safe technical projection for the `error` field of this module's log lines.
+ *
+ * The logging core keeps the `name`/`message`/`stack`/`cause` of whatever it is
+ * given, redacted by shape only. Passing a raw caught value would therefore
+ * publish free text that a transport, persistence or provider layer put into
+ * `message`, `stack` or `cause`: a customer name or a street address cannot be
+ * recovered by key-based redaction once it already sits inside a string. This
+ * class is consequently the ONLY value this module hands to a log line — the
+ * message is chosen here, and the optional `code` is one of the allowlisted
+ * literals above.
+ *
+ * The caught value is never lost from the business flow: the thrown
+ * `JubelioSalesGatewayError` keeps its own message, code, classification and
+ * ids exactly as before.
+ */
+class JubelioSalesDependencyError extends Error {
+  readonly code?: JubelioSalesLogCode;
+
+  constructor(message: string, code?: JubelioSalesLogCode) {
+    super(message);
+    this.name = "JubelioSalesDependencyError";
+    this.code = code;
+  }
+}
+
+/**
+ * Classifies a caught dependency failure into the static projection above.
+ *
+ * A queue rejection is the only case whose technical code is a module-owned
+ * literal (`QUEUE_FULL`/`QUEUE_TIMEOUT`); every other caught value is described
+ * generically, because its text belongs to the layer that threw it. Property
+ * reads and `instanceof` are guarded: a throwing getter or proxy trap must
+ * degrade to the generic projection instead of turning a logging-only concern
+ * into a business failure.
+ */
+function safeDependencyErrorLog(error: unknown): JubelioSalesDependencyError {
+  try {
+    if (error instanceof JubelioRequestQueueError) {
+      const code = error.code;
+      if (code === "QUEUE_FULL" || code === "QUEUE_TIMEOUT") {
+        return new JubelioSalesDependencyError(
+          "Jubelio request ditolak oleh antrean permintaan provider",
+          code
+        );
+      }
+    }
+  } catch {
+    // A hostile value (throwing getter or proxy trap) carries no safe signal:
+    // fall through to the generic projection instead of failing the caller.
+  }
+  return new JubelioSalesDependencyError(
+    "Jubelio sales request gagal pada lapisan transport, gateway atau penyimpanan"
+  );
 }
 
 const JUBELIO_LIVE_ORIGIN = "https://api2.jubelio.com";
@@ -1181,6 +1251,17 @@ export type JubelioSalesGateway = {
 };
 
 /**
+ * Stable business reference for one provider operation, used inside log
+ * messages only: the operation name plus the caller-supplied operation id when
+ * present. No free metadata field is added to a record.
+ */
+function operationLabel(operation: string, operationId?: string): string {
+  return operationId === undefined || operationId.length === 0
+    ? operation
+    : `${operation} ${operationId}`;
+}
+
+/**
  * These knobs are the shared, provider-level Jubelio backpressure settings
  * already used by the stock gateway. Sharing them (and the shared scheduler
  * keyed by base URL) keeps one backpressure profile for all Jubelio traffic.
@@ -1188,7 +1269,6 @@ export type JubelioSalesGateway = {
 export function createJubelioSalesGateway(options: {
   env?: JubelioSalesEnvironment;
   fetchImpl?: typeof fetch;
-  logger?: Logger;
   scheduler?: JubelioRequestScheduler;
 } = {}): JubelioSalesGateway {
   const env = options.env ?? process.env;
@@ -1230,10 +1310,6 @@ export function createJubelioSalesGateway(options: {
           maxQueued,
           queueTimeoutMs,
         }));
-  const log = (options.logger ?? createLogger({ module: "jubelio-sales" })).child({
-    service: "jubelio",
-    runtime: `${runtime.mode}:${runtime.liveSource}`,
-  });
   let token: string | null = null;
   let loginPromise: Promise<string> | null = null;
 
@@ -1265,11 +1341,7 @@ export function createJubelioSalesGateway(options: {
       body: JSON.stringify({ email, password }),
       signal: AbortSignal.timeout(timeoutMs),
     };
-    log.info("Jubelio HTTP request started", {
-      method: "POST",
-      path,
-      credentialsConfigured: true,
-    });
+    log.info(`Jubelio POST ${path} dimulai`);
     const startedAt = Date.now();
     let response: Response;
     try {
@@ -1278,23 +1350,16 @@ export function createJubelioSalesGateway(options: {
         { priority }
       );
     } catch (error) {
-      log.error("Jubelio HTTP request failed", {
-        method: "POST",
-        path,
-        durationMs: Date.now() - startedAt,
-        error: serializeError(error),
-      });
+      log.error(
+        `Jubelio POST ${path} gagal setelah ${Date.now() - startedAt}ms`,
+        safeDependencyErrorLog(error)
+      );
       throw error;
     }
     const body = await parseBody(response);
-    log.info("Jubelio HTTP response received", {
-      method: "POST",
-      path,
-      status: response.status,
-      ok: response.ok,
-      durationMs: Date.now() - startedAt,
-      authResponse: true,
-    });
+    log.info(
+      `Jubelio POST ${path}: HTTP ${response.status} dalam ${Date.now() - startedAt}ms`
+    );
     if (!response.ok || typeof body.token !== "string") {
       throw new JubelioSalesGatewayError("Jubelio login failed", {
         httpStatus: response.status,
@@ -1331,10 +1396,8 @@ export function createJubelioSalesGateway(options: {
       },
       signal: init.signal ?? AbortSignal.timeout(timeoutMs),
     };
-    log.info("Jubelio HTTP request started", {
-      method: requestInit.method ?? "GET",
-      path,
-    });
+    const method = requestInit.method ?? "GET";
+    log.info(`Jubelio ${method} ${path} dimulai`);
     const startedAt = Date.now();
     let response: Response;
     try {
@@ -1343,21 +1406,15 @@ export function createJubelioSalesGateway(options: {
         { priority }
       );
     } catch (error) {
-      log.error("Jubelio HTTP request failed", {
-        method: requestInit.method ?? "GET",
-        path,
-        durationMs: Date.now() - startedAt,
-        error: serializeError(error),
-      });
+      log.error(
+        `Jubelio ${method} ${path} gagal setelah ${Date.now() - startedAt}ms`,
+        safeDependencyErrorLog(error)
+      );
       throw error;
     }
-    log.info("Jubelio HTTP response received", {
-      method: requestInit.method ?? "GET",
-      path,
-      status: response.status,
-      ok: response.ok,
-      durationMs: Date.now() - startedAt,
-    });
+    log.info(
+      `Jubelio ${method} ${path}: HTTP ${response.status} dalam ${Date.now() - startedAt}ms`
+    );
     if (response.status === 401 && reloginOn401) {
       if (token === authToken) token = null;
       await getAuthToken(priority);
@@ -1381,12 +1438,8 @@ export function createJubelioSalesGateway(options: {
       );
     }
     const body = await parseBody(response);
-    log.info("Jubelio HTTP response output", {
-      method: "GET",
-      path,
-      status: response.status,
-      // Never log provider bodies: they contain customer PII.
-    });
+    // Never log provider bodies: they contain customer PII.
+    log.info(`Jubelio GET ${path}: HTTP ${response.status}`);
     if (!response.ok) {
       throw new JubelioSalesGatewayError(
         `Jubelio request failed (${response.status})`,
@@ -1409,7 +1462,6 @@ export function createJubelioSalesGateway(options: {
     path: string;
     body: unknown;
     priority: number;
-    context?: Record<string, unknown>;
   }): Promise<{ status: number; body: Record<string, unknown> }> {
     // Pre-send authentication happens OUTSIDE the ambiguity-wrapped request:
     // an auth/config/login failure means the write was never attempted, so
@@ -1417,26 +1469,27 @@ export function createJubelioSalesGateway(options: {
     try {
       await getAuthToken(input.priority);
     } catch (error) {
-      const context = {
-        method: "POST" as const,
-        path: input.path,
-        error: serializeError(error),
-        ...input.context,
-      };
+      // One shared line BEFORE the branches: a queue rejection is also a
+      // pre-send failure, so which write was NOT sent must stay observable.
+      // The `error` field is the static projection, never the caught value.
+      log.error(
+        `Jubelio POST ${input.path} tidak dikirim: autentikasi gagal`,
+        safeDependencyErrorLog(error)
+      );
+      // Unchanged classification and branch order: a gateway error keeps its
+      // own message/code, a queue rejection stays non-ambiguous but retryable,
+      // and anything else is a non-ambiguous pre-send failure.
       if (error instanceof JubelioSalesGatewayError) {
-        log.error("Jubelio sales write not attempted", context);
         throw error;
       }
       if (error instanceof JubelioRequestQueueError) {
         // The request never left the process boundary — not ambiguous.
-        log.error("Jubelio sales write not attempted", context);
         throw new JubelioSalesGatewayError(error.message, {
           code: error.code,
           ambiguous: false,
           retryable: true,
         });
       }
-      log.error("Jubelio sales write not attempted", context);
       throw new JubelioSalesGatewayError(
         error instanceof Error ? error.message : "Jubelio write not attempted",
         { ambiguous: false, retryable: true }
@@ -1446,12 +1499,8 @@ export function createJubelioSalesGateway(options: {
       method: "POST",
       body: JSON.stringify(input.body),
     };
-    log.info("Jubelio HTTP request started", {
-      method: "POST",
-      path: input.path,
-      // Never log request payloads: Sales Orders include customer PII.
-      ...input.context,
-    });
+    // Never log request payloads: Sales Orders include customer PII.
+    log.info(`Jubelio POST ${input.path} dimulai`);
     const startedAt = Date.now();
     let response: Response;
     try {
@@ -1465,13 +1514,10 @@ export function createJubelioSalesGateway(options: {
           retryable: true,
         });
       }
-      log.error("Jubelio sales write outcome unknown", {
-        method: "POST",
-        path: input.path,
-        durationMs: Date.now() - startedAt,
-        error: serializeError(error),
-        ...input.context,
-      });
+      log.error(
+        `Jubelio POST ${input.path} gagal setelah ${Date.now() - startedAt}ms; hasil penulisan belum pasti`,
+        safeDependencyErrorLog(error)
+      );
       throw new JubelioSalesGatewayError(
         error instanceof Error ? error.message : "Jubelio write timed out",
         { ambiguous: true, retryable: false }
@@ -1484,25 +1530,16 @@ export function createJubelioSalesGateway(options: {
     try {
       body = await parseBody(response);
     } catch (error) {
-      log.error("Jubelio sales write outcome unknown", {
-        method: "POST",
-        path: input.path,
-        status: response.status,
-        durationMs: Date.now() - startedAt,
-        error: serializeError(error),
-        ...input.context,
-      });
+      log.error(
+        `Jubelio POST ${input.path}: body respons HTTP ${response.status} gagal dibaca; hasil penulisan belum pasti`,
+        safeDependencyErrorLog(error)
+      );
       throw new JubelioSalesGatewayError(
         "Jubelio sales write response body could not be read; the write outcome is unknown",
         { ambiguous: true, retryable: false }
       );
     }
-    log.info("Jubelio HTTP response output", {
-      method: "POST",
-      path: input.path,
-      status: response.status,
-      ...input.context,
-    });
+    log.info(`Jubelio POST ${input.path}: HTTP ${response.status}`);
     return { status: response.status, body };
   }
 
@@ -1522,17 +1559,15 @@ export function createJubelioSalesGateway(options: {
     providerId: number;
     label: string;
     ids: { salesOrderId?: number; invoiceId?: number; paymentId?: number };
-    context?: Record<string, unknown>;
   }): Promise<void> {
     if (!input.hook) return;
     try {
       await input.hook(input.providerId);
     } catch (error) {
-      log.error("Jubelio returned provider id was not persisted before verification", {
-        ...input.context,
-        providerId: input.providerId,
-        error: serializeError(error),
-      });
+      log.error(
+        `Jubelio ${input.label} ${input.providerId} gagal disimpan sebelum verifikasi; hasil penulisan belum pasti`,
+        safeDependencyErrorLog(error)
+      );
       throw new JubelioSalesGatewayError(
         `Jubelio ${input.label} ${input.providerId} could not be persisted before verification; the outcome is unknown`,
         {
@@ -1549,7 +1584,6 @@ export function createJubelioSalesGateway(options: {
     path: string;
     status: number;
     body: Record<string, unknown>;
-    context?: Record<string, unknown>;
   }): JubelioSalesGatewayError {
     // 500+: the write may or may not have been applied → ambiguous.
     // 429: throttled before processing; deliberately retryable later, but the
@@ -1557,12 +1591,9 @@ export function createJubelioSalesGateway(options: {
     // 400/401/403/404/409: the provider rejected the request before applying.
     const ambiguous = input.status >= 500;
     if (ambiguous) {
-      log.error("Jubelio sales write outcome unknown", {
-        method: "POST",
-        path: input.path,
-        status: input.status,
-        ...input.context,
-      });
+      log.error(
+        `Jubelio POST ${input.path}: HTTP ${input.status}; hasil penulisan belum pasti`
+      );
     }
     return new JubelioSalesGatewayError(
       `Jubelio sales write failed (${input.status})`,
@@ -2239,7 +2270,7 @@ export function createJubelioSalesGateway(options: {
       // request: an unknown version never reaches login/POST.
       const expectedEnvelope = resolveContractEnvelope(input);
       const payload = buildSalesOrderPayload(input);
-      const context = { operation: "sales_order_create", operationId: input.operationId };
+      const operationRef = operationLabel("sales_order_create", input.operationId);
       // Exactly one create POST; any failure is terminal for this attempt.
       // Create rides the read lane (5): the cancel POST (10) must stay the
       // highest-priority write so it can outrank reads and create.
@@ -2247,10 +2278,9 @@ export function createJubelioSalesGateway(options: {
         path: "/sales/orders/",
         body: payload,
         priority: 5,
-        context,
       });
       if (status < 200 || status >= 300) {
-        throw writeRejection({ path: "/sales/orders/", status, body, context });
+        throw writeRejection({ path: "/sales/orders/", status, body });
       }
       const salesOrderId = parsePositiveId(body);
       // Durable handle first: the confirmation GET may fail or the process may
@@ -2260,7 +2290,6 @@ export function createJubelioSalesGateway(options: {
         providerId: salesOrderId,
         label: "sales order",
         ids: { salesOrderId },
-        context,
       });
       let snapshot: JubelioSalesOrderSnapshot;
       try {
@@ -2268,11 +2297,10 @@ export function createJubelioSalesGateway(options: {
       } catch (error) {
         // The create POST may have been applied; an unreadable/unverifiable
         // confirmation GET can never be treated as success.
-        log.error("Jubelio sales order confirmation read failed", {
-          ...context,
-          salesOrderId,
-          error: serializeError(error),
-        });
+        log.error(
+          `Jubelio ${operationRef}: sales order ${salesOrderId} gagal dikonfirmasi, pembacaan ulang gagal`,
+          safeDependencyErrorLog(error)
+        );
         throw new JubelioSalesGatewayError(
           "Jubelio sales order confirmation read failed",
           { ambiguous: true, retryable: false, salesOrderId }
@@ -2285,20 +2313,17 @@ export function createJubelioSalesGateway(options: {
         expectedEnvelope,
       });
       if (mismatch) {
-        log.error("Jubelio sales order confirmation mismatch", {
-          ...context,
-          salesOrderId,
-          mismatch,
-        });
+        log.error(
+          `Jubelio ${operationRef}: sales order ${salesOrderId} tidak cocok dengan permintaan — ${mismatch}`
+        );
         throw new JubelioSalesGatewayError(
           `Jubelio sales order ${salesOrderId} does not match the requested order: ${mismatch}`,
           { ambiguous: true, retryable: false, salesOrderId }
         );
       }
-      log.info("Jubelio sales order created and confirmed", {
-        ...context,
-        salesOrderId,
-      });
+      log.info(
+        `Jubelio ${operationRef}: sales order ${salesOrderId} dibuat dan terkonfirmasi`
+      );
       return { salesOrderId, order: snapshot };
     },
 
@@ -2318,11 +2343,10 @@ export function createJubelioSalesGateway(options: {
       // Validate the supplied v2 envelope BEFORE any payload/POST: an unknown
       // version must never reach the wire (the builder re-asserts it).
       const validatedExpected = assertExpectedEnvelope(input.expected);
-      const context = {
-        operation: "sales_order_channel_edit",
-        operationId: input.operationId,
-        salesOrderId: input.edit.salesorderId,
-      };
+      const operationRef = operationLabel(
+        "sales_order_channel_edit",
+        input.operationId
+      );
       // Payload construction is fail-closed BEFORE anything is sent (the
       // builder throws a non-ambiguous JubelioSalesGatewayError on any unsafe
       // snapshot — zero POST).
@@ -2337,10 +2361,9 @@ export function createJubelioSalesGateway(options: {
         path: "/sales/orders/",
         body: payload,
         priority: 5,
-        context,
       });
       if (status < 200 || status >= 300) {
-        throw writeRejection({ path: "/sales/orders/", status, body, context });
+        throw writeRejection({ path: "/sales/orders/", status, body });
       }
       const salesOrderId = parsePositiveId(body);
       if (salesOrderId !== input.edit.salesorderId) {
@@ -2359,10 +2382,10 @@ export function createJubelioSalesGateway(options: {
           validatedExpected
         );
       } catch (error) {
-        log.error("Jubelio sales order edit confirmation read failed", {
-          ...context,
-          error: serializeError(error),
-        });
+        log.error(
+          `Jubelio ${operationRef}: kanal sales order ${salesOrderId} gagal dikonfirmasi setelah edit, pembacaan ulang gagal`,
+          safeDependencyErrorLog(error)
+        );
         throw new JubelioSalesGatewayError(
           "Jubelio sales order edit confirmation read failed",
           { ambiguous: true, retryable: false }
@@ -2374,30 +2397,32 @@ export function createJubelioSalesGateway(options: {
         targetChannelStatus: input.targetChannelStatus,
       });
       if (mismatch) {
-        log.error("Jubelio sales order edit confirmation mismatch", {
-          ...context,
-          mismatch,
-        });
+        // `mismatch` can quote the RAW provider `channel_status` value, which
+        // is arbitrary remote text (it may carry a customer name). The log
+        // keeps a static summary plus the ids; the thrown error below still
+        // carries the detailed business mismatch unchanged.
+        log.error(
+          `Jubelio ${operationRef}: edit kanal sales order ${salesOrderId} belum terkonfirmasi oleh GET pembanding`
+        );
         throw new JubelioSalesGatewayError(
           `Jubelio sales order ${salesOrderId} edit is not confirmed: ${mismatch}`,
           { code: "EDIT_CONFIRM_MISMATCH", ambiguous: true, retryable: false }
         );
       }
-      log.info("Jubelio sales order channel status edited and confirmed", {
-        ...context,
-      });
+      log.info(
+        `Jubelio ${operationRef}: kanal sales order ${salesOrderId} diubah ke ${input.targetChannelStatus} dan terkonfirmasi`
+      );
       return { salesOrderId, order: confirmed };
     },
 
     async cancelSalesOrder(input): Promise<JubelioSalesCancelResult> {
-      const context = { operation: "sales_order_cancel", operationId: input.operationId };
+      const operationRef = operationLabel("sales_order_cancel", input.operationId);
       // Pre-invoice read: establishes current remote state before any write.
       const pre = await readSalesOrderSnapshot(input.salesOrderId, 5);
       if (pre.isCanceled) {
-        log.info("Jubelio sales order already canceled", {
-          ...context,
-          salesOrderId: input.salesOrderId,
-        });
+        log.info(
+          `Jubelio ${operationRef}: sales order ${input.salesOrderId} sudah dibatalkan`
+        );
         return { salesOrderId: input.salesOrderId, alreadyCanceled: true, order: pre };
       }
       if (pre.invoiceId !== null) {
@@ -2413,7 +2438,6 @@ export function createJubelioSalesGateway(options: {
           path: "/sales/orders/cancel/",
           body: { ids: [input.salesOrderId] },
           priority: 10,
-          context,
         });
       } catch (error) {
         // A timeout/network failure may have applied the cancellation: the
@@ -2422,11 +2446,10 @@ export function createJubelioSalesGateway(options: {
           error instanceof JubelioSalesGatewayError &&
           error.options.ambiguous
         ) {
-          log.error("Jubelio sales write outcome unknown", {
-            ...context,
-            salesOrderId: input.salesOrderId,
-            error: serializeError(error),
-          });
+          log.error(
+            `Jubelio ${operationRef}: hasil pembatalan sales order ${input.salesOrderId} belum pasti`,
+            safeDependencyErrorLog(error)
+          );
         } else {
           throw error;
         }
@@ -2438,7 +2461,6 @@ export function createJubelioSalesGateway(options: {
             path: "/sales/orders/cancel/",
             status,
             body,
-            context,
           });
         }
         if (status < 200 || status >= 300) {
@@ -2446,7 +2468,6 @@ export function createJubelioSalesGateway(options: {
             path: "/sales/orders/cancel/",
             status,
             body,
-            context,
           });
           // Definite provider rejections (400/401/403/404/409) need no further
           // read; 500+ may have been applied, so reconcile with a single GET.
@@ -2457,11 +2478,10 @@ export function createJubelioSalesGateway(options: {
       try {
         confirmed = await readSalesOrderSnapshot(input.salesOrderId, 5);
       } catch (error) {
-        log.error("Jubelio sales order cancel confirmation read failed", {
-          ...context,
-          salesOrderId: input.salesOrderId,
-          error: serializeError(error),
-        });
+        log.error(
+          `Jubelio ${operationRef}: konfirmasi pembatalan sales order ${input.salesOrderId} gagal dibaca`,
+          safeDependencyErrorLog(error)
+        );
         throw new JubelioSalesGatewayError(
           "Jubelio sales order cancel confirmation read failed",
           { ambiguous: true, retryable: false }
@@ -2473,10 +2493,9 @@ export function createJubelioSalesGateway(options: {
           { ambiguous: true, retryable: false }
         );
       }
-      log.info("Jubelio sales order canceled and confirmed", {
-        ...context,
-        salesOrderId: input.salesOrderId,
-      });
+      log.info(
+        `Jubelio ${operationRef}: sales order ${input.salesOrderId} dibatalkan dan terkonfirmasi`
+      );
       return {
         salesOrderId: input.salesOrderId,
         alreadyCanceled: false,
@@ -2485,11 +2504,10 @@ export function createJubelioSalesGateway(options: {
     },
 
     async createInvoice(input): Promise<JubelioInvoiceCreateResult> {
-      const context = {
-        operation: "sales_invoice_create",
-        operationId: input.operationId,
-        salesOrderId: input.salesOrderId,
-      };
+      const operationRef = operationLabel(
+        "sales_invoice_create",
+        input.operationId
+      );
       // Exactly one conversion POST; any failure is terminal for this attempt.
       // Conversion is a settlement write and rides the read lane (5): it must
       // never outrank the cancel POST (10).
@@ -2497,14 +2515,12 @@ export function createJubelioSalesGateway(options: {
         path: "/sales/packlists/create-invoice",
         body: { salesorder_id: input.salesOrderId },
         priority: 5,
-        context,
       });
       if (status < 200 || status >= 300) {
         throw writeRejection({
           path: "/sales/packlists/create-invoice",
           status,
           body,
-          context,
         });
       }
       // The response documents `{status, id}` where id is the Sales Invoice
@@ -2516,18 +2532,16 @@ export function createJubelioSalesGateway(options: {
         providerId: invoiceId,
         label: "invoice",
         ids: { invoiceId },
-        context,
       });
       let invoice: JubelioInvoiceSnapshot;
       try {
         const verified = await readJson(`/sales/invoices/${invoiceId}`, 5);
         invoice = parseInvoiceSnapshot(invoiceId, verified);
       } catch (error) {
-        log.error("Jubelio invoice verification read failed", {
-          ...context,
-          invoiceId,
-          error: serializeError(error),
-        });
+        log.error(
+          `Jubelio ${operationRef}: verifikasi invoice ${invoiceId} untuk sales order ${input.salesOrderId} gagal dibaca`,
+          safeDependencyErrorLog(error)
+        );
         // The conversion POST may have been applied; an unverifiable invoice
         // can never be treated as verified. Recovery is a GET of this id.
         throw new JubelioSalesGatewayError(
@@ -2542,11 +2556,10 @@ export function createJubelioSalesGateway(options: {
       try {
         order = await readSalesOrderSnapshot(input.salesOrderId, 5);
       } catch (error) {
-        log.error("Jubelio invoice linkage read failed", {
-          ...context,
-          invoiceId,
-          error: serializeError(error),
-        });
+        log.error(
+          `Jubelio ${operationRef}: tautan invoice ${invoiceId} ke sales order ${input.salesOrderId} gagal dibaca`,
+          safeDependencyErrorLog(error)
+        );
         throw new JubelioSalesGatewayError(
           "Jubelio invoice linkage read failed",
           { code: "INVOICE_CONFIRMATION_READ_FAILED", ambiguous: true, retryable: false, invoiceId }
@@ -2554,13 +2567,17 @@ export function createJubelioSalesGateway(options: {
       }
       const mismatch = invoiceLinkageMismatch({ invoice, order });
       if (mismatch) {
-        log.error("Jubelio invoice verification mismatch", { ...context, invoiceId, mismatch });
+        log.error(
+          `Jubelio ${operationRef}: invoice ${invoiceId} tidak cocok dengan sales order ${input.salesOrderId} — ${mismatch}`
+        );
         throw new JubelioSalesGatewayError(
           `Jubelio invoice ${invoiceId} does not match the converted sales order: ${mismatch}`,
           { code: "INVOICE_VERIFY_MISMATCH", ambiguous: true, retryable: false, invoiceId }
         );
       }
-      log.info("Jubelio invoice created and linked", { ...context, invoiceId });
+      log.info(
+        `Jubelio ${operationRef}: invoice ${invoiceId} dibuat dan tertaut ke sales order ${input.salesOrderId}`
+      );
       return { invoiceId, invoice };
     },
 
@@ -2589,11 +2606,10 @@ export function createJubelioSalesGateway(options: {
           { code: "PAYMENT_TYPE_INVALID", ambiguous: false, retryable: false }
         );
       }
-      const context = {
-        operation: "sales_payment_create",
-        operationId: input.operationId,
-        invoiceId: payment.invoiceId,
-      };
+      const operationRef = operationLabel(
+        "sales_payment_create",
+        input.operationId
+      );
       // Exactly one payment POST (sandbox 2026-09-24: payment_type is a
       // number, payment_no "[auto]" is provider-numbered, response is
       // `{status, id}` where id is the payment_id). The invoice id was
@@ -2619,10 +2635,9 @@ export function createJubelioSalesGateway(options: {
           ],
         },
         priority: 5,
-        context,
       });
       if (status < 200 || status >= 300) {
-        throw writeRejection({ path: "/sales/payments/", status, body, context });
+        throw writeRejection({ path: "/sales/payments/", status, body });
       }
       // `saveOK` may not carry an id; without one the payment cannot be
       // verified → ambiguous (it may exist). Never blind-retry; reconcile.
@@ -2639,18 +2654,16 @@ export function createJubelioSalesGateway(options: {
         providerId: paymentId,
         label: "payment",
         ids: { paymentId },
-        context,
       });
       let snapshot: JubelioPaymentSnapshot;
       try {
         const verified = await readJson(`/sales/payments/${paymentId}`, 5);
         snapshot = parsePaymentSnapshot(paymentId, verified);
       } catch (error) {
-        log.error("Jubelio payment verification read failed", {
-          ...context,
-          paymentId,
-          error: serializeError(error),
-        });
+        log.error(
+          `Jubelio ${operationRef}: verifikasi payment ${paymentId} untuk invoice ${payment.invoiceId} gagal dibaca`,
+          safeDependencyErrorLog(error)
+        );
         throw new JubelioSalesGatewayError(
           "Jubelio payment verification read failed",
           { code: "PAYMENT_CONFIRMATION_READ_FAILED", ambiguous: true, retryable: false, paymentId }
@@ -2662,13 +2675,17 @@ export function createJubelioSalesGateway(options: {
         amount: payment.amount,
       });
       if (mismatch) {
-        log.error("Jubelio payment verification mismatch", { ...context, paymentId, mismatch });
+        log.error(
+          `Jubelio ${operationRef}: payment ${paymentId} tidak cocok dengan invoice ${payment.invoiceId} — ${mismatch}`
+        );
         throw new JubelioSalesGatewayError(
           `Jubelio payment ${paymentId} does not match the verified invoice: ${mismatch}`,
           { code: "PAYMENT_VERIFY_MISMATCH", ambiguous: true, retryable: false, paymentId }
         );
       }
-      log.info("Jubelio payment created and linked", { ...context, paymentId });
+      log.info(
+        `Jubelio ${operationRef}: payment ${paymentId} dibuat dan tertaut ke invoice ${payment.invoiceId}`
+      );
       return { paymentId, payment: snapshot };
     },
 

@@ -14,14 +14,31 @@ import {
 } from "@/db";
 import { asc, eq, and } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
-import { createLogger, serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { readOrderPricing } from "@/lib/versioned-pricing";
-const log = createLogger({ module: "orders-detail" });
 
-export async function GET(
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("orders-detail");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Next/provider
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
+async function getOrderDetail(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
+): Promise<Response> {
   try {
     const access = await requireOnboardedApiSession();
     if (!access.ok) return access.response;
@@ -137,7 +154,9 @@ export async function GET(
           .orderBy(asc(deliveryTrackingEvents.receivedAt))
       : [];
 
-    log.info("owned order detail read", { orderId: id, hasShipment: !!shipment });
+    log.info(
+      `owned order detail read: order ${orderData.id}, shipment ${shipment ? "ada" : "tidak ada"}`
+    );
 
     // Ticket 07 — the customer sees ONLY their own Coupon redemption status
     // (public Offers have no code literal to expose). A released redemption is
@@ -214,11 +233,14 @@ export async function GET(
           : null,
       },
     });
-  } catch (error) {
-    log.error("order detail read failed", { error: serializeError(error) });
+  } catch {
+    log.error("order detail read failed", new RouteLogError("order detail read failed"));
     return NextResponse.json(
       { success: false, error: "Failed to fetch order" },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(getOrderDetail, "orders-detail");

@@ -37,6 +37,9 @@
  * Run: npx playwright test --config=playwright.mock.config.ts
  */
 import { defineConfig, devices } from "@playwright/test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // Dedicated isolated ports (distinct from the live config's 3000/3001/3002).
 // Browser-facing origins use `localhost` (cookies are port-independent, so
@@ -61,6 +64,25 @@ process.env.MIDTRANS_SERVER_KEY = "pickup-mock-only-server-key";
 
 process.env.JUBELIO_SHIPMENT_WEBHOOK_SECRET = "fixture-shipment-secret";
 
+// --- Artifact log untuk spec korelasi logging pada server NYATA --------------
+//
+// Satu direktori per run, DI LUAR repo (tmpdir sistem). Proses app pada harness
+// menulis stdout mentahnya ke file di bawah; spec membaca file itu sebagai
+// artifact eksternal — bukan lewat import logger app/core, bukan route
+// interception browser.
+//
+// File config ini dievaluasi di proses runner DAN di setiap worker, jadi nilai
+// yang sudah ada WAJIB dipakai ulang: tanpa reuse, worker akan membuat direktori
+// kedua dan mem-poll file yang tidak pernah ditulis oleh server yang berjalan.
+const LOGGING_DIR =
+  process.env.E2E_LOGGING_DIR && process.env.E2E_LOGGING_DIR.length > 0
+    ? process.env.E2E_LOGGING_DIR
+    : mkdtempSync(join(tmpdir(), "marketplace-logging-"));
+
+process.env.E2E_LOGGING_DIR = LOGGING_DIR;
+process.env.E2E_LOGGING_STORE_LOG = join(LOGGING_DIR, "store-stdout.log");
+process.env.E2E_LOGGING_ADMIN_LOG = join(LOGGING_DIR, "admin-stdout.log");
+
 // TEST-ONLY shared signing secret (deterministic, >= 32 chars).
 //
 // admin `verify-pickup` signs its call to the store's internal
@@ -78,9 +100,10 @@ const MOCK_SHARED_AUTH_SECRET = "mock-e2e-only-shared-auth-secret-do-not-reuse";
 export default defineConfig({
   testDir: "./e2e",
   // ONLY the mock-only specs (versioned checkout/settlement, checkout review
-  // preview, pickup, delivery, shipment, admin discounts) — this config must
-  // never run the live-cleanup checkout.spec.ts or the other shared-config specs.
-  testMatch: /(?:versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|discounts-usage|markdown|markdown-settlement|price-change|price-change-bulk|price-change-excel)-mock.spec.ts/,
+  // preview, pickup, delivery, shipment, admin discounts, real-server logging
+  // correlation) — this config must never run the live-cleanup checkout.spec.ts
+  // or the other shared-config specs.
+  testMatch: /(?:discounts-prototype|stock-visibility|versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|branch-form-layout|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|discounts-usage|markdown|markdown-settlement|price-change|price-change-bulk|price-change-excel|price-change-prototype|logging)-mock.spec.ts/,
   fullyParallel: false,
   workers: 1, // single fixture identity (john) — serial DB + cart ordering
   forbidOnly: true,
@@ -102,7 +125,7 @@ export default defineConfig({
     {
       name: "pickup-mock",
       testDir: "./e2e",
-      testMatch: /(?:versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|discounts-usage|markdown|markdown-settlement|price-change|price-change-bulk|price-change-excel)-mock.spec.ts/,
+      testMatch: /(?:discounts-prototype|stock-visibility|versioned-checkout|versioned-settlement|checkout-review|pickup|addresses|branch-origin|branch-form-layout|delivery-quote|delivery-order|shipment-booking|shipment-tracking|delivery-follow-up|discounts-admin|discounts-coupon|discounts-usage|markdown|markdown-settlement|price-change|price-change-bulk|price-change-excel|price-change-prototype|logging)-mock.spec.ts/,
       // No storageState/project auth: sessions are created in the spec via the
       // public HTTP sign-in seam against the isolated origins.
     },
@@ -120,7 +143,10 @@ export default defineConfig({
       },
     },
     {
-      command: `npx next dev -p ${STORE_PORT}`,
+      // Runner test-only: menjalankan `next dev` yang sama, tetapi stdout mentah
+      // proses app direkam ke E2E_LOGGING_STORE_LOG untuk spec korelasi logging.
+      // Port, env, dan `reuseExistingServer` tidak berubah.
+      command: `node ../../e2e/support/logging-server.mjs store ${STORE_PORT}`,
       cwd: "apps/store",
       url: STORE_PUBLIC_URL,
       reuseExistingServer: false,
@@ -175,7 +201,8 @@ export default defineConfig({
       },
     },
     {
-      command: `npx next dev -p ${ADMIN_PORT}`,
+      // Runner test-only yang sama untuk admin (E2E_LOGGING_ADMIN_LOG).
+      command: `node ../../e2e/support/logging-server.mjs admin ${ADMIN_PORT}`,
       cwd: "apps/admin",
       url: ADMIN_PUBLIC_URL,
       reuseExistingServer: false,

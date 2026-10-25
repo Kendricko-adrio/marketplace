@@ -473,8 +473,12 @@ export interface DiscountOfferSummaryDto {
   quotaCount: number | null;
   budgetAmount: string | null;
   updatedAt: string;
+  capacitySummary: DiscountOfferDetailDto["capacitySummary"] | null;
   liveRevision: {
     id: string;
+    revisionNo: number;
+    kind: string | null;
+    scope: string | null;
     name: string | null;
     minSubtotal: string | null;
     startAt: string | null;
@@ -1851,10 +1855,12 @@ export interface ListDiscountOffersInput {
   page?: number;
   limit?: number;
   state?: string;
+  activationKind?: string;
 }
 
 export interface ListDiscountOffersResult {
   data: DiscountOfferSummaryDto[];
+  countsByActivationKind: { public: number; manual_only: number };
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
@@ -1870,15 +1876,26 @@ export async function listDiscountOffers(
   if (input.state !== undefined && !OFFER_STATES.has(input.state)) {
     throw inputInvalid("state filter is not a supported Offer state");
   }
-  const where = input.state
-    ? eq(discountOffers.state, input.state)
-    : undefined;
-
+  if (input.activationKind !== undefined && !["public", "manual_only"].includes(input.activationKind)) {
+    throw inputInvalid("activationKind filter is not supported");
+  }
+  const stateWhere = input.state ? eq(discountOffers.state, input.state) : undefined;
+  const where = and(stateWhere, input.activationKind
+    ? eq(discountOffers.activationKind, input.activationKind) : undefined);
   const countRows = await db
-    .select({ count: sql<number>`count(*)::int` })
+    .select({ activationKind: discountOffers.activationKind, count: sql<number>`count(*)::int` })
     .from(discountOffers)
-    .where(where);
-  const total = countRows[0]?.count ?? 0;
+    .where(stateWhere)
+    .groupBy(discountOffers.activationKind);
+  const countsByActivationKind = { public: 0, manual_only: 0 };
+  for (const row of countRows) {
+    if (row.activationKind === "public" || row.activationKind === "manual_only") {
+      countsByActivationKind[row.activationKind] = row.count;
+    }
+  }
+  const total = input.activationKind === "public" ? countsByActivationKind.public
+    : input.activationKind === "manual_only" ? countsByActivationKind.manual_only
+    : countsByActivationKind.public + countsByActivationKind.manual_only;
 
   const offerRows = await db
     .select()
@@ -1891,11 +1908,16 @@ export async function listDiscountOffers(
   if (offerRows.length === 0) {
     return {
       data: [],
+      countsByActivationKind,
       pagination: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
     };
   }
 
   const ids = offerRows.map((row) => row.id);
+  const usageRows = await db.select().from(discountOfferUsage).where(
+    sql`${discountOfferUsage.offerId} in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})`
+  );
+  const usageByOffer = new Map(usageRows.map((row) => [row.offerId, row]));
   const revisionRows = await db
     .select()
     .from(discountOfferRevisions)
@@ -1963,9 +1985,20 @@ export async function listDiscountOffers(
       budgetAmount:
         offer.budgetAmount === null ? null : dbMoneyText(offer.budgetAmount),
       updatedAt: offer.updatedAt.toISOString(),
+      capacitySummary: (() => {
+        const usage = usageByOffer.get(offer.id);
+        if (!usage) return null;
+        const summary = capacitySummaryFor(offer, usage);
+        if ((offer.quotaCount !== null && summary.heldCount + summary.consumedCount > offer.quotaCount)
+          || (summary.availableAmount !== null && BigInt(summary.availableAmount) < BigInt(0))) return null;
+        return summary;
+      })(),
       liveRevision: live
         ? {
             id: live.id,
+            revisionNo: live.revisionNo,
+            kind: benefitByRevision.get(live.id)?.kind ?? null,
+            scope: benefitByRevision.get(live.id)?.scope ?? null,
             name: live.name,
             minSubtotal:
               live.minSubtotal === null ? null : dbMoneyText(live.minSubtotal),
@@ -2003,6 +2036,7 @@ export async function listDiscountOffers(
 
   return {
     data,
+    countsByActivationKind,
     pagination: {
       page,
       limit,

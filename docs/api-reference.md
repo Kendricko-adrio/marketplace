@@ -56,6 +56,55 @@ zod issues) on validation failures. Status codes are noted per endpoint.
   `[...all]` → `*` (Better Auth catch-all).
 - `apps/<app>/src/app/uploads/[...path]/route.ts` → `/uploads/{path...}` (public file serving).
 
+### Header korelasi `x-request-id`
+
+Setiap route handler HTTP first-party store dan admin dibungkus
+`withRequestContext` (kecuali yang tercantum pada pengecualian di bawah), dan
+wrapper itu **selalu** menambahkan header `x-request-id` pada response:
+
+- Nilai header adalah UUID kanonik yang dibuat **server** pada setiap request.
+  Incoming `x-request-id` dari client **diabaikan** sebagai identitas: dua
+  request dengan header masuk yang sama tetap mendapat dua UUID berbeda.
+- Nilai header sama dengan `requestId` pada setiap baris application log yang
+  ditulis di dalam request tersebut (detail format:
+  [`features/logging.md`](features/logging.md)).
+- Kontrak bisnis **tidak berubah**: status, body, dan header lain tetap seperti
+  sebelumnya. Endpoint yang sudah membawa field `requestId` di body error
+  envelope tetap memakai bentuk yang sama.
+
+Bukti korelasi pada server Next nyata dikunci dua endpoint pilot beserta test
+route masing-masing:
+
+| App | Endpoint | Module log |
+|---|---|---|
+| store | `GET /api/categories` | `categories-route` |
+| admin | `GET /api/admin/session-check` | `admin-session-check` |
+
+Endpoint first-party lain memakai wrapper yang sama, tetapi baru dua endpoint di
+atas yang punya artifact E2E korelasi sendiri; jangan memperlakukan angka itu
+sebagai bukti cakupan seluruh endpoint.
+
+Pengecualian yang diketahui (lihat
+[pemetaan cakupan](features/logging.md#pengecualian-yang-harus-dibaca-bersama-tabel)):
+
+- Status wrapper: store 34 `route.ts` di `src/app/api`, 33 dibungkus; admin 72
+  `route.ts`, 71 dibungkus. Satu-satunya `route.ts` yang tidak dibungkus di kedua
+  app adalah `auth/[...all]/route.ts` (catch-all Better Auth, memang tidak boleh
+  dibungkus `withRequestContext`). Tabel lengkap ada di
+  [tabel cakupan](features/logging.md#pengecualian-yang-harus-dibaca-bersama-tabel).
+- `/api/auth/[...all]` (Better Auth catch-all) dan `/uploads/[...path]` bukan
+  handler first-party berlogging, jadi jaminan header/`requestId` tidak berlaku.
+- `/api/addresses`, `/api/addresses/{id}`, `/api/addresses/{id}/default`, dan
+  `/api/onboarding/sync` kini dibungkus `withRequestContext` (module
+  `store-addresses`, `store-address`, `store-address-default`, `onboarding-sync`),
+  sehingga response-nya membawa `x-request-id` dan baris log jalur itu memakai
+  `requestId` kanonik.
+- `GET /api/admin/prices/{variantId}/history` dan
+  `GET /api/admin/shipment/regions` **sudah** dibungkus wrapper dengan module
+  logger miliknya sendiri (`admin-price-history`, `admin-shipment-regions`),
+  sehingga keduanya ikut jaminan header/`requestId` kanonik dan tidak lagi
+  memakai jalur logger lama dari guard.
+
 ---
 
 ## Quick reference — Store (`:3000`)
@@ -104,7 +153,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | ~~DELETE~~ | ~~`/api/admin/products/{id}`~~ | — | **Removed** — Jubelio is the source of truth |
 | GET | `/api/admin/categories` | admin-session (products:view) | List active categories |
 | GET | `/api/admin/brands` | admin-session (products:view) | List all product brands (dimension) for the homepage ProductFilterEditor dropdown |
-| GET | `/api/admin/branches` | admin-session (branches:view) | List branches (paginated) |
+| GET | `/api/admin/branches` | admin-session (branches:view) | List branches (paginated; `search` nama/kode/kota) |
 | POST | `/api/admin/branches` | admin-session (branches:edit:all) | Create branch with verified Shipment hierarchy |
 | GET | `/api/admin/shipment/regions` | admin-session (branches:edit) | Shipment hierarchy lookup |
 | GET | `/api/admin/branches/{id}` | admin-session (branches:view) | Fetch a branch |
@@ -128,7 +177,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | POST | `/api/admin/roles/{id}/restore` | admin-session (roles:edit) | Activate an archived Role after reviewed revalidation |
 | POST | `/api/admin/upload` | admin-session | Upload a file |
 | DELETE | `/api/admin/upload` | admin-session | Delete an uploaded file |
-| GET | `/api/admin/discounts` | admin-session (discounts:view) | Paginated Offer list (filter `state`) |
+| GET | `/api/admin/discounts` | admin-session (discounts:view) | Daftar promo dengan filter `state`/`activationKind`, jumlah per jalur, revision/benefit dan kapasitas tersedia global |
 | POST | `/api/admin/discounts` | admin-session (discounts:edit, gate 1) | Create ONE fixed Offer draft, `activationKind` public/manual_only (request-key idempotent; manual boleh membawa `codes[]`) |
 | GET | `/api/admin/discounts/{id}` | admin-session (discounts:view) | Safe Offer detail: live + draft revision, benefit, global capacity summary, masked codes |
 | PUT | `/api/admin/discounts/{id}/draft` | admin-session (discounts:edit) | Save complete draft terms + one goods benefit: fixed nominal or percentage rate/cap (expected Offer/draft versions) |
@@ -147,7 +196,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 | GET | `/api/admin/price-changes/{id}/report` | admin-session (prices:view + products:view all_branches) | Laporan/subset gagal `.xlsx` dari row durable (`subset=all|failed`) |
 | GET | `/api/admin/price-changes/{id}` | admin-session (prices:view + products:view all_branches) | Batch review/detail: counts + paginated rows (state filter) |
 | POST | `/api/admin/price-changes/{id}/apply` | admin-session (prices:edit + products:view all_branches) | Foreground chunked apply (≤25 rows / 5s per request); `202` while pending |
-| GET | `/api/admin/price-changes/candidates` | admin-session (prices:view + products:view all_branches) | SKU picker for bulk selection (`search`/`page`/`limit`) |
+| GET | `/api/admin/price-changes/candidates` | admin-session (prices:view + products:view all_branches) | Daftar harga SKU terpadu (`search`/`page`/`limit`, opsional `markdownStatus=inactive`) |
 | GET | `/api/admin/prices/{variantId}/history` | admin-session (prices:view + products:view all_branches) | Immutable revisions + current Markdown projection |
 | GET | `/api/admin/orders` | admin-session (orders view) | List orders (RBAC branch-scoped) |
 | GET | `/api/admin/orders/{id}` | admin-session (orders view) | Order detail incl. durable Jubelio operations + remote SO/invoice/payment ids + fulfillment block reason |
@@ -229,7 +278,7 @@ Both actions require `orders:edit` AND the current Home Branch matching the orde
 
 Gate domain `discounts.contractVersion` dibaca **tanpa cache** pada setiap writer; `0`/tidak ada = tidak aktif (`503 DISCOUNTS_INACTIVE`), nilai tidak dikenal fails closed (`503 DISCOUNTS_CONTRACT_UNSUPPORTED`). Otorisasi memakai Current Policy server-side: `discounts:view` + `discounts:edit` global (System Owner memakai bypass code-owned), dibaca ulang di dalam transaksi di bawah `SHARE` lock Admin User → Role. `discount_capacity:view/edit` global terpisah diperlukan untuk **memperbesar** kapasitas. Browser tidak pernah menjadi sumber policy. Envelope sukses `{ success: true, data }` (list menambahkan `pagination` di top level); kegagalan `{ success: false, error, code, requestId }` + header `x-request-id`, `Cache-Control: no-store`. Log sukses `info` dan kegagalan `error` tanpa body/key/fingerprint/token.
 
-- `GET /api/admin/discounts` — `page` (≥1), `limit` (1–50), `state` opsional (`draft|enabled|paused|archived`). Ringkasan aman: terms live, benefit goods (`fixedAmount` atau `rate`+`capAmount`), kapasitas, penanda draft.
+- `GET /api/admin/discounts` — `page` (≥1), `limit` (1–50), `state` opsional (`draft|enabled|paused|archived`), `activationKind` opsional (`public|manual_only`; invalid → `400 INPUT_INVALID`). Tanpa activation filter tetap mengembalikan kedua jalur untuk kompatibilitas. Filter jenis dijalankan sebelum pagination. Response menambahkan `countsByActivationKind: { public, manual_only }` di top level: hitungan mengikuti `state`, tetapi tidak dibatasi jenis/page. Setiap row menambahkan `liveRevision.revisionNo`, `kind`, `scope`, dan `capacitySummary` global (`consumedCount`, `heldCount`, `consumedAmount`, `heldAmount`, `availableCount`, `availableAmount`, `basis:"global"`). Missing projection atau komitmen melebihi batas → `capacitySummary:null`, bukan angka nol palsu. Field lama tetap; `codes` hanya masked untuk semua persona, tanpa literal kode/identitas order/customer. Kuota dan budget tersedia dibaca dari projection global dalam query yang dibatasi Offer pada halaman, bukan HTTP usage per row. Ringkasan bukan jaminan eligibility/booking kuota dan tidak menjalankan rekonsiliasi histori.
 - `POST /api/admin/discounts` — strict `{ requestKey: UUID, activationKind: "public" | "manual_only", codes?: string[] }`. Kode manual (maks 50 perintah) di-canonical-kan (trim+uppercase, ASCII 3–64) dan direservasi di transaksi yang sama; Offer publik dengan `codes` → `400 CODE_NOT_SUPPORTED`. Detail memuat `codes` (masked) dan literal `code` hanya untuk promo editor.
 - `POST /api/admin/discounts/{id}/codes` — `{ requestKey, code, expectedOfferVersion }`. Canonical unik global; bentrok → `409 CODE_CONFLICT`; Offer publik → `409 CODE_NOT_SUPPORTED`; stale → `409 STALE_REVISION`. Replay key+command sama → `200` tanpa code/audit kedua.
 - `PATCH /api/admin/discounts/{id}/codes/{codeId}` — `{ expectedOfferVersion, expectedCodeVersion, state }`; arsip terminal (`409 CODE_ARCHIVED`), usage tidak pernah direset, owner/literal tetap.
@@ -256,9 +305,9 @@ Semua endpoint membutuhkan admin session; `Cache-Control: no-store`; body memaka
 - `POST /api/admin/price-changes` — `prices:edit` global + `products:view all_branches`, gate `discounts.contractVersion=1`. Body strict `{ requestKey: UUID, source?: "manual"|"bulk"|null, reason?: string|null, rows: [{ sku, action: "set_price"|"restore_base", targetUnitPrice?: string|null, discountPercent?: string|null }] }` dengan 1..N row (batas statis `MAX_STAGE_ROWS_HARD_LIMIT=5000`; `source` default: 1 row → `manual`, >1 row → `bulk`). `set_price` memerlukan tepat satu dari target fixed (Rupiah utuh) atau persen potongan (server membekukan target fixed dari source terbaru, half-up); `restore_base` tidak menerima keduanya. Respons `201` batch `staged` dengan semua row `pending` dan preview non-otoritatif (source saat stage, effective kini, target, dampak/arah/persen, warnings); key+command sama → `200` batch yang sama; command berbeda → `409 REQUEST_KEY_CONFLICT`. Limit efektif `discount.import.maxRows` dibaca **uncached** per request: kelebihan → `400 ROW_LIMIT_EXCEEDED` tanpa mutation; config invalid → `503 IMPORT_LIMITS_INVALID` (fail closed). Row kosong/duplikat/bentuk salah → `400 INPUT_INVALID`; SKU tak dikenal atau source invalid pada row target fixed tetap di-stage dengan `variantId: null` + warning dan difinalkan `failed` saat apply, sedangkan row shortcut persen untuk SKU/source yang tidak resolvable ditolak `400 INPUT_INVALID` (target fixed tidak bisa dibekukan). Gate 0 → `503 DISCOUNTS_INACTIVE`.
 - `GET /api/admin/price-changes/{id}` — `prices:view` global + products view-all. Query `page` (≥1), `limit` (default 25, maks 100), `state` (`all` default; `pending|applied|unchanged|failed`). Counts selalu menggambarkan **seluruh** batch; `rows` hanya halaman yang diminta (`preview`, `state`, `resultCode`, `actual` before/after, `appliedRevisionId`) plus `pagination { page, limit, total, totalPages }` — cukup untuk report/subset retry tanpa arsip file. Nilai `state` lain → `400 INPUT_INVALID`. Id tak dikenal/denied → `404 NOT_FOUND`/`403 DENIED`.
 - `POST /api/admin/price-changes/{id}/apply` — `prices:edit`. Body `{ requestKey: UUID, previewDigest?: string|null }`. Foreground chunk: maksimum **25 row atau 5 detik** per request, tiap row satu transaksi bounded (lock batch→row→variant/source→current Markdown, validasi target terhadap source **terbaru**, revision immutable + current pointer + hasil row + audit). Respons `202` selama `pendingCount > 0`, `200` saat final; resume manual memakai request key baru dan hanya memproses row pending. Ledger `price_change_apply_request` unik `(actor_identity, request_key)`: key sama pada batch + digest sama melanjutkan/replay tanpa hasil row kedua, beda → `409 REQUEST_KEY_CONFLICT`. No-op → `unchanged` tanpa revision fiktif, tetap satu audit. Halt `POLICY_REVOKED` (grant dicabut di tengah chunk; row yang sudah commit tetap) dan `ROW_LIMIT_EXCEEDED` (batch melebihi limit baris terbaru; row pending ditahan) dikembalikan sebagai `haltReason`, bukan sukses. Bila grant sudah dicabut **sebelum** request dimulai, respons adalah `403 DENIED`; halt reason tetap dicatat pada batch dan hanya dapat dibaca viewer yang masih memegang `prices:view` + products view-all. Config limit invalid → `503 IMPORT_LIMITS_INVALID`; lock/serialization → `503 BUSY`. Counts selalu menjumlah `rowCount`; money tetap decimal string.
-- `GET /api/admin/price-changes/candidates` — `prices:view` global + products view-all; query `search` (≤100 karakter, case-insensitive pada SKU dan nama produk), `page`, `limit` (default 25, maks 100), urut `sku asc`. Envelope `{ rows, pagination }`; tiap row memuat `variantId`, `sku`, `productId`, `productName`, `variantLabel`, `basePrice`, `effectiveUnitPrice`, `storedTarget`, `markdownActive`, `priceVersion`. Baris dengan source tidak valid tetap dikembalikan dengan `basePrice`/`effectiveUnitPrice` null dan tetap dihitung pada total. No-store; log hanya total, bukan daftar SKU.
-- `POST /api/admin/price-changes` dengan `Content-Type: multipart/form-data` — body `workbook` (file `.xlsx`), `requestKey` (UUID), `reason?` (≤500), `parentBatchId?` (UUID batch asal untuk koreksi). **Staging saja**: parser memvalidasi container/signature, satu sheet `Harga`, marker `A1 = OKCIR_MARKDOWN_V1`, header resmi row 2, dan seluruh baris data sebelum transaksi apa pun; fatal (container rusak, macro, external link, encrypted/legacy OLE, sheet/marker/header salah, ZIP traversal/duplikat, batas entry/cell/text/row/byte) → `400 WORKBOOK_REJECTED` dengan `details.reason` dan **tidak** membuat batch/harga berubah. Baris yang gagal validasi (formula — cached value tidak dievaluasi, teks nominal, pecahan/0/negatif, action asing, SKU bukan text, blank price untuk `set_price`, price pada `restore_base`, SKU duplikat, `origin_row` invalid) disimpan sebagai row **failed final** dengan row number sheet, `resultCode`, dan raw action/target; baris valid tetap `pending`. Semua row blank diabaikan; baris yang hanya berisi kolom referensi diabaikan; partial tanpa SKU gagal row. Batas efektif `discount.import.maxRows`/`maxFileBytes`/`maxExpandedBytes` dibaca uncached; `content-length` di atas `maxFileBytes + 512KiB` envelope → `413 COMPRESSED_LIMIT_EXCEEDED`. Key sama + payload sama → `200` batch yang sama; payload berbeda → `409 REQUEST_KEY_CONFLICT`. `origin_row` hanya sah bila `parentBatchId` menunjuk batch yang ada dan setiap origin adalah row **failed final** milik batch itu (unik); selain itu `400 ORIGIN_INVALID` tanpa write. Isi workbook tidak pernah diarsipkan.
-- `GET /api/admin/price-changes/template` — `prices:view` + products view-all; mengembalikan `.xlsx` no-store: satu sheet `Harga`, `A1 = OKCIR_MARKDOWN_V1`, header row 2 `sku`, `action`, `new_price`, data mulai row 3. Semua sel text ditulis sebagai inline string (literal, bukan formula).
+- `GET /api/admin/price-changes/candidates` — `prices:view` global + products view-all; query `search` (≤100 karakter, case-insensitive pada SKU dan nama produk), `page`, `limit` (default 25, maks 100), urut `sku asc`. Envelope `{ rows, pagination }`; tiap row memuat `variantId`, `sku`, `productId`, `productName`, `variantLabel`, `basePrice`, `effectiveUnitPrice`, `storedTarget`, `markdownActive`, `priceVersion`. Tanpa filter, baris dengan source tidak valid tetap dikembalikan dengan `basePrice`/`effectiveUnitPrice` null dan tetap dihitung pada total. Pencarian kosong memuat katalog. Query opsional `markdownStatus=inactive` hanya memuat target tersimpan dengan source whole-Rupiah valid yang memenuhi `source <= target`; rows dan count memakai filter/pagination yang sama lintas katalog. Nilai lain (termasuk string kosong) → `400 INPUT_INVALID`. Source nol tetap valid mengikuti projection existing; source negatif/pecahan/melebihi batas uang dikecualikan dari daftar nonaktif. Permission tetap sama. No-store; log hanya total/filter dan konteks request, bukan daftar SKU.
+- `POST /api/admin/price-changes` dengan `Content-Type: multipart/form-data` — body `workbook` (file `.xlsx`), `requestKey` (UUID), `reason?` (≤500), `parentBatchId?` (UUID batch asal untuk koreksi). **Staging saja**: parser memvalidasi container/signature, satu sheet `Harga`, marker `A1 = markdown_v1` (marker lama tetap diterima sebagai alias dengan identitas internal batch tidak berubah), header resmi row 2, dan seluruh baris data sebelum transaksi apa pun; fatal (container rusak, macro, external link, encrypted/legacy OLE, sheet/marker/header salah, ZIP traversal/duplikat, batas entry/cell/text/row/byte) → `400 WORKBOOK_REJECTED` dengan `details.reason` dan **tidak** membuat batch/harga berubah. Baris yang gagal validasi (formula — cached value tidak dievaluasi, teks nominal, pecahan/0/negatif, action asing, SKU bukan text, blank price untuk `set_price`, price pada `restore_base`, SKU duplikat, `origin_row` invalid) disimpan sebagai row **failed final** dengan row number sheet, `resultCode`, dan raw action/target; baris valid tetap `pending`. Semua row blank diabaikan; baris yang hanya berisi kolom referensi diabaikan; partial tanpa SKU gagal row. Batas efektif `discount.import.maxRows`/`maxFileBytes`/`maxExpandedBytes` dibaca uncached; `content-length` di atas `maxFileBytes + 512KiB` envelope → `413 COMPRESSED_LIMIT_EXCEEDED`. Key sama + payload sama → `200` batch yang sama; payload berbeda → `409 REQUEST_KEY_CONFLICT`. `origin_row` hanya sah bila `parentBatchId` menunjuk batch yang ada dan setiap origin adalah row **failed final** milik batch itu (unik); selain itu `400 ORIGIN_INVALID` tanpa write. Isi workbook tidak pernah diarsipkan.
+- `GET /api/admin/price-changes/template` — `prices:view` + products view-all; mengembalikan `.xlsx` no-store: satu sheet `Harga`, `A1 = markdown_v1`, header row 2 `sku`, `action`, `new_price`, data mulai row 3. Semua sel text ditulis sebagai inline string (literal, bukan formula).
 - `POST /api/admin/price-changes/export` — `prices:view` + products view-all; body `{ variantIds: string[] }` (1..limit config, default 1000; id tak dikenal/duplikat-kosong → `400 INPUT_INVALID`). Nilai base/effective/target **selalu dari server**, bukan body. `action` diisi `set_price` dan `new_price` harga efektif saat ini (re-upload = no-op eksplisit sampai diedit); kolom referensi resmi `row_number`, `product_name`, `variant`, `source_price`, `effective_price`, `origin_row`, `status`, `error_reason` bersifat non-otoritatif.
 - `GET /api/admin/price-changes/{id}/report?subset=all|failed` — `prices:view` + products view-all; `.xlsx` no-store dibentuk dari row durable (bukan file upload). `failed` hanya row final gagal dan mengisi `origin_row` dengan nomor baris row itu sendiri sehingga file dapat diperbaiki lalu diunggah sebagai batch koreksi tertaut; `all` memuat seluruh row dengan kolom `row_number`, `status` (`pending|applied|unchanged|failed`) + `error_reason` (`resultCode`). Nilai `subset` lain → `400 INPUT_INVALID`; batch tak dikenal/denied → `404`/`403`. Text selalu literal (inline string) sehingga nilai berawalan `=`, `+`, `-`, `@` tidak menjadi formula. Row yang belum final tetap muncul dengan status `pending`, bukan diklaim sukses.
 - `GET /api/admin/prices/{variantId}/history` — `prices:view` global + products view-all, `page`/`limit` (≤100). Mengembalikan `{ variantId, sku, productId, productName, current, currentVersion, revisions, pagination }`; revision terbaru lebih dulu; money decimal string. Tidak mengekspos request key/fingerprint atau target SKU lain.
@@ -363,7 +412,7 @@ Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, 
 - **Params**: —
 - **Body**: none
 - **Response**: 200 `{ success: true, data: categories[] }` (full `categories` row); 500 `{ success: false, error }`
-- **Notes**: Filters `isActive = true`; ordered by `name` asc.
+- **Notes**: Filters `isActive = true`; ordered by `name` asc. Response membawa header `x-request-id` kanonik buatan server dan log memakai `requestId` yang sama; body/status tidak berubah (lihat [Header korelasi](#header-korelasi-x-request-id)).
 
 #### `GET` `/api/brands`
 - **Auth**: none
@@ -376,10 +425,10 @@ Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, 
 #### `GET` `/api/products`
 - **Auth**: none
 - **Purpose**: Paginated, filterable product list for storefront browsing.
-- **Params**: `search` (string, optional), `category` (slug, optional), `brand` (slug, optional), `minPrice` (string, optional), `maxPrice` (string, optional), `status` (string, default `"aktif"`), `hasDiscount` (`"true"` to filter products whose `basePrice > min(variant.price)`), `sortBy` (`"price"`|`"createdAt"`, default `"createdAt"`), `sortOrder` (`"asc"`|`"desc"`, default `"desc"`), `page` (int, default `1`), `limit` (int, default `12`, clamped to 1–100 via `parseListParams` in `apps/store/src/lib/list-params.ts`)
+- **Params**: `search` (string, optional), `category` (slug, optional), `brand` (slug, optional), `branch` (ID, optional), `minPrice` (string, optional), `maxPrice` (string, optional), `status` (string, default `"aktif"`), `hasDiscount` (`"true"` untuk Markdown aktif pada varian tersedia), `sortBy` (`"price"`|`"createdAt"`, default `"createdAt"`), `sortOrder` (`"asc"`|`"desc"`, default `"desc"`), `page` (int, default `1`), `limit` (int, default `12`, clamped to 1–100 via `parseListParams` in `apps/store/src/lib/list-params.ts`)
 - **Body**: none
 - **Response**: 200 `{ success: true, data: [{ id, name, slug, description, basePrice, status, createdAt, price, image, collection: string|null, gender: string|null, hasStock: boolean, lastKnownInStock: boolean }], pagination: { page, limit, total, totalPages } }`; 500 `{ success: false, error }`
-- **Notes**: `price` is the cheapest variant net price and `basePrice` is the RRP. `hasStock` means a mapped active branch can be selected, even when last-known availability is zero; `lastKnownInStock` is the provisional stock badge. Product cards grey out only without a mapped branch. Price/category/brand filtering remains server-side and pagination-aware. **Out-of-stock products always sort to the bottom**: a tier-1 `ORDER BY (has sellable stock) DESC` runs above the user's chosen `sortBy`/`sortOrder`, so products with no sellable stock in any active branch appear after every in-stock product regardless of sort (e.g. a `price asc` sort still lists all in-stock items cheapest-first, then out-of-stock items). A `branch` filter includes mapped products even when their last-known availability is zero; checkout verifies live stock. Requests are logged via the structured logger (`module: "products-list"`) and stamped with `x-request-id`.
+- **Notes**: Hanya produk dengan varian mapped dan stok tersedia pada cabang aktif yang dikembalikan: `max(0, COALESCE(availableStock, 0) - pendingRemoteStock) > 0`. Produk habis disembunyikan sebelum sort, limit, dan count sehingga pagination konsisten. Parameter `branch` membatasi stok **dan varian sumber harga** ke cabang tersebut. `price`, filter rentang harga/Markdown dan sort harga memakai varian tersedia; `sourcePrice` berasal dari varian sumber harga yang sama. `hasStock` dan `lastKnownInStock` merefleksikan stok tersedia terakhir, bukan sekadar mapping. Checkout tetap memeriksa Jubelio live. Request memakai structured logger `products-list` dan `x-request-id`.
 
 #### `GET` `/api/products/{id}`
 - **Auth**: none
@@ -387,7 +436,7 @@ Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, 
 - **Params**: `{id}` — accepts either the product `id` or its `slug` (looked up by id first, then by slug)
 - **Body**: none
 - **Response**: 200 `{ success: true, data: { ...product, variants: [{ ...variant, branchStock: [{ branchId, stock, reservedStock, pendingRemoteStock, available }] }] } }`; 404 if not found; 500 on error
-- **Notes**: All mapped active branch rows are exposed, including last-known zero; `available` is `max(0, availableStock - pendingRemoteStock)`. The label is provisional until the live checkout check.
+- **Notes**: `variants`, `colors`, `sizes` hanya mencakup varian dengan stok tersedia pada cabang aktif/mapped. Setiap `branchStock` hanya memuat `available > 0`, dihitung sebagai `max(0, COALESCE(availableStock, 0) - pendingRemoteStock)`. Produk yang seluruh stoknya habis tetap dapat dibuka melalui URL langsung: array pilihan kosong dan UI menampilkan `Stok habis` dengan pembelian dinonaktifkan. Ukuran di UI mengikuti warna terpilih. Checkout tetap memeriksa Jubelio live.
 
 #### `GET` `/api/homepage`
 - **Auth**: none
@@ -395,7 +444,7 @@ Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, 
 - **Params**: —
 - **Body**: none
 - **Response**: 200 `{ success: true, data: sections[] }` where each section varies by `type`: `carousel_product` sections gain a `products` array; `store_banner` sections gain a `branches` array (active branches, `name` asc); other types pass through unchanged. Empty array if no sections. 500 `{ success: false, error }`
-- **Notes**: Only `isActive = true` sections, ordered by `displayOrder` asc. `carousel_product` content has a `mode`: `"filter"` resolves products dynamically (mirrors `/api/products` filters: `search`, `category` slug, `brand` slug, `hasDiscount`, `minPrice`, `maxPrice`, `sortOrder` of `newest|priceAsc|priceDesc`; `limit` clamped 1–20, default 10) and runs in parallel; otherwise manual mode reads `homepageSectionProducts` junction rows ordered by `displayOrder`. Carousel product `price` is the cheapest variant net price, `basePrice` is the RRP. Each carousel product also carries `collection` (text label from the product row, nullable) and `gender` (resolved name from the sync-managed `gender` dimension table via `genderId`, nullable) so product cards can render both. `store_banner` sections attach all `status = "aktif"` branches. Read-only.
+- **Notes**: Section aktif diurutkan `displayOrder` asc. Carousel `manual` membaca junction sesuai urutan; mode `filter` mengikuti filter katalog (`search`, `category`, `brand`, `hasDiscount`, `minPrice`, `maxPrice`, `sortOrder`), limit 1–20. **Kedua mode menyembunyikan produk tanpa stok tersedia** pada cabang aktif/mapped; mode filter menerapkan aturan sebelum limit. Harga efektif dan source diproyeksikan dari varian tersedia saja. Field `collection` dan nama `gender` tetap disertakan. `store_banner` tetap menampilkan cabang aktif tanpa filter stok produk. Read-only; keberhasilan/kegagalan dicatat melalui structured logger `homepage`.
 
 ## Store — Cart, Checkout, Orders, Account
 
@@ -405,7 +454,7 @@ Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, 
 - **Params**: —
 - **Body**: none
 - **Response**: 200 `{ success, data: { id, items[], itemCount, subtotal, ppnRatePercent } }`; `ppnRatePercent` is the validated effective rate (11 fallback); 401 if unauth; 500 on error
-- **Notes**: Auto-creates a `carts` row if none exists for the user. Each item carries its own `branchId`. Subtotal sums `parseFloat(variant.price) * quantity`.
+- **Notes**: Membuat cart bila belum ada. Setiap item membawa `branchId` dan `available` (stok tersedia terakhir, 0 jika snapshot/mapping/cabang tidak tersedia). UI membatasi tombol tambah quantity berdasarkan `available`. Item lama tidak dihapus otomatis hanya karena stok habis. Subtotal memakai harga efektif varian; pemeriksaan stok live tetap dilakukan saat place-order.
 
 #### `DELETE` `/api/cart`
 - **Auth**: client-session
@@ -420,16 +469,16 @@ Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, 
 - **Purpose**: Add a variant from a branch to the cart, merging into an existing (variantId+branchId) line.
 - **Params**: —
 - **Body**: `{ variantId: string, branchId: string, quantity: number (int, positive, default 1) }`
-- **Response**: 200 `{ success, message }` (`"Cart item updated"` or `"Item added to cart"`); 400 invalid body / `"Branch not available"`; 401 if unauth; 404 `"Variant not found"`; 409 if Jubelio mapping is missing; 500 on error
-- **Notes**: Branch must be active and mapped to a Jubelio item/location row. Last-known stock does not restrict provisional cart quantity; place-order verifies live stock.
+- **Response**: 200 `{ success, message }` (`"Cart item updated"` or `"Item added to cart"`); 400 body invalid / `"Branch not available"` / stok tidak mencukupi; 401 if unauth; 404 `"Variant not found"`; 409 if Jubelio mapping is missing; 500 on error
+- **Notes**: Cabang wajib aktif dan pasangan item/location Jubelio mapped. Snapshot lokal menjadi batas: quantity baru **ditambah quantity item yang sudah ada** tidak boleh melebihi `availableStock - pendingRemoteStock`; stok 0/null ditolak `400`. Transaksi mengunci row stok dan upsert memakai conditional update untuk mencegah penambahan konkuren melewati batas. Perubahan cart tidak mereservasi stok; place-order tetap memeriksa Jubelio live.
 
 #### `PUT` `/api/cart/items/{id}`
 - **Auth**: client-session
 - **Purpose**: Update the quantity of a single cart item.
 - **Params**: `{id}` (cart item id)
 - **Body**: `{ quantity: number (int, positive) }`
-- **Response**: 200 `{ success, message: "Cart item updated" }`; 400 invalid body; 401 if unauth; 404 `"Cart not found"` / `"Cart item not found"`; 409 if the stock mapping is missing; 500 on error
-- **Notes**: Item is scoped to the user's cart. Cart changes do not reserve stock. Last-known availability is provisional; live validation occurs in place-order.
+- **Response**: 200 `{ success, message: "Cart item updated" }`; 400 body invalid / stok atau mapping/cabang tidak tersedia; 401 tanpa session; 404 `"Cart not found"` / `"Cart item not found"`; 500 pada kegagalan internal.
+- **Notes**: Item dibatasi ke cart milik session. Cabang wajib aktif/mapped; quantity akhir tidak boleh melebihi stok tersedia terakhir. Stok habis, snapshot/mapping hilang, atau cabang nonaktif ditolak `400` tanpa menghapus/mengubah item. Row stok dikunci selama transaksi update. Tidak mereservasi stok; validasi live tetap pada place-order.
 
 #### `DELETE` `/api/cart/items/{id}`
 - **Auth**: client-session
@@ -623,11 +672,11 @@ Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, 
 
 #### `GET` `/api/admin/branches`
 - **Auth**: admin-session (guard: branches/view)
-- **Purpose**: List branches (paginated).
-- **Params**: query `page` (default 1), `limit` (default 20)
+- **Purpose**: List branches (paginated, searchable).
+- **Params**: query `page` (default 1), `limit` (default 20), `search` (optional — case-insensitive partial match on `name`, `code`, or `city`; trimmed, blank means no filter)
 - **Body**: none
 - **Response**: 200 `{ success, data: [...], pagination: { page, limit, total, totalPages } }`; 500 error
-- **Notes**: Ordered by `createdAt` desc.
+- **Notes**: Ordered by `createdAt` desc. `search` and the branch-scope predicate are applied **in SQL before the page slice**, and the same `where` feeds the `count(*)` query, so `total`/`totalPages` describe the filtered result set (a match that would sit on page 2+ is still returned). Query module: `apps/admin/src/lib/branches-list.ts`; branch scope from the Current Policy via `branchScopeFromAuthorization` — own-branch scope returns only the Home Branch, an own-branch grant without a Home Branch fails closed (403). The admin list page debounces the input (400 ms) and resets to page 1 on a new term.
 
 #### `GET` `/api/admin/shipment/regions`
 - **Auth**: admin-session (guard: branches/edit), never a store session.
@@ -889,7 +938,7 @@ Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, 
 - **Params**: —
 - **Body**: none
 - **Response**: 200 (auth) `{ success: true, authenticated: true, mustResetPassword: boolean }`; 200 (no session/error) `{ success: false, mustResetPassword: false, authenticated: false }`
-- **Notes**: Reads `session.user.mustResetPassword`. Errors swallowed and returned as `authenticated: false` with `200` — no error surface to the client.
+- **Notes**: Reads `session.user.mustResetPassword`. Errors swallowed and returned as `authenticated: false` with `200` — no error surface to the client. Response membawa header `x-request-id` kanonik buatan server; lookup yang gagal tetap `200` dengan body yang sama dan error dinormalisasi sebelum di-log.
 
 #### `GET` `/api/admin/linkable-destinations`
 - **Auth**: admin-session (guard: `footer:view`)

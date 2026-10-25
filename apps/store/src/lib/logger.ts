@@ -1,135 +1,132 @@
-import { randomUUID } from "crypto";
-import type { NextRequest, NextResponse } from "next/server";
+import { createLogging } from "@marketplace/logging";
+import type {
+  Logging as CoreLogging,
+  ModuleLogger as CoreModuleLogger,
+} from "@marketplace/logging";
 
 /**
- * Structured logger for the order flow.
+ * Structured logging facade for the **store** runtime.
  *
- * Every log line is a single JSON object so it can be ingested by a log
- * aggregator (Loki, Datadog, Vercel logs, …) and queried by `requestId` /
- * `orderId` / `module`. Each record carries:
+ * This module is the app-scoped layer over `@marketplace/logging` — the single
+ * internal wrapper that owns Pino. It exports exactly one API surface:
+ * `createModuleLogger`, `withRequestContext`, `getRequestId`,
+ * `withExecutionContext`, `withDetachedExecutionContext`. One root instance per
+ * app runtime, one child logger per module, and `requestId`/`executionId` read
+ * from the active `AsyncLocalStorage` scope on every emission (never bound at
+ * creation time).
  *
- *   - timestamp  — ISO-8601 UTC (date + time the action happened)
- *   - level      — debug | info | warn | error
- *   - requestId  — correlates all logs within one request
- *   - message    — human-readable description of the action
- *   - …context   — arbitrary structured fields (orderId, userId, status, …)
+ * Rules for every call site: call `createModuleLogger` once at module scope,
+ * never funnel a `logger` or `requestId` parameter (or a request object) through
+ * a service/repository just for logging, and never add arbitrary bindings —
+ * business facts belong in the `message`, correlation fields come from the
+ * active scope.
  *
- * `requestLogger(request)` honors an upstream `x-request-id` header so a
- * request can be traced across the edge → app → downstream calls; it
- * generates a fresh id otherwise. Bind request-scoped context with
- * `.child({ orderId })` — the child keeps the same `requestId`.
+ * The previous custom engine (`createLogger`, `requestLogger`, `withRequestId`,
+ * `serializeError`, free-form context bindings, per-call UUID fallback) was
+ * removed once every call site migrated; `packages/logging/src/policy.test.ts`
+ * guards against reintroducing it.
  */
 
-export type LogLevel = "debug" | "info" | "warn" | "error";
-
-export interface LogContext {
-  readonly [key: string]: unknown;
+if (typeof window !== "undefined") {
+  // Fail fast rather than shipping a logger that cannot work: the core reads
+  // Node builtins (`node:async_hooks`, `node:crypto`) and writes to stdout, so a
+  // browser import is an authoring/build mistake. This is a runtime guard only;
+  // a compile-time server boundary would need a framework-level import such as
+  // `server-only`, which is deliberately not added here because it throws in
+  // plain Node (CLI scripts and unit tests import this module).
+  throw new Error(
+    "lib/logger hanya untuk runtime server (store): jangan diimpor dari client component"
+  );
 }
 
-export interface Logger {
-  readonly requestId: string;
-  debug(message: string, context?: LogContext): void;
-  info(message: string, context?: LogContext): void;
-  warn(message: string, context?: LogContext): void;
-  error(message: string, context?: LogContext): void;
-  /** Returns a new logger with extra bound context (same requestId). */
-  child(context: LogContext): Logger;
-}
+// ───────────────────── Application facade over @marketplace/logging ──────────
 
-const LEVELS: Record<LogLevel, number> = {
-  debug: 10,
-  info: 20,
-  warn: 30,
-  error: 40,
-};
+/** Value of the `app` field on every line written by this runtime. */
+const APP_LABEL = "store";
 
-const MIN_LEVEL =
-  LEVELS[(process.env.LOG_LEVEL as LogLevel | undefined) ?? "info"] ??
-  LEVELS.info;
-
-function emit(
-  level: LogLevel,
-  requestId: string,
-  message: string,
-  bound: LogContext,
-  context?: LogContext
-): void {
-  if (LEVELS[level] < MIN_LEVEL) return;
-  const record = {
-    timestamp: new Date().toISOString(),
-    level,
-    requestId,
-    message,
-    ...bound,
-    ...context,
-  };
-  // Serialize to a single line; fall back to the record if it contains a
-  // non-JSON-serializable value (e.g. a thrown Error) so we never lose the log.
-  let line: string;
-  try {
-    line = JSON.stringify(record);
-  } catch {
-    line = JSON.stringify({ ...record, message: String(message) });
-  }
-  // Route to the console method matching the level so platform log filters work.
-  switch (level) {
-    case "error":
-      console.error(line);
-      break;
-    case "warn":
-      console.warn(line);
-      break;
-    default:
-      console.log(line);
-  }
-}
-
-function makeLogger(requestId: string, bound: LogContext): Logger {
-  return {
-    requestId,
-    debug: (m, c) => emit("debug", requestId, m, bound, c),
-    info: (m, c) => emit("info", requestId, m, bound, c),
-    warn: (m, c) => emit("warn", requestId, m, bound, c),
-    error: (m, c) => emit("error", requestId, m, bound, c),
-    child: (c) => makeLogger(requestId, { ...bound, ...c }),
-  };
-}
-
-/** Create a standalone logger (e.g. for lib code not tied to a request). */
-export function createLogger(context?: LogContext, requestId?: string): Logger {
-  return makeLogger(requestId ?? randomUUID(), context ?? {});
+/**
+ * Member this module adds to the runtime global.
+ *
+ * Next.js evaluates a module more than once (dev HMR, separate route-module
+ * graphs), so a module-local singleton can create a second Pino root and a
+ * second `AsyncLocalStorage`; a scope opened through one instance would then be
+ * invisible to a logger built from the other. Memoising the instance on the
+ * global keeps exactly one owner per app runtime.
+ *
+ * Only the instance is cached. A `requestId` is never stored here — it is read
+ * from the active scope on every emission — and the member name is app-specific,
+ * so a process hosting both apps never shares one root.
+ */
+interface RootLoggingRegistry {
+  marketplaceLoggingStoreRoot?: CoreLogging;
 }
 
 /**
- * Build a logger bound to the incoming request. Honors an upstream
- * `x-request-id` header (so a request can be traced across the edge, the app,
- * and downstream calls); generates a fresh id otherwise.
+ * Returns this runtime's root logging instance, creating it on first evaluation.
+ *
+ * The single assertion below describes the global member this file adds: the
+ * intersection keeps every existing global member typed, and no `any` or
+ * `as unknown as` escape hatch is used.
  */
-export function requestLogger(request: NextRequest, context?: LogContext): Logger {
-  const incoming = request.headers.get("x-request-id")?.trim();
-  return makeLogger(incoming || randomUUID(), context ?? {});
-}
-
-/**
- * Stamp a response with the request id so the client can reference it when
- * reporting an issue. Returns the same response for chaining.
- */
-export function withRequestId<T extends NextResponse>(response: T, logger: Logger): T {
-  response.headers.set("x-request-id", logger.requestId);
-  return response;
-}
-
-/**
- * Serialize an unknown catch value into a plain object safe for structured
- * logging (preserves name/message/stack for Error, stringifies everything else).
- */
-export function serializeError(error: unknown): Record<string, unknown> {
-  if (error instanceof Error) {
-    return {
-      name: error.name,
-      message: error.message,
-      stack: error.stack,
-    };
+function resolveRootLogging(): CoreLogging {
+  const registry = globalThis as typeof globalThis & RootLoggingRegistry;
+  const cached = registry.marketplaceLoggingStoreRoot;
+  if (cached !== undefined) {
+    return cached;
   }
-  return { value: String(error) };
+  const created = createLogging({ app: APP_LABEL });
+  registry.marketplaceLoggingStoreRoot = created;
+  return created;
+}
+
+/**
+ * Root instance of this runtime, created once when the module is evaluated. The
+ * destination is resolved when a line is written, not at import time, and the
+ * root is never created per function or per request.
+ */
+const rootLogging = resolveRootLogging();
+
+/**
+ * Logger bound to one module name. Create it once at module scope; correlation
+ * fields are resolved per emission, so a logger created before (or outside) a
+ * request scope still writes the active `requestId`.
+ */
+export function createModuleLogger(module: string): CoreModuleLogger {
+  return rootLogging.createModuleLogger(module);
+}
+
+/**
+ * Wraps an HTTP handler as one request scope (route handler, webhook, HTTP
+ * cron). Arguments — including a framework `params` promise — are forwarded
+ * untouched, the response carries `x-request-id`, and a thrown value is logged
+ * inside the scope and rethrown as the identical object.
+ */
+export function withRequestContext<Args extends unknown[]>(
+  handler: (...args: Args) => Response | Promise<Response>,
+  module?: string
+): (...args: Args) => Promise<Response> {
+  return rootLogging.withRequestContext(handler, module);
+}
+
+/** Canonical `requestId` of the active scope, `null` outside an HTTP scope. */
+export function getRequestId(): string | null {
+  return rootLogging.getRequestId();
+}
+
+/**
+ * Runs `work` as a job/worker/CLI execution scope (alias of the core
+ * `runWithExecutionContext`): a new `executionId`, keeping the enclosing
+ * `requestId` when the job was triggered from HTTP.
+ */
+export function withExecutionContext<T>(work: () => T): T {
+  return rootLogging.runWithExecutionContext(work);
+}
+
+/**
+ * Runs `work` as an independent job/listener scope (alias of the core
+ * `runDetachedExecutionContext`): `requestId` is `null` and the `executionId` is
+ * new, never the caller's.
+ */
+export function withDetachedExecutionContext<T>(work: () => T): T {
+  return rootLogging.runDetachedExecutionContext(work);
 }

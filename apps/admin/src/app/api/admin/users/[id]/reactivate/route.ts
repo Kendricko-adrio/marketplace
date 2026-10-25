@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
 import { buildActorContext } from "@/lib/rbac/roles-service";
 import { reactivateUser } from "@/lib/rbac/users-service";
@@ -19,30 +19,49 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-user-reactivate");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB tidak pernah
+ * masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
 const reactivateSchema = z.strictObject({
   reason: z.string().min(1).nullable().optional(),
 });
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function POST(
+async function reactivateUserAccount(
   request: NextRequest,
   { params }: RouteContext
-) {
-  const guardResult = await guard("users", "edit", { request });
+): Promise<Response> {
+  const guardResult = await guard("users", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
+  let userId: string | null = null;
   try {
     const { id } = await params;
+    userId = id;
     const body = reactivateSchema.safeParse(
       await request.json().catch(() => ({}))
     );
     if (!body.success) {
-      logger.warn("users.reactivate.invalid_body", {
-        outcome: "denied",
-        userId: id,
-      });
+      log.warn(
+        `users reactivate ditolak: body tidak valid (userId ${id}, outcome denied)`
+      );
       return NextResponse.json(
         {
           success: false,
@@ -60,27 +79,29 @@ export async function POST(
       body.data.reason ?? null
     );
 
-    logger.info("users.reactivate", {
-      outcome: "success",
-      actorId: actor.userId,
-      userId: id,
-      policyVersion: actor.policyVersion,
-    });
+    // Alasan reaktivasi adalah teks bebas operator — tidak masuk log.
+    log.info(
+      `users reactivate (actor ${actor.userId}, userId ${id}, policyVersion ${actor.policyVersion}, outcome success)`
+    );
     return NextResponse.json({ success: true, data: reactivated });
   } catch (error) {
     const mapped = mapServiceError(error);
     if (mapped) {
-      logger.warn("users.reactivate.denied", {
-        outcome: "denied",
-        userId: (await params).id,
-        code: (error as { code?: string }).code,
-      });
+      log.warn(
+        `users reactivate denied (userId ${userId ?? "unknown"}, code ${(error as { code?: string }).code}, outcome denied)`
+      );
       return mapped;
     }
-    logger.error("users.reactivate.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+    log.error(
+      `users reactivate gagal (userId ${userId ?? "unknown"}, outcome error)`,
+      new RouteLogError("users reactivate gagal")
+    );
     return internalErrorResponse();
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(
+  reactivateUserAccount,
+  "admin-user-reactivate"
+);

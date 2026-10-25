@@ -2,11 +2,63 @@ import { deleteRetainedOrderFixtures } from "@marketplace/db/src/testing/retaine
 import dotenv from "dotenv";
 import path from "node:path";
 dotenv.config({ path: path.resolve(import.meta.dirname, "../../../../.env") });
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 import { eq } from "drizzle-orm";
 const { db, branchStocks, branches, clients, jubelioSalesOperations, orderItems, orders, products, productVariants } = await import("@/db");
 const { reconcileConfirmedSalesOrderHolds, dispatchJubelioSalesCancel, dispatchJubelioSalesCreate, ensureJubelioInvoice, ensureJubelioPayment } = await import("./jubelio-sales-lifecycle");
+// The app logging facade (not the core, not a mock): the request scope and the
+// canonical request id are observed exactly where the runtime produces them.
+const { getRequestId, withRequestContext } = await import("./logger");
+
+type LogRecord = Record<string, unknown>;
+
+/** Fixed envelope of one application log line (maintainable-code §7.2). */
+const FIXED_LOG_FIELDS = ["app", "level", "message", "module", "requestId", "timestamp"] as const;
+
+/** Field opsional yang diizinkan pada envelope yang sama (§7.2). */
+const OPTIONAL_LOG_FIELDS = ["error"] as const;
+
+/** Canonical server-generated UUID — an incoming header is never canonical. */
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * External sink under test: the process stdout. Logger internals (module
+ * logger, core, root instance) are never imported or mocked here, so a line is
+ * observed exactly where production writes it.
+ */
+function captureStdout(): { captured: string[]; restore: () => void } {
+  const captured: string[] = [];
+  const spy = vi.spyOn(process.stdout, "write").mockImplementation(
+    (chunk: string | Uint8Array): boolean => {
+      captured.push(
+        typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")
+      );
+      return true;
+    }
+  );
+  return { captured, restore: () => spy.mockRestore() };
+}
+
+/** Every JSON application line of this run; non-JSON output is not a log line. */
+function jsonLogRecords(captured: string[]): LogRecord[] {
+  const records: LogRecord[] = [];
+  for (const line of captured.join("").split("\n")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null) continue;
+    records.push(parsed as LogRecord);
+  }
+  return records;
+}
+
+function messageOf(record: LogRecord): string {
+  return typeof record.message === "string" ? record.message : "";
+}
 
 const prefix = `sales-recovery-${crypto.randomUUID()}`;
 const clientId = `${prefix}-client`;
@@ -96,10 +148,70 @@ describe("confirmed SO accounting crash recovery (PostgreSQL)", () => {
     expect((await ensureJubelioInvoice({ orderId: id, gateway, readOnlyRecovery: true })).status).toBe('confirmed');
     expect((await ensureJubelioPayment({ orderId: id, gateway, readOnlyRecovery: true })).status).toBe('confirmed');
     const { settleJubelioSalesOrder } = await import('./jubelio-sales-settlement');
-    await settleJubelioSalesOrder(id);
+    // Production-shaped invocation: the settlement pipeline runs inside the real
+    // app HTTP scope wrapper (no logger is passed anywhere) and the only
+    // observable log sink is the process stdout writer.
+    type SettlementOutcome = Awaited<ReturnType<typeof settleJubelioSalesOrder>>;
+    let outcome: SettlementOutcome | null = null;
+    let scopeRequestId: string | null = null;
+    let headerRequestId: string | null = null;
+    const { captured, restore } = captureStdout();
+    try {
+      const handler = withRequestContext(async () => {
+        scopeRequestId = getRequestId();
+        outcome = await settleJubelioSalesOrder(id);
+        return Response.json({ ok: true });
+      });
+      headerRequestId = (await handler()).headers.get('x-request-id');
+    } finally {
+      restore();
+    }
     const [row] = await db.select().from(orders).where(eq(orders.id, id));
     expect(row.fulfillmentBlockedReason).toBeNull(); expect(row.paymentStatus).toBe('paid'); expect(row.status).toBe('processing'); expect(row.pickupCode).toBeNull();
     expect(gets).toContain('invoice'); expect(gets).toContain('payment'); expect(posts).toBe(0);
+    // Business outcome unchanged by the logging migration: a delivery settlement
+    // completes IN processing and never claims a pickup code.
+    expect(outcome).toEqual({ status: 'fulfilled', pickupCode: null });
+
+    // ---- Log evidence (only meaningful once the business assertions passed). ----
+    // Correlation: the scope id and the response header are the same canonical
+    // server-generated UUID.
+    expect(scopeRequestId).toBe(headerRequestId);
+    expect(headerRequestId).toMatch(CANONICAL_UUID);
+
+    const records = jsonLogRecords(captured);
+    expect(records.length).toBeGreaterThan(0);
+    // The shared envelope (§7.2), owned by the store runtime — not the legacy
+    // record shape with free bindings.
+    const allowedFields: readonly string[] = [...FIXED_LOG_FIELDS, ...OPTIONAL_LOG_FIELDS];
+    for (const logged of records) {
+      expect(Object.keys(logged).filter((key) => !allowedFields.includes(key))).toEqual([]);
+      for (const field of FIXED_LOG_FIELDS) expect(logged).toHaveProperty(field);
+      expect(logged.app).toBe('store');
+      expect(logged.requestId).toMatch(CANONICAL_UUID);
+    }
+
+    // The lifecycle helper already writes through its own module logger; this
+    // test only pins the settlement module's own lines.
+    const settlementRecords = records.filter((logged) => logged.module === 'jubelio-sales-settlement');
+    expect(settlementRecords.length).toBeGreaterThan(0);
+    expect(settlementRecords.every((logged) => logged.requestId === headerRequestId)).toBe(true);
+
+    const gateRecords = settlementRecords.filter((logged) => messageOf(logged).includes('delivery fulfillment gate'));
+    expect(gateRecords.length).toBeGreaterThan(0);
+    const gate = gateRecords[0];
+    expect(gate.level).toBe('info');
+    // Business references stay greppable in the message, never as free bindings.
+    expect(messageOf(gate)).toContain(id);
+    expect(messageOf(gate)).toContain('processing');
+
+    // Privacy: the customer contact email, the raw contact phone, the internal
+    // operation note and any provider payload never reach a settlement log line.
+    const settlementRaw = JSON.stringify(settlementRecords);
+    expect(settlementRaw).not.toContain(`${clientId}@example.test`);
+    expect(settlementRaw).not.toContain('08123456789');
+    expect(settlementRaw).not.toContain(`${id}-create`);
+    expect(settlementRaw).not.toContain('payload');
   });
 
   it('holds delivery recovery without known operation identifiers and never records an intent or POST', async () => {

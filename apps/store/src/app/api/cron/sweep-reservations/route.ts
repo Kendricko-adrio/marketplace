@@ -18,7 +18,7 @@ import {
   reconcileJubelioSalesOperations,
   reconcileSettlements,
 } from "@/lib/jubelio-sales-settlement";
-import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 
 /**
  * Sweep cron — safety net for Sales-Order orders whose outcome was missed.
@@ -63,23 +63,42 @@ import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
  * always returns 200 so the crontab log stays clean (errors are logged
  * server-side). Idempotent: re-running over handled orders is a no-op.
  */
-export async function POST(request: NextRequest) {
-  const log = requestLogger(request, { module: "sweep-reservations" });
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("sweep-reservations");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Midtrans/
+ * provider tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
+/** HTTP adapter cron: auth gate, urutan langkah sweep, map ke status/body existing. */
+async function sweepReservations(request: NextRequest): Promise<Response> {
   log.info("reservation sweep requested");
   const expected = process.env.CRON_SECRET;
   if (!expected) {
     log.error("reservation sweep unavailable — CRON_SECRET is not configured");
-    return withRequestId(NextResponse.json(
+    return NextResponse.json(
       { success: false, error: "Cron not configured" },
       { status: 503 }
-    ), log);
+    );
   }
   const provided = request.headers.get("x-cron-secret");
   if (!provided || provided !== expected) {
     log.warn("reservation sweep unauthorized");
-    return withRequestId(NextResponse.json({ success: false, error: "Unauthorized" }, {
+    return NextResponse.json({ success: false, error: "Unauthorized" }, {
       status: 401,
-    }), log);
+    });
   }
 
   let finalized = 0;
@@ -112,29 +131,37 @@ export async function POST(request: NextRequest) {
     // Intent checkout yang committed tetapi belum pernah dispatched boleh
     // memakai satu claim existing. Possibly-sent tetap GET-only di bawah.
     try {
-      const resumed = await resumeUndispatchedCheckoutCreates(50, log);
-      log.info("undispatched checkout create sweep completed", { resumed });
+      const resumed = await resumeUndispatchedCheckoutCreates(50);
+      log.info(`undispatched checkout create sweep completed: resumed ${resumed}`);
     } catch {
       log.error("undispatched checkout create sweep unavailable");
     }
     // 1. Reconcile in-flight durable SO operations by persisted id + GET.
     try {
       const accounted = await reconcileConfirmedSalesOrderHolds(50);
-      log.info("confirmed Sales-Order hold accounting reconciled", { accounted });
-      const ops = await reconcileJubelioSalesOperations(50, { logger: log });
+      log.info(`confirmed Sales-Order hold accounting reconciled: accounted ${accounted}`);
+      const ops = await reconcileJubelioSalesOperations(50);
       jubelioSalesReview.scanned = ops.scanned;
       jubelioSalesReview.marked = ops.marked;
-      log.info("sales operation reconciliation finished", ops);
-    } catch (error) {
+      log.info(
+        `sales operation reconciliation finished: scanned ${ops.scanned}, confirmed ${ops.confirmed}, released ${ops.released}, marked ${ops.marked}, pending ${ops.pending}`
+      );
+    } catch {
       jubelioSalesReview.failed++;
-      log.error("sales operation reconciliation failed", { error: serializeError(error) });
+      log.error(
+        "sales operation reconciliation failed",
+        new RouteLogError("sales operation reconciliation failed")
+      );
     }
 
     // 2. Resume settlement for paid orders that never fulfilled.
     try {
-      settlementReview = await reconcileSettlements(50, log);
-    } catch (error) {
-      log.error("settlement reconciliation failed", { error: serializeError(error) });
+      settlementReview = await reconcileSettlements(50);
+    } catch {
+      log.error(
+        "settlement reconciliation failed",
+        new RouteLogError("settlement reconciliation failed")
+      );
     }
 
     // 3. Stale pending_payment orders (uses idx_orders_status_expires).
@@ -175,11 +202,11 @@ export async function POST(request: NextRequest) {
             // 404 — transaction never registered at Midtrans.
             status = "not_found";
           }
-        } catch (err) {
-          log.error("Midtrans status check failed", {
-            orderId: order.id,
-            error: serializeError(err),
-          });
+        } catch {
+          log.error(
+            `Order ${order.id}: Midtrans status check failed`,
+            new RouteLogError("Midtrans status check failed")
+          );
           // Don't fail the order on a transient Midtrans error — leave it for
           // the next sweep run. Avoids wrongly failing a paid-but-unreachable
           // order.
@@ -194,20 +221,17 @@ export async function POST(request: NextRequest) {
           // A success webhook was likely missed — finalize as paid through
           // the settlement pipeline (never ready_for_pickup before the
           // invoice + payment are verified).
-          const claimed = await claimPaidOrder(order.id, undefined, {
+          const claimed = await claimPaidOrder(order.id, {
             paymentType,
             transactionId,
           });
           if (claimed.claimed) {
-            const settlement = await settleJubelioSalesOrder(order.id, {
-              logger: log,
-            });
+            const settlement = await settleJubelioSalesOrder(order.id);
             if (settlement.status === "fulfilled") finalized++;
             else if (settlement.status === "manual_review") {
-              log.warn("sweep settlement needs manual review", {
-                orderId: order.id,
-                message: settlement.message,
-              });
+              // `settlement.message` memuat detail provider: hanya fakta bisnis
+              // (order + outcome) yang masuk log.
+              log.warn(`Order ${order.id}: sweep settlement needs manual review`);
             }
           }
         } else {
@@ -220,17 +244,17 @@ export async function POST(request: NextRequest) {
             status === "not_found"
               ? "Payment expired — order timed out (sweep; not found at Midtrans)"
               : "Payment expired — order timed out (sweep)";
-          const result = await claimAndFailOrder(order.id, reason, status, undefined, {
+          const result = await claimAndFailOrder(order.id, reason, status, {
             paymentType,
             transactionId,
           });
           if (result.claimed) failed++;
         }
-      } catch (err) {
-        log.error("reservation sweep order processing failed", {
-          orderId: order.id,
-          error: serializeError(err),
-        });
+      } catch {
+        log.error(
+          `Order ${order.id}: reservation sweep order processing failed`,
+          new RouteLogError("reservation sweep order processing failed")
+        );
       }
     }
 
@@ -240,9 +264,7 @@ export async function POST(request: NextRequest) {
     //    missed-order dispatch for ready_for_pickup AND completed orders,
     //    never a re-POST, never fatal to the sweep.
     try {
-      const mirror = await reconcileChannelStatusMirrorForSweep(db, {
-        logger: log,
-      });
+      const mirror = await reconcileChannelStatusMirrorForSweep(db);
       channelMirrorReview = {
         possiblySentScanned: mirror.possiblySentScanned,
         skippedFresh: mirror.skippedFresh,
@@ -263,16 +285,24 @@ export async function POST(request: NextRequest) {
         gagalBayarFailed: mirror.gagalBayarFailed,
         failed: 0,
       };
-      log.info("channel-status mirror reconciliation finished", mirror);
-    } catch (error) {
+      log.info(
+        `channel-status mirror reconciliation finished: possiblySent ${mirror.possiblySentScanned}, skippedFresh ${mirror.skippedFresh}, recovered ${mirror.recovered}, investigated ${mirror.investigated}, stillUnknown ${mirror.stillUnknown}, pendingTerminal ${mirror.pendingTerminalScanned}/${mirror.pendingTerminalAborted}/${mirror.pendingTerminalSkipped}, missedOrders ${mirror.missedOrdersScanned}/${mirror.missedDispatched}/${mirror.missedFailed}, verifikasi ${mirror.verifikasiOrdersScanned}/${mirror.verifikasiDispatched}/${mirror.verifikasiFailed}, gagalBayar ${mirror.gagalBayarOrdersScanned}/${mirror.gagalBayarDispatched}/${mirror.gagalBayarFailed}`
+      );
+    } catch {
       channelMirrorReview.failed = 1;
-      log.error("channel-status mirror reconciliation failed", {
-        error: serializeError(error),
-      });
+      log.error(
+        "channel-status mirror reconciliation failed",
+        new RouteLogError("channel-status mirror reconciliation failed")
+      );
     }
 
-    log.info("reservation sweep completed", { scanned, finalized, failed, jubelioSalesReview, settlementReview, channelMirrorReview });
-    return withRequestId(NextResponse.json({
+    log.info(
+      `reservation sweep completed: scanned ${scanned}, finalized ${finalized}, failed ${failed}, ` +
+        `salesReview {scanned ${jubelioSalesReview.scanned}, marked ${jubelioSalesReview.marked}, failed ${jubelioSalesReview.failed}}, ` +
+        `settlement {scanned ${settlementReview.scanned}, fulfilled ${settlementReview.fulfilled}, review ${settlementReview.review}, pending ${settlementReview.pending}}, ` +
+        `channelMirror {possiblySent ${channelMirrorReview.possiblySentScanned}, recovered ${channelMirrorReview.recovered}, investigated ${channelMirrorReview.investigated}, stillUnknown ${channelMirrorReview.stillUnknown}, pendingTerminalAborted ${channelMirrorReview.pendingTerminalAborted}, missedDispatched ${channelMirrorReview.missedDispatched}, missedFailed ${channelMirrorReview.missedFailed}, failed ${channelMirrorReview.failed}`
+    );
+    return NextResponse.json({
       success: true,
       scanned,
       finalized,
@@ -281,12 +311,15 @@ export async function POST(request: NextRequest) {
       jubelioSalesReview,
       settlementReview,
       channelMirrorReview,
-    }), log);
-  } catch (error) {
-    log.error("reservation sweep failed", { error: serializeError(error) });
-    return withRequestId(NextResponse.json(
+    });
+  } catch {
+    log.error("reservation sweep failed", new RouteLogError("reservation sweep failed"));
+    return NextResponse.json(
       { success: false, error: "Sweep failed" },
       { status: 500 }
-    ), log);
+    );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(sweepReservations, "sweep-reservations");

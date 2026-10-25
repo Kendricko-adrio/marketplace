@@ -443,16 +443,19 @@ test.describe("admin discounts UI", () => {
       uiOfferIds.push(offerId);
 
       // 2) Save complete draft terms with one fixed-goods benefit.
-      await page.getByLabel("Nama offer").fill("Diskon Rp17.000 Sepatu Pilihan");
+      await page.getByLabel("Nama promo").fill("Diskon Rp17.000 Sepatu Pilihan");
       await page.getByLabel("Minimum subtotal (Rp)").fill("100000");
-      await page.getByLabel("Nominal fixed-goods (Rp)").fill("17000");
+      await page.getByLabel("Nominal potongan barang (Rp)").fill("17000");
       await page.getByRole("button", { name: "Simpan draft" }).click();
-      await expect(page.getByRole("main").getByText("Draft disimpan")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Review perubahan", exact: true })).toBeEnabled();
 
       // 3) Capacity: a live Offer needs at least one global bound.
+      await page.getByRole("tab", { name: "Pemakaian & budget", exact: true }).click();
       await page.getByLabel("Kuota pemakaian").fill("10");
       await page.getByRole("button", { name: "Simpan kapasitas" }).click();
       await expect(page.getByText("Kapasitas disimpan")).toBeVisible();
+      await page.getByRole("tab", { name: "Aturan", exact: true }).click();
+      await page.getByText("Simulasi biaya", { exact: true }).click();
 
       // 4) Simulation through the shared pricing interface. Literal from the
       //    spec: 150000 - 17000 = 133000 net goods, 11% PPN 14630, total 147630.
@@ -461,13 +464,13 @@ test.describe("admin discounts UI", () => {
       await expect(page.getByText(/Simulasi admin: bukan quote/)).toBeVisible();
 
       // 5) Review shows the server-bound validations and enables publish.
-      await page.getByRole("button", { name: "Review draft" }).click();
+      await page.getByRole("button", { name: "Review perubahan" }).click();
       await expect(page.getByText(/Review siap publish/)).toBeVisible();
       await expect(page.getByText("Benefit goods version1 dengan parameter valid")).toBeVisible();
 
       // 6) Publish, then pause. Pausing is only offered for a live Offer.
-      await page.getByRole("button", { name: "Publish offer" }).click();
-      await expect(page.getByText("Offer dipublikasikan")).toBeVisible();
+      await page.getByRole("button", { name: "Publish promo" }).click();
+      await expect(page.getByText("Promo dipublikasikan")).toBeVisible();
       const pauseButton = page.getByRole("button", { name: "Jeda" });
       await expect(pauseButton).toBeVisible();
       await pauseButton.click();
@@ -495,18 +498,21 @@ test.describe("admin percentage goods UI", () => {
       expect(offerId.length, "the created draft must navigate to its detail page").toBe(36);
       uiOfferIds.push(offerId);
 
-      await page.getByLabel("Nama offer").fill("Diskon 10% maksimal Rp20.000");
+      await page.getByLabel("Nama promo").fill("Diskon 10% maksimal Rp20.000");
       await page.getByLabel("Minimum subtotal (Rp)").fill("0");
       await page.getByLabel("Jenis benefit").click();
       await page.getByRole("option", { name: "Persentase barang" }).click();
       await page.getByLabel("Persentase (%)").fill("10");
-      await page.getByLabel("Cap (Rp, opsional)").fill("20000");
+      await page.getByLabel("Maksimum potongan (Rp, opsional)").fill("20000");
       await page.getByRole("button", { name: "Simpan draft" }).click();
-      await expect(page.getByRole("main").getByText("Draft disimpan")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Review perubahan", exact: true })).toBeEnabled();
 
+      await page.getByRole("tab", { name: "Pemakaian & budget", exact: true }).click();
       await page.getByLabel("Kuota pemakaian").fill("10");
       await page.getByRole("button", { name: "Simpan kapasitas" }).click();
       await expect(page.getByText("Kapasitas disimpan")).toBeVisible();
+      await page.getByRole("tab", { name: "Aturan", exact: true }).click();
+      await page.getByText("Simulasi biaya", { exact: true }).click();
 
       // Simulasi default 150000 unit: 10% = 15000 (cap20000 belum mengikat),
       // net135000, PPN14850, total149850. Literal independen dari spec §4.4.
@@ -514,7 +520,7 @@ test.describe("admin percentage goods UI", () => {
       await expect(page.getByText(/149\.850/)).toBeVisible();
       await expect(page.getByText(/Simulasi admin: bukan quote/)).toBeVisible();
 
-      await page.getByRole("button", { name: "Review draft" }).click();
+      await page.getByRole("button", { name: "Review perubahan" }).click();
       await expect(page.getByText(/Review siap publish/)).toBeVisible();
       await expect(page.getByText("Benefit goods version1 dengan parameter valid")).toBeVisible();
     } finally {
@@ -539,17 +545,20 @@ test.describe("admin shipping subsidy UI", () => {
       expect(offerId.length, "the created draft must navigate to its detail page").toBe(36);
       uiOfferIds.push(offerId);
 
-      await page.getByLabel("Nama offer").fill("Subsidi Ongkir Rp20.000");
+      await page.getByLabel("Nama promo").fill("Subsidi Ongkir Rp20.000");
       await page.getByLabel("Minimum subtotal (Rp)").fill("0");
       await page.getByLabel("Jenis benefit").click();
       await page.getByRole("option", { name: "Subsidi ongkir (cap Rp)" }).click();
-      await page.getByLabel("Cap subsidi ongkir (Rp)").fill("20000");
+      await page.getByLabel("Maksimum subsidi ongkir (Rp)").fill("20000");
       await page.getByRole("button", { name: "Simpan draft" }).click();
-      await expect(page.getByRole("main").getByText("Draft disimpan")).toBeVisible();
+      await expect(page.getByRole("button", { name: "Review perubahan", exact: true })).toBeEnabled();
 
+      await page.getByRole("tab", { name: "Pemakaian & budget", exact: true }).click();
       await page.getByLabel("Kuota pemakaian").fill("10");
       await page.getByRole("button", { name: "Simpan kapasitas" }).click();
       await expect(page.getByText("Kapasitas disimpan")).toBeVisible();
+      await page.getByRole("tab", { name: "Aturan", exact: true }).click();
+      await page.getByText("Simulasi biaya", { exact: true }).click();
 
       // Simulasi delivery: barang150000 + ongkir30000 cap20000 → subsidi20000,
       // net ongkir10000, PPN16500, total176500 (literal spec §4.4).
@@ -561,12 +570,12 @@ test.describe("admin shipping subsidy UI", () => {
       await expect(page.getByText(/Subsidi ongkir: Rp 20.000/)).toBeVisible();
       await expect(page.getByText(/Simulasi admin: bukan quote/)).toBeVisible();
 
-      await page.getByRole("button", { name: "Review draft" }).click();
+      await page.getByRole("button", { name: "Review perubahan" }).click();
       await expect(page.getByText(/Review siap publish/)).toBeVisible();
       await expect(page.getByText("Benefit shipping version1 (cap ongkir positif) valid")).toBeVisible();
 
-      await page.getByRole("button", { name: "Publish offer" }).click();
-      await expect(page.getByText("Offer dipublikasikan")).toBeVisible();
+      await page.getByRole("button", { name: "Publish promo" }).click();
+      await expect(page.getByText("Promo dipublikasikan")).toBeVisible();
     } finally {
       await page.close();
     }
@@ -655,6 +664,7 @@ test.describe("admin Manual Promo Code", () => {
     const page = await hqContext.newPage();
     try {
       await page.goto(`/admin/discounts/${manualOfferId}`);
+      await page.getByRole("tab", { name: "Kode", exact: true }).click();
       await expect(page.getByText("Kode manual", { exact: true })).toBeVisible();
       await expect(page.getByText(MANUAL_CODE)).toBeVisible();
       await page.getByLabel("Tambah kode").fill("extraadmin25");

@@ -269,7 +269,7 @@ export default function CarouselProductSectionForm({
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <input
-                className="flex h-10 w-full rounded-md border border-input bg-background pl-10 pr-3 py-2 text-sm"
+                className="flex h-10 w-full rounded-md border border-input bg-field pl-10 pr-3 py-2 text-sm"
                 placeholder="Cari produk..."
                 value={search}
                 onChange={(e) => {
@@ -437,7 +437,7 @@ export default function CarouselProductSectionForm({
                 type="number"
                 min={MIN_LIMIT}
                 max={MAX_LIMIT}
-                className="flex h-10 w-24 rounded-md border border-input bg-background px-3 py-2 text-sm"
+                className="flex h-10 w-24 rounded-md border border-input bg-field px-3 py-2 text-sm"
                 value={limit}
                 onChange={(e) =>
                   updateLimit(parseInt(e.target.value || String(DEFAULT_LIMIT), 10))

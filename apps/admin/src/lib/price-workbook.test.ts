@@ -65,6 +65,19 @@ function fatalReason(run: () => unknown): string {
 }
 
 describe("parsePriceWorkbook — accepted rows", () => {
+  it("menerima marker markdown_v1 dan file lama dengan identitas internal batch tetap stabil", () => {
+    for (const marker of ["markdown_v1", "OKCIR_MARKDOWN_V1"]) {
+      const bytes = buildWorkbookFixture([
+        { row: 1, cells: { A: { kind: "text", value: marker } } },
+        HEADER_ROW,
+        dataRow(3, "SKU-MARKER", "set_price", 150000),
+      ]);
+      const parsed = parsePriceWorkbook(bytes, LIMITS);
+      expect(parsed.templateVersion).toBe("OKCIR_MARKDOWN_V1");
+      expect(parsed.acceptedCount).toBe(1);
+      expect(parsed.rows[0].targetUnitPrice).toBe("150000");
+    }
+  });
   it("reads a valid workbook with exact SKUs, integer set_price and empty restore", () => {
     const parsed = parsePriceWorkbook(
       workbook([
@@ -98,7 +111,7 @@ describe("parsePriceWorkbook — accepted rows", () => {
 
   it("resolves shared-string cells (Excel-authored workbooks)", () => {
     const strings = [
-      "OKCIR_MARKDOWN_V1",
+      "markdown_v1",
       "sku",
       "action",
       "new_price",
@@ -579,7 +592,8 @@ describe("writePriceTemplate / writePriceWorkbook", () => {
     const parts = readZipFixture(writePriceTemplate());
     expect([...parts.keys()]).toContain("xl/worksheets/sheet1.xml");
     const sheet = textOf(parts.get("xl/worksheets/sheet1.xml")!);
-    expect(sheet).toContain("OKCIR_MARKDOWN_V1");
+    expect(sheet).toContain(">markdown_v1<");
+    expect(sheet).not.toMatch(/okcir/i);
     expect(sheet).toContain(">sku<");
     expect(sheet).toContain(">action<");
     expect(sheet).toContain(">new_price<");

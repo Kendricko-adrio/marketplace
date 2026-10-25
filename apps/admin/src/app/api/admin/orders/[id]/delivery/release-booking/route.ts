@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/db";
 import { guard } from "@/lib/rbac/guard";
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import {
   BOOKING_RELEASE_PROOF_SOURCE,
   createDeliveryFollowUp,
@@ -34,20 +34,42 @@ const bodySchema = z
   })
   .strict();
 
-export async function POST(
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-order-delivery-release-booking");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB tidak pernah
+ * masuk log, hanya pesan yang ditulis module ini. Referensi/alasan bukti rilis
+ * adalah teks bebas operator, jadi tidak pernah ditulis sebagai field log.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
+async function releaseBooking(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const guardResult = await guard("orders", "edit", { request });
+): Promise<Response> {
+  const guardResult = await guard("orders", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
-  const orderLog = logger.child({ module: "delivery-release-booking" });
+  const { ctx } = guardResult;
 
+  let orderId: string | null = null;
   try {
     const { id } = await params;
+    orderId = id;
     const parsed = bodySchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      orderLog.warn("delivery.release-booking.invalid_input", { outcome: "denied" });
+      log.warn(
+        `delivery release-booking ditolak: bukti rilis tidak lengkap (order ${id}, outcome denied)`
+      );
       return NextResponse.json(
         {
           success: false,
@@ -68,23 +90,33 @@ export async function POST(
       },
       parsed.data.proof
     );
-    orderLog.info("delivery.release-booking.success", { outcome: "success" });
+    log.info(
+      `delivery release-booking sukses (order ${id}, attempt ${data.attemptNumber}, outcome success)`
+    );
     return NextResponse.json({ success: true, data });
   } catch (error) {
     if (error instanceof DeliveryFollowUpError) {
-      orderLog.warn("delivery.release-booking.failed", { outcome: "denied", code: error.code });
+      log.warn(
+        `delivery release-booking gagal (order ${orderId ?? "unknown"}, code ${error.code}, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: error.message, code: error.code },
         { status: error.code === "NOT_FOUND" ? 404 : error.code === "FORBIDDEN" ? 403 : 409 }
       );
     }
-    orderLog.error("delivery.release-booking.failed", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+    log.error(
+      `delivery release-booking gagal (order ${orderId ?? "unknown"}, outcome error)`,
+      new RouteLogError("delivery release-booking gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Gagal memproses pemenuhan pengiriman." },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(
+  releaseBooking,
+  "admin-order-delivery-release-booking"
+);

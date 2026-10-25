@@ -317,5 +317,5 @@ export const HEADER_ROW: SheetRow = {
 
 export const MARKER_ROW: SheetRow = {
   row: 1,
-  cells: { A: { kind: "text", value: "OKCIR_MARKDOWN_V1" } },
+  cells: { A: { kind: "text", value: "markdown_v1" } },
 };

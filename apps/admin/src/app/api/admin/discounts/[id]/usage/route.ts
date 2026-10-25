@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 
 import { guard } from "@/lib/rbac/guard";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { readDiscountOfferUsage } from "@/lib/discount-operations-read";
 import {
   discountFailureResponse,
@@ -23,12 +24,22 @@ import {
 // returned alongside the global aggregate so the two are never conflated.
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-discount-usage");
+
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function GET(request: NextRequest, { params }: RouteContext) {
-  const guardResult = await guard("discounts", "view", { request });
+async function discountUsage(
+  request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("discounts", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const { id } = await params;
@@ -45,19 +56,15 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
         entryId: searchParams.get("entryId"),
       },
     });
-    logger.info("discounts.usage", {
-      outcome: "success",
-      offerId: id,
-      basis: result.availability.basis,
-      heldCount: result.availability.heldCount,
-      consumedCount: result.availability.consumedCount,
-      entriesAccess: result.entriesAccess,
-      scopeMode: result.scope?.mode ?? null,
-      entryTotal: result.entries?.total ?? 0,
-      driftDetected: result.drift.detected,
-    });
-    return discountSuccessResponse(logger, result);
+    // Identitas client di entry tidak pernah masuk log; hanya agregat.
+    log.info(
+      `discounts usage (offer ${id}, basis ${result.availability.basis}, heldCount ${result.availability.heldCount}, consumedCount ${result.availability.consumedCount}, entriesAccess ${result.entriesAccess}, scopeMode ${result.scope?.mode ?? "none"}, entryTotal ${result.entries?.total ?? 0}, driftDetected ${result.drift.detected}, outcome success)`
+    );
+    return discountSuccessResponse(result);
   } catch (error) {
-    return discountFailureResponse(logger, error, "discounts.usage.failure");
+    return discountFailureResponse(error, "discounts usage gagal");
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(discountUsage, "admin-discount-usage");

@@ -71,11 +71,28 @@ import {
   type PromoReplacementState,
 } from "@/lib/promo-replacement";
 import {
-  requestLogger,
-  serializeError,
-  withRequestId,
-  type Logger,
+  createModuleLogger,
+  getRequestId,
+  withRequestContext,
 } from "@/lib/logger";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("checkout-preview");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Next/provider
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 type PreviewErrorCode =
   | "INPUT_INVALID"
@@ -99,24 +116,20 @@ class PreviewNotFoundError extends Error {
 }
 
 function previewFailure(
-  log: Logger,
   status: number,
   code: PreviewErrorCode,
   error: string,
   data?: Record<string, unknown>
 ): NextResponse {
-  return withRequestId(
-    NextResponse.json(
-      {
-        success: false,
-        code,
-        error,
-        requestId: log.requestId,
-        ...(data ? { data } : {}),
-      },
-      { status, headers: { "Cache-Control": "no-store" } }
-    ),
-    log
+  return NextResponse.json(
+    {
+      success: false,
+      code,
+      error,
+      requestId: getRequestId(),
+      ...(data ? { data } : {}),
+    },
+    { status, headers: { "Cache-Control": "no-store" } }
   );
 }
 
@@ -186,36 +199,32 @@ const previewRequestSchema = z
     path: ["acknowledgeInvalidation"],
   });
 
-export async function POST(request: NextRequest) {
-  let log = requestLogger(request, { module: "checkout-preview" });
+async function previewCheckout(request: NextRequest): Promise<Response> {
   try {
     const access = await requireOnboardedApiSession();
-    if (!access.ok) return withRequestId(access.response, log);
+    if (!access.ok) return access.response;
     const { session } = access;
-    log = log.child({ userId: session.user.id });
 
     // ===== Required versioned-pricing gate (never a silent legacy fallback) ==
     let contractVersion: 0 | 1 | null = null;
     try {
       contractVersion = await getDiscountsContractVersion();
-    } catch (gateError) {
-      log.error("checkout preview pricing gate unavailable", {
-        outcome: "error",
-        error: serializeError(gateError),
-      });
+    } catch {
+      log.error(
+        "checkout preview pricing gate unavailable (outcome error)",
+        new RouteLogError("checkout preview pricing gate unavailable")
+      );
       return previewFailure(
-        log,
         503,
         "PRICING_UNAVAILABLE",
         "Harga checkout belum dapat diverifikasi. Silakan coba beberapa saat lagi."
       );
     }
     if (contractVersion !== 1) {
-      log.warn("checkout preview rejected — versioned pricing gate is off", {
-        outcome: "unsupported_version",
-      });
+      log.warn(
+        "checkout preview rejected — versioned pricing gate is off (outcome unsupported_version)"
+      );
       return previewFailure(
-        log,
         400,
         "UNSUPPORTED_VERSION",
         "Preview checkout berversi belum aktif."
@@ -235,29 +244,21 @@ export async function POST(request: NextRequest) {
     if ((body as { fulfillmentMethod?: unknown } | null)?.fulfillmentMethod === "delivery") {
       const delivery = deliveryReviewSchema.safeParse(body);
       if (!delivery.success) {
-        log.warn("delivery review input rejected", { outcome: "invalid_input" });
-        return previewFailure(log, 400, "INPUT_INVALID", "Data checkout tidak valid.");
+        log.warn("delivery review input rejected (outcome invalid_input)");
+        return previewFailure(400, "INPUT_INVALID", "Data checkout tidak valid.");
       }
       const data = await previewDeliveryReview(session.user.id, delivery.data);
-      log.info("delivery review preview succeeded", {
-        total: data.pricing.total,
-        goodsDiscount: data.pricing.discount,
-        shippingBeforeSubsidy: data.pricing.shippingBeforeSubsidy,
-        shippingSubsidy: data.pricing.shippingSubsidy,
-        shippingCost: data.pricing.shippingCost,
-        contextFingerprint: data.contextFingerprint,
-        promoKind: data.promo.kind,
-        replacementDirection: data.replacement?.direction ?? null,
-      });
-      return withRequestId(NextResponse.json({ success: true, data }, { headers: { "Cache-Control": "no-store" } }), log);
+      log.info(
+        `delivery review preview succeeded: total ${data.pricing.total}, goodsDiscount ${data.pricing.discount}, shippingBeforeSubsidy ${data.pricing.shippingBeforeSubsidy}, shippingSubsidy ${data.pricing.shippingSubsidy}, shippingCost ${data.pricing.shippingCost}, fingerprint ${data.contextFingerprint}, promo ${data.promo.kind}, replacement ${data.replacement?.direction ?? "-"}`
+      );
+      return NextResponse.json({ success: true, data }, { headers: { "Cache-Control": "no-store" } });
     }
     const parsed = previewRequestSchema.safeParse(body);
     if (!parsed.success) {
-      log.warn("checkout preview body rejected", {
-        outcome: "invalid_input",
-        issueCount: parsed.error.issues.length,
-      });
-      return previewFailure(log, 400, "INPUT_INVALID", "Data checkout tidak valid.");
+      log.warn(
+        `checkout preview body rejected (outcome invalid_input, ${parsed.error.issues.length} issue)`
+      );
+      return previewFailure(400, "INPUT_INVALID", "Data checkout tidak valid.");
     }
     const { phone, email, pickupDate, pickupTime, selectedItemIds } = parsed.data;
 
@@ -268,8 +269,8 @@ export async function POST(request: NextRequest) {
       .where(eq(carts.userId, session.user.id))
       .limit(1);
     if (cartRows.length === 0) {
-      log.warn("checkout preview rejected — cart is empty", { outcome: "invalid_input" });
-      return previewFailure(log, 400, "INPUT_INVALID", "Keranjang masih kosong.");
+      log.warn(`checkout preview rejected — cart is empty (outcome invalid_input, user ${session.user.id})`);
+      return previewFailure(400, "INPUT_INVALID", "Keranjang masih kosong.");
     }
     const cartId = cartRows[0].id;
 
@@ -291,11 +292,10 @@ export async function POST(request: NextRequest) {
 
     // Ids outside the caller's cart are not the caller's data → not found.
     if (selected.length !== selectedItemIds.length) {
-      log.warn("checkout preview rejected — selected items not owned", {
-        outcome: "not_found",
-        selectedCount: selectedItemIds.length,
-      });
-      return previewFailure(log, 404, "NOT_FOUND", "Barang keranjang tidak ditemukan.");
+      log.warn(
+        `checkout preview rejected — selected items not owned (outcome not_found, ${selectedItemIds.length} selected)`
+      );
+      return previewFailure(404, "NOT_FOUND", "Barang keranjang tidak ditemukan.");
     }
 
     // ===== Exactly one branch (pickup origin) ==============================
@@ -310,13 +310,10 @@ export async function POST(request: NextRequest) {
       0
     );
     if (branchlessCount > 0) {
-      log.warn("checkout preview rejected — selected line has no branch", {
-        outcome: "invalid_input",
-        itemCount: selected.length,
-        branchlessCount,
-      });
+      log.warn(
+        `checkout preview rejected — selected line has no branch (outcome invalid_input, ${selected.length} item, ${branchlessCount} tanpa cabang)`
+      );
       return previewFailure(
-        log,
         400,
         "INPUT_INVALID",
         "Checkout hanya untuk satu cabang. Pilih barang dari satu cabang saja."
@@ -326,19 +323,16 @@ export async function POST(request: NextRequest) {
       selected.map((row) => row.branchId).filter((id): id is string => !!id)
     );
     if (branchIds.size !== 1) {
-      log.warn("checkout preview rejected — branch unresolved", {
-        outcome: "invalid_input",
-        branchCount: branchIds.size,
-      });
+      log.warn(
+        `checkout preview rejected — branch unresolved (outcome invalid_input, ${branchIds.size} cabang)`
+      );
       return previewFailure(
-        log,
         400,
         "INPUT_INVALID",
         "Checkout hanya untuk satu cabang. Pilih barang dari satu cabang saja."
       );
     }
     const branchId = [...branchIds][0];
-    log = log.child({ branchId, itemCount: selected.length });
 
     const branchRows = await db
       .select({
@@ -351,19 +345,16 @@ export async function POST(request: NextRequest) {
       .limit(1);
     const branch = branchRows[0];
     if (!branch) {
-      log.warn("checkout preview rejected — branch not found", { outcome: "not_found" });
-      return previewFailure(log, 404, "NOT_FOUND", "Cabang tidak ditemukan.");
+      log.warn("checkout preview rejected — branch not found (outcome not_found)");
+      return previewFailure(404, "NOT_FOUND", "Cabang tidak ditemukan.");
     }
     // An inactive or provider-unmapped branch is a readiness problem, not a
     // customer input problem: fail closed without pricing it.
     if (branch.status !== "aktif" || branch.jubelioLocationId == null) {
-      log.warn("checkout preview rejected — branch not ready", {
-        outcome: "unavailable",
-        branchStatus: branch.status,
-        mapped: branch.jubelioLocationId != null,
-      });
+      log.warn(
+        `checkout preview rejected — branch not ready (outcome unavailable, status ${branch.status}, mapped ${branch.jubelioLocationId != null})`
+      );
       return previewFailure(
-        log,
         503,
         "PRICING_UNAVAILABLE",
         "Cabang ini belum siap untuk checkout. Silakan coba beberapa saat lagi."
@@ -372,13 +363,10 @@ export async function POST(request: NextRequest) {
 
     const slot = validatePickupSlot(branch.operatingHours, pickupDate, pickupTime);
     if (!slot.ok) {
-      log.warn("checkout preview rejected — pickup slot invalid", {
-        outcome: "invalid_input",
-        pickupDate,
-        pickupTime,
-      });
+      log.warn(
+        `checkout preview rejected — pickup slot invalid (outcome invalid_input, ${pickupDate} ${pickupTime}, branch ${branchId})`
+      );
       return previewFailure(
-        log,
         400,
         "INPUT_INVALID",
         slot.error ?? "Jadwal pickup tidak valid."
@@ -616,11 +604,10 @@ export async function POST(request: NextRequest) {
         if (!requested.ok) {
           // Kandidat gagal tidak mengganti pilihan lama yang masih valid.
           const mapped = mapOfferReasonToHttp(requested.reason);
-          log.warn("checkout preview candidate rejected — previous selection kept", {
-            outcome: "promo_ineligible",
-            reason: requested.reason,
-          });
-          return previewFailure(log, mapped.status, mapped.code, requested.message);
+          log.warn(
+            `checkout preview candidate rejected — previous selection kept (outcome promo_ineligible, ${requested.reason})`
+          );
+          return previewFailure(mapped.status, mapped.code, requested.message);
         }
         const previousPricing = reviewPricingOf(previousResult.snapshot);
         const candidatePricing = reviewPricingOf(requested.snapshot);
@@ -650,21 +637,15 @@ export async function POST(request: NextRequest) {
           deltaTotal: comparison.deltaTotal,
           requiresIncreaseConfirmation: requiresIncreaseAcknowledgement,
         };
-        log = log.child({
-          candidateOfferId:
-            requested.promo.kind === "none" ? null : requested.promo.offerId,
-        });
       } else {
         // Promo yang direview gugur: alasan aman + customer memilih lagi atau
         // secara eksplisit lanjut tanpa promo. Tidak ada diskon palsu dipertahankan.
         if (!requested.ok) {
           const mapped = mapOfferReasonToHttp(requested.reason);
-          log.warn("checkout preview replacement rejected — both promos unavailable", {
-            outcome: "promo_ineligible",
-            previousReason: previousResult.reason,
-            candidateReason: requested.reason,
-          });
-          return previewFailure(log, mapped.status, mapped.code, requested.message, {
+          log.warn(
+            `checkout preview replacement rejected — both promos unavailable (outcome promo_ineligible, previous ${previousResult.reason}, candidate ${requested.reason})`
+          );
+          return previewFailure(mapped.status, mapped.code, requested.message, {
             previous: {
               status: "invalid",
               promo: previous.promoSelection,
@@ -676,12 +657,10 @@ export async function POST(request: NextRequest) {
         if (requested.promo.kind === "none") {
           if (parsed.data.acknowledgeInvalidation !== true) {
             const mapped = mapOfferReasonToHttp(previousResult.reason);
-            log.warn("checkout preview invalidation awaits explicit continue", {
-              outcome: "promo_invalidated",
-              previousReason: previousResult.reason,
-            });
+            log.warn(
+              `checkout preview invalidation awaits explicit continue (outcome promo_invalidated, previous ${previousResult.reason})`
+            );
             return previewFailure(
-              log,
               mapped.status,
               mapped.code,
               `${previousResult.message} Pilih promo lain atau lanjut tanpa promo.`,
@@ -719,15 +698,13 @@ export async function POST(request: NextRequest) {
       }
     } else if (!requested.ok) {
       const mapped = mapOfferReasonToHttp(requested.reason);
-      log.warn("checkout preview promo rejected", {
-        outcome: "promo_ineligible",
-        reason: requested.reason,
-      });
-      return previewFailure(log, mapped.status, mapped.code, requested.message);
+      log.warn(
+        `checkout preview promo rejected (outcome promo_ineligible, ${requested.reason})`
+      );
+      return previewFailure(mapped.status, mapped.code, requested.message);
     } else {
       snapshot = requested.snapshot;
       promo = requested.promo;
-      if (promo.kind !== "none") log = log.child({ offerId: promo.offerId });
     }
 
     // Existing checkout wire names; `discount` is the v1 goods discount. The
@@ -757,114 +734,97 @@ export async function POST(request: NextRequest) {
       requiresContinueWithoutPromoAcknowledgement,
     });
 
-    log.info("checkout review preview succeeded", {
-      outcome: "ok",
-      pricingContractVersion: snapshot.pricingContractVersion,
-      pricingEngineVersion: snapshot.pricingEngineVersion,
-      providerContractVersion: snapshot.providerContractVersion,
-      ppnRatePercent: pricing.ppnRatePercent,
-      ppnAmount: pricing.ppnAmount,
-      total: pricing.total,
-      contextFingerprint,
-      expiresAt,
-      replacementDirection: replacement?.direction ?? null,
-      previousStatus: replacement?.previous.status ?? null,
-      requiresIncreaseAcknowledgement,
-      requiresContinueWithoutPromoAcknowledgement,
-    });
-    return withRequestId(
-      NextResponse.json(
-        {
-          success: true,
-          data: {
-            pricing,
-            promo,
-            reviewToken,
-            expiresAt,
-            contextFingerprint,
-            requiresIncreaseConfirmation: requiresIncreaseAcknowledgement,
-            requiresContinueWithoutPromoAcknowledgement,
-            replacement,
-          },
+    log.info(
+      `checkout review preview succeeded (outcome ok): contract v${snapshot.pricingContractVersion}, engine v${snapshot.pricingEngineVersion}, provider v${snapshot.providerContractVersion}, ppn ${pricing.ppnAmount} @ ${pricing.ppnRatePercent}%, total ${pricing.total}, promo ${promo.kind === "none" ? "-" : promo.offerId}, fingerprint ${contextFingerprint}, expires ${expiresAt}, replacement ${replacement?.direction ?? "-"}, previous ${replacement?.previous.status ?? "-"}, increaseAck ${requiresIncreaseAcknowledgement}, continueAck ${requiresContinueWithoutPromoAcknowledgement}`
+    );
+    return NextResponse.json(
+      {
+        success: true,
+        data: {
+          pricing,
+          promo,
+          reviewToken,
+          expiresAt,
+          contextFingerprint,
+          requiresIncreaseConfirmation: requiresIncreaseAcknowledgement,
+          requiresContinueWithoutPromoAcknowledgement,
+          replacement,
         },
-        { headers: { "Cache-Control": "no-store" } }
-      ),
-      log
+      },
+      { headers: { "Cache-Control": "no-store" } }
     );
   } catch (error) {
     if (error instanceof CheckoutAdmissionError) {
-      if (error.status === 503) log.error("checkout admission unavailable", { code: error.code });
-      else log.warn("checkout admission denied", { code: error.code });
-      return withRequestId(NextResponse.json({ success: false, code: error.code, error: error.message, requestId: log.requestId },
-        { status: error.status, headers: { "Cache-Control": "no-store", ...(error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {}) } }), log);
+      if (error.status === 503) log.error(`checkout admission unavailable (code ${error.code})`);
+      else log.warn(`checkout admission denied (code ${error.code})`);
+      return NextResponse.json({ success: false, code: error.code, error: error.message, requestId: getRequestId() },
+        { status: error.status, headers: { "Cache-Control": "no-store", ...(error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {}) } });
     }
     if (error instanceof DeliveryPreviewPromoError) {
-      log.warn("delivery review promo rejected", { code: error.code, outcome: "promo_ineligible" });
-      return previewFailure(log, error.status, error.code, error.message, error.data);
+      log.warn(`delivery review promo rejected (code ${error.code}, outcome promo_ineligible)`);
+      return previewFailure(error.status, error.code, error.message, error.data);
     }
     if (error instanceof DeliveryQuoteDataError) {
-      log.error("delivery review data unavailable", { code: error.code });
-      return previewFailure(log, error.code === "NOT_FOUND" ? 404 : error.code === "INVALID_INPUT" ? 400 : 503,
+      log.error(`delivery review data unavailable (code ${error.code})`);
+      return previewFailure(error.code === "NOT_FOUND" ? 404 : error.code === "INVALID_INPUT" ? 400 : 503,
         error.code === "NOT_FOUND" ? "NOT_FOUND" : error.code === "INVALID_INPUT" ? "INPUT_INVALID" : "PRICING_UNAVAILABLE", error.message);
     }
     if (error instanceof QuoteDeliveryError) {
-      log.error("delivery review quote unavailable", { code: error.code });
-      return previewFailure(log, 409, "DELIVERY_REPRICE_REQUIRED", "Layanan pengiriman berubah. Periksa kembali ongkir.");
+      log.error(`delivery review quote unavailable (code ${error.code})`);
+      return previewFailure(409, "DELIVERY_REPRICE_REQUIRED", "Layanan pengiriman berubah. Periksa kembali ongkir.");
     }
     if (error instanceof CheckoutInputError) {
       // Size breach keeps the approved 413 contract on size alone; malformed
       // or missing JSON stays a shape rejection (400) — never the reverse.
       const limitExceeded = error.status === 413;
-      log.warn("checkout preview body rejected", {
-        outcome: limitExceeded ? "limit_exceeded" : "invalid_input",
-        underlyingStatus: error.status,
-      });
+      log.warn(
+        `checkout preview body rejected (outcome ${
+          limitExceeded ? "limit_exceeded" : "invalid_input"
+        }, underlying status ${error.status})`
+      );
       return limitExceeded
         ? previewFailure(
-            log,
             413,
             "INPUT_LIMIT_EXCEEDED",
             "Data checkout melebihi batas ukuran."
           )
-        : previewFailure(log, 400, "INPUT_INVALID", "Data checkout tidak valid.");
+        : previewFailure(400, "INPUT_INVALID", "Data checkout tidak valid.");
     }
     if (error instanceof PricingContractError) {
-      log.warn("checkout preview pricing input rejected", {
-        outcome: "invalid_input",
-        code: error.code,
-      });
-      return previewFailure(log, 400, "INPUT_INVALID", "Data harga atau keranjang tidak valid.");
+      log.warn(
+        `checkout preview pricing input rejected (outcome invalid_input, code ${error.code})`
+      );
+      return previewFailure(400, "INPUT_INVALID", "Data harga atau keranjang tidak valid.");
     }
     if (error instanceof PreviewNotFoundError) {
-      log.warn("checkout preview rejected — client not found", { outcome: "not_found" });
-      return previewFailure(log, 404, "NOT_FOUND", error.message);
+      log.warn("checkout preview rejected — client not found (outcome not_found)");
+      return previewFailure(404, "NOT_FOUND", error.message);
     }
     if (error instanceof CheckoutReviewRequiredError) {
-      log.warn("checkout preview review no longer current", {
-        outcome: "review_required",
-      });
-      return previewFailure(log, 409, "CHECKOUT_REVIEW_REQUIRED", error.message);
+      log.warn("checkout preview review no longer current (outcome review_required)");
+      return previewFailure(409, "CHECKOUT_REVIEW_REQUIRED", error.message);
     }
     if (error instanceof CheckoutReviewUnavailableError) {
-      log.error("checkout preview review token unavailable", { outcome: "error" });
+      log.error("checkout preview review token unavailable (outcome error)");
       return previewFailure(
-        log,
         503,
         "PRICING_UNAVAILABLE",
         "Preview checkout belum tersedia. Silakan coba beberapa saat lagi."
       );
     }
-    log.error("checkout preview failed", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+    log.error(
+      "checkout preview failed (outcome error)",
+      new RouteLogError("checkout preview failed")
+    );
     // Authoritative data could not be read: never price from a stale/empty
     // fallback, keep the client on an explicit retry.
     return previewFailure(
-      log,
       503,
       "PRICING_UNAVAILABLE",
       "Preview checkout gagal diproses. Silakan coba beberapa saat lagi."
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(previewCheckout, "checkout-preview");

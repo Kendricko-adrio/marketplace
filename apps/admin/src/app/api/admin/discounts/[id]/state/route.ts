@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { guard } from "@/lib/rbac/guard";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import {
   setDiscountOfferState,
   DiscountAdministrationError,
@@ -20,6 +21,13 @@ import {
 // identity, published revisions and audit trail are retained.
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-discount-state");
+
 type RouteContext = { params: Promise<{ id: string }> };
 
 const stateSchema = z.strictObject({
@@ -28,21 +36,23 @@ const stateSchema = z.strictObject({
   state: z.enum(["enabled", "paused", "archived"]),
 });
 
-export async function PATCH(request: NextRequest, { params }: RouteContext) {
-  const guardResult = await guard("discounts", "edit", { request });
+async function setState(
+  request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("discounts", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const parsed = stateSchema.safeParse(
       await request.json().catch(() => null)
     );
     if (!parsed.success) {
-      logger.warn("discounts.state.invalid_body", { outcome: "denied" });
+      log.warn("discounts state ditolak: body tidak valid (outcome denied)");
       return discountFailureResponse(
-        logger,
         new DiscountAdministrationError(400, "INPUT_INVALID", "Invalid request body"),
-        "discounts.state.denied"
+        "discounts state ditolak"
       );
     }
 
@@ -52,17 +62,14 @@ export async function PATCH(request: NextRequest, { params }: RouteContext) {
       requireActorId(ctx.user.id)
     );
 
-    logger.info("discounts.state", {
-      outcome: "success",
-      offerId: id,
-      state: result.data.state,
-      version: result.data.version,
-      replayed: result.replayed,
-      actorId: ctx.user.id,
-      policyVersion: ctx.policy.policyVersion,
-    });
-    return discountSuccessResponse(logger, result.data);
+    log.info(
+      `discounts state (offer ${id}, state ${result.data.state}, version ${result.data.version}, replayed ${result.replayed}, actor ${ctx.user.id}, policyVersion ${ctx.policy.policyVersion}, outcome success)`
+    );
+    return discountSuccessResponse(result.data);
   } catch (error) {
-    return discountFailureResponse(logger, error, "discounts.state.failure");
+    return discountFailureResponse(error, "discounts state gagal");
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const PATCH = withRequestContext(setState, "admin-discount-state");

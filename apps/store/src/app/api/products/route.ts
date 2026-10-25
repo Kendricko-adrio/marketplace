@@ -15,13 +15,32 @@ import {
 } from "@/db";
 import { eq, ilike, and, or, sql, desc, asc, gte, lte, inArray } from "drizzle-orm";
 import { hasAvailableStock } from "@/lib/stock";
+import { sellableVariantSql } from "@/lib/storefront-stock";
 import {
   effectivePriceSql,
   markdownActiveSql,
   projectRow,
 } from "@/lib/variant-price-projection";
 import { parseListParams } from "@/lib/list-params";
-import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("products-list");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Next/provider
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 type ProductResult = {
   id: string;
@@ -37,8 +56,8 @@ type ProductResult = {
   thumbnail: string | null;
 };
 
-export async function GET(request: NextRequest) {
-  const log = requestLogger(request, { module: "products-list" });
+/** HTTP adapter: baca filter, query halaman produk, map ke status/body existing. */
+async function listProducts(request: NextRequest): Promise<Response> {
   try {
     const { searchParams } = new URL(request.url);
 
@@ -85,6 +104,7 @@ export async function GET(request: NextRequest) {
           eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
         )
       )
+      .where(sellableVariantSql(branchId))
       .groupBy(productVariants.productId)
       .as("vp");
 
@@ -130,31 +150,6 @@ export async function GET(request: NextRequest) {
       conditions.push(brand.length ? eq(products.brandId, brand[0].id) : sql`false`);
     }
 
-    // Branch filtering uses provider mappings, not a provisional stock count.
-    if (branchId) {
-      conditions.push(
-        inArray(
-          products.id,
-          db
-            .select({ productId: productVariants.productId })
-            .from(productVariants)
-            .innerJoin(
-              branchStocks,
-              eq(branchStocks.productVariantId, productVariants.id)
-            )
-            .innerJoin(branches, eq(branches.id, branchStocks.branchId))
-            .where(
-              and(
-                eq(branchStocks.branchId, branchId),
-                eq(branches.status, "aktif"),
-                sql`${branches.jubelioLocationId} is not null`,
-                sql`${productVariants.jubelioItemId} is not null`
-              )
-            )
-        )
-      );
-    }
-
     // Category filter (slug → id) via a subquery on the junction table, so it
     // composes with the other conditions and applies to the count query too.
     if (categorySlug) {
@@ -178,26 +173,6 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // "Has sellable stock in any active branch" — the same rule as
-    // `hasAvailableStock` (lib/stock.ts) but expressed in SQL so it can drive
-    // ordering. Used as the FIRST ORDER BY tier so out-of-stock products are
-    // always pushed below in-stock ones, regardless of the user's chosen sort.
-    // NOTE: no `.as()` here — an alias would make Drizzle emit `ORDER BY
-    // "has_sellable_stock"` referencing a column that isn't in the SELECT
-    // list (Postgres rejects it). Without the alias Drizzle inlines the full
-    // EXISTS expression in the ORDER BY clause, which is valid.
-    const hasSellableStock = sql<boolean>`EXISTS (
-      SELECT 1
-      FROM ${productVariants}
-      JOIN ${branchStocks} ON ${branchStocks.productVariantId} = ${productVariants.id}
-      JOIN ${branches} ON ${branches.id} = ${branchStocks.branchId}
-      WHERE ${productVariants.productId} = ${products.id}
-        AND ${branches.status} = 'aktif'
-        AND ${branches.jubelioLocationId} IS NOT NULL
-        AND ${productVariants.jubelioItemId} IS NOT NULL
-        AND COALESCE(${branchStocks.availableStock}, 0) - ${branchStocks.pendingRemoteStock} > 0
-    )`;
-
     const chosenSort =
       sortBy === "price"
         ? sortOrder === "asc"
@@ -207,8 +182,8 @@ export async function GET(request: NextRequest) {
         ? asc(products.createdAt)
         : desc(products.createdAt);
 
-    // Tier 1: in-stock first (out-of-stock last). Tier 2: the user's sort.
-    const orderBy = [desc(hasSellableStock), chosenSort];
+    // Produk habis sudah dieliminasi sebelum pagination dan count.
+    const orderBy = [chosenSort];
 
     const selectCols = {
       id: products.id,
@@ -272,9 +247,9 @@ export async function GET(request: NextRequest) {
         )
       )
       .where(
-        inArray(
-          productVariants.productId,
-          queryResults.map((p) => p.id)
+        and(
+          inArray(productVariants.productId, queryResults.map((p) => p.id)),
+          sellableVariantSql(branchId)
         )
       );
 
@@ -407,8 +382,7 @@ export async function GET(request: NextRequest) {
           markdownActive: display?.active ?? false,
           markdownRevisionId: display?.revisionId ?? null,
           image,
-          // A mapped branch remains selectable with a provisional zero.
-          hasStock: (stockByProduct.get(product.id)?.length ?? 0) > 0,
+          hasStock: hasAvailableStock(stockByProduct.get(product.id) ?? []),
           lastKnownInStock: hasAvailableStock(stockByProduct.get(product.id) ?? []),
         };
       })
@@ -424,33 +398,20 @@ export async function GET(request: NextRequest) {
         totalPages: Math.ceil(total / limit),
       },
     });
-    log.info("products.list", {
-      filters: {
-        search,
-        category: categorySlug,
-        brand: brandSlug,
-        branch: branchId,
-        minPrice,
-        maxPrice,
-        status,
-        hasDiscount,
-        sortBy,
-        sortOrder,
-        page,
-        limit,
-      },
-      returned: productsWithImages.length,
-      total,
-    });
-    return withRequestId(response, log);
-  } catch (error) {
-    log.error("products.list.failed", serializeError(error));
-    return withRequestId(
-      NextResponse.json(
-        { success: false, error: "Failed to fetch products" },
-        { status: 500 }
-      ),
-      log
+    // Nilai query mentah (search/category/brand/branch/harga) tidak masuk log;
+    // hanya fakta bisnis halaman + boolean filter yang aman.
+    log.info(
+      `products list loaded: page ${page}, limit ${limit}, returned ${productsWithImages.length}, total ${total}, sortBy ${sortBy}, sortOrder ${sortOrder}, hasDiscount ${hasDiscount}`
+    );
+    return response;
+  } catch {
+    log.error("products list failed", new RouteLogError("products list failed"));
+    return NextResponse.json(
+      { success: false, error: "Failed to fetch products" },
+      { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(listProducts, "products-list");

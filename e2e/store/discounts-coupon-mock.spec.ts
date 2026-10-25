@@ -207,8 +207,11 @@ async function createOffer(input: {
   await pool.query(`INSERT INTO discount_offer_usage (offer_id) VALUES ($1)`, [input.id]);
 }
 
-/** Drives cart → checkout → pickup slot → contact and leaves step 2 ready. */
-async function reachContactStep(page: Page): Promise<void> {
+/**
+ * Drives cart → checkout → pickup slot + contact → review step, where the
+ * single promo slot lives (the contact step no longer exists).
+ */
+async function reachPaymentStep(page: Page): Promise<void> {
   const add = await storeContext.request.post("/api/cart/items", {
     data: { variantId: VARIANT_ID, branchId: homeBranchId, quantity: 1 },
   });
@@ -221,9 +224,10 @@ async function reachContactStep(page: Page): Promise<void> {
   await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
   await page.getByRole("combobox").click();
   await page.getByRole("option", { name: PICKUP_TIME }).click();
-  await page.getByRole("button", { name: "Lanjut" }).click();
   await page.getByLabel("Nomor Telepon *").fill(CONTACT_PHONE);
   await page.getByLabel("Email *").fill(CONTACT_EMAIL);
+  await page.getByRole("button", { name: "Lanjut" }).click();
+  await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
   await expect(page.getByText("Promo", { exact: true })).toBeVisible();
 }
 
@@ -505,7 +509,7 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     const availableResponse = page.waitForResponse(
       (response) => response.url().endsWith("/api/discounts/available")
     );
-    await reachContactStep(page);
+    await reachPaymentStep(page);
     const available = await availableResponse;
     const availableBody = await available.json();
     expect(available.ok()).toBe(true);
@@ -522,9 +526,8 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
 
     await page.getByRole("button", { name: /Mock Hemat 25/ }).click();
     await expect(page.getByRole("button", { name: /Mock Hemat 25/ })).toHaveAttribute("aria-pressed", "true");
-    await page.getByRole("button", { name: "Lanjut" }).click();
 
-    await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
     await expect(page.getByText(/Promo dipakai:/)).toContainText("Mock Hemat 25");
     await expect(page.getByText("Diskon promo").first()).toBeVisible();
     await expect(page.getByText(`Rp ${TOTAL.toLocaleString("id-ID")}`).first()).toBeVisible();
@@ -541,10 +544,9 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
       sellPrice: GOODS,
     });
 
-    await reachContactStep(page);
+    await reachPaymentStep(page);
     await page.getByRole("button", { name: /Mock Hemat 25/ }).click();
-    await page.getByRole("button", { name: "Lanjut" }).click();
-    await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
 
     // Keep the browser on the isolated origin if the dev mock redirects to :3000.
     await page.route("**/checkout/payment-test?*", (route) => {
@@ -645,7 +647,7 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     const availableResponse = page.waitForResponse((response) =>
       response.url().endsWith("/api/discounts/available")
     );
-    await reachContactStep(page);
+    await reachPaymentStep(page);
     const available = await availableResponse;
     const availableBody = await available.json();
     const percentOffer = (availableBody.data.items as Array<Record<string, unknown>>).find(
@@ -664,8 +666,7 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
       "Diskon 10% (maks Rp 20.000)"
     );
     await page.getByRole("button", { name: /Mock Persen 10/ }).click();
-    await page.getByRole("button", { name: "Lanjut" }).click();
-    await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
     await expect(page.getByText("Diskon promo").first()).toBeVisible();
     await expect(page.getByText(`Rp ${PERCENT_TOTAL.toLocaleString("id-ID")}`).first()).toBeVisible();
 
@@ -758,7 +759,7 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
       sellPrice: GOODS,
     });
 
-    await reachContactStep(page);
+    await reachPaymentStep(page);
     await page.getByLabel("Punya kode promo?").fill(` ${MANUAL_PERCENT_CODE.toLowerCase()} `);
     await page.getByRole("button", { name: "Terapkan" }).click();
 
@@ -768,7 +769,7 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
       page.getByText(`Rp ${PERCENT_TOTAL.toLocaleString("id-ID")}`).first()
     ).toBeVisible();
     await expect(page.getByText(MANUAL_PERCENT_CODE)).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
 
     await page.route("**/checkout/payment-test?*", (route) => {
       const requestUrl = new URL(route.request().url());
@@ -930,15 +931,14 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
   }
 
   async function reviewWithCoupon25(page: Page) {
-    await reachContactStep(page);
-    // Step 3 memuat ulang picker; tunggu daftar itu selesai agar keadaan stale
-    // (untuk kasus kandidat gugur) deterministik, bukan balapan jaringan.
+    // Langkah pembayaran memuat picker; daftarkan wait SEBELUM navigasi agar
+    // keadaan stale (untuk kasus kandidat gugur) deterministik.
     const reviewPicker = page.waitForResponse((response) =>
       response.url().endsWith("/api/discounts/available")
     );
+    await reachPaymentStep(page);
     await page.getByRole("button", { name: /Mock Hemat 25/ }).click();
-    await page.getByRole("button", { name: "Lanjut" }).click();
-    await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
     await reviewPicker;
     await expect(page.getByText(/Promo dipakai:/)).toContainText("Mock Hemat 25");
     await expect(page.getByText(rupiah(TOTAL)).first()).toBeVisible();
@@ -1102,10 +1102,9 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
   test("mengganti ke benefit lebih besar menurunkan total final dan langsung diterapkan tanpa dialog", async () => {
     const page = await storeContext.newPage();
     await ensureStock();
-    await reachContactStep(page);
+    await reachPaymentStep(page);
     await page.getByRole("button", { name: /Mock Hemat 10/ }).click();
-    await page.getByRole("button", { name: "Lanjut" }).click();
-    await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
     await expect(page.getByText(rupiah(TOTAL_AFTER_SMALL)).first()).toBeVisible();
 
     const replacementResponse = page.waitForResponse(
@@ -1136,7 +1135,16 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
 
       // Clock/Offer fixture: Offer yang direview dipause sebelum pembayaran.
       await setOfferState(OFFER_ID, "paused");
-      await page.getByRole("button", { name: "Kembali" }).click();
+      // Melepas promo memicu preview "previous" dan ditolak server: state gugur
+      // tampil di langkah pembayaran, bukan order diam-diam tanpa promo.
+      const rejected = page.waitForResponse((response) =>
+        response.url().endsWith("/api/checkout/preview") &&
+        (response.request().postData() ?? "").includes("\"previous\"")
+      );
+      await page.getByRole("button", { name: "Pakai tanpa promo" }).click();
+      const rejection = await rejected;
+      expect(rejection.status()).toBe(409);
+      expect((await rejection.json()).code).toBe("PROMO_UNAVAILABLE");
       await expect(page.getByText("Promo sebelumnya tidak lagi berlaku").first()).toBeVisible();
       await expect(
         page.getByText("Promo ini sudah tidak tersedia untuk pesanan kamu.")
@@ -1145,18 +1153,16 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
       await expect(page.getByText(rupiah(TOTAL_WITHOUT_PROMO)).first()).toBeVisible();
       await expect(page.getByText(/Promo dipakai:/)).toHaveCount(0);
 
-      // Percobaan lanjut ke review dengan promo mati ditolak; tidak ada order.
-      const rejected = page.waitForResponse((response) =>
-        response.url().endsWith("/api/checkout/preview")
+      // Lanjut tanpa promo eksplisit → review baru dengan total penuh. Tunggu
+      // review selesai sebelum mencentang, karena review baru me-reset konfirmasi.
+      const rereview = page.waitForResponse(
+        (response) =>
+          response.url().endsWith("/api/checkout/preview") &&
+          (response.request().postData() ?? "").includes("acknowledgeInvalidation")
       );
-      await page.getByRole("button", { name: "Lanjut", exact: true }).click();
-      const rejection = await rejected;
-      expect(rejection.status()).toBe(409);
-      expect((await rejection.json()).code).toBe("PROMO_UNAVAILABLE");
-
-      // Lanjut tanpa promo eksplisit → review baru dengan total penuh.
       await page.getByRole("button", { name: "Lanjut tanpa promo" }).click();
-      await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
+      expect((await rereview).ok()).toBe(true);
+      await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
       await expect(page.getByText(rupiah(TOTAL_WITHOUT_PROMO)).first()).toBeVisible();
       await expect(page.getByText(/Promo dipakai:/)).toHaveCount(0);
 
@@ -1296,10 +1302,12 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
       );
       expect(stock.rows[0].available_stock).toBe(5);
 
-      // UI tidak menampilkan applied state palsu: kembali ke langkah promo dengan
-      // state gugur yang eksplisit (bukan order tanpa promo diam-diam).
+      // UI tidak menampilkan applied state palsu: tetap di langkah pembayaran
+      // dengan state gugur + rincian perlu diperiksa ulang, tombol bayar mati
+      // (bukan order tanpa promo diam-diam).
       await expect(page.getByText("Promo sebelumnya tidak lagi berlaku").first()).toBeVisible();
-      await expect(page.getByRole("button", { name: "Bayar Sekarang" })).toHaveCount(0);
+      await expect(page.getByRole("button", { name: "Periksa ulang pesanan" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "Bayar Sekarang" })).toBeDisabled();
     } finally {
       await pool.query(
         "UPDATE discount_offer_usage SET reserved_count=0, reserved_amount='0' WHERE offer_id=$1",
@@ -1332,14 +1340,14 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
     expect(stale.status()).toBe(409);
     expect((await stale.json()).code).toBe("CHECKOUT_REVIEW_REQUIRED");
 
-    // Approval lama gugur: kembali ke langkah kontak, tanpa total berdiskon palsu.
-    await expect(page.getByRole("heading", { name: "Informasi Kontak" })).toBeVisible();
+    // Approval lama gugur: kembali ke langkah input, tanpa total berdiskon palsu.
+    await expect(page.getByRole("heading", { name: "Cara Pengiriman", exact: true })).toBeVisible();
     await expect(page.getByText(/Promo dipakai:/)).toHaveCount(0);
 
     // Review baru memakai konteks terbaru dan pilihan yang diklik customer
     // (qty2: 300000 - 10000 = 290000, PPN 31900, total 321900) tanpa dialog.
     await page.getByRole("button", { name: "Lanjut", exact: true }).click();
-    await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
     await expect(page.getByText(rupiah(321_900)).first()).toBeVisible();
     await expect(page.getByText(/Promo dipakai:/)).toContainText("Mock Hemat 10");
     await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -1357,7 +1365,7 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
       sellPrice: GOODS,
     });
 
-    await reachContactStep(page);
+    await reachPaymentStep(page);
     await page.getByLabel("Punya kode promo?").fill(" manualmock25 ");
     await page.getByRole("button", { name: "Terapkan" }).click();
 
@@ -1389,7 +1397,7 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
     await expect(page.getByText(rupiah(TOTAL)).first()).toBeVisible();
 
     // Terapkan manual code langsung membuat review terbaru (langkah Pembayaran).
-    await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
     await page.route("**/checkout/payment-test?*", (route) => {
       const requestUrl = new URL(route.request().url());
       if (requestUrl.origin === STORE_BASE_URL) return route.fallback();
@@ -1466,10 +1474,9 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
   test("Manual code dinonaktifkan setelah review: alasan jelas, Lanjut tanpa promo eksplisit, tanpa order", async () => {
     const page = await storeContext.newPage();
     await ensureStock();
-    await reachContactStep(page);
+    await reachPaymentStep(page);
     await page.getByLabel("Punya kode promo?").fill(MANUAL_CODE);
     await page.getByRole("button", { name: "Terapkan" }).click();
-    await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
     await expect(page.getByText(rupiah(TOTAL)).first()).toBeVisible();
 
     const ordersBefore = await pool.query(
@@ -1495,7 +1502,7 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
       await expect(page.getByText(/tidak tersedia/i).first()).toBeVisible();
 
       await page.getByRole("button", { name: "Lanjut tanpa promo" }).click();
-      await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
       await expect(page.getByText(rupiah(TOTAL_WITHOUT_PROMO)).first()).toBeVisible();
       await expect(page.getByText(MANUAL_CODE)).toHaveCount(0);
 

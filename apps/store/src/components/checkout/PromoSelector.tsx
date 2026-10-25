@@ -114,8 +114,7 @@ export function PromoSelector({
         <div>
           <h3 className="text-sm font-semibold">Promo</h3>
           <p className="text-xs text-muted-foreground">
-            Pilih satu kupon untuk pesanan ini. Mengganti kupon atau melepasnya
-            dihitung ulang oleh server; pemilihan tidak memesan kapasitas.
+            Gunakan satu promo: masukkan kode atau pilih kupon di bawah.
           </p>
         </div>
       </div>
@@ -148,6 +147,69 @@ export function PromoSelector({
           </div>
         </div>
       )}
+
+      <div className="mb-4 border-b pb-4">
+        <label htmlFor="manual-promo-code" className="text-sm font-medium">
+          Punya kode promo?
+        </label>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          Kode yang tidak berlaku tidak mengubah promo aktif.
+        </p>
+        <form
+          className="mt-2 flex flex-wrap items-center gap-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (manualCode.trim().length < 3) return;
+            onApplyManualCode(manualCode);
+          }}
+        >
+          <Input
+            id="manual-promo-code"
+            name="manual-promo-code"
+            value={manualCode}
+            onChange={(event) => setManualCode(event.target.value)}
+            maxLength={64}
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="Contoh: HEMAT17AGUSTUS"
+            className="h-9 w-full max-w-xs font-mono text-sm uppercase"
+            disabled={disabled || pendingOfferId != null}
+          />
+          <Button
+            type="submit"
+            size="sm"
+            disabled={disabled || pendingOfferId != null || manualCode.trim().length < 3}
+          >
+            {manualPending ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+            ) : null}
+            Terapkan
+          </Button>
+        </form>
+        {manualCodeError && (
+          <p role="alert" className="mt-2 text-xs font-medium text-destructive">
+            {manualCodeError}
+          </p>
+        )}
+        {appliedManualCode && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Badge className="gap-1 font-mono">
+              <Check className="h-3 w-3" aria-hidden="true" />
+              {appliedManualCode.code}
+            </Badge>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="gap-1"
+              onClick={onClearManual}
+              disabled={disabled || pendingOfferId != null}
+            >
+              <X className="h-3.5 w-3.5" aria-hidden="true" /> Lepas kode
+            </Button>
+          </div>
+        )}
+      </div>
 
       {loading ? (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -237,69 +299,7 @@ export function PromoSelector({
         </Button>
       )}
 
-      <div className="mt-4 border-t pt-3">
-        <label htmlFor="manual-promo-code" className="text-sm font-medium">
-          Punya kode promo?
-        </label>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          Masukkan kode lalu tekan Terapkan. Kode diperiksa server; kode yang
-          tidak berlaku tidak mengganti promo yang sudah dipakai.
-        </p>
-        <form
-          className="mt-2 flex flex-wrap items-center gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (manualCode.trim().length < 3) return;
-            onApplyManualCode(manualCode);
-          }}
-        >
-          <Input
-            id="manual-promo-code"
-            name="manual-promo-code"
-            value={manualCode}
-            onChange={(event) => setManualCode(event.target.value)}
-            maxLength={64}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="Contoh: HEMAT17AGUSTUS"
-            className="h-9 w-full max-w-xs font-mono text-sm uppercase"
-            disabled={disabled || manualPending}
-          />
-          <Button
-            type="submit"
-            size="sm"
-            disabled={disabled || manualPending || manualCode.trim().length < 3}
-          >
-            {manualPending ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-            ) : null}
-            Terapkan
-          </Button>
-        </form>
-        {manualCodeError && (
-          <p role="alert" className="mt-2 text-xs font-medium text-destructive">
-            {manualCodeError}
-          </p>
-        )}
-        {appliedManualCode && (
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <Badge className="gap-1 font-mono">
-              <Check className="h-3 w-3" aria-hidden="true" />
-              {appliedManualCode.code}
-            </Badge>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="gap-1"
-              onClick={onClearManual}
-              disabled={disabled || pendingOfferId != null}
-            >
-              <X className="h-3.5 w-3.5" aria-hidden="true" /> Lepas kode
-            </Button>
-          </div>
-        )}
-      </div>
+
     </div>
   );
 }

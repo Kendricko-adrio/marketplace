@@ -9,13 +9,11 @@ import { DiscountsListClient } from "./discounts-list-client";
 
 export default function DiscountsPage() {
   return (
-    <div className="space-y-6">
-      <div>
+    <div className="min-w-0 space-y-6">
+      <div className="max-w-3xl space-y-1">
         <h1 className="text-2xl font-bold text-foreground">Diskon</h1>
-        <p className="text-muted-foreground">
-          Kelola Offer publik bertipe fixed-goods: simpan draft, tinjau
-          perubahan, lalu publish atau jeda. Draft tidak pernah mengubah terms
-          yang sedang live.
+        <p className="text-sm text-muted-foreground">
+          Kelola kupon publik dan kode promo.
         </p>
       </div>
       <DiscountsListClient />

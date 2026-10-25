@@ -18,7 +18,6 @@ const { claimLatePaidOrder, claimPaidOrder, processLateSettlement, resolvePaymen
   await import("./order-finalize");
 const { releaseConfirmedSalesOrderHold } = await import("./jubelio-sales-lifecycle");
 const { finalizeRejectedCheckoutCreate } = await import("./checkout-recovery");
-const { createLogger } = await import("./logger");
 
 const url = process.env.DATABASE_URL;
 const PREFIX = `discount-lifecycle-${crypto.randomUUID()}`;
@@ -31,7 +30,6 @@ const revisionId = `${PREFIX}-revision`;
 const benefitId = `${PREFIX}-benefit`;
 const pool = url ? new Pool({ connectionString: url, max: 4 }) : null;
 const db = pool ? drizzle(pool, { schema }) : null;
-const log = createLogger({ module: "discount-lifecycle-test" });
 
 async function probe() {
   if (!url) return { ready: false, blocker: "DATABASE_URL is not configured" };
@@ -304,7 +302,7 @@ describe("paid → consumed", () => {
       await pool!.query(`select deadline from discount_redemption where order_id=$1`, [orderId])
     ).rows[0].deadline;
 
-    expect(await claimPaidOrder(orderId, log, { paymentType: "qris", transactionId: "tx-1" })).toEqual({
+    expect(await claimPaidOrder(orderId, { paymentType: "qris", transactionId: "tx-1" })).toEqual({
       claimed: true,
     });
     const paid = await pool!.query(
@@ -331,7 +329,7 @@ describe("paid → consumed", () => {
     expect(deadlineAfter.getTime()).toBe(deadlineBefore.getTime());
 
     // Duplicate callback: no double transition/counter/event.
-    expect(await claimPaidOrder(orderId, log, { transactionId: "tx-1" })).toEqual({ claimed: false });
+    expect(await claimPaidOrder(orderId, { transactionId: "tx-1" })).toEqual({ claimed: false });
     expect(await events(redemptionId)).toEqual({ consumed: 1, reserved: 1 });
   });
 });
@@ -364,13 +362,13 @@ describe("safe unpaid terminal → released", () => {
     const redemptionId = await reserveFor(orderId);
     await insertOperation({ orderId, type: "create", status: "rejected" });
 
-    await finalizeRejectedCheckoutCreate(orderId, log);
+    await finalizeRejectedCheckoutCreate(orderId);
     expect(await redemption(orderId)).toMatchObject({ status: "released" });
     const failed = await pool!.query(`select status, payment_status from orders where id=$1`, [orderId]);
     expect(failed.rows[0]).toEqual({ status: "failed_payment", payment_status: "failed" });
     expect(await events(redemptionId)).toEqual({ released: 1, reserved: 1 });
 
-    await finalizeRejectedCheckoutCreate(orderId, log);
+    await finalizeRejectedCheckoutCreate(orderId);
     expect(await events(redemptionId)).toEqual({ released: 1, reserved: 1 });
   });
 
@@ -408,7 +406,7 @@ describe("late settlement", () => {
     });
     await insertOperation({ orderId, type: "cancel", status: "confirmed", salesOrderId: 990_002 });
 
-    const result = await processLateSettlement(orderId, log, { transactionId: "tx-late-1" });
+    const result = await processLateSettlement(orderId, { transactionId: "tx-late-1" });
     expect(result.status).toBe("manual_review");
     const order = await pool!.query(
       `select status, payment_status, fulfillment_blocked_reason from orders where id=$1`,
@@ -429,7 +427,7 @@ describe("late settlement", () => {
     expect(state.usage).toMatchObject({ reserved_count: 0, consumed_count: 0 });
 
     // Duplicate webhook for the same transaction: no second review event.
-    await processLateSettlement(orderId, log, { transactionId: "tx-late-1" });
+    await processLateSettlement(orderId, { transactionId: "tx-late-1" });
     expect(await events(redemptionId)).toEqual({
       late_paid_review: 1,
       released: 1,
@@ -442,7 +440,7 @@ describe("late settlement", () => {
     const redemptionId = await reserveFor(orderId);
     await insertOperation({ orderId, type: "cancel", status: "dispatched_unknown", salesOrderId: 990_003 });
 
-    const result = await processLateSettlement(orderId, log, { transactionId: "tx-late-2" });
+    const result = await processLateSettlement(orderId, { transactionId: "tx-late-2" });
     expect(result.status).toBe("manual_review");
     expect(await redemption(orderId)).toMatchObject({ status: "consumed" });
     expect(await events(redemptionId)).toEqual({ consumed: 1, reserved: 1 });
@@ -458,7 +456,7 @@ describe("late settlement", () => {
     const orderId = await createOrder({ status: "failed_payment", paymentStatus: "failed" });
     const redemptionId = await reserveFor(orderId);
 
-    expect(await claimLatePaidOrder(orderId, log, { transactionId: "tx-late-3" })).toBe(true);
+    expect(await claimLatePaidOrder(orderId, { transactionId: "tx-late-3" })).toBe(true);
     expect(await redemption(orderId)).toMatchObject({ status: "consumed" });
     expect(await events(redemptionId)).toEqual({ consumed: 1, reserved: 1 });
     const order = await pool!.query(

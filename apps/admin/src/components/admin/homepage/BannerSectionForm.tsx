@@ -260,7 +260,7 @@ export default function BannerSectionForm({
                     <div className="space-y-1">
                       <Label className="text-xs">Alt Text (aksesibilitas)</Label>
                       <input
-                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                        className="flex h-9 w-full rounded-md border border-input bg-field px-3 py-2 text-sm"
                         value={slide.altText ?? ""}
                         onChange={(e) => updateSlide(index, { altText: e.target.value })}
                         placeholder={`Deskripsi slide ${index + 1}`}
@@ -282,7 +282,7 @@ export default function BannerSectionForm({
             <Label htmlFor="ctaText">Teks Tombol CTA</Label>
             <input
               id="ctaText"
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              className="flex h-10 w-full rounded-md border border-input bg-field px-3 py-2 text-sm"
               value={banner.ctaText ?? ""}
               onChange={(e) => update({ ctaText: e.target.value })}
               placeholder="Belanja Sekarang"
@@ -319,7 +319,7 @@ export default function BannerSectionForm({
             <Label htmlFor="ctaLink">Link CTA</Label>
             <input
               id="ctaLink"
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              className="flex h-10 w-full rounded-md border border-input bg-field px-3 py-2 text-sm"
               value={banner.ctaLink ?? ""}
               onChange={(e) => update({ ctaLink: e.target.value })}
               placeholder="/products"
@@ -351,7 +351,7 @@ export default function BannerSectionForm({
                 <input
                   id="cta-built-url"
                   readOnly
-                  className="flex h-9 flex-1 rounded-md border border-input bg-muted/40 px-3 py-2 text-sm font-mono text-muted-foreground"
+                  className="flex h-9 flex-1 rounded-md border border-input bg-muted px-3 py-2 text-sm font-mono text-muted-foreground"
                   value={builtCtaUrl}
                 />
                 <Button
@@ -389,7 +389,7 @@ export default function BannerSectionForm({
               type="number"
               min={MIN_INTERVAL_SEC}
               max={MAX_INTERVAL_SEC}
-              className="flex h-10 w-24 rounded-md border border-input bg-background px-3 py-2 text-sm"
+              className="flex h-10 w-24 rounded-md border border-input bg-field px-3 py-2 text-sm"
               value={banner.autoRotateIntervalSec ?? DEFAULT_INTERVAL_SEC}
               onChange={(e) =>
                 update({

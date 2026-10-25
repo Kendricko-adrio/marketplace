@@ -395,6 +395,7 @@ export interface PriceChangeCandidate {
 }
 
 export interface PriceChangeCandidateQuery {
+  markdownStatus?: string;
   search?: string;
   page?: number | string;
   limit?: number | string;
@@ -2215,6 +2216,9 @@ export async function listPriceChangeCandidates(
   const page = requirePage(query.page, 1, 1_000_000);
   const limit = requirePage(query.limit, 25, MAX_PAGE_SIZE);
   const search = normalizeSearch(query.search);
+  if (query.markdownStatus !== undefined && query.markdownStatus !== "inactive") {
+    inputInvalid("markdownStatus must be inactive when provided");
+  }
   const searchFilter =
     search === null
       ? undefined
@@ -2223,11 +2227,29 @@ export async function listPriceChangeCandidates(
           ilike(products.name, `%${escapeLikePattern(search)}%`)
         );
 
+  // Same predicate and joins for rows/count: inactive targets cover the entire
+  // catalogue, not only the current page. Match the whole-Rupiah source reader
+  // (zero is valid; legacy fractional/negative/oversized sources are not).
+  const candidateFilter = and(
+    searchFilter,
+    query.markdownStatus === "inactive"
+      ? sql`${variantPriceRevisions.targetUnitPrice} > 0
+          AND ${productVariants.price} >= 0
+          AND ${productVariants.price} <= ${MAX_MONEY_RUPIAH.toString()}::numeric
+          AND ${productVariants.price} = trunc(${productVariants.price})
+          AND ${productVariants.price} <= ${variantPriceRevisions.targetUnitPrice}`
+      : undefined
+  );
   const totalRows = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(productVariants)
     .innerJoin(products, eq(products.id, productVariants.productId))
-    .where(searchFilter);
+    .leftJoin(variantPriceCurrent, eq(variantPriceCurrent.variantId, productVariants.id))
+    .leftJoin(variantPriceRevisions, and(
+      eq(variantPriceRevisions.id, variantPriceCurrent.revisionId),
+      eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
+    ))
+    .where(candidateFilter);
   const total = Number(totalRows[0]?.count ?? 0);
 
   const rows = await db
@@ -2256,7 +2278,7 @@ export async function listPriceChangeCandidates(
         eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
       )
     )
-    .where(searchFilter)
+    .where(candidateFilter)
     .orderBy(asc(productVariants.sku))
     .limit(limit)
     .offset((page - 1) * limit);

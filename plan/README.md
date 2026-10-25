@@ -34,7 +34,10 @@ per-feature inside each plan file (same four statuses, one per feature).
 
 - **Draft → Ready:** after repo facts and user decisions are aligned, show the
   complete draft (scope, non-scope, features, acceptance/verify criteria, open
-  questions) to the user. Resolve all behavior-affecting open questions and
+  questions, plus the advisory technical/UX blueprint) to the user. The
+  blueprint is a checklist, not a gate: unfilled parts must appear as open items
+  so the owner can decide before implementation rather than discover them in
+  code. Resolve all behavior-affecting open questions and
   obtain explicit approval of the **complete** scope and criteria. Record the
   approval in the plan file before updating this index. Orchestrator self-review
   alone is insufficient; neither publication nor an autonomous loop may treat

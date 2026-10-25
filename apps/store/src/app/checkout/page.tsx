@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { ReadOnlyInput } from "@/components/ui/read-only-input";
 import {
   ArrowLeft,
   ArrowRight,
@@ -26,7 +27,6 @@ import {
   MapPin,
   Calendar,
   TriangleAlert,
-  User,
 } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 import { useCart } from "@/providers/cart-provider";
@@ -175,7 +175,7 @@ export default function CheckoutPage() {
   const [cart, setCart] = useState<CartData | null>(null);
   const [branch, setBranch] = useState<BranchWithHours | null>(null);
   const [loading, setLoading] = useState(true);
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [step, setStep] = useState<1 | 2>(1);
   const [submitting, setSubmitting] = useState(false);
 
   // Selected item IDs — passed from the cart page via sessionStorage.
@@ -584,7 +584,11 @@ export default function CheckoutPage() {
       : null;
   // Tanpa promo yang gugur, tombol bayar tetap bisa ditekan: acknowledgement
   // penggantian/invalidation dikirim bersama body place-order.
-  const promoBlocked = promoInvalidation != null;
+  const promoBlocked = promoInvalidation != null || promoPendingOfferId != null;
+  // Review server wajib untuk kontrak berversi dan bisa gugur (promo ditolak,
+  // ongkir berubah, konteks berubah). Customer me-review ulang di tempat tanpa
+  // kehilangan alamat/layanan yang sudah dipilih.
+  const needsRereview = cart?.pricingContractVersion === 1 && review == null;
 
   // Pickup validation — the server also revalidates at order placement.
   const validatePickup = (): boolean => {
@@ -610,13 +614,16 @@ export default function CheckoutPage() {
     return true;
   };
 
-  // Step 1 validates fulfillment before opening contact. The existing pickup
-  // endpoint retains its name for compatibility; delivery never sends slots.
+  // Step 1 validates fulfillment AND the order contact before the review is
+  // created. The existing pickup endpoint retains its name for compatibility;
+  // delivery never sends slots.
   const handleNextFromFulfillment = async () => {
     if (fulfillmentMethod === "delivery") {
       if (deliveryPending || !deliveryService) return;
-      setConfirmed(false);
-      setStep(2);
+      // Delivery memakai email akun + telepon penerima alamat; tidak ada
+      // langkah kontak terpisah, jadi validasinya di sini.
+      if (!validateDeliveryContact()) return;
+      await goToPayment();
       return;
     }
     if (!validatePickup() || !branch) return;
@@ -634,8 +641,8 @@ export default function CheckoutPage() {
       const data = await res.json();
       if (generation !== pickupValidationGeneration.current) return;
       if (data.success) {
-        setConfirmed(false);
-        setStep(2);
+        if (!validateContact()) return;
+        await goToPayment();
       } else {
         setPickupError(data.error || "Invalid pickup slot.");
       }
@@ -645,9 +652,32 @@ export default function CheckoutPage() {
     }
   };
 
+  // Kontak pemesan delivery: email dari akun, telepon dari penerima alamat.
+  const validateDeliveryContact = (): boolean => {
+    const recipientPhone = (deliveryAddressPreview?.phone ?? "").trim();
+    const digits = recipientPhone.replace(/\D/g, "");
+    if (!deliveryAddressPreview || digits.length < 8 || digits.length > 15) {
+      setContactError(
+        "Nomor telepon penerima pada alamat tidak valid (8–15 angka). Perbaiki nomor tersebut di Buku Alamat atau gunakan alamat baru."
+      );
+      return false;
+    }
+    const accountEmail = (email || sessionUser?.email || "").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(accountEmail)) {
+      setContactError("Email akun belum valid. Lengkapi email akun sebelum melanjutkan.");
+      return false;
+    }
+    setPhone(recipientPhone);
+    setEmail(accountEmail);
+    setContactError("");
+    return true;
+  };
+
   function currentIntent(): Record<string, unknown> {
     return fulfillmentMethod === "delivery" && deliveryService ? {
-      itemIds: selectedItems.map((item) => item.id), contactPhone: phone.trim(), contactEmail: email.trim(),
+      itemIds: selectedItems.map((item) => item.id),
+      contactPhone: (deliveryAddressPreview?.phone ?? phone).trim(),
+      contactEmail: (email || sessionUser?.email || "").trim(),
       fulfillmentMethod: "delivery",
       ...(deliveryNewAddress ? { newAddress: deliveryNewAddress, saveAddress: deliverySaveAddress, saveRequestId }
         : { addressId: deliveryAddressId }),
@@ -690,7 +720,13 @@ export default function CheckoutPage() {
       reviewToken: data.reviewToken,
       expiresAt: data.expiresAt,
       pricing: data.pricing,
-      intent,
+      intent: intent.fulfillmentMethod === "delivery"
+        ? {
+            ...intent,
+            approvedPricing: data.pricing,
+            originFingerprint: data.deliveryService?.originFingerprint ?? intent.originFingerprint,
+          }
+        : intent,
       contextFingerprint: data.contextFingerprint,
       promo: data.promo ?? { kind: selection.kind, ...("offerId" in selection ? { offerId: selection.offerId } : {}) },
       requiresIncreaseAcknowledgement: data.requiresIncreaseConfirmation === true,
@@ -712,7 +748,7 @@ export default function CheckoutPage() {
     setPromoInvalidation(null);
     setPromoReplacement(null);
     setConfirmed(false);
-    setStep(3);
+    setStep(2);
   }
 
   async function postPreview(body: Record<string, unknown>) {
@@ -756,7 +792,7 @@ export default function CheckoutPage() {
           setConfirmed(false);
           selectOffer(offerId);
           setPromoInvalidation(null);
-          setStep(2);
+          setStep(1);
           toast.error(result.error || "Rincian pesanan berubah. Periksa kembali total kamu.");
           return;
         }
@@ -820,7 +856,7 @@ export default function CheckoutPage() {
         if (result.code === "CHECKOUT_REVIEW_REQUIRED") {
           setReview(null);
           setConfirmed(false);
-          setStep(2);
+          setStep(1);
         }
         if (typeof result.code === "string" && result.code.startsWith("PROMO_")) {
           setManualCodeError(String(result.error || "Kode promo belum dapat dipakai."));
@@ -884,7 +920,7 @@ export default function CheckoutPage() {
           setReview(null);
           selectOffer(null);
           setPromoInvalidation(null);
-          setStep(2);
+          setStep(1);
         }
         toast.error(result.error || "Promo belum dapat dilepas. Coba lagi.");
         return;
@@ -902,10 +938,14 @@ export default function CheckoutPage() {
     }
   }
 
-  async function handleNextFromContact() {
+  /**
+   * Satu-satunya jalan menuju langkah pembayaran: membuat review server setelah
+   * input langkah 1 valid. Dipakai juga oleh pemulihan "Periksa ulang pesanan"
+   * saat review lama gugur (promo ditolak/ongkir berubah).
+   */
+  async function goToPayment() {
     if (reviewing) return;
     if (fulfillmentMethod === "delivery" && (deliveryPending || !deliveryService)) { setStep(1); return; }
-    if (!validateContact()) return;
     setConfirmed(false);
     if (cart?.pricingContractVersion === 1) {
       setReviewing(true);
@@ -944,7 +984,7 @@ export default function CheckoutPage() {
       finally { setReviewing(false); }
       return;
     }
-    setStep(3);
+    setStep(2);
   }
 
   function clearPendingRequest() {
@@ -971,11 +1011,14 @@ export default function CheckoutPage() {
           const services: DeliveryQuoteService[] = result.data?.services ?? [];
           const matched = services.find((service) => service.courierId === deliveryService?.courierId && service.serviceId === deliveryService?.serviceId) ?? null;
           setDeliveryService(matched); setRepriceSync({ services, selected: matched }); setRepriceShown(true);
-          if (!matched) setStep(1); else setStep(2);
-        } else setStep(2);
+          // Layanan yang disetujui hilang → kembali ke langkah input; bila masih
+          // ada, customer mengonfirmasi ulang di langkah pembayaran.
+          if (!matched) setStep(1);
+        } else setStep(1);
       }
       // Promo ditolak authoritative (kapasitas/ineligible/berubah): tidak ada
-      // order yang dibuat. Kembali ke langkah promo untuk pilihan baru — jangan
+      // order yang dibuat. Customer tetap di langkah pembayaran untuk memilih
+      // promo lain, lalu me-review ulang lewat "Periksa ulang pesanan" — jangan
       // menampilkan applied state palsu atau order tanpa promo diam-diam.
       if (typeof result.code === "string" && result.code.startsWith("PROMO_")) {
         clearPendingRequest();
@@ -1210,8 +1253,7 @@ export default function CheckoutPage() {
         <div className="flex items-center justify-between">
           {[
             { num: 1, label: "Cara Pengiriman", icon: MapPin },
-            { num: 2, label: "Kontak", icon: User },
-            { num: 3, label: "Bayar & Pesan", icon: CreditCard },
+            { num: 2, label: "Bayar & Pesan", icon: CreditCard },
           ].map((s, i) => (
             <div key={s.num} className="flex items-center flex-1 last:flex-none">
               <div className="flex items-center gap-2">
@@ -1236,7 +1278,7 @@ export default function CheckoutPage() {
                   {s.label}
                 </span>
               </div>
-              {i < 2 && (
+              {i < 1 && (
                 <div
                   className={`flex-1 h-0.5 mx-2 sm:mx-4 ${
                     step > s.num ? "bg-primary" : "bg-muted"
@@ -1248,126 +1290,8 @@ export default function CheckoutPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Main step content */}
-        <div className="lg:col-span-2">
-          {/* Step 2 — Order contact, distinct from delivery recipient */}
-          {step === 2 && (
-            <Card>
-              <CardContent className="p-6">
-                <h2 className="text-xl font-bold mb-1">Informasi Kontak</h2>
-                <p className="text-sm text-muted-foreground mb-4">
-                  {fulfillmentMethod === "pickup"
-                    ? "Isi kontak yang aktif untuk pesanan dan pengambilan di cabang."
-                    : "Isi kontak pemesan yang aktif untuk keperluan pesanan dan pembayaran."}
-                </p>
-
-                {fulfillmentMethod === "pickup" ? (
-                  <div className="mb-6 flex items-start gap-3 rounded-lg border border-amber-200 border-l-4 border-l-amber-500 bg-amber-50 p-4 dark:border-amber-800 dark:border-l-amber-500 dark:bg-amber-950/50">
-                    <TriangleAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                    <p className="text-sm leading-relaxed text-amber-900 dark:text-amber-100">
-                      Sebutkan email dan nomor telepon ini kepada staf saat mengambil pesanan.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="mb-6 rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm leading-relaxed">
-                    Kontak ini adalah kontak pemesan. Pengiriman menggunakan nama dan nomor penerima pada alamat yang Anda pilih.
-                  </div>
-                )}
-
-                {/* Contact fields */}
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="phone" className="mb-1.5 block">
-                      Nomor Telepon *
-                    </Label>
-                    <Input
-                      id="phone"
-                      type="tel"
-                      placeholder="081234567890"
-                      value={phone}
-                      onChange={(e) => setPhone(e.target.value)}
-                    />
-                    <p className="mt-1.5 text-xs text-muted-foreground">
-                      Gunakan nomor telepon yang aktif.
-                    </p>
-                  </div>
-                  <div>
-                    <Label htmlFor="email" className="mb-1.5 block">
-                      Email *
-                    </Label>
-                    <Input
-                      id="email"
-                      type="email"
-                      placeholder="anda@email.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                    />
-                    <p className="mt-1.5 text-xs text-muted-foreground">
-                      {fulfillmentMethod === "pickup"
-                        ? "Kode pickup akan dikirim ke email ini setelah pesanan siap diambil."
-                        : "Gunakan email pemesan yang aktif."}
-                    </p>
-                  </div>
-                </div>
-
-                {contactError && (
-                  <p className="mt-4 text-sm text-destructive">{contactError}</p>
-                )}
-
-                {fulfillmentMethod === "pickup" && cart?.pricingContractVersion === 1 && (
-                  <div className="mt-6">
-                    <PromoSelector
-                      appliedManualCode={appliedManualCode}
-                      manualCodeError={manualCodeError}
-                      manualPending={promoPendingOfferId === "manual"}
-                      onApplyManualCode={(code) => void handleApplyManualCode(code)}
-                      onClearManual={() => void handleSelectOffer(null)}
-                      offers={promoOffers}
-                      selectedOfferId={selectedOfferId}
-                      invalidated={promoInvalidation}
-                      pendingOfferId={promoPendingOfferId}
-                      loading={promoLoading}
-                      error={promoError}
-                      disabled={reviewing}
-                      onSelect={(offerId) => void handleSelectOffer(offerId)}
-                      onClear={() => void handleSelectOffer(null)}
-                      onContinueWithout={() => void handleContinueWithoutPromo()}
-                      onRetry={() => void loadPromos()}
-                    />
-                  </div>
-                )}
-
-                {canFillFromProfile && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-4"
-                    onClick={() => {
-                      if (sessionUser?.phone) setPhone(sessionUser.phone);
-                      if (sessionUser?.email) setEmail(sessionUser.email);
-                    }}
-                  >
-                    Isi dari Profil
-                  </Button>
-                )}
-
-                <div className="mt-6 flex justify-between">
-                  <Button variant="outline" onClick={() => setStep(1)}>
-                    Kembali
-                  </Button>
-                  <Button
-                    onClick={handleNextFromContact}
-                    className="gap-2"
-                    disabled={reviewing || (fulfillmentMethod === "delivery" && (deliveryPending || !deliveryService))}
-                  >
-                    Lanjut <ArrowRight className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-
+      <div className="mx-auto max-w-3xl">
+        <div className="min-w-0">
           {/* Keep fulfillment mounted across steps: hiding preserves the
               delivery draft, quote, selection and pending request identity. */}
           <div hidden={step !== 1}>
@@ -1588,35 +1512,232 @@ export default function CheckoutPage() {
                   <p className="mt-4 text-sm text-destructive">{pickupError}</p>
                 )}
 
+                {/* Kontak pemesan tinggal di langkah ini: pickup diisi di sini,
+                    delivery memakai email akun + telepon penerima alamat. */}
+                <section aria-labelledby="checkout-contact-title" className="mt-6 space-y-4 border-t pt-6">
+                  <div>
+                    <h3 id="checkout-contact-title" className="text-base font-semibold">Kontak Pemesan</h3>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {fulfillmentMethod === "pickup"
+                        ? "Isi nomor telepon dan email yang aktif untuk pesanan dan pengambilan di cabang."
+                        : "Email akun dipakai untuk konfirmasi pesanan dan pembayaran. Pengiriman memakai nama dan nomor penerima pada alamat di atas."}
+                    </p>
+                  </div>
+
+                  {fulfillmentMethod === "pickup" ? (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <Label htmlFor="phone" className="mb-1.5 block">Nomor Telepon *</Label>
+                        <Input
+                          id="phone"
+                          type="tel"
+                          autoComplete="tel"
+                          placeholder="081234567890"
+                          value={phone}
+                          onChange={(e) => setPhone(e.target.value)}
+                        />
+                        <p className="mt-1.5 text-xs text-muted-foreground">Nomor aktif yang bisa dihubungi toko.</p>
+                      </div>
+                      <div>
+                        <Label htmlFor="email" className="mb-1.5 block">Email *</Label>
+                        <Input
+                          id="email"
+                          type="email"
+                          autoComplete="email"
+                          placeholder="anda@email.com"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                        />
+                        <p className="mt-1.5 text-xs text-muted-foreground">Kode pickup dikirim ke email ini setelah pesanan siap diambil.</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <span className="mb-1.5 block text-sm font-medium">Nomor Telepon Penerima</span>
+                        <ReadOnlyInput
+                          id="contactPhone"
+                          value={deliveryAddressPreview?.phone ?? ""}
+                          hint="Mengikuti nomor telepon pada alamat penerima di atas."
+                        />
+                      </div>
+                      <div>
+                        <span className="mb-1.5 block text-sm font-medium">Email Akun</span>
+                        <ReadOnlyInput
+                          id="contactEmail"
+                          value={email || sessionUser?.email || ""}
+                          hint="Email akun dipakai untuk konfirmasi pesanan dan pembayaran."
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {contactError && (
+                    <p className="text-sm text-destructive">{contactError}</p>
+                  )}
+
+                  {fulfillmentMethod === "pickup" && canFillFromProfile && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        if (sessionUser?.phone) setPhone(sessionUser.phone);
+                        if (sessionUser?.email) setEmail(sessionUser.email);
+                      }}
+                    >
+                      Isi dari Profil
+                    </Button>
+                  )}
+                </section>
+
                 <div className="mt-6 flex justify-end">
                   <Button
-                    onClick={handleNextFromFulfillment}
+                    onClick={() => void handleNextFromFulfillment()}
                     className="gap-2"
                     disabled={
-                      fulfillmentMethod === "delivery" &&
-                      (deliveryPending || !deliveryService)
+                      reviewing ||
+                      (fulfillmentMethod === "delivery" &&
+                        (deliveryPending || !deliveryService))
                     }
                   >
-                    Lanjut <ArrowRight className="h-4 w-4" />
+                    {reviewing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" /> Memeriksa…
+                      </>
+                    ) : (
+                      <>
+                        Lanjut <ArrowRight className="h-4 w-4" />
+                      </>
+                    )}
                   </Button>
                 </div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Step 3 — Review & Place Order */}
-          {step === 3 && (
+          {/* Step 2 — Review & Place Order */}
+          {step === 2 && (
             <Card>
               <CardContent className="p-6">
                 {fulfillmentMethod === "delivery" && repriceShown && <p role="alert" className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium text-amber-900">{REPRICE_MESSAGE}</p>}
+                {needsRereview && (
+                  <div role="alert" className="mb-4 space-y-2 rounded-lg border border-amber-300 border-l-4 border-l-amber-500 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:border-l-amber-500 dark:bg-amber-950/50">
+                    <p className="font-medium text-amber-900 dark:text-amber-100">Rincian pesanan perlu diperiksa ulang</p>
+                    <p className="text-amber-900/90 dark:text-amber-100/90">
+                      {promoInvalidation?.message ? `${promoInvalidation.message} ` : ""}
+                      Periksa ulang untuk memakai total terbaru sebelum membayar.
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void goToPayment()}
+                      disabled={reviewing || promoPendingOfferId != null}
+                    >
+                      {reviewing ? "Memeriksa…" : "Periksa ulang pesanan"}
+                    </Button>
+                  </div>
+                )}
                 <h2 className="text-xl font-bold mb-1">Pembayaran</h2>
                 <p className="text-sm text-muted-foreground mb-6">
                   Periksa pesanan Anda, lalu konfirmasi untuk melanjutkan ke
                   pembayaran via Midtrans.
                 </p>
 
-                {/* Payment method badge */}
-                {fulfillmentMethod === "pickup" && cart?.pricingContractVersion === 1 && (
+                {/* Order summary */}
+                <div className="space-y-3 mb-6">
+                  <h3 className="font-semibold">Ringkasan Pesanan</h3>
+                  {appliedPromo && (
+                    <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
+                      Promo dipakai: <span className="font-medium">{appliedPromo.name}</span> · potongan Rp{" "}
+                      {Number(appliedPromo.benefitAmount).toLocaleString("id-ID")}
+                    </div>
+                  )}
+                  {selectedItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 rounded-lg border p-3 sm:flex sm:items-center"
+                    >
+                      <div className="h-14 w-14 rounded-md bg-secondary/50 flex-shrink-0 relative overflow-hidden">
+                        {item.image && (
+                          <Image
+                            src={item.image}
+                            alt={item.product.name}
+                            fill
+                            className="object-cover"
+                          />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="break-words text-sm font-medium">
+                          {item.product.name}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {[item.variant.color, item.variant.size]
+                            .filter(Boolean)
+                            .join(" / ")}{" "}
+                          · Qty {item.quantity}
+                        </div>
+                      </div>
+                      <div className="col-start-2 whitespace-nowrap text-sm font-medium sm:shrink-0">
+                        Rp{" "}
+                        {(
+                          parseFloat(item.variant.price) * item.quantity
+                        ).toLocaleString("id-ID")}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Fulfillment and contact are separate, scannable groups. */}
+                <section className="mb-6 rounded-lg border p-4 sm:p-5">
+                  <h3 className="mb-4 font-semibold">
+                    {fulfillmentMethod === "delivery" ? "Detail Pengiriman" : "Detail Pengambilan"}
+                  </h3>
+                  {fulfillmentMethod === "delivery" && deliveryAddressPreview && (
+                    <div className="mb-4 space-y-1 break-words text-sm leading-relaxed">
+                      <p className="text-xs font-medium text-muted-foreground">Penerima Pengiriman</p>
+                      <p className="font-medium">{deliveryAddressPreview.recipientName}</p>
+                      <p>{deliveryAddressPreview.phone}</p>
+                      <p>{deliveryAddressPreview.fullAddress}</p>
+                      <p className="text-muted-foreground">Kode pos {deliveryAddressPreview.postalCode}</p>
+                    </div>
+                  )}
+                  <dl className="grid gap-4 border-t pt-4 text-sm sm:grid-cols-2">
+                    <div className="min-w-0 space-y-1">
+                      <dt className="text-xs text-muted-foreground">
+                        {fulfillmentMethod === "delivery" ? "Dikirim dari" : "Cabang pengambilan"}
+                      </dt>
+                      <dd className="break-words font-medium">{branch?.name ?? "-"}</dd>
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <dt className="text-xs text-muted-foreground">
+                        {fulfillmentMethod === "delivery" ? "Layanan kurir" : "Estimasi Pickup"}
+                      </dt>
+                      <dd className="break-words font-medium">
+                        {fulfillmentMethod === "delivery"
+                          ? deliveryService?.name ?? "-"
+                          : `${formatDateLabel(pickupDate)} · ${pickupTime}`}
+                      </dd>
+                    </div>
+                  </dl>
+                </section>
+
+                <section className="mb-6 rounded-lg border p-4 sm:p-5">
+                  <h3 className="mb-4 font-semibold">Kontak Pemesan</h3>
+                  <dl className="grid gap-4 text-sm sm:grid-cols-2">
+                    <div className="min-w-0 space-y-1">
+                      <dt className="text-xs text-muted-foreground">Telepon</dt>
+                      <dd className="break-words font-medium">{phone}</dd>
+                    </div>
+                    <div className="min-w-0 space-y-1">
+                      <dt className="text-xs text-muted-foreground">Email</dt>
+                      <dd className="break-words font-medium">{email}</dd>
+                    </div>
+                  </dl>
+                </section>
+
+                {/* One promo slot for pickup and delivery. */}
+                {cart?.pricingContractVersion === 1 && (
                   <PromoSelector
                       appliedManualCode={appliedManualCode}
                       manualCodeError={manualCodeError}
@@ -1637,107 +1758,12 @@ export default function CheckoutPage() {
                   />
                 )}
                 <div className="mb-6 flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
-                  <CreditCard className="h-6 w-6 text-primary" />
+                  <CreditCard className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
                   <div>
-                    <div className="font-semibold">Pilih metode di halaman Midtrans</div>
+                    <div className="font-semibold">Pembayaran via Midtrans</div>
                     <div className="text-xs text-muted-foreground">
-                      QRIS, GoPay, transfer bank/VA, atau kartu kredit/debit
+                      Pilih QRIS, GoPay, VA, atau kartu setelah klik Bayar Sekarang.
                     </div>
-                  </div>
-                </div>
-
-                {/* Order summary */}
-                <div className="space-y-3 mb-6">
-                  <h3 className="font-semibold">Ringkasan Pesanan</h3>
-                  {appliedPromo && (
-                    <div className="rounded-lg border border-primary/20 bg-primary/5 p-3 text-sm">
-                      Promo dipakai: <span className="font-medium">{appliedPromo.name}</span> · potongan Rp{" "}
-                      {Number(appliedPromo.benefitAmount).toLocaleString("id-ID")}
-                    </div>
-                  )}
-                  {promoInvalidation && (
-                    <div role="alert" className="rounded-lg border border-amber-300 border-l-4 border-l-amber-500 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:border-l-amber-500 dark:bg-amber-950/50">
-                      <p className="font-medium text-amber-900 dark:text-amber-100">
-                        Promo sebelumnya tidak lagi berlaku
-                      </p>
-                      <p className="mt-1 text-amber-900/90 dark:text-amber-100/90">
-                        {promoInvalidation.message} Pilih promo lain atau lanjut tanpa promo.
-                      </p>
-                    </div>
-                  )}
-                  {selectedItems.map((item) => (
-                    <div
-                      key={item.id}
-                      className="flex items-center gap-3 rounded-lg border p-3"
-                    >
-                      <div className="h-14 w-14 rounded-md bg-secondary/50 flex-shrink-0 relative overflow-hidden">
-                        {item.image && (
-                          <Image
-                            src={item.image}
-                            alt={item.product.name}
-                            fill
-                            className="object-cover"
-                          />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium line-clamp-1">
-                          {item.product.name}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {[item.variant.color, item.variant.size]
-                            .filter(Boolean)
-                            .join(" / ")}{" "}
-                          · Qty {item.quantity}
-                        </div>
-                      </div>
-                      <div className="text-sm font-medium">
-                        Rp{" "}
-                        {(
-                          parseFloat(item.variant.price) * item.quantity
-                        ).toLocaleString("id-ID")}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Shipping + contact summary */}
-                <div className="space-y-2 mb-6 rounded-lg border bg-muted/30 p-4 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Cabang</span>
-                    <span className="font-medium">{branch?.name ?? "-"}</span>
-                  </div>
-                  {fulfillmentMethod === "delivery" ? (
-                    <div className="space-y-2">
-                      {deliveryAddressPreview && <div className="rounded-lg border p-3 text-sm">
-                        <p className="mb-1 font-semibold">Penerima Pengiriman</p>
-                        <p className="font-medium">{deliveryAddressPreview.recipientName} · {deliveryAddressPreview.phone}</p>
-                        <p>{deliveryAddressPreview.fullAddress}</p>
-                        <p className="text-muted-foreground">Kode pos {deliveryAddressPreview.postalCode}</p>
-                      </div>}
-                      <span className="text-muted-foreground">Pengiriman</span>
-                      <span className="font-medium">
-                        {deliveryService
-                          ? `${branch?.name ?? ""} → ${deliveryService.name}`
-                          : "-"}
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Estimasi Pickup</span>
-                      <span className="font-medium">
-                        {formatDateLabel(pickupDate)} · {pickupTime}
-                      </span>
-                    </div>
-                  )}
-                  <p className="pt-2 font-semibold">Kontak Pemesan</p>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Telepon</span>
-                    <span className="font-medium">{phone}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Email</span>
-                    <span className="font-medium">{email}</span>
                   </div>
                 </div>
 
@@ -1747,8 +1773,8 @@ export default function CheckoutPage() {
                   <div className="flex items-start gap-2.5">
                     <TriangleAlert className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
                     <p className="text-sm font-medium leading-relaxed text-amber-900 dark:text-amber-100">
-                      Sebutkan email dan nomor telepon di atas kepada staf toko
-                      saat Anda datang mengambil pesanan.
+                      Sebutkan nomor telepon dan email yang kamu isi kepada staf
+                      toko saat Anda datang mengambil pesanan.
                     </p>
                   </div>
                   <div className="mt-2.5 flex items-start gap-2.5 border-t border-amber-200 pt-2.5 dark:border-amber-800">
@@ -1761,8 +1787,9 @@ export default function CheckoutPage() {
                 </div>
                 )}
 
-                {/* Price breakdown */}
-                <div className="space-y-2 mb-6">
+                {/* Price breakdown: original shipping minus subsidy exactly once. */}
+                <section aria-labelledby="payment-breakdown-title" className="mb-6 space-y-3 rounded-lg bg-muted/50 p-4 sm:p-5">
+                  <h3 id="payment-breakdown-title" className="mb-4 font-semibold">Rincian Pembayaran</h3>
                   <div className="flex justify-between text-sm">
                     <span className="text-muted-foreground">
                       Subtotal ({selectedItems.length} barang)
@@ -1781,23 +1808,14 @@ export default function CheckoutPage() {
                     <span className="text-muted-foreground">PPN ({pricing.ppnRatePercent}%)</span>
                     <span>Rp {Number(pricing.ppnAmount).toLocaleString("id-ID")}</span>
                   </div>
-                  <div className="flex justify-between text-sm">
+                  <div className="flex justify-between gap-4 text-sm">
                     <span className="text-muted-foreground">Ongkos Kirim</span>
                     {fulfillmentMethod === "delivery" && deliveryService ? (
-                      <span>
-                        {Number(pricing.shippingSubsidy ?? 0) > 0 ? (
-                          <>
-                            <span className="mr-1 text-muted-foreground line-through">
-                              Rp {Number(pricing.shippingBeforeSubsidy ?? deliveryService.shippingCost).toLocaleString("id-ID")}
-                            </span>
-                            Rp {Number(pricing.shippingCost).toLocaleString("id-ID")}
-                          </>
-                        ) : (
-                          <>Rp {Number(deliveryService.shippingCost).toLocaleString("id-ID")}</>
-                        )}
+                      <span className="shrink-0">
+                        Rp {Number(pricing.shippingBeforeSubsidy ?? deliveryService.shippingCost).toLocaleString("id-ID")}
                       </span>
                     ) : (
-                      <span className="text-green-600">Gratis (Pickup)</span>
+                      <span className="shrink-0">Gratis (Pickup)</span>
                     )}
                   </div>
                   {Number(pricing.shippingSubsidy ?? 0) > 0 && (
@@ -1823,7 +1841,7 @@ export default function CheckoutPage() {
                       Rp {total.toLocaleString("id-ID")}
                     </span>
                   </div>
-                </div>
+                </section>
 
                 {/* Confirmation checkbox */}
                 <label className="flex items-start gap-3 mb-6 cursor-pointer">
@@ -1840,16 +1858,16 @@ export default function CheckoutPage() {
                   </span>
                 </label>
 
-                <div className="flex justify-between">
-                  <Button variant="outline" onClick={() => {
+                <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
+                  <Button variant="outline" disabled={submitting || promoPendingOfferId != null} onClick={() => {
                     setConfirmed(false);
-                    setStep(2);
+                    setStep(1);
                   }}>
                     Kembali
                   </Button>
                   <Button
                     onClick={handlePlaceOrder}
-                    disabled={!confirmed || submitting || promoBlocked}
+                    disabled={!confirmed || submitting || promoBlocked || needsRereview}
                     className="gap-2"
                     size="lg"
                   >
@@ -1869,102 +1887,6 @@ export default function CheckoutPage() {
           )}
         </div>
 
-        {/* Sticky order summary sidebar (desktop) */}
-        <div>
-          <Card className="sticky top-24 border-none shadow-md bg-secondary/30">
-            <CardContent className="p-6">
-              <h3 className="text-lg font-bold mb-4">Ringkasan</h3>
-
-              <div className="space-y-2 mb-4">
-                {(selectedItems.length > 0 ? selectedItems : cart.items).map(
-                  (item) => (
-                    <div
-                      key={item.id}
-                      className="flex justify-between text-sm"
-                    >
-                      <span className="text-muted-foreground line-clamp-1 pr-2">
-                        {item.product.name} ×{item.quantity}
-                      </span>
-                      <span className="flex-shrink-0">
-                        Rp{" "}
-                        {(
-                          parseFloat(item.variant.price) * item.quantity
-                        ).toLocaleString("id-ID")}
-                      </span>
-                    </div>
-                  )
-                )}
-                {selectedItems.length === 0 && (
-                  <p className="text-xs text-muted-foreground italic">
-                    Pilih barang untuk melihat ringkasan.
-                  </p>
-                )}
-              </div>
-
-              <hr className="border-t border-dashed border-muted-foreground/30 my-3" />
-
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Subtotal</span>
-                  <span>Rp {subtotal.toLocaleString("id-ID")}</span>
-                </div>
-                {Number(pricing.discount) > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Diskon promo</span>
-                    <span className="text-green-600">
-                      - Rp {Number(pricing.discount).toLocaleString("id-ID")}
-                    </span>
-                  </div>
-                )}
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">PPN ({pricing.ppnRatePercent}%)</span>
-                  <span>{fulfillmentMethod === "delivery" && !deliveryService ? "—" : `Rp ${Number(pricing.ppnAmount).toLocaleString("id-ID")}`}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Ongkos Kirim</span>
-                  <span>{fulfillmentMethod === "pickup" ? "Gratis (Pickup)" : deliveryService ? `Rp ${Number(pricing.shippingCost).toLocaleString("id-ID")}` : "Pilih layanan pengiriman"}</span>
-                </div>
-                {Number(pricing.shippingSubsidy ?? 0) > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Subsidi ongkir</span>
-                    <span className="text-green-600">
-                      - Rp {Number(pricing.shippingSubsidy).toLocaleString("id-ID")}
-                    </span>
-                  </div>
-                )}
-                {Number(pricing.serviceFee) > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Biaya Layanan</span>
-                    <span>Rp {Number(pricing.serviceFee).toLocaleString("id-ID")}</span>
-                  </div>
-                )}
-              </div>
-
-              <hr className="border-t border-dashed border-muted-foreground/30 my-3" />
-
-              <div className="flex justify-between font-bold">
-                <span>Total</span>
-                <span className="text-primary">
-                  {fulfillmentMethod === "delivery" && !deliveryService ? "—" : `Rp ${total.toLocaleString("id-ID")}`}
-                </span>
-              </div>
-
-              {branch && (
-                <div
-                  role="group"
-                  aria-label={fulfillmentMethod === "delivery" ? "Cabang asal" : "Cabang pengambilan"}
-                  className="mt-4 flex items-start gap-2 rounded-lg border border-border/80 bg-card p-3 text-xs shadow-sm"
-                >
-                  <MapPin className="h-4 w-4 text-primary flex-shrink-0 mt-0.5" />
-                  <div>
-                    <div className="font-medium">{branch.name}</div>
-                    <div className="text-muted-foreground">{branch.city}</div>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
       </div>
 
       {/* Ticket 08 — dialog kenaikan total saat mengganti promo. Kandidat ditahan

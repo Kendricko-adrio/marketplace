@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { guard } from "@/lib/rbac/guard";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import {
   simulateDiscountOffer,
   DiscountAdministrationError,
@@ -22,6 +23,13 @@ import {
 // never silently use different terms than the editor is looking at.
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-discount-simulate");
+
 type RouteContext = { params: Promise<{ id: string }> };
 
 const simulateSchema = z.strictObject({
@@ -40,21 +48,23 @@ const simulateSchema = z.strictObject({
     .max(50),
 });
 
-export async function POST(request: NextRequest, { params }: RouteContext) {
-  const guardResult = await guard("discounts", "edit", { request });
+async function simulateOffer(
+  request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("discounts", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const parsed = simulateSchema.safeParse(
       await request.json().catch(() => null)
     );
     if (!parsed.success) {
-      logger.warn("discounts.simulate.invalid_body", { outcome: "denied" });
+      log.warn("discounts simulate ditolak: body tidak valid (outcome denied)");
       return discountFailureResponse(
-        logger,
         new DiscountAdministrationError(400, "INPUT_INVALID", "Invalid request body"),
-        "discounts.simulate.denied"
+        "discounts simulate ditolak"
       );
     }
 
@@ -64,17 +74,15 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       requireActorId(ctx.user.id)
     );
 
-    logger.info("discounts.simulate", {
-      outcome: "success",
-      offerId: id,
-      applied: result.applied,
-      eligible: result.eligible,
-      fulfillmentMethod: parsed.data.fulfillmentMethod,
-      lineCount: parsed.data.lines.length,
-      actorId: ctx.user.id,
-    });
-    return discountSuccessResponse(logger, result);
+    // Harga/line mentah tidak masuk log — hanya jumlah baris dan fakta hasil.
+    log.info(
+      `discounts simulate (offer ${id}, applied ${result.applied}, eligible ${result.eligible}, fulfillmentMethod ${parsed.data.fulfillmentMethod}, lineCount ${parsed.data.lines.length}, actor ${ctx.user.id}, outcome success)`
+    );
+    return discountSuccessResponse(result);
   } catch (error) {
-    return discountFailureResponse(logger, error, "discounts.simulate.failure");
+    return discountFailureResponse(error, "discounts simulate gagal");
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(simulateOffer, "admin-discount-simulate");

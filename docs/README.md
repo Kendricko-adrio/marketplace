@@ -81,7 +81,7 @@ lasting design/invariant/flow content is distilled into the appropriate
 | Delivery checkout quotes | [`docs/features/delivery-quotes.md`](features/delivery-quotes.md) |
 | Versioned checkout pricing (money snapshot, PPN goods-only, provider payable) | [`docs/features/versioned-checkout-pricing.md`](features/versioned-checkout-pricing.md) |
 | Discount Offer administration (public fixed-goods lifecycle, review, publish, capacity) | [`docs/features/discount-administration.md`](features/discount-administration.md) |
-| Coupon publik dan lifecycle Redemption (picker, reservasi atomik, paid/consume, safe release, late paid) | [`docs/features/discount-redemption.md`](features/discount-redemption.md) |
+| Promo checkout pickup/delivery (kode promo, kupon, review pembayaran, subsidi ongkir, lifecycle Redemption) | [`docs/features/discount-redemption.md`](features/discount-redemption.md) |
 | Manual Markdown price changes (per-SKU target, projection, apply/history, provider whole-line discount) | [`docs/features/markdown-pricing.md`](features/markdown-pricing.md) |
 | Mandatory verified branch Shipment regions | [`docs/features/branch-shipping-regions.md`](features/branch-shipping-regions.md) |
 | Client address book, branch shipping origin and parcel master | [`docs/features/client-addresses.md`](features/client-addresses.md) |

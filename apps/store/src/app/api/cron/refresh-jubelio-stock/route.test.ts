@@ -4,7 +4,9 @@ import { NextRequest } from "next/server";
 const refresh = vi.fn();
 vi.mock("@marketplace/db/src/jubelio-stock-refresh", () => ({ refreshMappedJubelioStock: refresh }));
 vi.mock("@/db", () => ({ db: {} }));
-vi.mock("@/lib/logger", () => ({ requestLogger: () => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), requestId: "test" }), serializeError: (e: unknown) => String(e), withRequestId: (response: Response) => response }));
+// Tidak ada mock `@/lib/logger` di sini: route memakai facade nyata
+// (`createModuleLogger` + `withRequestContext`), sehingga mock manual tidak
+// diperlukan lagi — tidak ada stub lama yang tersisa untuk di-mock.
 
 const request = (secret?: string) => new NextRequest("http://localhost/api/cron/refresh-jubelio-stock", { method: "POST", headers: secret ? { "x-cron-secret": secret } : {} });
 
@@ -27,5 +29,10 @@ describe("stock refresh cron HTTP seam", () => {
     const ok = await POST(request("valid"));
     expect(ok.status).toBe(200);
     expect((await ok.json()).observed).toBe(2);
+    // Entry HTTP memakai scope kanonik: header `x-request-id` selalu UUID
+    // buatan server (bukan incoming id).
+    expect(ok.headers.get("x-request-id")).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    );
   });
 });

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 
 import { guard } from "@/lib/rbac/guard";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import {
   getPriceChangeBatch,
   PriceChangeError,
@@ -19,15 +20,28 @@ import {
 // 25, max 100) optionally filtered by row state (`all|pending|applied|unchanged|
 // failed`; an unknown value is a domain 400 INPUT_INVALID). A batch outside the
 // viewer's grants is a plain 404 (existence is not disclosed).
+//
+// The route guard only checks `prices:view`; the `products:view all_branches`
+// grant is enforced by the administration layer where the batch is read, so the
+// 404 for an out-of-grant batch stays identical.
 export const dynamic = "force-dynamic";
 
-export async function GET(
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-price-changes-detail");
+
+type RouteContext = { params: Promise<{ id: string }> };
+
+async function priceChangeDetail(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const guardResult = await guard("prices", "view", { request });
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("prices", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const { id } = await params;
@@ -43,7 +57,6 @@ export async function GET(
     );
     if (!result) {
       return priceChangeFailureResponse(
-        logger,
         new PriceChangeError(
           404,
           "NOT_FOUND",
@@ -52,20 +65,17 @@ export async function GET(
         "price_changes.detail.denied"
       );
     }
-    logger.info("price_changes.detail", {
-      outcome: "success",
-      batchId: result.id,
-      state: result.state,
-      rowCount: result.rowCount,
-      page: result.pagination.page,
-      actorId: ctx.user.id,
-    });
-    return priceChangeSuccessResponse(logger, result);
-  } catch (error) {
-    return priceChangeFailureResponse(
-      logger,
-      error,
-      "price_changes.detail.failure"
+    log.info(
+      `price_changes.detail (batch ${result.id}, state ${result.state}, rowCount ${result.rowCount}, page ${result.pagination.page}, actingUserId ${ctx.user.id}, outcome success)`
     );
+    return priceChangeSuccessResponse(result);
+  } catch (error) {
+    return priceChangeFailureResponse(error, "price_changes.detail.failure");
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(
+  priceChangeDetail,
+  "admin-price-changes-detail"
+);

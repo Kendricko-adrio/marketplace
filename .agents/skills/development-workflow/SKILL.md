@@ -27,17 +27,46 @@ When an upstream Matt Pocock skill says "Call the Skill tool", Pi may not expose
 - Read back the goal, confirmed decisions, non-goals, observable acceptance/verification criteria, and remaining uncertainty. Ask for explicit confirmation of the shared understanding before writing an actionable nontrivial plan/spec. Keep unresolved choices visible as questions, not assumed implementation decisions.
 - Draft the plan/spec from that understanding, including tests at public seams and deployment implications when applicable. Show the **complete** draft or a reviewable link plus an accurate decision/edge-case summary. Obtain explicit user approval of the complete scope and acceptance criteria before marking a plan `Ready`, publishing an agent-ready spec, queueing a task for an autonomous loop, or starting implementation. Editing an approved contract requires renewed approval if it changes behavior, scope, or acceptance criteria.
 - `Draft` is not authorization. Record the approval and its scope in the plan's approval section and transition the index only after the gate passes. Existing `In Progress` plans are not retroactively returned to `Draft`; new decisions or scope changes still require confirmation.
+- Carry a **technical blueprint** and a **UX blueprint** inside the same spec/plan file whenever the work touches code. They are an advisory checklist, not an extra gate: fill what applies, record every empty part as an open item, and never claim the design is complete while a path, state, or label is still undecided. For a small single-session change, 4–6 lines (files touched + relevant UI states) are enough.
+
+### Technical blueprint
+
+- File table: full `path`, create/modify, a 1–3 line responsibility, the layer from [`docs/architecture/code-organization.md`](../../../docs/architecture/code-organization.md) (`route.ts` / `-service.ts` / `-repository.ts` / `-client.ts` / UI component / `packages/db/src/schema/`), and the test seam. Full paths, never bare filenames — bare names are what make an implementer write the same module twice in two places.
+- Exported contract for each new or contract-changing file: function/type names and parameters, **without bodies**. This is the seam neighbouring slices code against, not an implementation manual.
+- Non-obvious structure decisions (new module, new folder, splitting a file, shared vs app-local) with the reason and the rejected alternative.
+- `discovery:` marker with a concrete question wherever a file is genuinely unknown. An unknown is a discovery task; guessing it mid-implementation is not.
+
+### UX blueprint
+
+Required when the change affects UI; otherwise write `N/A — <reason>`.
+
+- The agreed **reference page/pattern** compared for cross-page consistency, and the hierarchy with its single dominant primary action.
+- **Component reuse map**: existing shared component (with path) versus new, and which variant applies.
+- **State matrix** per screen with final labels/copy: idle, loading, empty, error, success, disabled/permission-restricted, unsaved. A state that is not in the table will not be implemented.
+- Target viewport, responsive behaviour, and the keyboard/focus/contrast points to verify.
+- When the owner asks for a prototype, record it as the **binding** reference for screen structure, flow, action naming, and states — while existing tokens and shared components remain the source of truth for visuals. Never copy prototype CSS or introduce ad-hoc values, fonts, or palettes.
+
+### Blueprint checklist (advisory)
+
+- [ ] File table: path, action, responsibility, layer, test seam
+- [ ] Exported contract (names + parameters) for new or contract-changing files
+- [ ] Non-obvious structure decisions with rejected alternatives
+- [ ] `discovery:` markers where paths are genuinely unknown
+- [ ] (UI) Agreed reference page/pattern + component reuse map
+- [ ] (UI) State matrix + final labels/copy per screen
+- [ ] (UI) Target viewport, responsive, keyboard/focus, contrast
+- [ ] (UI) Requested prototype recorded as the binding reference
 
 ## 3. Slice only when useful
 
 - If the build spans sessions or the user requests a multi-ticket breakdown, propose tracer-bullet tickets: each delivers a narrow, independently testable end-to-end behavior (rather than a whole database/API/UI layer), with acceptance criteria and real blockers. Show the numbered breakdown and dependencies to the user; get separate approval before publishing/queueing tickets. Small work goes straight from approved conversational scope or spec to implementation.
-- Tickets convey *what* must work, not a brittle list of file paths or an invitation to redesign product behavior. Carry the approved spec, testing seams, exclusions, and source-of-truth research in the handoff. **A session may cover one or several approved tickets according to the user's requested scope.** Even in a multi-ticket session, implement, test, review, and record the outcome of each verifiable slice before moving to the next; respect dependencies and do not mark blocked or unverified tickets Done. A new product decision still requires owner approval, not an agent-selected default. No second product plan is required.
+- Tickets convey *what* must work and inherit the approved technical/UX blueprint; they are not an invitation to redesign product behavior. A ticket may refine a file name or placement only while the approved layer convention and exported contracts stay intact, and the deviation is written to the plan's deviation log and reported to the owner. A new module, a new behavior, or a state/label outside the approved blueprint still needs an owner decision. Carry the approved spec, blueprint, testing seams, exclusions, and source-of-truth research in the handoff. **A session may cover one or several approved tickets according to the user's requested scope.** Even in a multi-ticket session, implement, test, review, and record the outcome of each verifiable slice before moving to the next; respect dependencies and do not mark blocked or unverified tickets Done. A new product decision still requires owner approval, not an agent-selected default. No second product plan is required.
 
 ## 4. Implement, review, and close
 
 - Start from the approved behavior; make a short technical work sequence, then use `tdd` at agreed public seams. Run focused tests/typechecks as you go and the suites required by `AGENTS.md` before reporting completion. Update feature/API/deployment docs where applicable.
 - If implementation reveals a new product, policy, or architecture choice outside the approved scope, stop the affected work, explain the options, and request a user decision. Do not let a worker, reviewer, or loop silently expand the spec.
-- Review the changed diff against **both** repo standards and the approved spec/acceptance criteria. Verify findings against current files and test results. Check the exact changed files, including any pre-existing user changes; never claim the full suite passed if it did not run.
+- Review the changed diff against **both** repo standards and the approved spec/acceptance criteria, plus the approved blueprints: a file outside the file table, a state/label missing from the state matrix, or an invented component is a review finding even when the tests pass. Verify findings against current files and test results. Check the exact changed files, including any pre-existing user changes; never claim the full suite passed if it did not run.
 - The main agent owns `plan/index.md` consistency, docs extraction, and plan-file retirement at `Done` (directly or by validating an authorized handoff). Commits require user authorization; push, remote work, and deployment each require the explicit permission specified in `AGENTS.md`.
 
 ## 5. Delegation when explicitly authorized for this task/session

@@ -286,7 +286,7 @@ Manual/bulk/Excel selalu stage → review → apply. Bulk hanya checked SKUs, re
 
 ### 6.2 Template/parser contract — detail teknis usulan
 
-- `.xlsx`, satu sheet bernama `Harga`, versi pada cell A1 literal `OKCIR_MARKDOWN_V1`, header row2 `sku`, `action`, `new_price`; data mulai row3. Nama sheet/cell marker adalah usulan format konkret, bukan format legacy yang harus kompatibel.
+- `.xlsx`, satu sheet bernama `Harga`, marker pada cell A1 literal `markdown_v1` (penamaan terbaru sesuai permintaan pemilik; marker lama diterima sebagai alias dan identitas internal batch tetap kompatibel), header row2 `sku`, `action`, `new_price`; data mulai row3. Nama sheet/cell marker adalah usulan format konkret, bukan format legacy yang harus kompatibel.
 - SKU harus cell text, exact match case-sensitive tanpa fuzzy/trim perubahan identity. `action` literal `set_price` atau `restore_base`. `new_price` cell numeric integer Rupiah; teks `Rp150.000`, formula, negative/fraction/NaN tidak diterima. `set_price` wajib harga; restore wajib kosong.
 - Export/template boleh menambah reference columns resmi `product_name`, `variant`, `source_price`, `effective_price`, `origin_row`, `error_reason`; tidak authoritative. Unknown/missing/duplicate header dan sheet tambahan fatal. File dengan extension/MIME saja tidak membuktikan format: periksa container/signature.
 - Blank seluruh row diabaikan; partially filled tanpa SKU gagal row. Semua kemunculan SKU duplikat gagal, bukan last-row-wins. Formula pada cell row termasuk referensi menggagalkan row; tidak evaluate cached result. Macro, external relationships, encrypted/unsupported workbook ditolak fatal; jangan fetch external links.

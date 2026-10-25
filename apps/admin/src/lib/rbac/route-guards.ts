@@ -1,8 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import {
-  serializeError,
-} from "@/lib/logger";
+import { createModuleLogger } from "@/lib/logger";
 import { guard, type PolicyContext } from "@/lib/rbac/guard";
 import type { ActionKey, ModuleKey } from "@marketplace/db/src/rbac/catalog";
 
@@ -18,6 +16,24 @@ import type { ActionKey, ModuleKey } from "@marketplace/db/src/rbac/catalog";
 // - 401 without a session, 403 with a stable code for policy denials.
 // - Handler success is logged `info`; unexpected handler failures are
 //   logged `error` and answered 500.
+//
+// Logging contract: the module logger is created once here; the RBAC
+// module/action label travels in the `message` and the request id comes from
+// the active HTTP scope. No logger is taken from (or handed to) the guard.
+
+const log = createModuleLogger("rbac");
+
+/**
+ * Static, module-owned projection for a failed handler. The caught value may
+ * carry driver/provider free text, so it is never logged; the caller still gets
+ * the same 500 envelope.
+ */
+class RbacRouteLogError extends Error {
+  constructor(label: string) {
+    super(`rbac route handler gagal (${label})`);
+    this.name = "RbacRouteLogError";
+  }
+}
 
 export type RouteContext = { params: Promise<Record<string, string>> };
 
@@ -47,9 +63,9 @@ export function withPermission(
   action: ActionKey
 ): (request: NextRequest, routeCtx?: RouteContext) => Promise<Response> {
   return async (request: NextRequest, routeCtx?: RouteContext) => {
-    const guardResult = await guard(module, action, { request });
+    const guardResult = await guard(module, action);
     if (!guardResult.ok) return guardResult.response;
-    const { logger, ctx } = guardResult;
+    const { ctx } = guardResult;
     const label = `${module}.${action}`;
     try {
       const response = await handler(
@@ -58,19 +74,17 @@ export function withPermission(
         routeCtx as RouteContext | undefined
       );
       if (isResponse(response) && response.status < 400) {
-        logger.info(label, { outcome: "success" });
+        log.info(`${label} (outcome success)`);
       } else {
-        logger.warn(`${label}.client_error`, {
-          outcome: "denied",
-          status: isResponse(response) ? response.status : undefined,
-        });
+        log.warn(
+          `${label}.client_error (outcome denied, status ${
+            isResponse(response) ? response.status : "unknown"
+          })`
+        );
       }
       return response;
-    } catch (error) {
-      logger.error(`${label}.failure`, {
-        outcome: "error",
-        error: serializeError(error),
-      });
+    } catch {
+      log.error(`${label}.failure (outcome error)`, new RbacRouteLogError(label));
       return NextResponse.json(
         { success: false, error: "Internal server error" },
         { status: 500 }

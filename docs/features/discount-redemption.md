@@ -1,9 +1,9 @@
 # Coupon publik dan lifecycle Redemption
 
-Status: ticket 07 terimplementasi untuk **pickup**, ticket 08 menambahkan
-penggantian/gugurnya promo, ticket 09 Manual Promo Code, dan ticket 10 benefit
-percentage goods dengan cap opsional. Pemilihan promo di checkout delivery dan
-subsidi ongkir tetap milik ticket 11.
+Checkout **pickup dan delivery** mendukung Coupon publik dan Manual Promo Code
+dalam satu slot. Benefit mencakup nominal/persentase barang serta subsidi ongkir
+khusus delivery. UI pembayaran menampilkan pilihan promo dan kode sebelum
+rincian biaya; backend tetap menjadi authority eligibility dan total.
 
 Dokumen ini menjelaskan satu Coupon publik goods (nominal tetap atau persentase)
 tanpa claim: bagaimana customer memilih, bagaimana order menahan kapasitas
@@ -13,8 +13,8 @@ Markdown tetap komponen terpisah dan boleh digabung dengan Coupon.
 ## 1. Model dan batas
 
 - Satu order maksimal **satu Redemption sepanjang hidupnya**, termasuk setelah
-  `released`. Slot promo hanya boleh berisi satu Coupon publik atau (nanti) satu
-  Manual Promo Code/shipping subsidy; Markdown bukan Redemption.
+  `released`. Slot promo hanya boleh berisi satu Coupon publik atau satu
+  Manual Promo Code dengan benefit barang/ongkir; Markdown bukan Redemption.
 - Offer `public` tanpa kode dan tanpa prior claim. Kapasitas mengikuti
   `quota_count`, `budget_amount`, dan `per_client_limit` pada Offer yang sama;
   rename, revision, pause, atau ganti email tidak mereset pemakaian.
@@ -32,7 +32,7 @@ Markdown tetap komponen terpisah dan boleh digabung dengan Coupon.
 ## 2. Picker publik
 
 `POST /api/discounts/available` (read-only, onboarded client) menerima
-`{ selectedItemIds, fulfillmentMethod?: "pickup", cursor? }` dan mengembalikan
+`{ selectedItemIds, fulfillmentMethod?: "pickup" | "delivery", shippingBeforeSubsidy?, cursor? }` dan mengembalikan
 Coupon publik yang relevan:
 
 - hanya Offer publik `enabled` dengan revision published dan waktu aktif;
@@ -44,10 +44,32 @@ Coupon publik yang relevan:
   Picker menampilkan `Diskon 10% (maks Rp 20.000)` untuk percentage dan
   `Potongan Rp …` untuk fixed.
 
-Picker di halaman checkout (step kontak, pickup, gate `discounts.contractVersion=1`)
-menampilkan daftar itu; Offer disabled tidak bisa dipilih. Memilih Coupon hanya
-mengubah state browser: **tidak** membuat order, hold, atau usage. Pilihan
-terikat ke body preview/place-order sebagai `promoSelection`.
+Picker tersedia pada langkah pembayaran untuk pickup dan delivery saat
+`discounts.contractVersion=1`; langkah kontak pickup juga mempertahankan picker
+existing. Input **Punya kode promo?** dan tombol **Terapkan** berada sebelum daftar
+Coupon agar mudah ditemukan. Offer disabled tidak bisa dipilih. Memilih Coupon
+atau menerapkan kode **tidak** membuat order, hold, atau usage. Preview server
+memvalidasi pilihan dan memperbarui total; pilihan terikat ke body
+preview/place-order sebagai `promoSelection`.
+
+### Susunan review pembayaran
+
+Review memakai satu kolom dengan kelompok terpisah: produk, detail pengiriman/
+pengambilan, kontak pemesan, promo, informasi Midtrans, rincian pembayaran, dan
+konfirmasi. Sidebar ringkasan hanya ada pada langkah sebelumnya, bukan diduplikasi
+pada pembayaran. Cabang asal dan layanan kurir memiliki label terpisah. Nama
+penerima, telepon, alamat, dan kode pos ditampilkan per baris; field panjang wrap
+dan kolom detail/kontak menjadi vertikal pada mobile.
+
+Rincian biaya menampilkan ongkir **sebelum subsidi**, lalu satu baris subsidi
+negatif. Contoh: barang Rp150.000 + PPN Rp16.500 + ongkir Rp30.000 − subsidi
+Rp15.000 = total Rp181.500. Ongkir tidak dikurangi subsidi dua kali.
+
+Setiap review promo delivery yang berhasil memperbarui `approvedPricing` dan
+origin fingerprint pada intent submit. Mengganti promo mereset checkbox
+persetujuan; pembayaran ditahan saat pemeriksaan promo berlangsung. Kode invalid
+mempertahankan pilihan dan total valid sebelumnya. Penggantian yang menaikkan
+total menunggu dialog konfirmasi; batal mempertahankan promo lama.
 
 ## 3. Preview dan review token
 
@@ -143,8 +165,8 @@ Acknowledgement adalah bagian intent: replay key yang sama dengan acknowledgemen
 berbeda menjawab `409 REQUEST_KEY_CONFLICT`.
 
 Aturan dialog hanya berlaku untuk penggantian promo. Reprice delivery yang sudah
-ada tetap meminta reapproval komponen walau total turun; pemilihan promo delivery
-menyusul ticket 11.
+ada tetap meminta reapproval komponen walau total turun. Aturan ini juga berlaku
+saat customer memilih promo pada review delivery.
 
 ## 4. Place order: reservasi atomik
 
@@ -279,8 +301,7 @@ persetujuan terikat fingerprint), serta integrasi `order-finalize.ts`,
 
 ## 9. Non-goals
 
-Pemilihan promo shipping/delivery dan subsidi ongkir (ticket 11), usage/privacy
-detail dan capacity races lanjutan (12), refund tooling, pembuktian pembayaran
+Usage/privacy detail dan capacity races lanjutan (12), refund tooling, pembuktian pembayaran
 Rp0, UAT staging/rollout (13). Benefit percentage/manual yang digabung dalam
 satu order diuji lintas slice pada ticket 13. Gate operasional `discounts.contractVersion`
 tetap `0` pada seed sampai rollout berizin.
@@ -330,6 +351,33 @@ Endpoint: `POST /api/admin/discounts/{id}/codes` dan
 `discount-reservation.db.test.ts`, `checkout-admission.db.test.ts`, serta
 `e2e/admin/discounts-admin-mock.spec.ts` (blok Manual Promo Code) dan
 `e2e/store/discounts-coupon-mock.spec.ts` (kasus Manual Promo Code).
+
+## Verifikasi review pembayaran dan promo delivery
+
+Regression browser ada di `e2e/store/checkout-review-mock.spec.ts`, kasus
+`delivery payment review exposes working promo and readable sections` pada
+1280px dan 390px. Test memakai checkout dan preview HTTP nyata, provider mock
+lokal, serta intercept submit untuk memeriksa approval tanpa membuat order
+provider tambahan. Kasus HTTP shipping existing tetap menguji place-order nyata.
+
+Cakupan: kode valid/invalid, satu slot publik/manual, diskon barang/subsidi,
+dialog kenaikan total (batal/setuju), reset checkbox, keyboard Tab/Enter, harga
+pada submit, section berlabel, sidebar tidak diduplikasi, dan tanpa overflow.
+Referensi konsistensi visual: langkah Informasi Kontak checkout serta shared
+Card/Input/Button/Badge existing; render kedua viewport telah diperiksa.
+
+Context7 checkpoint: `/microsoft/playwright` — locator role/label, web-first
+assertions, `setViewportSize`, dan `boundingBox` dikonfirmasi dari dokumentasi.
+Perubahan JSX/layout memakai API komponen existing; panduan Next.js terpasang
+`node_modules/next/dist/docs/01-app/03-api-reference/01-directives/use-client.md`
+juga diperiksa. Tidak ada schema, endpoint, environment, atau deployment baru.
+
+Bukti verifikasi lokal: typecheck store lolos; focused unit 21 passed; full unit
+155 file / 1.740 passed / 12 skipped pada DB disposable. Batch E2E awal mencatat
+46 passed, tiga kegagalan selector heading lama dan sepuluh test belum berjalan.
+Setelah selector diperjelas, recheck hanya kasus gagal/belum berjalan ditambah
+dua lifecycle pickup menghasilkan 15 passed (total 61 test unik passed). Legacy
+`npm run test:e2e` tidak dijalankan karena memerlukan izin terpisah.
 
 ## Subsidi ongkir dalam siklus Redemption (ticket 11)
 

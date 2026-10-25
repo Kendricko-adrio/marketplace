@@ -16,10 +16,29 @@
  * courier_id, courier_service_id, is_cod, origin/destination, items); no
  * invented carton/package_detail. No tokens, sender/recipient PII, or raw
  * provider payloads are logged.
+ *
+ * Logging contract (maintainable-code §7): the module logger is created once
+ * here — this adapter takes no logger/context option from its caller. Business
+ * identifiers (ref_no = order id, courier id, HTTP status) travel in the
+ * `message`; a transport failure is described by a static projection owned by
+ * this module, so the raw `fetch`/provider text never reaches a log line.
  */
-import { createLogger, serializeError } from "@/lib/logger";
+import { createModuleLogger } from "@/lib/logger";
 
-const log = createLogger({ module: "jubelio-shipment-client" });
+const log = createModuleLogger("jubelio-shipment");
+
+/**
+ * Static, module-owned projection for a failed transport call. The caught value
+ * can carry the provider URL, credentials or body, so it is never logged; the
+ * caller still receives the same `SHIPMENT_UNAVAILABLE` error as before.
+ */
+class ShipmentTransportLogError extends Error {
+  constructor() {
+    super("panggilan transport Jubelio Shipment gagal");
+    this.name = "ShipmentTransportLogError";
+  }
+}
+
 const TOKEN_SAFETY_MARGIN_MS = 60_000;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -77,7 +96,7 @@ function shipmentEnv(): { baseUrl: string; clientId: string; clientSecret: strin
   const clientId = (process.env.JUBELIO_SHIPMENT_CLIENT_ID ?? "").trim();
   const clientSecret = (process.env.JUBELIO_SHIPMENT_CLIENT_SECRET ?? "").trim();
   if (!baseUrl || !clientId || !clientSecret) {
-    log.error("shipment runtime not fully configured", { outcome: "denied" });
+    log.error("shipment runtime not fully configured (outcome denied)");
     throw new Error("SHIPMENT_NOT_CONFIGURED");
   }
   const url = new URL(baseUrl);
@@ -93,15 +112,15 @@ function shipmentEnv(): { baseUrl: string; clientId: string; clientSecret: strin
     process.env.NODE_ENV === "production" || process.env.APP_ENV === "production";
   if (process.env.E2E_PROVIDER_MOCKS === "true") {
     if (production) {
-      log.error("E2E provider mocks forbidden outside development", { outcome: "denied" });
+      log.error("E2E provider mocks forbidden outside development (outcome denied)");
       throw new Error("SHIPMENT_E2E_MODE_FORBIDDEN");
     }
     if (!isBareLoopback) {
-      log.error("E2E shipment base must be bare loopback", { outcome: "denied" });
+      log.error("E2E shipment base must be bare loopback (outcome denied)");
       throw new Error("SHIPMENT_MOCK_BASE_NOT_LOOPBACK");
     }
   } else if (production && url.protocol !== "https:") {
-    log.error("shipment base must be https in production", { outcome: "denied" });
+    log.error("shipment base must be https in production (outcome denied)");
     throw new Error("SHIPMENT_NOT_CONFIGURED");
   }
   return { baseUrl, clientId, clientSecret, timeout: timeoutMs() };
@@ -114,7 +133,7 @@ async function refreshToken(
   timeout: number
 ): Promise<CachedToken> {
   const requestedAt = Date.now();
-  log.info("shipment token requested", { host: new URL(baseUrl).host });
+  log.info(`shipment token requested (host ${new URL(baseUrl).host})`);
   const response = await fetch(`${baseUrl}/auth/generate-token`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -123,7 +142,9 @@ async function refreshToken(
     signal: AbortSignal.timeout(timeout),
   });
   if (!response.ok) {
-    log.error("shipment token failed", { outcome: "error", status: response.status });
+    log.error(
+      `shipment token failed (outcome error, status ${response.status})`
+    );
     throw new Error("SHIPMENT_TOKEN_FAILED");
   }
   const body = (await response.json()) as Record<string, unknown>;
@@ -139,7 +160,7 @@ async function refreshToken(
     !Number.isFinite(seconds) ||
     seconds <= 0
   ) {
-    log.error("shipment token response malformed", { outcome: "error" });
+    log.error("shipment token response malformed (outcome error)");
     throw new Error("SHIPMENT_TOKEN_FAILED");
   }
   const ttl = seconds * 1000;
@@ -190,10 +211,9 @@ export function createJubelioShipmentGateway() {
     ): Promise<JubelioShipmentCreateResult> {
       const { baseUrl, clientId, clientSecret, timeout } = shipmentEnv();
       const token = await currentToken(baseUrl, clientId, clientSecret, timeout);
-      log.info("shipment create dispatched", {
-        refNo: request.ref_no,
-        courierId: request.courier_id,
-      });
+      log.info(
+        `shipment create dispatched (ref ${request.ref_no}, courier ${request.courier_id})`
+      );
       const wireBody = {
         // Documented create fields only — no invented carton/package_detail.
         ref_no: request.ref_no,
@@ -229,15 +249,17 @@ export function createJubelioShipmentGateway() {
           cache: "no-store",
           signal: AbortSignal.timeout(timeout),
         });
-      } catch (error) {
-        log.error("shipment create transport failed", {
-          outcome: "error",
-          error: serializeError(error),
-        });
+      } catch {
+        log.error(
+          `shipment create transport failed (ref ${request.ref_no}, outcome error)`,
+          new ShipmentTransportLogError()
+        );
         throw new Error("SHIPMENT_UNAVAILABLE");
       }
       if (!response.ok) {
-        log.error("shipment create failed", { outcome: "error", status: response.status });
+        log.error(
+          `shipment create failed (ref ${request.ref_no}, outcome error, status ${response.status})`
+        );
         throw new Error("SHIPMENT_CREATE_FAILED");
       }
       const body = (await response.json()) as Record<string, unknown>;
@@ -255,7 +277,9 @@ export function createJubelioShipmentGateway() {
         price < 0 ||
         (priceBillNumber !== null && !Number.isFinite(priceBillNumber))
       ) {
-        log.error("shipment create response malformed", { outcome: "error" });
+        log.error(
+          `shipment create response malformed (ref ${request.ref_no}, outcome error)`
+        );
         throw new Error("SHIPMENT_MALFORMED");
       }
       const trackingUrl = body.tracking_url;
@@ -281,7 +305,7 @@ export function createJubelioShipmentGateway() {
     async getAwb(awb: string): Promise<unknown> {
       const { baseUrl, clientId, clientSecret, timeout } = shipmentEnv();
       const token = await currentToken(baseUrl, clientId, clientSecret, timeout);
-      log.info("shipment awb detail requested", {});
+      log.info("shipment awb detail requested");
       let response: Response;
       try {
         response = await fetch(`${baseUrl}/shipments/awb/${encodeURIComponent(awb)}`, {
@@ -290,29 +314,31 @@ export function createJubelioShipmentGateway() {
           cache: "no-store",
           signal: AbortSignal.timeout(timeout),
         });
-      } catch (error) {
-        log.error("shipment awb detail transport failed", {
-          outcome: "error",
-          error: serializeError(error),
-        });
+      } catch {
+        log.error(
+          "shipment awb detail transport failed (outcome error)",
+          new ShipmentTransportLogError()
+        );
         throw new Error("SHIPMENT_UNAVAILABLE");
       }
       if (response.status === 404) {
-        log.error("shipment awb detail unknown", { outcome: "error" });
+        log.error("shipment awb detail unknown (outcome error)");
         throw new Error("SHIPMENT_AWB_UNKNOWN");
       }
       if (!response.ok) {
-        log.error("shipment awb detail failed", { outcome: "error", status: response.status });
+        log.error(
+          `shipment awb detail failed (outcome error, status ${response.status})`
+        );
         throw new Error("SHIPMENT_UNAVAILABLE");
       }
       const body: unknown = await response.json();
       if (!body || typeof body !== "object" || Array.isArray(body)) {
-        log.error("shipment awb detail malformed", { outcome: "error" });
+        log.error("shipment awb detail malformed (outcome error)");
         throw new Error("SHIPMENT_MALFORMED");
       }
       const detail = body as Record<string, unknown>;
       if (Number(detail.shipment_id) <= 0 || !detail.awb) {
-        log.error("shipment awb detail identity missing", { outcome: "error" });
+        log.error("shipment awb detail identity missing (outcome error)");
         throw new Error("SHIPMENT_MALFORMED");
       }
       return body;

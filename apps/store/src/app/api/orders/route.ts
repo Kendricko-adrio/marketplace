@@ -9,8 +9,26 @@ import {
 } from "@/db";
 import { eq, desc } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 
-export async function GET() {
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("store-orders");
+
+/**
+ * Proyeksi teknis statis untuk jalur kegagalan tak terduga. Nilai yang
+ * tertangkap tidak pernah masuk log; kontrak HTTP tetap sama.
+ */
+class OrdersListLogError extends Error {
+  constructor() {
+    super("store orders: gagal memuat daftar order");
+    this.name = "OrdersListLogError";
+  }
+}
+
+async function listOrders(): Promise<Response> {
   try {
     const access = await requireOnboardedApiSession();
     if (!access.ok) return access.response;
@@ -77,11 +95,13 @@ export async function GET() {
       success: true,
       data: ordersWithItems,
     });
-  } catch (error) {
-    console.error("Error fetching orders:", error);
+  } catch {
+    log.error("Daftar order gagal dimuat (outcome error)", new OrdersListLogError());
     return NextResponse.json(
       { success: false, error: "Failed to fetch orders" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(listOrders, "store-orders");

@@ -20,7 +20,7 @@ import {
   asc,
   eq,
 } from "drizzle-orm";
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard, crossBranchNotFound } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import { deliveryShipments, deliveryTrackingEvents, deliveryBookingReviews } from "@/db";
@@ -40,29 +40,44 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-orders-detail");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/decoder tidak
+ * pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
 // GET /api/admin/orders/[id]   [orders:view]
 //
 // Own-branch scope pins the lookup to the Home Branch: a cross-branch order
 // id maps to 404 so existence is not disclosed. All-branch scope is
 // unrestricted.
-export async function GET(
+async function orderDetail(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const guardResult = await guard("orders", "view", { request });
+): Promise<Response> {
+  const guardResult = await guard("orders", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const { id } = await params;
-    const orderLog = logger.child({ orderId: id });
     const authorization = branchScopeFromAuthorization(ctx.authorization);
     if (!authorization) {
-      orderLog.warn("orders.detail.scope_unresolvable", {
-        outcome: "denied",
-        reason: "missing_home_branch",
-        userId: ctx.user.id,
-      });
+      log.warn(
+        `orders detail ditolak: branch scope tidak dapat ditentukan (order ${id}, userId ${ctx.user.id}, reason missing_home_branch, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Forbidden", code: "DENIED" },
         { status: 403 }
@@ -158,7 +173,7 @@ export async function GET(
       .limit(1);
 
     if (order.length === 0) {
-      crossBranchNotFound(orderLog);
+      crossBranchNotFound();
       return NextResponse.json(
         { success: false, error: "Order not found" },
         { status: 404 }
@@ -171,7 +186,7 @@ export async function GET(
       authorization.mode === "own" &&
       order[0].order.branchId !== authorization.branchId
     ) {
-      crossBranchNotFound(orderLog);
+      crossBranchNotFound();
       return NextResponse.json(
         { success: false, error: "Order not found" },
         { status: 404 }
@@ -191,15 +206,13 @@ export async function GET(
     } catch (pricingError) {
       // Versi unknown/corrupt fail closed: error generik 500 + konteks terstruktur
       // (kode kontrak + ketiga kolom versi tersimpan), tanpa menyentuh provider.
-      orderLog.error("orders.detail.pricing_failclosed", {
-        outcome: "error",
-        pricingErrorCode:
-          pricingError instanceof PricingContractError ? pricingError.code : null,
-        pricingContractVersion: persistedOrder.pricingContractVersion,
-        pricingEngineVersion: persistedOrder.pricingEngineVersion,
-        providerContractVersion: persistedOrder.providerContractVersion,
-        error: serializeError(pricingError),
-      });
+      // Kode kontrak adalah token statis, bukan teks bebas DB/decoder.
+      log.error(
+        `orders detail gagal decode pricing (order ${id}, pricingErrorCode ${
+          pricingError instanceof PricingContractError ? pricingError.code : "UNKNOWN"
+        }, pricingContractVersion ${persistedOrder.pricingContractVersion ?? "null"}, pricingEngineVersion ${persistedOrder.pricingEngineVersion ?? "null"}, providerContractVersion ${persistedOrder.providerContractVersion ?? "null"}, outcome error)`,
+        new RouteLogError("orders detail pricing fail-closed")
+      );
       return NextResponse.json(
         { success: false, error: "Failed to fetch order" },
         { status: 500 }
@@ -331,7 +344,9 @@ export async function GET(
       const special = access.allowed ? await createDeliveryFollowUp(db).inspect(id, { id: ctx.user.id, homeBranchId, canEditOrders }) : { failure: false, release: false, finish: false };
       workflow = { stage, access, eligibility, tracking, special };
     }
-    orderLog.info("orders.detail", { outcome: "success", scope: authorization.mode, stockOperationCount: stockOperations.length });
+    log.info(
+      `orders detail served (order ${id}, scope ${authorization.mode}, stockOperationCount ${stockOperations.length}, outcome success)`
+    );
     // Ticket 07 — read-only Coupon redemption state for ops. No customer
     // identities beyond this order and no Offer code literal (public only).
     const [redemption] = await db
@@ -390,14 +405,17 @@ export async function GET(
         stockOperations,
       },
     });
-  } catch (error) {
-    logger.error("orders.detail.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    log.error(
+      "orders detail gagal (outcome error)",
+      new RouteLogError("orders detail gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch order" },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(orderDetail, "admin-orders-detail");

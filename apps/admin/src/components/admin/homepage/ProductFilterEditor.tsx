@@ -82,7 +82,7 @@ export default function ProductFilterEditor({
           </Label>
           <input
             id={`${idPrefix}-search`}
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            className="flex h-9 w-full rounded-md border border-input bg-field px-3 py-2 text-sm"
             value={value.search ?? ""}
             onChange={(e) => update("search", e.target.value || undefined)}
             placeholder="Ketik nama produk..."
@@ -178,7 +178,7 @@ export default function ProductFilterEditor({
             id={`${idPrefix}-minPrice`}
             type="number"
             min="0"
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            className="flex h-9 w-full rounded-md border border-input bg-field px-3 py-2 text-sm"
             value={value.minPrice ?? ""}
             onChange={(e) => update("minPrice", e.target.value || undefined)}
             placeholder="0"
@@ -192,7 +192,7 @@ export default function ProductFilterEditor({
             id={`${idPrefix}-maxPrice`}
             type="number"
             min="0"
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+            className="flex h-9 w-full rounded-md border border-input bg-field px-3 py-2 text-sm"
             value={value.maxPrice ?? ""}
             onChange={(e) => update("maxPrice", e.target.value || undefined)}
             placeholder="Tanpa batas"

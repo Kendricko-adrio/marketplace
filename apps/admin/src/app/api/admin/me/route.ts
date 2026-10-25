@@ -1,7 +1,26 @@
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
-import { createLogger, serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-me");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari Better Auth
+ * (atau lapisan di bawahnya) tidak pernah masuk log — nilai itu bisa memuat
+ * cookie/header authorization/detail SQL.
+ */
+class CurrentUserLogError extends Error {
+  constructor() {
+    super("me gagal");
+    this.name = "CurrentUserLogError";
+  }
+}
 
 // GET /api/admin/me
 // Authentication-only identity endpoint: returns the currently signed-in
@@ -11,23 +30,19 @@ import { createLogger, serializeError } from "@/lib/logger";
 // Policy discovery (grants/scopes) lives in /api/admin/policy/me.
 export const dynamic = "force-dynamic";
 
-export async function GET() {
-  const logger = createLogger({ route: "me" });
-
+async function currentAdminUser(): Promise<Response> {
   try {
     const session = await auth.api.getSession({ headers: await headers() });
     if (!session) {
-      logger.warn("me.unauthenticated", { outcome: "denied" });
+      log.warn("me: pengguna belum terautentikasi (outcome denied)");
       return NextResponse.json(
         { success: false, error: "Unauthorized" },
         { status: 401 }
       );
     }
 
-    logger.info("me.resolved", {
-      outcome: "success",
-      userId: session.user.id,
-    });
+    // Id internal saja: nama/email pemilik sesi tidak pernah masuk log.
+    log.info(`me.resolved (userId ${session.user.id}, outcome success)`);
 
     return NextResponse.json({
       success: true,
@@ -39,14 +54,13 @@ export async function GET() {
         branchId: session.user.branchId ?? null,
       },
     });
-  } catch (error) {
-    logger.error("me.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    log.error("me gagal (outcome error)", new CurrentUserLogError());
     return NextResponse.json(
       { success: false, error: "Failed to fetch current user" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(currentAdminUser, "admin-me");

@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, CheckCircle2, Loader2, PlayCircle, XCircle } from "lucide-react";
+import { ArrowLeft, Loader2, PlayCircle } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -32,7 +32,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/providers/auth-provider";
+import { DiscountReviewDialog, type ReviewResult } from "./discount-review-dialog";
 
 // =========================================================
 // Discount Offer editor
@@ -110,32 +112,6 @@ interface Detail {
   codes: CodeLabel[];
   codeLiteralVisible: boolean;
   usage: Usage | null;
-}
-
-interface ReviewValidation {
-  code: string;
-  ok: boolean;
-  message: string;
-}
-
-interface ReviewResult {
-  offerId: string;
-  offerVersion: number;
-  draftVersion: number;
-  policyVersion: number;
-  liveRevisionId: string | null;
-  draftRevisionId: string;
-  stateAfter: string;
-  validations: ReviewValidation[];
-  canPublish: boolean;
-  fingerprint: string;
-  diff: {
-    terms: Array<{ field: string; live: unknown; draft: unknown }>;
-    benefit: { live: unknown; draft: unknown };
-    capacity: { live: unknown; draft: unknown };
-  };
-  simulation: false;
-  notice: string;
 }
 
 interface SimulationLine {
@@ -316,23 +292,6 @@ const STATE_LABEL: Record<Detail["state"], string> = {
   archived: "Diarsipkan",
 };
 
-const VALIDATION_LABEL: Record<string, string> = {
-  TERMS_COMPLETE: "Terms lengkap",
-  BENEFIT_VALID: "Benefit fixed-goods valid",
-  CAPACITY_BOUND: "Minimal satu batas kapasitas",
-  WINDOW_ORDERED: "Jendela waktu valid",
-  CODE_FREE: "Offer publik tanpa kode",
-  LIVE_TERMS_IMMUTABLE: "Terms live tidak berubah",
-};
-
-const FIELD_LABEL: Record<string, string> = {
-  name: "Nama",
-  currency: "Mata uang",
-  minSubtotal: "Minimum subtotal",
-  startAt: "Mulai",
-  endAt: "Berakhir",
-};
-
 const HISTORY_LABEL: Record<string, string> = {
   DISCOUNT_OFFER_DRAFT_CREATED: "Draft dibuat",
   DISCOUNT_OFFER_DRAFT_SAVED: "Draft disimpan",
@@ -367,10 +326,22 @@ function fromWibInput(local: string): string | null {
   return `${local}:00+07:00`;
 }
 
-function display(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "—";
-  if (typeof value === "string") return value;
-  return JSON.stringify(value);
+function HistoryChanges({ changes }: { changes: unknown }) {
+  if (!changes || typeof changes !== "object") return null;
+  const event = changes as Record<string, unknown>;
+  // Render only operational fields, not request keys/fingerprints or arbitrary payloads.
+  const fields = ["quotaCount", "budgetAmount", "perClientLimit", "name", "currency", "minSubtotal", "startAt", "endAt", "kind", "fixedAmount", "rate", "capAmount", "state", "revisionId", "maskedCode", "benefit"];
+  function safe(value: unknown): unknown {
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value).filter(([key]) => fields.includes(key)).map(([key, entry]) => [key, safe(entry)]));
+  }
+  const before = event.before ?? (event.fromState ? { state: event.fromState, revisionId: event.fromRevisionId } : null);
+  const after = event.after ?? event.terms ?? event.capacity ?? { state: event.toState, revisionId: event.toRevisionId, maskedCode: event.maskedCode };
+  return <details className="mt-2"><summary className="cursor-pointer font-medium">Lihat perubahan</summary>
+    <dl className="mt-2 grid gap-3 sm:grid-cols-2">{[["Sebelum", before], ["Sesudah", after]].map(([label, value]) => <div key={String(label)} className="min-w-0 rounded-md bg-muted/30 p-3">
+      <dt className="font-medium">{String(label)}</dt><dd><pre className="whitespace-pre-wrap break-all text-xs">{value ? JSON.stringify(safe(value), null, 2) : "Tidak dicatat pada event ini"}</pre></dd>
+    </div>)}</dl>
+  </details>;
 }
 
 export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
@@ -381,6 +352,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [usage, setUsage] = useState<UsageResult | null>(null);
   const [usageStatus, setUsageStatus] = useState("");
+  const [tab, setTab] = useState("aturan");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -413,6 +385,12 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
   });
   const [simulation, setSimulation] = useState<SimulationResult | null>(null);
   const [review, setReview] = useState<ReviewResult | null>(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [needsReload, setNeedsReload] = useState(false);
+  const [savedDraftForm, setSavedDraftForm] = useState("");
+  const reviewTrigger = useRef<HTMLButtonElement>(null);
+  const running = useRef(false);
+  const draftDirty = JSON.stringify(draftForm) !== savedDraftForm;
   const [newCode, setNewCode] = useState("");
   const [confirm, setConfirm] = useState<{
     state: "enabled" | "paused" | "archived";
@@ -443,6 +421,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
       setHistory(nextHistory);
       await loadUsage(1, "");
       setUsageStatus("");
+      setNeedsReload(false);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.message : "Gagal memuat offer");
     } finally {
@@ -459,7 +438,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
   useEffect(() => {
     if (!detail) return;
     const source = detail.draftRevision ?? detail.liveRevision;
-    setDraftForm({
+    const nextForm = {
       name: source?.name ?? "",
       minSubtotal: source?.minSubtotal ?? "0",
       startAt: toWibInput(source?.startAt),
@@ -469,11 +448,13 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
           ? "percentage_goods"
           : source?.benefit?.kind === "shipping"
             ? "shipping"
-            : "fixed_goods",
+            : "fixed_goods" as "fixed_goods" | "percentage_goods" | "shipping",
       fixedAmount: source?.benefit?.fixedAmount ?? "",
       rate: source?.benefit?.rate ?? "",
       capAmount: source?.benefit?.capAmount ?? "",
-    });
+    };
+    setDraftForm(nextForm);
+    setSavedDraftForm(JSON.stringify(nextForm));
     setCapacityForm({
       quota: detail.quotaCount === null ? "" : String(detail.quotaCount),
       budget: detail.budgetAmount ?? "",
@@ -483,7 +464,12 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
     setReview(null);
   }, [detail]);
 
+  useEffect(() => { setReview(null); }, [draftForm, capacityForm]);
+
   async function run(key: string, action: () => Promise<void>): Promise<void> {
+    if (running.current) return;
+    running.current = true;
+    if (key !== "review" && key !== "publish") setReview(null);
     setBusy(key);
     setError(null);
     try {
@@ -491,9 +477,14 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
     } catch (caught) {
       const message =
         caught instanceof ApiError ? caught.message : "Terjadi kesalahan";
+      if (caught instanceof ApiError && caught.status === 409) {
+        setReview(null);
+        setNeedsReload(true);
+      }
       setError(message);
       toast.error(message);
     } finally {
+      running.current = false;
       setBusy(null);
     }
   }
@@ -586,7 +577,9 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
   }
 
   async function runReview(): Promise<void> {
-    if (!detail) return;
+    if (!detail || draftDirty || needsReload || !canEdit || running.current) return;
+    setReview(null);
+    setReviewOpen(true);
     await run("review", async () => {
       const result = await request<ReviewResult>(
         `/api/admin/discounts/${offerId}/review`,
@@ -603,7 +596,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
   }
 
   async function publish(): Promise<void> {
-    if (!detail || !review) return;
+    if (!detail || !review || draftDirty || needsReload || !review.canPublish) return;
     await run("publish", async () => {
       await request<Detail>(`/api/admin/discounts/${offerId}/publish`, {
         method: "POST",
@@ -615,7 +608,8 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
           reviewFingerprint: review.fingerprint,
         }),
       });
-      toast.success("Offer dipublikasikan");
+      toast.success("Promo dipublikasikan");
+      setReviewOpen(false);
       setReview(null);
       await load();
     });
@@ -712,6 +706,174 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
     );
   }
 
+  const simulationPanel = (<details className="rounded-lg border bg-background p-1"><summary className="cursor-pointer px-5 py-3 font-medium">Simulasi biaya</summary><Card>
+        <CardHeader>
+          <CardTitle>Simulasi pricing</CardTitle>
+          <CardDescription>
+            Memakai interface pricing yang sama dengan jalur customer. Ini
+            simulasi: bukan quote, bukan order, tidak menahan stok/kapasitas.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="space-y-2">
+              <Label htmlFor="sim-variant">Variant ID</Label>
+              <Input
+                id="sim-variant"
+                value={simForm.variantId}
+                onChange={(event) =>
+                  setSimForm((current) => ({
+                    ...current,
+                    variantId: event.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sim-price">Harga satuan (Rp)</Label>
+              <Input
+                id="sim-price"
+                inputMode="numeric"
+                value={simForm.unitPrice}
+                onChange={(event) =>
+                  setSimForm((current) => ({
+                    ...current,
+                    unitPrice: event.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sim-qty">Qty</Label>
+              <Input
+                id="sim-qty"
+                inputMode="numeric"
+                value={simForm.quantity}
+                onChange={(event) =>
+                  setSimForm((current) => ({
+                    ...current,
+                    quantity: event.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Fulfillment</Label>
+              <Select
+                value={simForm.fulfillment}
+                onValueChange={(value) =>
+                  setSimForm((current) => ({
+                    ...current,
+                    fulfillment: value as "pickup" | "delivery",
+                  }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pickup">Pickup</SelectItem>
+                  <SelectItem value="delivery">Delivery</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sim-shipping">Ongkir (Rp)</Label>
+              <Input
+                id="sim-shipping"
+                inputMode="numeric"
+                value={simForm.shipping}
+                disabled={simForm.fulfillment === "pickup"}
+                onChange={(event) =>
+                  setSimForm((current) => ({
+                    ...current,
+                    shipping: event.target.value,
+                  }))
+                }
+              />
+            </div>
+          </div>
+          <Button
+            onClick={() => void simulate()}
+            disabled={busy !== null || !detail.draftRevision}
+            variant="outline"
+          >
+            {busy === "simulate" ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <PlayCircle className="mr-2 h-4 w-4" />
+            )}
+            Jalankan simulasi
+          </Button>
+          {!detail.draftRevision ? (
+            <p className="text-sm text-muted-foreground">
+              Simpan draft dengan benefit goods terlebih dahulu.
+            </p>
+          ) : null}
+
+          {simulation ? (
+            <div className="space-y-3">
+              <div className="rounded-md border p-3 text-sm">
+                <p className="font-medium">
+                  {simulation.applied
+                    ? "Benefit diterapkan"
+                    : "Tidak diterapkan (minimum belum terpenuhi atau benefit Rp0)"}
+                </p>
+                <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                  <span>Subtotal: {rupiah(simulation.breakdown.subtotal)}</span>
+                  <span>
+                    Diskon barang: {rupiah(simulation.breakdown.goodsDiscount)}
+                  </span>
+                  <span>Net barang: {rupiah(simulation.breakdown.netGoods)}</span>
+                  <span>
+                    Ongkir asli: {rupiah(simulation.breakdown.shippingBeforeSubsidy)}
+                  </span>
+                  <span>
+                    Subsidi ongkir: {rupiah(simulation.breakdown.shippingSubsidy)}
+                  </span>
+                  <span>
+                    Ongkir net: {rupiah(simulation.breakdown.shippingNet)}
+                  </span>
+                  <span>
+                    PPN {simulation.breakdown.ppnRatePercent}%:{" "}
+                    {rupiah(simulation.breakdown.ppnAmount)}
+                  </span>
+                  <span className="font-semibold">
+                    Total: {rupiah(simulation.breakdown.total)}
+                  </span>
+                </div>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {simulation.notice}
+                </p>
+              </div>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Variant</TableHead>
+                      <TableHead>Qty</TableHead>
+                      <TableHead>Harga source</TableHead>
+                      <TableHead>Diskon</TableHead>
+                      <TableHead>Net line</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {simulation.breakdown.lines.map((line) => (
+                      <TableRow key={line.variantId}>
+                        <TableCell>{line.variantId}</TableCell>
+                        <TableCell>{line.quantity}</TableCell>
+                        <TableCell>{rupiah(line.sourceUnitPrice)}</TableCell>
+                        <TableCell>{rupiah(line.goodsDiscountAmount)}</TableCell>
+                        <TableCell>{rupiah(line.netLineAmount)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card></details>);
   const title =
     detail.liveRevision?.name ??
     detail.draftRevision?.name ??
@@ -741,13 +903,9 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
             >
               {STATE_LABEL[detail.state]}
             </Badge>
-            <span>Offer {detail.key.slice(0, 8)}</span>
-            <span>·</span>
-            <span>v{detail.version}</span>
-            <span>·</span>
-            <span>draft v{detail.draftVersion}</span>
-            <span>·</span>
-            <span>policy v{detail.policyVersion}</span>
+            <span>{detail.activationKind === "public" ? "Kupon publik" : "Kode promo"}</span>
+            <span>{detail.liveRevision ? `Live: Revision ${detail.liveRevision.revisionNo}` : "Belum dipublish"}</span>
+            {detail.draftRevision && detail.liveRevision ? <Badge variant="secondary">Ada perubahan draft</Badge> : null}
           </div>
         </div>
         {canEdit ? (
@@ -758,7 +916,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                 onClick={() =>
                   setConfirm({
                     state: "paused",
-                    title: "Jeda offer?",
+                    title: "Jeda promo?",
                     description:
                       "Offer berhenti menerima pemakaian baru. Hold yang sudah ada tidak dibatalkan dan usage tidak di-reset.",
                   })
@@ -788,7 +946,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                 onClick={() =>
                   setConfirm({
                     state: "archived",
-                    title: "Arsipkan offer?",
+                    title: "Arsipkan promo?",
                     description:
                       "Arsip bukan hard delete: identitas, revision terbit, usage, dan histori tetap disimpan.",
                   })
@@ -804,21 +962,29 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
       {error ? (
         <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
           {error}
+          {needsReload ? <Button className="ml-2" variant="outline" disabled={busy !== null} onClick={() => void load()}>Muat versi terbaru</Button> : null}
         </div>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-2">
+      <Tabs value={tab} onValueChange={setTab} className="min-w-0 space-y-6">
+        <div className="max-w-full overflow-x-auto">
+          <TabsList aria-label="Detail promo">
+            <TabsTrigger value="aturan">Aturan</TabsTrigger>
+            <TabsTrigger value="kode">Kode</TabsTrigger>
+            <TabsTrigger value="pemakaian">Pemakaian &amp; budget</TabsTrigger>
+            <TabsTrigger value="riwayat">Riwayat</TabsTrigger>
+          </TabsList>
+        </div>
+        <TabsContent value="aturan" className="space-y-6 min-w-0">
         <Card>
           <CardHeader>
-            <CardTitle>Terms draft</CardTitle>
-            <CardDescription>
-              Draft terpisah dari revision live. Menyimpan draft tidak mengubah
-              terms yang dilihat customer. Nominal dalam Rupiah utuh.
-            </CardDescription>
+            <CardTitle><h2>Aturan promo</h2></CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-6">
+            <fieldset className="min-w-0 space-y-4 border-b pb-6">
+              <legend className="text-sm font-semibold">Identitas promo</legend>
             <div className="space-y-2">
-              <Label htmlFor="offer-name">Nama offer</Label>
+              <Label htmlFor="offer-name">Nama promo</Label>
               <Input
                 id="offer-name"
                 value={draftForm.name}
@@ -832,11 +998,15 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                 placeholder="Diskon Rp17.000 Sepatu Pilihan"
               />
             </div>
+            </fieldset>
+            <fieldset className="min-w-0 space-y-4 border-b pb-6">
+              <legend className="text-sm font-semibold">Potongan</legend>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="offer-min">Minimum subtotal (Rp)</Label>
                 <Input
                   id="offer-min"
+                  aria-describedby="offer-min-hint"
                   inputMode="numeric"
                   value={draftForm.minSubtotal}
                   disabled={!canEdit || busy !== null}
@@ -847,6 +1017,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                     }))
                   }
                 />
+                <p id="offer-min-hint" className="text-xs text-muted-foreground">Dihitung setelah harga coret. Isi 0 jika tanpa minimum.</p>
               </div>
               <div className="space-y-2">
                 <Label htmlFor="offer-benefit-kind">Jenis benefit</Label>
@@ -878,7 +1049,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
             </div>
             {draftForm.benefitKind === "fixed_goods" ? (
               <div className="space-y-2">
-                <Label htmlFor="offer-fixed">Nominal fixed-goods (Rp)</Label>
+                <Label htmlFor="offer-fixed">Nominal potongan barang (Rp)</Label>
                 <Input
                   id="offer-fixed"
                   inputMode="numeric"
@@ -893,12 +1064,12 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                   placeholder="17000"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Sekali per order, di-clip ke subtotal setelah Markdown.
+                  Berlaku sekali per order, maksimal sebesar subtotal setelah harga coret.
                 </p>
               </div>
             ) : draftForm.benefitKind === "shipping" ? (
               <div className="space-y-2">
-                <Label htmlFor="offer-shipping-cap">Cap subsidi ongkir (Rp)</Label>
+                <Label htmlFor="offer-shipping-cap">Maksimum subsidi ongkir (Rp)</Label>
                 <Input
                   id="offer-shipping-cap"
                   inputMode="numeric"
@@ -913,9 +1084,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                   placeholder="20000"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Wajib positif. Subsidi = min(ongkir sebelum subsidi, cap);
-                  hanya delivery dengan ongkir positif, sisa hangus, tanpa
-                  pembatasan kurir.
+                  Harus lebih dari 0. Berlaku untuk delivery, maksimal sebesar ongkir; sisa subsidi tidak dapat digunakan kembali. Semua kurir.
                 </p>
               </div>
             ) : (
@@ -936,12 +1105,11 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                     placeholder="10"
                   />
                   <p className="text-xs text-muted-foreground">
-                    &gt;0 sampai 100, maksimal 6 digit pecahan. Benefit
-                    dibulatkan floor dari subtotal setelah Markdown.
+                    Lebih dari 0 hingga 100%, maksimal 6 angka desimal. Potongan dari subtotal setelah harga coret, dibulatkan ke bawah.
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="offer-cap">Cap (Rp, opsional)</Label>
+                  <Label htmlFor="offer-cap">Maksimum potongan (Rp, opsional)</Label>
                   <Input
                     id="offer-cap"
                     inputMode="numeric"
@@ -956,16 +1124,20 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                     placeholder="Kosongkan jika tanpa cap"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Cap berlaku sekali per order, bukan per baris/unit.
+                    Batas potongan per order, bukan per barang. Kosongkan jika tanpa batas.
                   </p>
                 </div>
               </div>
             )}
+            </fieldset>
+            <fieldset className="min-w-0 space-y-4">
+              <legend className="text-sm font-semibold">Jadwal</legend>
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="offer-start">Mulai (WIB, inklusif)</Label>
+                <Label htmlFor="offer-start">Mulai (WIB)</Label>
                 <Input
                   id="offer-start"
+                  aria-describedby="offer-schedule-hint"
                   type="datetime-local"
                   value={draftForm.startAt}
                   disabled={!canEdit || busy !== null}
@@ -978,9 +1150,10 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="offer-end">Berakhir (WIB, eksklusif)</Label>
+                <Label htmlFor="offer-end">Berakhir (WIB)</Label>
                 <Input
                   id="offer-end"
+                  aria-describedby="offer-schedule-hint"
                   type="datetime-local"
                   value={draftForm.endAt}
                   disabled={!canEdit || busy !== null}
@@ -993,32 +1166,34 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                 />
               </div>
             </div>
-            <p className="text-xs text-muted-foreground">
-              Benefit goods version1: nominal tetap atau persentase dengan cap
-              opsional. Subsidi ongkir dan kode manual dikelola terpisah.
+            <p id="offer-schedule-hint" className="text-xs text-muted-foreground">
+              Berlaku mulai waktu yang dipilih dan berhenti tepat pada waktu berakhir. Kosongkan tanggal jika tanpa batas waktu.
             </p>
-            {canEdit ? (
-              <Button onClick={() => void saveDraft()} disabled={busy !== null}>
-                {busy === "draft" ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : null}
-                Simpan draft
-              </Button>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                Anda hanya memiliki akses lihat.
-              </p>
-            )}
+            </fieldset>
+            <p className="text-xs text-muted-foreground">Hanya untuk customer dengan email akun store terverifikasi. Nominal dalam Rupiah utuh.</p>
+            <div className="space-y-3 border-t pt-5">
+              {canEdit ? <>
+                <div className="flex flex-wrap items-center gap-3">
+                  <Button onClick={() => void saveDraft()} disabled={busy !== null}>
+                    {busy === "draft" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    Simpan draft
+                  </Button>
+                  <Button ref={reviewTrigger} variant="outline" onClick={() => void runReview()} disabled={busy !== null || !detail.draftRevision || draftDirty || needsReload}>Review perubahan</Button>
+                  {draftDirty ? <span role="status" className="text-sm text-muted-foreground">Belum disimpan — simpan draft sebelum review.</span> : null}
+                </div>
+                <p className="text-sm text-muted-foreground">Menyimpan draft tidak mengaktifkan promo.</p>
+              </> : <p className="text-sm text-muted-foreground">Anda hanya memiliki akses lihat.</p>}
+            </div>
           </CardContent>
         </Card>
-
+        {simulationPanel}
+        </TabsContent>
+        <TabsContent value="pemakaian" className="space-y-6 min-w-0">
         <Card>
           <CardHeader>
             <CardTitle>Kapasitas</CardTitle>
             <CardDescription>
-              Minimal satu batas (kuota atau budget) wajib ada sebelum publish.
-              Perubahan yang memperbesar kapasitas memerlukan grant Kapasitas
-              Diskon.
+              Minimal satu batas, kuota atau budget, wajib diisi sebelum publish.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1077,6 +1252,9 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                 budget, atau jatah per akun akan ditolak server.
               </p>
             ) : null}
+            <p className="rounded-md border bg-muted/30 px-4 py-3 text-sm">
+              Simpan kapasitas langsung berlaku pada promo live, terpisah dari draft dan publish.
+            </p>
             {canEdit ? (
               <Button
                 onClick={() => void saveCapacity()}
@@ -1281,283 +1459,14 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
             ) : null}
           </CardContent>
         </Card>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Simulasi pricing</CardTitle>
-          <CardDescription>
-            Memakai interface pricing yang sama dengan jalur customer. Ini
-            simulasi: bukan quote, bukan order, tidak menahan stok/kapasitas.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-            <div className="space-y-2">
-              <Label htmlFor="sim-variant">Variant ID</Label>
-              <Input
-                id="sim-variant"
-                value={simForm.variantId}
-                onChange={(event) =>
-                  setSimForm((current) => ({
-                    ...current,
-                    variantId: event.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sim-price">Harga satuan (Rp)</Label>
-              <Input
-                id="sim-price"
-                inputMode="numeric"
-                value={simForm.unitPrice}
-                onChange={(event) =>
-                  setSimForm((current) => ({
-                    ...current,
-                    unitPrice: event.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sim-qty">Qty</Label>
-              <Input
-                id="sim-qty"
-                inputMode="numeric"
-                value={simForm.quantity}
-                onChange={(event) =>
-                  setSimForm((current) => ({
-                    ...current,
-                    quantity: event.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Fulfillment</Label>
-              <Select
-                value={simForm.fulfillment}
-                onValueChange={(value) =>
-                  setSimForm((current) => ({
-                    ...current,
-                    fulfillment: value as "pickup" | "delivery",
-                  }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="pickup">Pickup</SelectItem>
-                  <SelectItem value="delivery">Delivery</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sim-shipping">Ongkir (Rp)</Label>
-              <Input
-                id="sim-shipping"
-                inputMode="numeric"
-                value={simForm.shipping}
-                disabled={simForm.fulfillment === "pickup"}
-                onChange={(event) =>
-                  setSimForm((current) => ({
-                    ...current,
-                    shipping: event.target.value,
-                  }))
-                }
-              />
-            </div>
-          </div>
-          <Button
-            onClick={() => void simulate()}
-            disabled={busy !== null || !detail.draftRevision}
-            variant="outline"
-          >
-            {busy === "simulate" ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <PlayCircle className="mr-2 h-4 w-4" />
-            )}
-            Jalankan simulasi
-          </Button>
-          {!detail.draftRevision ? (
-            <p className="text-sm text-muted-foreground">
-              Simpan draft dengan benefit goods terlebih dahulu.
-            </p>
-          ) : null}
-
-          {simulation ? (
-            <div className="space-y-3">
-              <div className="rounded-md border p-3 text-sm">
-                <p className="font-medium">
-                  {simulation.applied
-                    ? "Benefit diterapkan"
-                    : "Tidak diterapkan (minimum belum terpenuhi atau benefit Rp0)"}
-                </p>
-                <div className="mt-2 grid gap-1 sm:grid-cols-2">
-                  <span>Subtotal: {rupiah(simulation.breakdown.subtotal)}</span>
-                  <span>
-                    Diskon barang: {rupiah(simulation.breakdown.goodsDiscount)}
-                  </span>
-                  <span>Net barang: {rupiah(simulation.breakdown.netGoods)}</span>
-                  <span>
-                    Ongkir asli: {rupiah(simulation.breakdown.shippingBeforeSubsidy)}
-                  </span>
-                  <span>
-                    Subsidi ongkir: {rupiah(simulation.breakdown.shippingSubsidy)}
-                  </span>
-                  <span>
-                    Ongkir net: {rupiah(simulation.breakdown.shippingNet)}
-                  </span>
-                  <span>
-                    PPN {simulation.breakdown.ppnRatePercent}%:{" "}
-                    {rupiah(simulation.breakdown.ppnAmount)}
-                  </span>
-                  <span className="font-semibold">
-                    Total: {rupiah(simulation.breakdown.total)}
-                  </span>
-                </div>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  {simulation.notice}
-                </p>
-              </div>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Variant</TableHead>
-                      <TableHead>Qty</TableHead>
-                      <TableHead>Harga source</TableHead>
-                      <TableHead>Diskon</TableHead>
-                      <TableHead>Net line</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {simulation.breakdown.lines.map((line) => (
-                      <TableRow key={line.variantId}>
-                        <TableCell>{line.variantId}</TableCell>
-                        <TableCell>{line.quantity}</TableCell>
-                        <TableCell>{rupiah(line.sourceUnitPrice)}</TableCell>
-                        <TableCell>{rupiah(line.goodsDiscountAmount)}</TableCell>
-                        <TableCell>{rupiah(line.netLineAmount)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Review &amp; publish</CardTitle>
-          <CardDescription>
-            Review menghitung diff server-side dan fingerprint versi. Publish
-            memakai fingerprint itu dan menolak (409) bila draft berubah setelah
-            review.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-wrap gap-2">
-            <Button
-              onClick={() => void runReview()}
-              disabled={busy !== null || !detail.draftRevision}
-              variant="outline"
-            >
-              {busy === "review" ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : null}
-              Review draft
-            </Button>
-            {review ? (
-              <Button
-                onClick={() => void publish()}
-                disabled={busy !== null || !review.canPublish}
-              >
-                {busy === "publish" ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : null}
-                Publish offer
-              </Button>
-            ) : null}
-          </div>
-
-          {review ? (
-            <div className="space-y-4">
-              <div className="space-y-1">
-                {review.validations.map((validation) => (
-                  <div
-                    key={validation.code}
-                    className="flex items-start gap-2 text-sm"
-                  >
-                    {validation.ok ? (
-                      <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-600" />
-                    ) : (
-                      <XCircle className="mt-0.5 h-4 w-4 text-destructive" />
-                    )}
-                    <span>
-                      <span className="font-medium">
-                        {VALIDATION_LABEL[validation.code] ?? validation.code}
-                      </span>
-                      {" — "}
-                      <span className="text-muted-foreground">
-                        {validation.message}
-                      </span>
-                    </span>
-                  </div>
-                ))}
-              </div>
-
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Field</TableHead>
-                      <TableHead>Live</TableHead>
-                      <TableHead>Draft</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {review.diff.terms.map((entry) => (
-                      <TableRow key={entry.field}>
-                        <TableCell className="font-medium">
-                          {FIELD_LABEL[entry.field] ?? entry.field}
-                        </TableCell>
-                        <TableCell>{display(entry.live)}</TableCell>
-                        <TableCell>{display(entry.draft)}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-
-              <p className="text-xs text-muted-foreground">
-                Review {review.canPublish ? "siap publish" : "belum siap publish"}
-                {" · "}fingerprint {review.fingerprint.slice(0, 12)}… ·{" "}
-                {review.notice}
-              </p>
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground">
-              Jalankan review untuk melihat diff dan validasi sebelum publish.
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
+        </TabsContent>
+        <TabsContent value="kode" className="space-y-6 min-w-0">
       {detail.activationKind === "manual_only" ? (
         <Card>
           <CardHeader>
             <CardTitle>Kode manual</CardTitle>
             <CardDescription>
-              Literal kode direservasi saat transaksi berhasil dan tidak dapat
-              diubah atau dipindah ke Offer lain. Semua kode berbagi quota,
-              budget, dan jatah akun Offer ini; viewer hanya melihat label
-              masked.
+              Semua kode berbagi kuota, budget, dan jatah per akun promo ini.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -1580,8 +1489,10 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                     autoComplete="off"
                     spellCheck={false}
                     placeholder="HEMAT17AGUSTUS"
-                    className="w-64 font-mono uppercase"
+                    className="w-64 max-w-full font-mono uppercase"
+                    aria-describedby="new-code-hint"
                   />
+                  <p id="new-code-hint" className="text-xs text-muted-foreground">Kode dicadangkan saat berhasil ditambahkan; tidak dapat diubah atau dipindahkan ke promo lain.</p>
                 </div>
                 <Button
                   type="submit"
@@ -1666,15 +1577,14 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
             )}
           </CardContent>
         </Card>
-      ) : null}
-
+      ) : <Card><CardContent className="pt-6">Kupon publik tidak memiliki kode. Customer memilih kupon langsung di checkout.</CardContent></Card>}
+        </TabsContent>
+        <TabsContent value="riwayat" className="space-y-6 min-w-0">
       <Card>
         <CardHeader>
           <CardTitle>Histori audit</CardTitle>
           <CardDescription>
-            Immutable: draft, publish, status, dan perubahan kapasitas/kode
-            tercatat dengan revision, policy version, dan aktor saat aksi
-            terjadi. Literal kode tidak pernah ditulis ke histori.
+            Catatan perubahan promo, pelaku, dan waktunya. Riwayat tidak dapat diubah; kode tetap disamarkan.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -1717,12 +1627,23 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
                         : ""}
                     </p>
                   ) : null}
+                  <HistoryChanges changes={entry.changes} />
                 </li>
               ))}
             </ul>
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+      </Tabs>
+
+      <DiscountReviewDialog open={reviewOpen} busy={busy} error={error} needsReload={needsReload} review={review}
+        liveRevisionNo={detail.liveRevision?.revisionNo ?? null} draftRevisionNo={detail.draftRevision?.revisionNo ?? null}
+        capacityNotice={`Kuota ${detail.quotaCount ?? "tidak dibatasi"} · budget ${detail.budgetAmount === null ? "tidak dibatasi" : rupiah(detail.budgetAmount)} · jatah ${detail.perClientLimit}/akun. Consumed ${usage?.availability.consumedCount ?? "—"} · Hold ${usage?.availability.heldCount ?? "—"}.`}
+        triggerRef={reviewTrigger}
+        onOpenChange={(open) => { setReviewOpen(open); if (!open) setReview(null); }}
+        onPublish={() => void publish()}
+        onReload={() => { setReviewOpen(false); void load(); }} />
 
       <ConfirmDialog
         open={confirm !== null}

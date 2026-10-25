@@ -392,11 +392,13 @@ test.afterAll(async () => {
 async function openOfferFromList(context: BrowserContext, name: string) {
   const page = await context.newPage();
   await page.goto("/admin/discounts");
-  await expect(page.getByText("Offer publik", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: /Kode promo/ }).click();
+  await expect(page.getByText("Daftar promo", { exact: true })).toBeVisible();
   const row = page.getByRole("row", { name: new RegExp(name) });
   await expect(row).toBeVisible();
   await row.getByRole("link", { name: "Kelola" }).click();
   await page.waitForURL(`**/admin/discounts/${OFFER}`);
+  await page.getByRole("tab", { name: "Pemakaian & budget", exact: true }).click();
   return page;
 }
 
@@ -418,7 +420,7 @@ test("editor navigates summary → scoped entries → history with masked usage"
   await expect(page.locator(`a[href="/admin/orders/${SBY_ORDER}"]`)).toBeVisible();
   // The usage table only ever shows the masked label; the protected code panel
   // above is the editor-only literal channel.
-  await expect(page.getByText(/^OP.+AT$/).first()).toBeVisible();
+  await expect(page.getByRole("cell", { name: /^OP.+AT manual_only$/ }).first()).toBeVisible();
   const usageApi = await hqContext.request.get(`/api/admin/discounts/${OFFER}/usage`);
   const usageRaw = await usageApi.text();
   expect(usageRaw).not.toContain(CODE_LITERAL);
@@ -435,6 +437,7 @@ test("editor navigates summary → scoped entries → history with masked usage"
   expect(await historyApi.text()).not.toContain(CODE_LITERAL);
 
   // History: actual revision/actor/time from the immutable audit rows.
+  await page.getByRole("tab", { name: "Riwayat", exact: true }).click();
   await expect(page.getByText("Histori audit")).toBeVisible();
   await expect(page.getByText("Aktor: HQ Manager").first()).toBeVisible();
   await expect(page.getByText(/revision 1/).first()).toBeVisible();
@@ -527,7 +530,7 @@ test("safe pause stops new use without cancelling or resetting held entries", as
   };
 
   await page.getByRole("button", { name: "Jeda", exact: true }).click();
-  await expect(page.getByText("Jeda offer?")).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Jeda promo?", exact: true })).toBeVisible();
   await expect(
     page.getByText(/Hold yang sudah ada tidak dibatalkan dan usage tidak di-reset/)
   ).toBeVisible();

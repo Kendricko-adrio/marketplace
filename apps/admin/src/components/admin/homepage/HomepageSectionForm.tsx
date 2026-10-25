@@ -316,7 +316,7 @@ export default function HomepageSectionForm({
             <Label htmlFor="title">Judul</Label>
             <input
               id="title"
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              className="flex h-10 w-full rounded-md border border-input bg-field px-3 py-2 text-sm"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Judul section"
@@ -326,7 +326,7 @@ export default function HomepageSectionForm({
             <Label htmlFor="subtitle">Subtitle</Label>
             <input
               id="subtitle"
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              className="flex h-10 w-full rounded-md border border-input bg-field px-3 py-2 text-sm"
               value={subtitle}
               onChange={(e) => setSubtitle(e.target.value)}
               placeholder="Subtitle (opsional)"

@@ -15,6 +15,7 @@ COPY apps/store/package.json apps/store/
 COPY apps/admin/package.json apps/admin/
 COPY apps/jubelio-mock/package.json apps/jubelio-mock/
 COPY packages/db/package.json packages/db/
+COPY packages/logging/package.json packages/logging/
 COPY packages/ui/package.json packages/ui/
 
 # `npm ci` installs the lockfile exactly; workspaces get hoisted to root node_modules.

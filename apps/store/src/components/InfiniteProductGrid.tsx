@@ -20,7 +20,7 @@ export interface Product {
   image: string | null;
   collection: string | null;
   gender: string | null;
-  /** Whether at least one mapped branch can be selected. */
+  /** True bila minimal satu cabang aktif/mapped memiliki sellable > 0. */
   hasStock: boolean;
   /** Last-known availability only; checkout always confirms live. */
   lastKnownInStock?: boolean;
@@ -161,7 +161,6 @@ export default function InfiniteProductGrid({
               gender={product.gender ?? undefined}
               collection={product.collection ?? undefined}
               outOfStock={!product.hasStock}
-              stockUnconfirmed={product.hasStock && product.lastKnownInStock === false}
             />
           );
         })}

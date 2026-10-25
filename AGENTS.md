@@ -86,6 +86,13 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 - **Every timestamp column uses `timestamptz`** (`withTimezone: true`) — never
   bare `timestamp`; send `Date` objects on insert. (Details:
   [`docs/architecture/database.md`](docs/architecture/database.md).)
+- **Backend structure and logging follow the `maintainable-code` skill** —
+  feature-first `route.ts` → `*-service.ts` → `*-repository.ts` / `*-client.ts`,
+  one service per business operation, no query inside `route.ts`, and
+  module-scoped loggers that are never passed as parameters. Read
+  [`.agents/skills/maintainable-code/SKILL.md`](.agents/skills/maintainable-code/SKILL.md)
+  and [`docs/architecture/code-organization.md`](docs/architecture/code-organization.md)
+  before writing or restructuring backend code.
 - **Logging is mandatory for backend logic** — every change to `/api/**` code
   must log through the app's structured logger (`apps/store/src/lib/logger.ts`
   / `apps/admin/src/lib/logger.ts`): minimum `info` on success, `error` with
@@ -105,6 +112,16 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   Stop for new product decisions; do not silently re-plan. Read the on-demand
   [`development-workflow` skill](.agents/skills/development-workflow/SKILL.md)
   for the full process and gates.
+- **Write the technical and UX blueprint before implementation.** A nontrivial
+  spec/plan carries, inside the same file, the file-level technical blueprint
+  (full paths, responsibility, layer, exported contract, test seam) and the UX
+  blueprint (reference page, component reuse map, state matrix with final copy,
+  viewport/accessibility). Both are an **advisory checklist**: unfilled parts
+  become open items, and a requested prototype is the binding reference for
+  flow, structure, and states while existing tokens/components stay the visual
+  source of truth. A small single-session change may use a 4–6 line mini
+  version. Details: [`development-workflow` §2](.agents/skills/development-workflow/SKILL.md)
+  and [`ux-design` §3](.agents/skills/ux-design/SKILL.md).
 - **Subagents are opt-in, bounded, and edit-only implementers.** Spawn only
   when the user explicitly authorizes delegation for the current task/session;
   plan approval is not permission. For implementation handoffs, subagents may
@@ -126,11 +143,29 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   status tracked in `plan/index.md` — see [`plan/README.md`](plan/README.md).
   Implement approved scope one verifiable slice at a time; review against the
   approved behavior and repo standards before accepting the result.
-- **Load the matching skill first** — check available skills before starting:
-  `tdd` (tests), `systematic-debugging` (bugs, test failures, unexpected
-  behavior — never guess a fix), `nextjs` (UI), `better-auth-best-practices` (auth), `frontend-design` (design).
-  If subagents are used, they must load the matching skill too; subagent use
-  never bypasses a rule.
+- **Load the matching skill first** — the lookup is mandatory before
+  implementation, for the main agent **and** for an authorized implementer
+  subagent: `ux-design` (all coding; mandatory UX and cross-page consistency
+  gates for frontend), `maintainable-code` (backend structure, service/repository
+  boundaries, contextual logging), `tdd` (tests), `systematic-debugging` (bugs,
+  test failures, unexpected behavior — never guess a fix), `nextjs` (UI),
+  `better-auth-best-practices` (auth), `frontend-design` (visual polish within
+  the established design system). If subagents are used, they must load the
+  matching skill too; subagent use never bypasses a rule, and loading a skill
+  never grants scope, delegation, or commit/remote permission that the user did
+  not approve separately.
+- **Mandatory UX skill lookup before coding, especially frontend development.**
+  Read [`.agents/skills/ux-design/SKILL.md`](.agents/skills/ux-design/SKILL.md)
+  in full before any coding task; merely naming the skill is not loading it.
+  For frontend development (pages, components, forms, navigation, layout,
+  styling, themes/tokens, and interaction states), apply its task-flow,
+  clickability, concise-copy, spacing, accessibility, and cross-page consistency
+  gates. Reuse the established shared components and design tokens; do not
+  invent a different visual style per page. `ux-design` usability and consistency
+  requirements take precedence over conflicting aesthetic advice in
+  `frontend-design`. For backend-only work without UX impact, record that the
+  visual gates are not applicable. This requirement also applies to authorized
+  implementer subagents; the main agent still owns all validation.
 - **Context7 inquiry is mandatory before implementation.** Model knowledge stops
   at its training cut-off, so never write library/framework API code from
   memory. Before the first code slice that touches an external package
@@ -206,6 +241,12 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   components, forms, or navigation get a `*.spec.ts` under `e2e/store/` or
   `e2e/admin/` asserting user-visible behavior. The canonical way to verify
   a UI feature works is to run its Playwright spec and see it pass.
+- **Frontend acceptance also requires the `ux-design` review gate.** The main
+  agent must inspect the rendered UI and relevant interaction states, compare
+  it against an agreed peer-page/shared-pattern reference, and verify cross-page
+  consistency alongside the required Playwright coverage. JSX inspection or a
+  passing click test alone does not establish good UX. If browser verification
+  is blocked, report that limitation and do not claim frontend completion.
 - **Use the `tdd` skill** (`.agents/skills/tdd/SKILL.md`) for all test work:
   one vertical slice at a time, tests at public seams only, expected values
   from an independent source of truth (no tautological assertions), and write

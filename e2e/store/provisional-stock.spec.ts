@@ -18,12 +18,13 @@ test("product stock is presented as provisional until checkout", async ({ page }
   await expect(page.getByText("Stok dikonfirmasi dari Jubelio saat bayar")).toBeVisible();
 });
 
-test("a provisional zero does not prevent adding a mapped item to the cart", async ({ page }) => {
+test("an in-stock mapped item can enter the cart before the live checkout check", async ({ page }) => {
   const catalog = await (await page.request.get("/api/products?limit=1")).json();
   const detail = await (await page.request.get(`/api/products/${catalog.data[0].slug}`)).json();
   const variant = detail.data.variants.find((v: { branchStock: unknown[] }) => v.branchStock.length);
   expect(variant).toBeTruthy();
   const branch = variant.branchStock[0];
+  expect(branch.available).toBeGreaterThan(0);
   const added = await page.request.post("/api/cart/items", { data: {
     variantId: variant.id, branchId: branch.branchId, quantity: 1,
   } });
@@ -65,7 +66,6 @@ test("Bayar Sekarang shows a clear provider-stock error and keeps the cart", asy
     await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
     await page.getByRole("combobox").click();
     await page.getByRole("option", { name: "10:00" }).click();
-    await page.getByRole("button", { name: "Lanjut" }).click();
     await page.getByLabel("Nomor Telepon *").fill("081234567890");
     await page.getByLabel("Email *").fill("john@example.com");
     await page.getByRole("button", { name: "Lanjut" }).click();

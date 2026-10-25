@@ -237,16 +237,106 @@ Kode error stabil: `INPUT_INVALID` (400), `DENIED` (403), `NOT_FOUND` (404),
 
 ## 7. UI admin
 
-- `/admin/discounts` — daftar Offer: terms live, status, benefit, kapasitas,
-  penanda draft, filter status, pagination, tombol "Buat draft".
-- `/admin/discounts/{id}` — editor: terms draft, kapasitas, simulasi pricing,
-  review (validasi + diff + fingerprint), publish, pause/enable/archive,
-  ringkasan kapasitas global (consumed/held/available + peringatan drift),
-  daftar pemakaian ter-scope dengan filter status + pagination + tautan order,
-  dan histori dengan revision/policy/aktor.
+- `/admin/discounts` — tab **Kupon publik / Kode promo** (default publik), dengan
+  jumlah hasil sesuai filter status sebelum pagination. Pergantian tab/status
+  kembali ke halaman 1. **Buat draft** mengikuti jalur tab aktif.
+- Tabel menampilkan identitas/terms live, jalur, benefit nominal/persentase/subsidi
+  ongkir, status, revision live, penanda draft, **kuota dan budget tersedia**
+  bersamaan, serta masked codes dan statusnya. Revision memakai `revisionNo`,
+  bukan identity/draft/policy version. Literal kode tidak dikirim pada list,
+  termasuk untuk editor.
+- Kapasitas list memakai projection global: batas − consumed − hold; contoh
+  kuota100/90/10 → tersedia0, budget2000000/1800000/200000 → Rp0. `null` pada
+  dimensi berarti tidak dibatasi; draft tanpa dua batas diberi label belum
+  disetel/belum dapat publish. Projection hilang atau melebihi batas ditandai
+  tidak tersedia/perlu review, bukan diisi nol palsu. List bukan booking kuota
+  dan tidak melakukan rekonsiliasi/reset counter.
+- `/admin/discounts/{id}` — header live revision/draft dan empat tab:
+  **Aturan** (terms draft + simulasi biaya collapsible), **Kode** (manual;
+  publik hanya penjelasan tanpa form), **Pemakaian & budget** (kapasitas global,
+  drift, entries ter-scope/filter/pagination/order link), **Riwayat** (aktor,
+  waktu, revision/policy dan perubahan tersimpan). Input bertahan lintas tab;
+  mengganti filter usage tidak me-reset terms.
+- **Simpan kapasitas** langsung mengubah policy live melalui writer existing,
+  bukan menunggu publish terms. Increase/reduction dan current grants tetap
+  diperiksa server.
+- **Review perubahan** membuka dialog berisi diff server, benefit, syarat,
+  waktu WIB, konteks kapasitas/hold dan validasi sebelum **Publish promo**.
+  Terms lokal yang berubah harus disimpan terlebih dahulu. Cancel tidak
+  publish dan mengembalikan fokus; pending publish tidak bisa ditutup/dikirim
+  dua kali. Stale409 menginvalidasi review dan meminta **Muat versi terbaru**;
+  tidak ada force-overwrite. Snapshot/hold order lama tidak diubah.
+- Theme/komponen admin existing dipakai langsung. Desktop1440/mobile390
+  mempertahankan scroll pada kontainer tabel/tab dan dialog yang dapat
+  dijangkau, tanpa overflow dokumen.
 - Navigasi sidebar "Diskon" hanya muncul dengan `discounts:view`; tombol tulis
   mengikuti policy mirror, tetapi server tetap otoritatif.
 - Aksi destruktif (pause/archive) memakai dialog konfirmasi, bukan `confirm()`.
+
+### 7.1 Penyempurnaan UX: copy, grouping, dan navigasi
+
+Pemilik menyetujui scope **Diskon + shared tabs**: daftar dan editor Diskon,
+perbaikan komponen tabs bersama, serta regression check pada detail Produk.
+Tidak mengubah API, permission, formula, lifecycle, shell admin, atau gate rilis.
+
+- Pengantar daftar dipersingkat. Penjelasan jalur, aturan penggabungan promo,
+  draft/publish, dan istilah kapasitas berada pada disclosure **Tentang promo**.
+  Keterangan bahwa kapasitas bersifat global dan bukan reservasi tetap terlihat.
+- Data tabel tetap lengkap: terms live, revision, kuota, budget, dan masked codes
+  tidak dihilangkan. Nilai tersedia lebih menonjol daripada rincian batas/terpakai/
+  ditahan. Kolom **Aksi / Kelola** tetap terlihat di kanan ketika tabel digeser.
+- Form Aturan dikelompokkan dengan fieldset **Identitas promo**, **Potongan**,
+  dan **Jadwal**. Label batas potongan memakai “Maksimum”; jadwal memakai WIB
+  dengan keterangan bahwa waktu mulai termasuk dan promo berhenti tepat pada
+  waktu berakhir. Nilai dan makna aturan tidak berubah.
+- **Simpan draft** dan **Review perubahan** berdekatan, disertai penanda perubahan
+  belum disimpan dan keterangan bahwa menyimpan draft tidak mengaktifkan promo.
+  Review tetap dinonaktifkan bila belum memenuhi guard existing. Simulasi tetap
+  berada pada bagian terpisah yang bisa dibuka/tutup.
+- Draft baru tidak menampilkan badge draft kedua yang mengulang status. Promo
+  yang sudah live dan memiliki draft tetap ditandai **Ada perubahan draft**.
+- Peringatan bahwa **Simpan kapasitas langsung berlaku pada promo live** tetap
+  terlihat dekat tindakan, tidak disembunyikan di bantuan tambahan. Ketentuan
+  email terverifikasi, uang Rupiah utuh, dan privacy kode tetap dipertahankan.
+- Shared `TabsList` memiliki surface `bg-card`, border, dan padding; tab aktif
+  memakai `bg-primary`/`text-primary-foreground`, selaras dengan tombol/navigasi
+  admin existing. Hover, focus ring, keyboard navigation, dan semantik Radix
+  dipertahankan. Detail Produk memakai pattern yang sama tanpa redesign halaman.
+
+**Checkpoint dokumentasi:** Context7 `/microsoft/playwright` mengonfirmasi
+`getByRole`, `toHaveCSS`, keyboard `press`, `setViewportSize`, `testInfo.outputPath`,
+dan `toBeInViewport({ ratio })`. Perubahan aplikasi hanya menyentuh JSX/copy/layout
+serta class CSS pada komponen existing; tidak menambah API framework atau Radix.
+Panduan installed Next.js `use-client.md` juga dibaca sebelum implementasi.
+
+**Bukti verifikasi lokal:**
+
+- Red → green: dua test UX gagal pada implementasi awal (batas tabs belum ada dan
+  grouping form belum ada), kemudian **2 passed**. Pemeriksaan lanjutan menemukan
+  tombol Kelola di luar viewport; assertion viewport gagal sebelum kolom aksi
+  dipertahankan di kanan, lalu **1 passed** setelah perbaikan.
+- Mock E2E pada `discounts-prototype-mock.spec.ts`,
+  `discounts-admin-mock.spec.ts`, dan `discounts-usage-mock.spec.ts`:
+  **19 kasus unik memiliki hasil PASS** melalui focused run dan batch regression.
+  Batch 17 kasus menghasilkan 16 pass dan satu assertion lama “Jeda offer?” yang
+  tidak sesuai dialog existing “Jeda promo?”. Setelah locator diselaraskan dengan
+  accessible dialog, focused safe-pause **1 passed**; assertion bahwa hold dan
+  availability tidak berubah tetap dipertahankan. Test render/action terbaru
+  kemudian direcheck dan lulus. Angka ini bukan klaim satu full run 19 sekaligus.
+- `verify:batch:unit`: **150 files passed; 1722 tests passed, 12 skipped**.
+  Tidak ada unit seam/logic domain baru; unit regression domain tercakup batch ini.
+- `verify:types:admin`, `verify:types:store`, dan ESLint scoped pada tiga file
+  halaman Diskon: **PASS**. Log disimpan di luar repo dengan prefix
+  `/tmp/discounts-ux-`.
+- Agent utama memeriksa hasil render Chromium pada desktop1440 dan mobile390,
+  termasuk screenshot dari test yang lulus. Tabs detail Produk dibandingkan
+  dengan Diskon; keyboard, selected state, serta akses ke Stok/Varian lulus.
+  Daftar/editor Diskon tidak menambah overflow dokumen; tabel/tab tetap memiliki
+  region scroll. Shell/sidebar mobile existing tidak direstruktur.
+
+Tidak menjalankan legacy/live-provider E2E, usability test dengan operator nyata,
+commit, atau deployment. Verifikasi ini tidak menyelesaikan UAT/sign-off dan
+release gates pada plan diskon existing.
 
 ## 8. Seed fixture (mode demo)
 

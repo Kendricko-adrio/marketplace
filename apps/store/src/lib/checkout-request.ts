@@ -4,7 +4,14 @@ import { NextResponse } from "next/server";
 import { db, checkoutRequests, orders, jubelioSalesOperations } from "@/db";
 import { readOrderPricing } from "./versioned-pricing";
 import { CheckoutReviewRequiredError } from "./checkout-review";
-import { withRequestId, type Logger } from "./logger";
+import { createModuleLogger } from "./logger";
+
+/**
+ * Module logger untuk helper ini: dibuat sekali di module scope. Helper ini
+ * tidak membuka scope HTTP sendiri — `requestId` mengikuti scope yang dibuka
+ * route pemanggil (`withRequestContext` di `POST /api/checkout/place-order`).
+ */
+const log = createModuleLogger("checkout-request");
 
 export class CheckoutRequestConflictError extends Error {
   readonly code = "REQUEST_KEY_CONFLICT";
@@ -89,13 +96,18 @@ export async function readCheckoutResult(clientId: string, requestKey: string) {
     redirectUrl: paymentAvailable ? order.snapRedirectUrl : null, expiresAt: order.expiresAt?.toISOString() ?? null };
 }
 
+/**
+ * Respons hasil checkout yang sudah diterima. Header `x-request-id` kanonik
+ * ditambahkan wrapper HTTP di route (bukan di sini), dan baris log memakai
+ * scope request yang sama tanpa parameter logger.
+ */
 export function checkoutResultResponse(result: NonNullable<Awaited<ReturnType<typeof readCheckoutResult>>>,
-  replay: boolean, log: Logger) {
+  replay: boolean) {
   const status = replay ? 200 : result.state === "processing" || result.state === "manual_review" ? 202 : 201;
-  log.info("accepted checkout result returned", { orderId: result.orderId, state: result.state, replay, status });
+  log.info(`accepted checkout result returned: order ${result.orderId}, state ${result.state}, replay ${replay}, status ${status}`);
   // Top-level aliases menjaga compatibility dengan payment consumers existing;
   // kontrak baru menggunakan data. Tidak mengembalikan review token atau PII.
-  return withRequestId(NextResponse.json({ success: true, data: result,
+  return NextResponse.json({ success: true, data: result,
     orderId: result.orderId, redirectUrl: result.redirectUrl },
-    { status, headers: { "Cache-Control": "no-store" } }), log);
+    { status, headers: { "Cache-Control": "no-store" } });
 }

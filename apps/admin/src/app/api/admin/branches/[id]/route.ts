@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { branches } from "@/db";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard, crossBranchNotFound } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import {
@@ -11,32 +12,49 @@ import {
   parseBranchOrigin,
   updateBranch,
 } from "@/lib/branches-service";
-import { serializeError } from "@/lib/logger";
 import { branchRegionSchema, verifyBranchRegion } from "@/lib/shipment-regions";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-branch-detail");
+
+/**
+ * Proyeksi teknis statis untuk field `error` pada jalur kegagalan tak terduga
+ * (bisa memuat SQL/provider text).
+ */
+class BranchDetailLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BranchDetailLogError";
+  }
+}
+
+type RouteContext = { params: Promise<{ id: string }> };
 
 // GET /api/admin/branches/[id]   [branches:view]
 //
 // Own-branch view reaches only the Home Branch; another Branch id maps to
 // 404 so existence is not disclosed. All-branch view is unrestricted.
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const guardResult = await guard("branches", "view", { request });
+async function branchDetail(
+  _request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("branches", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
+  let branchId: string | null = null;
   try {
     const { id } = await params;
-    const branchLog = logger.child({ branchId: id });
+    branchId = id;
 
     const scope = branchScopeFromAuthorization(ctx.authorization);
     if (!scope) {
-      branchLog.warn("branches.detail.scope_unresolvable", {
-        outcome: "denied",
-        reason: "missing_home_branch",
-        userId: ctx.user.id,
-      });
+      log.warn(
+        `branches.detail scope tidak dapat ditentukan (userId ${ctx.user.id}, branchId ${id}, reason missing_home_branch, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Forbidden", code: "DENIED" },
         { status: 403 }
@@ -50,7 +68,7 @@ export async function GET(
       .limit(1);
 
     if (branch.length === 0) {
-      crossBranchNotFound(branchLog);
+      crossBranchNotFound();
       return NextResponse.json(
         { success: false, error: "Branch not found" },
         { status: 404 }
@@ -58,26 +76,26 @@ export async function GET(
     }
 
     if (scope.mode === "own" && branch[0].id !== scope.branchId) {
-      crossBranchNotFound(branchLog);
+      crossBranchNotFound();
       return NextResponse.json(
         { success: false, error: "Branch not found" },
         { status: 404 }
       );
     }
 
-    branchLog.info("branches.detail", {
-      outcome: "success",
-      scope: scope.mode,
-    });
+    log.info(
+      `branches.detail (branchId ${id}, scope ${scope.mode}, outcome success)`
+    );
     return NextResponse.json({
       success: true,
       data: branch[0],
     });
-  } catch (error) {
-    logger.error("branches.detail.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error(
+      `branches.detail gagal (branchId ${branchId ?? "unknown"}, outcome error)`,
+      new BranchDetailLogError("branches detail gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch branch" },
       { status: 500 }
@@ -119,25 +137,24 @@ const updateBranchSchema = z.object({
 //
 // Own-branch edit reaches only the Home Branch; another Branch id maps to
 // 404. All-branch edit may edit any Branch.
-export async function PUT(
+async function updateBranchRow(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const guardResult = await guard("branches", "edit", { request });
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("branches", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
+  let branchId: string | null = null;
   try {
     const { id } = await params;
-    const branchLog = logger.child({ branchId: id });
+    branchId = id;
 
     const scope = branchScopeFromAuthorization(ctx.authorization);
     if (!scope) {
-      branchLog.warn("branches.update.scope_unresolvable", {
-        outcome: "denied",
-        reason: "missing_home_branch",
-        userId: ctx.user.id,
-      });
+      log.warn(
+        `branches.update scope tidak dapat ditentukan (userId ${ctx.user.id}, branchId ${id}, reason missing_home_branch, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Forbidden", code: "DENIED" },
         { status: 403 }
@@ -154,7 +171,7 @@ export async function PUT(
       existing.length === 0 ||
       (scope.mode === "own" && existing[0].id !== scope.branchId)
     ) {
-      crossBranchNotFound(branchLog);
+      crossBranchNotFound();
       return NextResponse.json(
         { success: false, error: "Branch not found" },
         { status: 404 }
@@ -165,10 +182,11 @@ export async function PUT(
     const parsed = updateBranchSchema.safeParse(body);
 
     if (!parsed.success) {
-      branchLog.warn("branches.update.invalid_input", {
-        outcome: "denied",
-        issues: parsed.error.issues.map(({ path, code }) => ({ path, code })),
-      });
+      log.warn(
+        `branches.update ditolak: body tidak valid (branchId ${id}, issueCodes ${parsed.error.issues
+          .map(({ code }) => code)
+          .join(",")}, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Invalid request body", details: parsed.error.issues.map(({ path, code }) => ({ path, code })) },
         { status: 400 }
@@ -182,11 +200,11 @@ export async function PUT(
     // origin rejects the edit without touching the branch or the audit log.
     const origin = parseBranchOrigin(data);
     if (!origin.ok) {
-      branchLog.error("branches.update.origin_invalid", {
-        outcome: "denied",
-        error: origin.error,
-        branchId: id,
-      });
+      // `origin.error` adalah pesan validasi statis milik branches-service.
+      log.error(
+        `branches.update ditolak: origin pengiriman tidak valid (branchId ${id}, reason ${origin.error}, outcome denied)`,
+        new BranchDetailLogError("branches.update origin tidak valid")
+      );
       return NextResponse.json(
         { success: false, error: origin.error },
         { status: 400 }
@@ -197,8 +215,15 @@ export async function PUT(
     try {
       region = await verifyBranchRegion(data);
     } catch (error) {
+      // Klasifikasi tetap dari penanda internal yang sama seperti sebelumnya;
+      // pesan provider tidak pernah masuk log.
       const invalid = error instanceof Error && error.message === "REGION_INPUT_INVALID";
-      branchLog.error("branches.update.region_rejected", { outcome: "denied", reason: invalid ? "invalid_region" : "provider_unavailable" });
+      log.error(
+        `branches.update ditolak: wilayah shipment tidak dapat diverifikasi (branchId ${id}, reason ${
+          invalid ? "invalid_region" : "provider_unavailable"
+        }, outcome denied)`,
+        new BranchDetailLogError("branches.update region gagal")
+      );
       return NextResponse.json({ success: false, error: invalid ? "Wilayah pengiriman atau kode pos tidak valid" : "Wilayah Shipment tidak tersedia. Silakan coba lagi." }, { status: invalid ? 400 : 503 });
     }
 
@@ -227,35 +252,32 @@ export async function PUT(
       );
     } catch (error) {
       if (error instanceof BranchServiceError && error.code === "NOT_FOUND") {
-        branchLog.warn("branches.update.vanished_mid_request", {
-          outcome: "denied",
-          reason: "branch_deleted_concurrently",
-        });
+        log.warn(
+          `branches.update ditolak: branch hilang di tengah request (branchId ${id}, reason branch_deleted_concurrently, outcome denied)`
+        );
         return NextResponse.json(
           { success: false, error: "Branch not found" },
           { status: 404 }
         );
     }
-      branchLog.error("branches.update.db_failure", {
-        outcome: "error",
-        error: serializeError(error),
-      });
+      log.error(
+        `branches.update gagal: transaksi DB (branchId ${id}, outcome error)`,
+        new BranchDetailLogError("branches.update db_failure")
+      );
       return NextResponse.json(
         { success: false, error: "Failed to update branch" },
         { status: 500 }
       );
     }
 
-    branchLog.info("branches.update", {
-      outcome: "success",
-      scope: scope.mode,
-    });
+    log.info(`branches.update (branchId ${id}, scope ${scope.mode}, outcome success)`);
     return NextResponse.json({ success: true, data: { id } });
-  } catch (error) {
-    logger.error("branches.update.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/provider text.
+    log.error(
+      `branches.update gagal (branchId ${branchId ?? "unknown"}, outcome error)`,
+      new BranchDetailLogError("branches update gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to update branch" },
       { status: 500 }
@@ -271,20 +293,20 @@ export async function PUT(
 // run INSIDE the delete transaction (branches-service): the branch row is
 // locked FOR UPDATE so a concurrent admin assignment cannot slip in between
 // check and delete.
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+async function removeBranch(
+  _request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
   const guardResult = await guard("branches", "delete", {
-    request,
     requiredScope: "all_branches",
   });
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
+  let branchId: string | null = null;
   try {
     const { id } = await params;
-    const branchLog = logger.child({ branchId: id });
+    branchId = id;
 
     try {
       await deleteBranch(id, {
@@ -294,7 +316,7 @@ export async function DELETE(
     } catch (error) {
       if (error instanceof BranchServiceError) {
         if (error.code === "NOT_FOUND") {
-          crossBranchNotFound(branchLog);
+          crossBranchNotFound();
           return NextResponse.json(
             { success: false, error: "Branch not found" },
             { status: 404 }
@@ -302,10 +324,9 @@ export async function DELETE(
         }
         // BRANCH_IN_USE — re-checked inside the transaction against the
         // locked branch row.
-        branchLog.warn("branches.delete.branch_in_use", {
-          outcome: "denied",
-          reason: "home_branch_assignment",
-        });
+        log.warn(
+          `branches.delete ditolak: branch masih menjadi Home Branch admin (branchId ${id}, reason home_branch_assignment, outcome denied)`
+        );
         return NextResponse.json(
           {
             success: false,
@@ -315,26 +336,31 @@ export async function DELETE(
           { status: 409 }
         );
       }
-      branchLog.error("branches.delete.db_failure", {
-        outcome: "error",
-        error: serializeError(error),
-      });
+      log.error(
+        `branches.delete gagal: transaksi DB (branchId ${id}, outcome error)`,
+        new BranchDetailLogError("branches.delete db_failure")
+      );
       return NextResponse.json(
         { success: false, error: "Failed to delete branch" },
         { status: 500 }
       );
     }
 
-    branchLog.info("branches.delete", { outcome: "success" });
+    log.info(`branches.delete (branchId ${id}, outcome success)`);
     return NextResponse.json({ success: true });
-  } catch (error) {
-    logger.error("branches.delete.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/provider text.
+    log.error(
+      `branches.delete gagal (branchId ${branchId ?? "unknown"}, outcome error)`,
+      new BranchDetailLogError("branches delete gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to delete branch" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(branchDetail, "admin-branch-detail");
+export const PUT = withRequestContext(updateBranchRow, "admin-branch-detail");
+export const DELETE = withRequestContext(removeBranch, "admin-branch-detail");

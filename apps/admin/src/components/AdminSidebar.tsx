@@ -145,12 +145,15 @@ export default function AdminSidebar() {
     : "";
 
   return (
-    <aside className="w-full md:w-64 md:shrink-0 md:h-screen bg-card text-muted-foreground flex flex-col md:sticky md:top-0 border-r">
-      <div className="p-6 text-xl font-bold text-foreground border-b">
+    <aside className="w-full md:w-64 md:shrink-0 md:h-full bg-card text-muted-foreground flex flex-col border-r">
+      <div className="p-6 text-xl font-bold text-foreground border-b shrink-0">
         Admin<span className="text-primary">Panel</span>
       </div>
 
-      <nav className="flex-1 p-4 flex flex-wrap md:flex-col gap-2">
+      {/* The nav is the only scrollable region of the sidebar: with many
+          modules (or a short viewport) the list scrolls instead of pushing
+          the brand header and the account footer out of view. */}
+      <nav className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-wrap md:flex-col md:flex-nowrap gap-2">
         {visibleLinks.map((link) => {
           const Icon = link.icon;
           const isActive = link.href === activeHref;
@@ -175,7 +178,7 @@ export default function AdminSidebar() {
         })}
       </nav>
 
-      <div className="p-4 border-t">
+      <div className="p-4 border-t shrink-0">
         {mounted ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

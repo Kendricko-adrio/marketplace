@@ -16,7 +16,7 @@ import {
 // =========================================================
 // Template/export/report format:
 //   sheet  : exactly one sheet named `Harga`
-//   A1     : literal `OKCIR_MARKDOWN_V1`
+//   A1     : literal `markdown_v1`
 //   row 2  : `sku`, `action`, `new_price` (this order), followed only by the
 //            official NON-authoritative reference columns
 //   row 3+ : data
@@ -35,7 +35,10 @@ import {
 // be staged); only structural problems throw `WorkbookFatalError`. The caller
 // records the row errors as `failed` rows and never applies them.
 
+// Durable batch identity is unchanged so existing history, receipts, and the
+// database CHECK remain compatible. This value is not the workbook label.
 export const WORKBOOK_TEMPLATE_VERSION = "OKCIR_MARKDOWN_V1";
+export const WORKBOOK_MARKER = "markdown_v1";
 export const WORKBOOK_SHEET_NAME = "Harga";
 
 export const WORKBOOK_INPUT_HEADERS = ["sku", "action", "new_price"] as const;
@@ -859,11 +862,12 @@ export function parsePriceWorkbook(
   if (
     !marker ||
     cellKind(marker) !== "text" ||
-    cellText(marker, shared) !== WORKBOOK_TEMPLATE_VERSION
+    (cellText(marker, shared) !== WORKBOOK_MARKER &&
+      cellText(marker, shared) !== WORKBOOK_TEMPLATE_VERSION)
   ) {
     fatal(
       "UNSUPPORTED_MARKER",
-      `Cell A1 must be the literal ${WORKBOOK_TEMPLATE_VERSION}`
+      `Cell A1 must be the literal ${WORKBOOK_MARKER}`
     );
   }
   const extraMarkerCells = [...byNumber.get(1)!.cells.entries()].some(
@@ -969,7 +973,7 @@ function buildWorkbookBytes(
   const sheetRows: string[] = [];
   const rowXml = (rowNumber: number, cells: string[]): string =>
     `<row r="${rowNumber}">${cells.join("")}</row>`;
-  sheetRows.push(rowXml(1, [textCell("A1", WORKBOOK_TEMPLATE_VERSION)]));
+  sheetRows.push(rowXml(1, [textCell("A1", WORKBOOK_MARKER)]));
   sheetRows.push(
     rowXml(
       2,

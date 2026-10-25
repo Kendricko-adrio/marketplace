@@ -109,8 +109,9 @@ client usage sebelum orders/Offer.
 - satu batch `bulk` `staged` berisi 3 row `pending` (`SS-WHT-41`, `SS-BLK-41`,
   `OX-BLK-41`) dengan preview non-otoritatif;
 - satu batch `xlsx` `staged` berisi 2 row `pending` (`SS-WHT-41` target
-  `820000`, `CS-NVY-40` `restore_base`) dengan `template_version =
-  OKCIR_MARKDOWN_V1`.
+  `820000`, `CS-NVY-40` `restore_base`) dengan identitas internal workbook v1
+  existing. Marker pada file workbook baru adalah `markdown_v1`; identitas
+  internal batch seed/histori tidak diganti.
 
 Keduanya tidak menulis revision/current pointer dan tidak mengubah
 `product_variant.price`. Cleanup FK-ordered melepas `origin_retry_row_id` lebih

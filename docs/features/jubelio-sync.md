@@ -80,15 +80,46 @@ adjustments.
 
 ## Checkout Sales Orders
 
-Checkout uses `apps/store/src/lib/jubelio-sales-client.ts`, not inventory
-adjustments. Local pending holds and the provider's `available` series are
-combined conservatively. The product and cart display the last-known values
-as provisional. Place-order reads selected item/location pairs live, rejects
-missing/inconsistent/unreachable provider observations, and atomically holds
-`available - pendingRemoteStock` before creating a Sales Order. The daily
-stock-only scan repairs webhook gaps without sending an adjustment or a Sales
-Order; it is not a checkout fallback during a provider outage. See [Sales Orders](jubelio-sales-orders.md) and
-[stock reservation](stock-reservation.md).
+Checkout memakai `apps/store/src/lib/jubelio-sales-client.ts`, bukan inventory
+adjustment. Provider `available` dikurangi pending hold lokal secara konservatif.
+Produk dan cart menampilkan snapshot terakhir; storefront menyembunyikan produk,
+varian, dan cabang habis serta membatasi quantity cart berdasarkan snapshot itu.
+Place-order tetap membaca pasangan item/location langsung dari Jubelio, menolak
+observasi hilang/inkonsisten/tidak terjangkau, lalu memperoleh atomic hold atas
+`available - pendingRemoteStock` sebelum membuat Sales Order. Daily stock-only
+scan memperbaiki gap webhook tanpa mengirim adjustment atau Sales Order; scan
+bukan fallback checkout ketika provider tidak tersedia. Lihat
+[Sales Orders](jubelio-sales-orders.md) dan [stock reservation](stock-reservation.md).
+
+## Visibilitas stok storefront dan batas keranjang
+
+- Stok tersedia = `max(0, COALESCE(availableStock, 0) - pendingRemoteStock)`.
+  Jangan kurangi lagi `on_order`, provider reserved, atau legacy `reservedStock`.
+  Snapshot belum diketahui (`NULL`) tidak membuka pembelian.
+- Katalog/search dan carousel homepage (manual maupun filter) hanya menampilkan
+  produk dengan minimal satu varian tersedia pada cabang aktif dan mapped.
+  Filter berlaku sebelum count/pagination/limit, bukan sesudah hasil diambil.
+- Harga kartu, filter harga/Markdown dan sort memakai varian yang tersedia;
+  jika filter cabang dipakai, varian sumber harga harus tersedia di cabang itu.
+- Detail menyembunyikan varian dan cabang kosong. Ukuran mengikuti warna
+  terpilih, sehingga kombinasi tidak tersedia tidak ditawarkan. Pergantian
+  varian mereset cabang, quantity, dan gambar terpilih.
+- URL langsung produk habis tetap menampilkan informasi produk dengan label
+  **Stok habis**, tanpa opsi varian/cabang dan tanpa pembelian.
+- API tambah/update cart membatasi quantity akhir terhadap stok tersedia.
+  Penambahan ulang memperhitungkan quantity yang sudah di cart; conditional
+  upsert dan lock row stok menjaga request konkuren. Cart bukan reservasi.
+- Item lama yang stoknya kemudian habis tidak dihapus otomatis. Tombol tambah
+  quantity dinonaktifkan; validasi Jubelio live saat place-order tetap wajib.
+
+Contoh: Red/M memiliki `availableStock=3` dan `pendingRemoteStock=1`,
+jadi batasnya 2. Jika cart sudah berisi 1, penambahan 2 ditolak. Red/S dengan
+stok 0 tidak muncul; Blue/L tetap ditawarkan jika cabang lain memiliki stok.
+Produk muncul kembali setelah sync mencatat stok tersedia positif.
+
+Regression: [stock-visibility mock E2E](../../e2e/store/stock-visibility-mock.spec.ts)
+memverifikasi HTTP dan browser dengan stok 0, snapshot null, pending hold,
+quantity konkuren, filter cabang/harga, pagination, carousel, dan item cart lama.
 
 ## Auth
 

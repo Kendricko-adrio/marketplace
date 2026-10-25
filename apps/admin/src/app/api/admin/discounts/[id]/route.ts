@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 
 import { guard } from "@/lib/rbac/guard";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import {
   getDiscountOfferDetail,
   DiscountAdministrationError,
@@ -23,12 +24,22 @@ import {
 // An unknown id is 404; the response is never cached.
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-discount-detail");
+
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function GET(_request: NextRequest, { params }: RouteContext) {
-  const guardResult = await guard("discounts", "view", {});
+async function discountDetail(
+  _request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("discounts", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const { id } = await params;
@@ -37,27 +48,23 @@ export async function GET(_request: NextRequest, { params }: RouteContext) {
       requireActorId(ctx.user.id)
     );
     if (!detail) {
-      logger.warn("discounts.detail.not_found", {
-        outcome: "denied",
-        offerId: id,
-      });
+      log.warn(
+        `discounts detail ditolak: offer tidak ditemukan (offer ${id}, outcome denied)`
+      );
       return discountFailureResponse(
-        logger,
         new DiscountAdministrationError(404, "NOT_FOUND", "Offer not found"),
-        "discounts.detail.denied"
+        "discounts detail ditolak"
       );
     }
 
-    logger.info("discounts.detail", {
-      outcome: "success",
-      offerId: detail.id,
-      state: detail.state,
-      currentRevisionId: detail.currentRevisionId,
-      version: detail.version,
-      draftVersion: detail.draftVersion,
-    });
-    return discountSuccessResponse(logger, detail);
+    log.info(
+      `discounts detail (offer ${detail.id}, state ${detail.state}, currentRevisionId ${detail.currentRevisionId ?? "none"}, version ${detail.version}, draftVersion ${detail.draftVersion}, outcome success)`
+    );
+    return discountSuccessResponse(detail);
   } catch (error) {
-    return discountFailureResponse(logger, error, "discounts.detail.failure");
+    return discountFailureResponse(error, "discounts detail gagal");
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(discountDetail, "admin-discount-detail");

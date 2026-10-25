@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { guard } from "@/lib/rbac/guard";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import {
   MAX_STAGE_ROWS_HARD_LIMIT,
   PriceChangeError,
@@ -35,7 +36,18 @@ import {
 // `requestKey` (UUID) is the command key: same key + same validated command
 // returns the SAME staged batch (200); a different command under a used key is
 // 409 REQUEST_KEY_CONFLICT.
+//
+// The route guard only checks `prices:edit`; the `products:view all_branches`
+// grant and the writer gate are re-read by the administration layer inside the
+// transaction, so a concurrent revoke still serializes against the write.
 export const dynamic = "force-dynamic";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-price-changes");
 
 const stageSchema = z.strictObject({
   requestKey: z.uuid(),
@@ -68,9 +80,8 @@ function formField(form: FormData, name: string): string | null {
 
 async function stageWorkbookUpload(
   request: NextRequest,
-  logger: Parameters<typeof priceChangeFailureResponse>[0],
   actorUserId: string
-) {
+): Promise<Response> {
   // Read the configured limits BEFORE buffering anything so an oversized body
   // is rejected from its declared length, not after it was loaded.
   const limits = await readWorkbookUploadLimits();
@@ -119,31 +130,24 @@ async function stageWorkbookUpload(
     },
     actorUserId
   );
-  logger.info("price_changes.stage.workbook", {
-    outcome: "success",
-    batchId: result.data.id,
-    state: result.data.state,
-    rowCount: result.data.rowCount,
-    failedCount: result.data.failedCount,
-    pendingCount: result.data.pendingCount,
-    replayed: result.status === 200,
-    bytes: bytes.length,
-    actorId: actorUserId,
-  });
-  return priceChangeSuccessResponse(logger, result.data, result.status);
+  // Isi workbook dan nilai harga tidak pernah masuk log: hanya identifier
+  // batch dan angka agregat.
+  log.info(
+    `price_changes.stage.workbook (batch ${result.data.id}, state ${result.data.state}, rowCount ${result.data.rowCount}, failedCount ${result.data.failedCount}, pendingCount ${result.data.pendingCount}, replayed ${result.status === 200}, bytes ${bytes.length}, actingUserId ${actorUserId}, outcome success)`
+  );
+  return priceChangeSuccessResponse(result.data, result.status);
 }
 
-export async function POST(request: NextRequest) {
-  const guardResult = await guard("prices", "edit", { request });
+async function stagePriceChanges(request: NextRequest): Promise<Response> {
+  const guardResult = await guard("prices", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const contentType = (request.headers.get("content-type") ?? "").toLowerCase();
     if (contentType.startsWith("multipart/form-data")) {
       return await stageWorkbookUpload(
         request,
-        logger,
         requirePriceActorId(ctx.user.id)
       );
     }
@@ -152,9 +156,8 @@ export async function POST(request: NextRequest) {
       await request.json().catch(() => null)
     );
     if (!parsed.success) {
-      logger.warn("price_changes.stage.invalid_body", { outcome: "denied" });
+      log.warn("price_changes.stage.invalid_body (outcome denied)");
       return priceChangeFailureResponse(
-        logger,
         new PriceChangeError(400, "INPUT_INVALID", "Invalid request body"),
         "price_changes.stage.denied"
       );
@@ -168,21 +171,14 @@ export async function POST(request: NextRequest) {
       },
       requirePriceActorId(ctx.user.id)
     );
-    logger.info("price_changes.stage", {
-      outcome: "success",
-      batchId: result.data.id,
-      state: result.data.state,
-      rowCount: result.data.rowCount,
-      replayed: result.status === 200,
-      actorId: ctx.user.id,
-      policyVersion: ctx.policy.policyVersion,
-    });
-    return priceChangeSuccessResponse(logger, result.data, result.status);
-  } catch (error) {
-    return priceChangeFailureResponse(
-      logger,
-      error,
-      "price_changes.stage.failure"
+    log.info(
+      `price_changes.stage (batch ${result.data.id}, state ${result.data.state}, rowCount ${result.data.rowCount}, replayed ${result.status === 200}, actingUserId ${ctx.user.id}, policyVersion ${ctx.policy.policyVersion}, outcome success)`
     );
+    return priceChangeSuccessResponse(result.data, result.status);
+  } catch (error) {
+    return priceChangeFailureResponse(error, "price_changes.stage.failure");
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(stagePriceChanges, "admin-price-changes");

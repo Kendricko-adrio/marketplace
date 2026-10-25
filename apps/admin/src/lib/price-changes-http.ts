@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { serializeError, withRequestId, type Logger } from "@/lib/logger";
+import { createModuleLogger, getRequestId } from "@/lib/logger";
 import { describePriceChangeError, PriceChangeError } from "./price-changes-administration";
 import type { PriceWorkbookFile } from "./price-changes-administration";
 
@@ -9,45 +9,59 @@ import type { PriceWorkbookFile } from "./price-changes-administration";
 // no-store on every response, `warn` for expected denials and `error` for the
 // unexpected path. Request keys, fingerprints and source prices of other SKUs
 // are never logged.
+//
+// Logging contract (maintainable-code §7): the module logger is created once
+// here, so no helper takes a `logger` argument. `requestId` in the body is the
+// canonical id of the active HTTP scope (`getRequestId()`, `null` outside one);
+// the `x-request-id` header belongs to the `withRequestContext` wrapper at the
+// HTTP entry. Denial codes and the machine-readable workbook reason are static
+// tokens, so they travel in the `message`; the unexpected path logs a static
+// projection instead of the caught value.
+
+const log = createModuleLogger("price-changes-http");
 
 export const PRICE_CHANGES_NO_STORE = { "Cache-Control": "no-store" } as const;
 
 export const WORKBOOK_CONTENT_TYPE =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
+/**
+ * Static, module-owned projection for the unexpected path. The caught value can
+ * carry SQL/provider free text, so it is never passed to a log line; the caller
+ * still receives the identical `500 INTERNAL` envelope.
+ */
+class PriceChangesEnvelopeLogError extends Error {
+  constructor(event: string) {
+    super(`price change envelope gagal (${event})`);
+    this.name = "PriceChangesEnvelopeLogError";
+  }
+}
+
 export function priceChangeErrorResponse(
-  logger: Logger,
   status: number,
   code: string,
   message: string,
   details?: { reason?: string }
 ): NextResponse {
-  return withRequestId(
-    NextResponse.json(
-      {
-        success: false,
-        error: message,
-        code,
-        ...(details ? { details } : {}),
-        requestId: logger.requestId,
-      },
-      { status, headers: PRICE_CHANGES_NO_STORE }
-    ),
-    logger
+  return NextResponse.json(
+    {
+      success: false,
+      error: message,
+      code,
+      ...(details ? { details } : {}),
+      requestId: getRequestId(),
+    },
+    { status, headers: PRICE_CHANGES_NO_STORE }
   );
 }
 
 export function priceChangeSuccessResponse<T>(
-  logger: Logger,
   data: T,
   status = 200
 ): NextResponse {
-  return withRequestId(
-    NextResponse.json(
-      { success: true, data },
-      { status, headers: PRICE_CHANGES_NO_STORE }
-    ),
-    logger
+  return NextResponse.json(
+    { success: true, data },
+    { status, headers: PRICE_CHANGES_NO_STORE }
   );
 }
 
@@ -57,49 +71,45 @@ export function priceChangeSuccessResponse<T>(
  * inline strings, so no cell can become a formula.
  */
 export function priceWorkbookResponse(
-  logger: Logger,
   file: PriceWorkbookFile
 ): NextResponse {
-  return withRequestId(
-    new NextResponse(Buffer.from(file.bytes), {
-      status: 200,
-      headers: {
-        ...PRICE_CHANGES_NO_STORE,
-        "Content-Type": WORKBOOK_CONTENT_TYPE,
-        "Content-Disposition": `attachment; filename="${file.filename}"`,
-        "Content-Length": String(file.bytes.length),
-      },
-    }),
-    logger
-  );
+  return new NextResponse(Buffer.from(file.bytes), {
+    status: 200,
+    headers: {
+      ...PRICE_CHANGES_NO_STORE,
+      "Content-Type": WORKBOOK_CONTENT_TYPE,
+      "Content-Disposition": `attachment; filename="${file.filename}"`,
+      "Content-Length": String(file.bytes.length),
+    },
+  });
 }
 
 export function priceChangeFailureResponse(
-  logger: Logger,
   error: unknown,
   event: string
 ): NextResponse {
   const described = describePriceChangeError(error);
   if (described) {
-    logger.warn(event, {
-      outcome: "denied",
-      code: described.code,
-      ...(described.details?.reason ? { reason: described.details.reason } : {}),
-    });
+    // `details.reason` is the workbook reject reason token (e.g.
+    // WORKBOOK_CORRUPT), never free text or a price from another SKU.
+    const reason = described.details?.reason;
+    log.warn(
+      `${event} (code ${described.code}${
+        reason ? `, reason ${reason}` : ""
+      }, outcome denied)`
+    );
     return priceChangeErrorResponse(
-      logger,
       described.status,
       described.code,
       described.message,
       described.details
     );
   }
-  logger.error(event, {
-    outcome: "error",
-    error: serializeError(error),
-  });
+  log.error(
+    `${event} (code INTERNAL, outcome error)`,
+    new PriceChangesEnvelopeLogError(event)
+  );
   return priceChangeErrorResponse(
-    logger,
     500,
     "INTERNAL",
     "Internal server error"

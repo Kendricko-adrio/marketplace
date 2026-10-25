@@ -2,6 +2,28 @@
 
 Status: background research, **not** an implemented refactor. The agreed code-organization convention is recorded in [code-organization.md](code-organization.md); use that document for future refactors. Consulted official Next.js App Router documentation (including Context7's indexed Next.js 16 documentation) and this repository. These are design recommendations, not Next.js-enforced layers.
 
+> **Catatan superseded.** Dokumen ini disimpan hanya sebagai latar historis;
+> konvensi yang mengikat adalah [code-organization.md](code-organization.md) dan
+> [`.agents/skills/maintainable-code/SKILL.md`](../../.agents/skills/maintainable-code/SKILL.md).
+> Bila berbeda, dokumen yang lebih baru yang menang. Secara khusus:
+>
+> 1. Query Drizzle **tidak pernah** ditinggalkan di dalam `route.ts`; endpoint
+>    sederhana memanggil fungsi query/DAL bernama secara langsung, bukan
+>    menyimpan query di handler (ini menggantikan bacaan "endpoint CRUD kecil
+>    boleh tetap di route").
+> 2. `logger`, `requestId`, atau request object **tidak** boleh dijadikan
+>    dependency/parameter yang dijalin ke service atau adapter **untuk keperluan
+>    logging/korelasi** (lihat frasa "explicit dependencies … logger/provider
+>    adapters" pada usulan refactor di bawah); logging bersifat module-scoped dan
+>    membaca request context secara implisit. Sebaliknya, dependency eksplisit
+>    yang memang dipakai untuk bekerja — input bisnis bertipe, `db`/`tx`,
+>    provider client — tetap sah, bukan pelanggaran.
+> 3. Penamaan service per operasi dan aturan anti-god-service, plus review signal
+>    80/300 (signal, bukan target), kini tercatat di code-organization.md dan
+>    tidak lagi hanya tersirat di sini.
+> 4. Bagian "Evidence from this repo" adalah snapshot inspeksi historis, bukan
+>    inventory file atau jumlah baris terkini.
+
 ## What Next.js actually requires
 
 - `app/**/route.ts` defines an HTTP endpoint; named exports (`GET`, `POST`, etc.) are the entry points. It uses Web `Request`/`Response`, optionally `NextRequest`/`NextResponse`. Next.js does **not** require business logic to live in those functions, nor prescribe controller/service/repository directories. A `route.ts` and a `page.tsx` cannot own the same URL segment. [Route Handlers](https://nextjs.org/docs/app/getting-started/route-handlers), [project structure](https://nextjs.org/docs/app/getting-started/project-structure).

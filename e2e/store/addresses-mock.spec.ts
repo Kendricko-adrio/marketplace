@@ -362,6 +362,54 @@ test.describe("mock-only client address book (ticket 02)", () => {
   // step's saved state and run in file order.
   test.describe.configure({ mode: "serial" });
 
+  test("editable fields read as inputs while auto-filled fields read as locked", async () => {
+    const page = await aliceContext!.newPage();
+    await page.goto("/account/addresses");
+    await openAddressForm(page);
+
+    const editable = page.getByLabel("Nama Penerima");
+    const locked = page.getByLabel("Kode Pos");
+    await expect(editable).toBeVisible();
+    await expect(locked).toBeVisible();
+
+    // Independent source of truth: the page/card surface the fields sit on.
+    // The editable field surface must NOT be the gray page background, which
+    // reads as "disabled" (the regression this spec pins).
+    const channels = (color: string): number[] =>
+      color.match(/\d+/g)!.slice(0, 3).map(Number);
+    const pageBackground = await page
+      .locator("body")
+      .evaluate((element) => getComputedStyle(element).backgroundColor);
+    expect(Math.min(...channels(pageBackground))).toBeLessThan(246);
+
+    const editableBackground = await editable.evaluate(
+      (element) => getComputedStyle(element).backgroundColor
+    );
+    const lockedBackground = await locked.evaluate(
+      (element) => getComputedStyle(element).backgroundColor
+    );
+    expect(Math.min(...channels(editableBackground))).toBeGreaterThanOrEqual(246);
+
+    // A locked field is never distinguished by colour alone: it carries the
+    // readonly state, a lock icon and a short reason next to the field.
+    await expect(locked).toHaveAttribute("readonly", "");
+    await expect(lockedBackground).not.toBe(editableBackground);
+    const lockedColor = await locked.evaluate((element) => getComputedStyle(element).color);
+    const editableColor = await editable.evaluate((element) => getComputedStyle(element).color);
+    expect(lockedColor).not.toBe(editableColor);
+    await expect(page.getByTestId("read-only-lock")).toBeVisible();
+    await expect(page.getByText("Terisi otomatis dari Kelurahan/Area.")).toBeVisible();
+
+    // Region pickers are form controls too — same field surface, not the page gray.
+    const regionSelect = page.getByRole("combobox").first();
+    const selectBackground = await regionSelect.evaluate(
+      (element) => getComputedStyle(element).backgroundColor
+    );
+    expect(selectBackground).toBe(editableBackground);
+
+    await page.close();
+  });
+
   test("address form saves an address with the mocked Shipment region hierarchy", async () => {
     const page = await aliceContext!.newPage();
     await page.goto("/account");

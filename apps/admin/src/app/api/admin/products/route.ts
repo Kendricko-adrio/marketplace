@@ -10,7 +10,7 @@ import {
   genders,
 } from "@/db";
 import { eq, desc, sql, inArray, asc, ilike, or, and } from "drizzle-orm";
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import {
@@ -21,6 +21,23 @@ import { parsePagination } from "@/lib/pagination";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-products");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/driver tidak
+ * pernah masuk log.
+ */
+class ProductsListLogError extends Error {
+  constructor() {
+    super("products list gagal");
+    this.name = "ProductsListLogError";
+  }
+}
+
 // GET /api/admin/products   [products:view]
 //
 // Branch scope comes from the Current Policy (not the legacy Role):
@@ -29,19 +46,17 @@ export const dynamic = "force-dynamic";
 //   - all-branch view  → all products, stock summed across branches.
 // The SQL `where` is the real access control; computeScopedTotals (pure) is
 // the tested filter+sum. See lib/branch-stock.ts.
-export async function GET(request: NextRequest) {
-  const guardResult = await guard("products", "view", { request });
+async function listProducts(request: NextRequest): Promise<Response> {
+  const guardResult = await guard("products", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const authorization = branchScopeFromAuthorization(ctx.authorization);
     if (!authorization) {
-      logger.warn("products.list.scope_unresolvable", {
-        outcome: "denied",
-        reason: "missing_home_branch",
-        userId: ctx.user.id,
-      });
+      log.warn(
+        `products.list scope tidak dapat ditentukan (userId ${ctx.user.id}, reason missing_home_branch, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Forbidden", code: "DENIED" },
         { status: 403 }
@@ -205,13 +220,9 @@ export async function GET(request: NextRequest) {
       })
     );
 
-    logger.info("products.list", {
-      outcome: "success",
-      total,
-      page,
-      limit,
-      scope: authorization.mode,
-    });
+    log.info(
+      `products.list (total ${total}, page ${page}, limit ${limit}, scope ${authorization.mode}, outcome success)`
+    );
 
     return NextResponse.json({
       success: true,
@@ -223,14 +234,14 @@ export async function GET(request: NextRequest) {
         totalPages: Math.ceil(total / limit),
       },
     });
-  } catch (error) {
-    logger.error("products.list.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error("products.list gagal (outcome error)", new ProductsListLogError());
     return NextResponse.json(
       { success: false, error: "Failed to fetch products" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(listProducts, "admin-products");

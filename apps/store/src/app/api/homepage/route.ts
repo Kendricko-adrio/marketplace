@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+import { sellableVariantSql, sellableProductSql } from "@/lib/storefront-stock";
 import { db } from "@/db";
 import {
   homepageSections,
@@ -21,6 +23,24 @@ import {
   markdownActiveSql,
   projectRow,
 } from "@/lib/variant-price-projection";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("homepage");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Next/provider
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 type ProductRow = (typeof products)["$inferSelect"];
 
@@ -70,6 +90,7 @@ async function resolveFilterModeProducts(
         eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
       )
     )
+    .where(sellableVariantSql())
     .groupBy(productVariants.productId)
     .as("vp");
 
@@ -222,7 +243,7 @@ async function hydrateProducts(
         eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
       )
     )
-    .where(inArray(productVariants.productId, ids));
+    .where(and(inArray(productVariants.productId, ids), sellableVariantSql()));
   type DisplayPrice = {
     effective: bigint;
     source: bigint;
@@ -274,7 +295,8 @@ async function hydrateProducts(
   });
 }
 
-export async function GET() {
+/** HTTP adapter: section homepage aktif + produk terpilih, map ke status/body existing. */
+async function getHomepage(): Promise<Response> {
   try {
     const sections = await db
       .select()
@@ -283,6 +305,7 @@ export async function GET() {
       .orderBy(asc(homepageSections.displayOrder));
 
     if (sections.length === 0) {
+      log.info("homepage loaded: 0 section");
       return NextResponse.json({ success: true, data: [] });
     }
 
@@ -344,7 +367,7 @@ export async function GET() {
       const productRows = await db
         .select()
         .from(products)
-        .where(inArray(products.id, allProductIds));
+        .where(and(inArray(products.id, allProductIds), eq(products.status, "aktif"), sellableProductSql()));
       for (const p of productRows) productMap.set(p.id, p);
 
       // Fetch all variants for these products with their Markdown projection to
@@ -372,7 +395,8 @@ export async function GET() {
             eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
           )
         )
-        .where(inArray(productVariants.productId, allProductIds));
+        .where(and(inArray(productVariants.productId, allProductIds), sellableVariantSql()))
+        .orderBy(asc(productVariants.id));
 
       type DisplayPrice = { effective: string; source: string; active: boolean };
       const minPriceMap = new Map<string, DisplayPrice>();
@@ -518,12 +542,16 @@ export async function GET() {
       return section;
     });
 
+    log.info(`homepage loaded: ${data.length} section`);
     return NextResponse.json({ success: true, data });
-  } catch (error) {
-    console.error("Error fetching homepage sections:", error);
+  } catch {
+    log.error("homepage load failed", new RouteLogError("homepage load failed"));
     return NextResponse.json(
       { success: false, error: "Failed to fetch homepage sections" },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(getHomepage, "homepage");

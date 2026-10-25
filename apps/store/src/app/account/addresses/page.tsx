@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ReadOnlyInput } from "@/components/ui/read-only-input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { ClientAddressInput, ClientAddressView } from "@/lib/client-addresses";
@@ -76,7 +77,7 @@ export default function AddressBookPage() {
       <h2 className="text-xl font-medium">{editing ? "Edit alamat" : "Alamat baru"}</h2>
       <div className="grid gap-5 sm:grid-cols-2">{([ ["recipientName", "Nama Penerima"], ["phone", "Nomor Telepon"] ] as const).map(([key, label]) => <div className="space-y-2" key={key}><Label htmlFor={key}>{label}</Label><Input id={key} required value={input[key]} onChange={(event) => setInput((prev) => ({ ...prev, [key]: event.target.value }))} /></div>)}
       {fields.map((field, index) => <RegionPicker key={`${field}:${index > 0 ? input[fields[index - 1]] : "root"}`} index={index} value={input[field]} parentId={index > 0 ? input[fields[index - 1]] : undefined} onChange={(id, postal) => setInput((prev) => { const next = { ...prev, [field]: id, postalCode: postal ?? "" }; for (let n = index + 1; n < fields.length; n++) next[fields[n]] = ""; return next; })} />)}
-      <div className="space-y-2"><Label htmlFor="postalCode">Kode Pos</Label><Input id="postalCode" value={input.postalCode} readOnly /></div></div>
+      <div className="space-y-2"><Label htmlFor="postalCode">Kode Pos</Label><ReadOnlyInput id="postalCode" value={input.postalCode} hint="Terisi otomatis dari Kelurahan/Area." /></div></div>
       <div className="space-y-2"><Label htmlFor="fullAddress">Alamat Lengkap</Label><Input id="fullAddress" required value={input.fullAddress} placeholder="Jalan, nomor rumah, unit, dan patokan" onChange={(event) => setInput((prev) => ({ ...prev, fullAddress: event.target.value }))} /></div>
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={input.isDefault} onChange={(event) => setInput((prev) => ({ ...prev, isDefault: event.target.checked }))} />Jadikan alamat utama</label>
       <div className="flex gap-3"><Button disabled={busy || !ready}>Simpan alamat</Button><Button type="button" variant="outline" onClick={() => setShowForm(false)}>Batal</Button></div>

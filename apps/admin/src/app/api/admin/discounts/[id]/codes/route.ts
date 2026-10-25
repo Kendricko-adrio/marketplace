@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { guard } from "@/lib/rbac/guard";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import {
   addDiscountCode,
   DiscountAdministrationError,
@@ -22,6 +23,13 @@ import {
 // adalah promo editor.
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-discount-codes");
+
 type RouteContext = { params: Promise<{ id: string }> };
 
 const addCodeSchema = z.strictObject({
@@ -30,19 +38,21 @@ const addCodeSchema = z.strictObject({
   expectedOfferVersion: z.number().int().positive(),
 });
 
-export async function POST(request: NextRequest, { params }: RouteContext) {
-  const guardResult = await guard("discounts", "edit", { request });
+async function addCode(
+  request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("discounts", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const parsed = addCodeSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      logger.warn("discounts.codes.create.invalid_body", { outcome: "denied" });
+      log.warn("discounts codes create ditolak: body tidak valid (outcome denied)");
       return discountFailureResponse(
-        logger,
         new DiscountAdministrationError(400, "INPUT_INVALID", "Invalid request body"),
-        "discounts.codes.create.denied"
+        "discounts codes create ditolak"
       );
     }
 
@@ -52,17 +62,15 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       requireActorId(ctx.user.id)
     );
 
-    logger.info("discounts.codes.create", {
-      outcome: "success",
-      offerId: id,
-      codeCount: result.data.codes.length,
-      version: result.data.version,
-      replayed: result.replayed,
-      actorId: ctx.user.id,
-      policyVersion: ctx.policy.policyVersion,
-    });
-    return discountSuccessResponse(logger, result.data, result.status);
+    // Literal kode tidak pernah masuk log — hanya jumlah kode + versi.
+    log.info(
+      `discounts codes create (offer ${id}, codeCount ${result.data.codes.length}, version ${result.data.version}, replayed ${result.replayed}, actor ${ctx.user.id}, policyVersion ${ctx.policy.policyVersion}, outcome success)`
+    );
+    return discountSuccessResponse(result.data, result.status);
   } catch (error) {
-    return discountFailureResponse(logger, error, "discounts.codes.create.failure");
+    return discountFailureResponse(error, "discounts codes create gagal");
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(addCode, "admin-discount-codes");

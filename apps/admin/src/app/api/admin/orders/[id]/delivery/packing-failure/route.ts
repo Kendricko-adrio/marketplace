@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/db";
 import { guard } from "@/lib/rbac/guard";
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import {
   createDeliveryFollowUp,
   DeliveryFollowUpError,
@@ -21,20 +21,41 @@ const bodySchema = z
   })
   .strict();
 
-export async function POST(
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-order-delivery-packing-failure");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB tidak pernah
+ * masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
+async function failPacking(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const guardResult = await guard("orders", "edit", { request });
+): Promise<Response> {
+  const guardResult = await guard("orders", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
-  const orderLog = logger.child({ module: "delivery-packing-failure" });
+  const { ctx } = guardResult;
 
+  let orderId: string | null = null;
   try {
     const { id } = await params;
+    orderId = id;
     const parsed = bodySchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
-      orderLog.warn("delivery.packing-failure.invalid_input", { outcome: "denied" });
+      log.warn(
+        `delivery packing-failure ditolak: reasonCode tidak dikenal (order ${id}, outcome denied)`
+      );
       return NextResponse.json(
         {
           success: false,
@@ -54,23 +75,33 @@ export async function POST(
       },
       parsed.data.reasonCode
     );
-    orderLog.info("delivery.packing-failure.success", { outcome: "success" });
+    log.info(
+      `delivery packing-failure sukses (order ${id}, reason ${parsed.data.reasonCode}, outcome success)`
+    );
     return NextResponse.json({ success: true, data });
   } catch (error) {
     if (error instanceof DeliveryFollowUpError) {
-      orderLog.warn("delivery.packing-failure.failed", { outcome: "denied", code: error.code });
+      log.warn(
+        `delivery packing-failure gagal (order ${orderId ?? "unknown"}, code ${error.code}, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: error.message, code: error.code },
         { status: error.code === "NOT_FOUND" ? 404 : error.code === "FORBIDDEN" ? 403 : 409 }
       );
     }
-    orderLog.error("delivery.packing-failure.failed", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+    log.error(
+      `delivery packing-failure gagal (order ${orderId ?? "unknown"}, outcome error)`,
+      new RouteLogError("delivery packing-failure gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Gagal memproses pemenuhan pengiriman." },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(
+  failPacking,
+  "admin-order-delivery-packing-failure"
+);

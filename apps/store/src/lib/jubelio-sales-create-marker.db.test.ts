@@ -2,7 +2,7 @@ import { deleteRetainedOrderFixtures } from "@marketplace/db/src/testing/retaine
 import dotenv from "dotenv";
 import path from "node:path";
 dotenv.config({ path: path.resolve(import.meta.dirname, "../../../../.env") });
-import { afterAll, expect, it } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { Pool } from "pg";
 import type { JubelioSalesGateway } from "./jubelio-sales-client";
@@ -10,6 +10,67 @@ import type { JubelioSalesGateway } from "./jubelio-sales-client";
 const { db, branchStocks, branches, clients, orderItems, orders, products, productVariants } = await import("@/db");
 const { dispatchJubelioSalesCreate } = await import("./jubelio-sales-lifecycle");
 const { getJubelioSalesOperation } = await import("./jubelio-sales-operations");
+// The app logging facade (not the core, not a mock): the request scope and the
+// canonical request id are observed exactly where the runtime produces them.
+const { getRequestId, withRequestContext } = await import("./logger");
+
+type DispatchCreateResult = Awaited<ReturnType<typeof dispatchJubelioSalesCreate>>;
+type LogRecord = Record<string, unknown>;
+
+/** Fixed envelope of one application log line (maintainable-code §7.2). */
+const FIXED_LOG_FIELDS = [
+  "app",
+  "level",
+  "message",
+  "module",
+  "requestId",
+  "timestamp",
+] as const;
+
+/** Field opsional yang diizinkan pada envelope yang sama (§7.2). */
+const OPTIONAL_LOG_FIELDS = ["error"] as const;
+
+/** Canonical server-generated UUID — an incoming header is never canonical. */
+const CANONICAL_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * External sink under test: the process stdout. Logger internals (module
+ * logger, core, root instance) are never imported or mocked here, so a line is
+ * observed exactly where production writes it.
+ */
+function captureStdout(): { captured: string[]; restore: () => void } {
+  const captured: string[] = [];
+  const spy = vi.spyOn(process.stdout, "write").mockImplementation(
+    (chunk: string | Uint8Array): boolean => {
+      captured.push(
+        typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")
+      );
+      return true;
+    }
+  );
+  return { captured, restore: () => spy.mockRestore() };
+}
+
+/** Every JSON application line of this run; non-JSON output is not a log line. */
+function jsonLogRecords(captured: string[]): LogRecord[] {
+  const records: LogRecord[] = [];
+  for (const line of captured.join("").split("\n")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null) continue;
+    records.push(parsed as LogRecord);
+  }
+  return records;
+}
+
+function messageOf(record: LogRecord): string {
+  return typeof record.message === "string" ? record.message : "";
+}
 
 // The provider boundary is deliberately a stub: no login or real Jubelio POST.
 // This is the approved per-order DB seam, not a fake in-memory claim.
@@ -52,9 +113,38 @@ it("records marker-only divergence on a confirmed create without stopping the lo
     },
   } as unknown as JubelioSalesGateway;
 
-  const first = await dispatchJubelioSalesCreate({ orderId, create, gateway });
-  expect(first).toEqual({ status: "confirmed", salesOrderId: remoteId });
-  expect(await dispatchJubelioSalesCreate({ orderId, create, gateway })).toEqual(first);
+  // Both the first dispatch and its replay run through the real app HTTP scope
+  // wrapper: no logger is injected, and the correlation observed below comes
+  // from the AsyncLocalStorage scope, not from a parameter.
+  let firstOutcome: DispatchCreateResult | null = null;
+  let replayOutcome: DispatchCreateResult | null = null;
+  let firstScopeRequestId: string | null = null;
+  let replayScopeRequestId: string | null = null;
+  let firstHeaderRequestId: string | null = null;
+  let replayHeaderRequestId: string | null = null;
+  const { captured, restore } = captureStdout();
+  try {
+    const firstHandler = withRequestContext(async () => {
+      firstScopeRequestId = getRequestId();
+      firstOutcome = await dispatchJubelioSalesCreate({ orderId, create, gateway });
+      return Response.json({ ok: true });
+    });
+    const firstResponse = await firstHandler();
+    firstHeaderRequestId = firstResponse.headers.get("x-request-id");
+    const replayHandler = withRequestContext(async () => {
+      replayScopeRequestId = getRequestId();
+      replayOutcome = await dispatchJubelioSalesCreate({ orderId, create, gateway });
+      return Response.json({ ok: true });
+    });
+    const replayResponse = await replayHandler();
+    replayHeaderRequestId = replayResponse.headers.get("x-request-id");
+  } finally {
+    restore();
+  }
+
+  // ---- Business behaviour: unchanged by the logging migration. ----
+  expect(firstOutcome).toEqual({ status: "confirmed", salesOrderId: remoteId });
+  expect(replayOutcome).toEqual(firstOutcome);
   expect(posts).toBe(1);
   const record = await getJubelioSalesOperation(db, { orderId, type: "create" });
   expect(record).toMatchObject({
@@ -65,6 +155,64 @@ it("records marker-only divergence on a confirmed create without stopping the lo
   const [local] = await db.select({ status: orders.status, paymentStatus: orders.paymentStatus, salesOrderId: orders.jubelioSalesOrderId })
     .from(orders).where(eq(orders.id, orderId));
   expect(local).toEqual({ status: "pending_payment", paymentStatus: "pending", salesOrderId: remoteId });
+  if (!record) throw new Error("create operation hilang setelah dispatch");
+  const operationId = record.id;
+
+  // ---- Log evidence (only meaningful once the business assertions passed). ----
+  // Correlation: the scope id and the response header are the same canonical
+  // server-generated UUID, and the two invocations never share it.
+  expect(firstScopeRequestId).toBe(firstHeaderRequestId);
+  expect(replayScopeRequestId).toBe(replayHeaderRequestId);
+  expect(firstHeaderRequestId).toMatch(CANONICAL_UUID);
+  expect(replayHeaderRequestId).toMatch(CANONICAL_UUID);
+  expect(firstHeaderRequestId).not.toBe(replayHeaderRequestId);
+
+  const records = jsonLogRecords(captured);
+  expect(records.length).toBeGreaterThan(0);
+  const allowedFields: readonly string[] = [...FIXED_LOG_FIELDS, ...OPTIONAL_LOG_FIELDS];
+  for (const logged of records) {
+    // No legacy line survives: the envelope is the fixed six fields (plus the
+    // optional `error`), owned by the store runtime.
+    expect(Object.keys(logged).filter((key) => !allowedFields.includes(key))).toEqual([]);
+    for (const field of FIXED_LOG_FIELDS) {
+      expect(logged).toHaveProperty(field);
+    }
+    expect(logged.app).toBe("store");
+    expect(logged.requestId).toMatch(CANONICAL_UUID);
+  }
+
+  const lifecycleRecords = records.filter((logged) => logged.module === "jubelio-sales-lifecycle");
+  const scopeRequestIds = [String(firstHeaderRequestId), String(replayHeaderRequestId)];
+  expect(lifecycleRecords.every((logged) => scopeRequestIds.includes(String(logged.requestId)))).toBe(true);
+
+  const createScopeRecords = lifecycleRecords.filter(
+    (logged) => logged.requestId === firstHeaderRequestId
+  );
+  expect(createScopeRecords.map((logged) => logged.level)).toEqual(["info", "error", "info", "info"]);
+
+  const [dispatched, mismatch, holdAccounted, created] = createScopeRecords;
+  // Business references belong in the message: order, operation and remote ids
+  // stay greppable without binding arbitrary metadata fields.
+  expect(messageOf(dispatched)).toContain(orderId);
+  expect(messageOf(dispatched)).toContain(operationId);
+  expect(messageOf(mismatch)).toContain(orderId);
+  expect(messageOf(mismatch)).toContain(String(remoteId));
+  expect(messageOf(mismatch)).toContain("CREATE_MARKER_MISMATCH");
+  expect(messageOf(holdAccounted)).toContain(orderId);
+  expect(messageOf(created)).toContain(orderId);
+  expect(messageOf(created)).toContain(String(remoteId));
+  expect(messageOf(created)).toContain(operationId);
+
+  // Privacy: the raw provider marker, the customer name, the create note and
+  // any request payload never reach a log line.
+  const rawLog = captured.join("");
+  expect(rawLog).not.toContain("Operator changed marker");
+  expect(rawLog).not.toContain("Marker Test");
+  expect(rawLog).not.toContain("OKCIR_SO_CREATE:");
+  expect(rawLog).not.toContain("channelStatus");
+  expect(rawLog).not.toContain("customerName");
+  expect(rawLog).not.toContain("itemId");
+  expect(rawLog).not.toContain("payload");
 });
 
 afterAll(async () => {

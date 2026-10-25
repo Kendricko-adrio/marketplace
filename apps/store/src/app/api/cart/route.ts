@@ -7,13 +7,33 @@ import {
   products,
   productImages,
   branches,
+  branchStocks,
 } from "@/db";
-import { eq, asc } from "drizzle-orm";
+import { eq, and, asc, sql } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { getPpnRatePercent, getDiscountsContractVersion } from "@/lib/config";
 import { buildPricingSnapshot } from "@/lib/versioned-pricing";
 import { readVariantProjections } from "@/lib/variant-price-projection";
-import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("cart");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Next/provider
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini. Kontrak HTTP
+ * gagal (status/body) tidak berubah.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 // Helper to get or create cart
 async function getOrCreateCart(userId: string) {
@@ -31,11 +51,10 @@ async function getOrCreateCart(userId: string) {
   return cart;
 }
 
-export async function GET(request: NextRequest) {
-  const log = requestLogger(request, { module: "cart" });
+async function getCart(_request: NextRequest): Promise<Response> {
   try {
     const access = await requireOnboardedApiSession();
-    if (!access.ok) return withRequestId(access.response, log);
+    if (!access.ok) return access.response;
     const { session } = access;
 
     const cart = await getOrCreateCart(session.user.id);
@@ -45,6 +64,12 @@ export async function GET(request: NextRequest) {
       .select({
         id: cartItems.id,
         quantity: cartItems.quantity,
+        available: sql<number>`CASE
+          WHEN ${branches.status} = 'aktif'
+            AND ${branches.jubelioLocationId} IS NOT NULL
+            AND ${productVariants.jubelioItemId} IS NOT NULL
+          THEN GREATEST(0, COALESCE(${branchStocks.availableStock}, 0) - COALESCE(${branchStocks.pendingRemoteStock}, 0))
+          ELSE 0 END`,
         variantId: cartItems.variantId,
         branchId: cartItems.branchId,
         variant: {
@@ -71,6 +96,10 @@ export async function GET(request: NextRequest) {
       .innerJoin(productVariants, eq(cartItems.variantId, productVariants.id))
       .innerJoin(products, eq(productVariants.productId, products.id))
       .leftJoin(branches, eq(cartItems.branchId, branches.id))
+      .leftJoin(branchStocks, and(
+        eq(branchStocks.branchId, cartItems.branchId),
+        eq(branchStocks.productVariantId, cartItems.variantId)
+      ))
       .where(eq(cartItems.cartId, cart.id));
 
     // Get an image for each item: prefer the product-level thumbnail (Jubelio
@@ -133,13 +162,11 @@ export async function GET(request: NextRequest) {
     const subtotal = pricingContractVersion === 1
       ? Number(snapshot?.subtotal ?? "0")
       : displayItems.reduce((sum, item) => sum + parseFloat(item.variant.price) * item.quantity, 0);
-    log.info("cart served", {
-      userId: session.user.id,
-      itemCount: displayItems.length,
-      subtotal,
-      ppnRatePercent,
-    });
-    return withRequestId(NextResponse.json({
+    // Fakta bisnis (user, jumlah item, subtotal, PPN) hanya ada di message.
+    log.info(
+      `cart served: user ${session.user.id}, ${displayItems.length} item, subtotal ${subtotal}, ppn ${ppnRatePercent}%`
+    );
+    return NextResponse.json({
       success: true,
       data: {
         id: cart.id,
@@ -149,21 +176,20 @@ export async function GET(request: NextRequest) {
         subtotal,
         ppnRatePercent: Number(ppnRatePercent),
       },
-    }), log);
-  } catch (error) {
-    log.error("cart fetch failed", { error: serializeError(error) });
-    return withRequestId(NextResponse.json(
+    });
+  } catch {
+    log.error("cart fetch failed", new RouteLogError("cart read failed"));
+    return NextResponse.json(
       { success: false, error: "Failed to fetch cart" },
       { status: 500 }
-    ), log);
+    );
   }
 }
 
-export async function DELETE(request: NextRequest) {
-  const log = requestLogger(request, { module: "cart" });
+async function deleteCart(_request: NextRequest): Promise<Response> {
   try {
     const access = await requireOnboardedApiSession();
-    if (!access.ok) return withRequestId(access.response, log);
+    if (!access.ok) return access.response;
     const { session } = access;
 
     const cart = await db
@@ -180,16 +206,20 @@ export async function DELETE(request: NextRequest) {
         .where(eq(carts.id, cart[0].id));
     }
 
-    log.info("cart cleared", { userId: session.user.id });
-    return withRequestId(NextResponse.json({
+    log.info(`cart cleared: user ${session.user.id}`);
+    return NextResponse.json({
       success: true,
       message: "Cart cleared",
-    }), log);
-  } catch (error) {
-    log.error("cart clear failed", { error: serializeError(error) });
-    return withRequestId(NextResponse.json(
+    });
+  } catch {
+    log.error("cart clear failed", new RouteLogError("cart clear failed"));
+    return NextResponse.json(
       { success: false, error: "Failed to clear cart" },
       { status: 500 }
-    ), log);
+    );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(getCart, "cart");
+export const DELETE = withRequestContext(deleteCart, "cart");

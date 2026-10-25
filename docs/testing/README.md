@@ -53,6 +53,26 @@ The same isolated config includes address/default ownership, branch origin, serv
 
 Use `npm run test:unit -- --no-file-parallelism` to avoid shared RBAC-fixture races. Tracking has an independently computed fixed HMAC fixture, concurrent event regressions and real-PG lifecycle assertions. Follow-up covers current Home/ledger guards, zero create on release, one proof-approved attempt-2 create and system-only known-ID GET settlement recovery. Never treat mock success as courier/dashboard/deployment activation. See [delivery lifecycle](../features/home-delivery.md).
 
+## Regression stok storefront (mock-only)
+
+`e2e/store/stock-visibility-mock.spec.ts` menguji seam HTTP dan browser:
+stok nol/null/pending, quantity kumulatif dan request konkuren, cabang
+nonaktif/mapping hilang, harga dan pagination katalog, kombinasi warna/ukuran,
+homepage manual/filter, serta item cart lama saat stok habis. Fixture SQL hanya
+menyiapkan data di DB disposable `marketplace_discounts_test_*`; assertion
+memakai API/UI, bukan query database.
+
+```bash
+DATABASE_URL=<db-disposable> npm run verify:batch:e2e -- e2e/store/stock-visibility-mock.spec.ts
+npm run verify:unit:slice -- apps/store/src/lib/stock.test.ts
+npm run verify:types:store
+```
+
+Mode `E2E_PROVIDER_MOCKS=true` memakai `distDir: ".next/mock"` pada kedua app
+agar tidak berbenturan dengan lock/output dev server biasa. Typegen mock
+disertakan dalam tsconfig. Build/deployment default tetap `.next`; tidak ada
+env baru atau perubahan provider live.
+
 ## Baseline checkout berversi (disposable)
 
 Bagian ini hanya untuk database **disposable**. Selalu set `DATABASE_URL`
@@ -133,6 +153,32 @@ admission 429/`Retry-After` termasuk forged `X-Real-IP`/`X-Forwarded-For`.
 `playwright.mock.config.ts` dan tidak dipakai produksi. Spec
 `versioned-checkout`/`versioned-settlement` kini memakai preview+token karena
 gate1 mewajibkan review. Bukti ini **bukan** redemption/capacity ticket 07/12.
+
+## Pemulihan UX Diskon Admin sesuai prototype
+
+Spec `e2e/admin/discounts-prototype-mock.spec.ts` mencakup tab/filter/pagination,
+revision/benefit dan kapasitas tersedia, empat tab detail dan input lintas tab,
+create sesuai jalur, viewer masked/read-only, audit before/after, dialog
+review/publish/cancel/fokus, invalid/failure/pending publish, conflict policy,
+request-race serta overflow mobile. Endpoint aplikasi + PostgreSQL nyata tetap
+dipakai; hanya failure/pending/race HTTP dikontrol pada browser boundary.
+
+Jalankan dengan `DATABASE_URL` disposable `marketplace_discounts_test_*` dan
+konfigurasi mock-only; fixture/gate dipulihkan lewat cleanup FK-ordered. Jangan
+memakai DB dev/operasional. Spec terdaftar pada kedua `testMatch` konfigurasi.
+
+```bash
+npm run verify:batch:e2e -- e2e/admin/discounts-prototype-mock.spec.ts \\
+  e2e/admin/discounts-admin-mock.spec.ts e2e/admin/discounts-usage-mock.spec.ts
+npm run verify:unit:slice -- apps/admin/src/lib/discounts-administration.db.test.ts
+```
+
+Regression existing tetap mencakup fixed/percentage/shipping/manual code,
+aggregate-only, scope cabang, dan pause tanpa reset hold. Service list diuji
+melalui `listDiscountOffers` untuk filter sebelum pagination, count kedua
+jalur, shipping revision, quota/budget literal, projection hilang dan privacy.
+Standard `test:e2e`/provider live masih memerlukan izin tersendiri; mock green
+bukan bukti UAT staging atau aktivasi rilis.
 
 ## Discount Offer administration (disposable)
 
@@ -399,6 +445,126 @@ npm run verify:batch:e2e -- e2e/admin/price-change-excel-mock.spec.ts
   [`playwright.mock.config.ts`](../../playwright.mock.config.ts); periksa regex
   memuat `price-change-excel`. Green mock bukan benchmark 1000 row, bukan bukti
   parser aman untuk semua file adversarial, dan bukan UAT/aktivasi produksi.
+
+## Korelasi logging pada server nyata (disposable)
+
+Sejak migrasi logging, route handler HTTP first-party store/admin memakai
+wrapper `withRequestContext` yang sama (pengecualian dicatat di
+[`features/logging.md`](../features/logging.md#cakupan-pemakaian)). Bukti
+korelasi pada server Next
+yang benar-benar berjalan tetap dipusatkan pada dua route pilot: `GET
+/api/categories` (store, module `categories-route`) dan `GET
+/api/admin/session-check` (admin, module `admin-session-check`). Bukti utamanya
+bukan route interception browser, melainkan artifact **stdout** proses app yang
+dibaca dari file. Route lain memakai wrapper yang sama tetapi belum punya artifact
+E2E-nya sendiri; jangan menganggap dua spec ini membuktikan korelasi semua
+endpoint.
+
+Persyaratan: **hanya DB disposable** dengan `DATABASE_URL` eksplisit dan nama
+database berawalan `marketplace_discounts_test_*` (endpoint kategori membaca
+data ter-seed). Jangan memakai DB default/dev/staging.
+
+```bash
+export DATABASE_URL="postgresql://postgres:postgres@localhost:5432/marketplace_discounts_test_<suffix>"
+npm run db:push              # skema development (JANGAN db:migrate di dev)
+SEED_MODE=demo npm run db:seed
+
+npm run verify:types:store
+npm run verify:types:admin
+npm run verify:unit:slice -- packages/logging/src/logger.test.ts \
+  packages/logging/src/http-context.test.ts \
+  packages/logging/src/policy.test.ts \
+  apps/store/src/lib/logger.test.ts apps/admin/src/lib/logger.test.ts \
+  apps/store/src/app/api/categories/route.test.ts \
+  apps/admin/src/app/api/admin/session-check/route.test.ts
+
+DATABASE_URL=<db-disposable> npm run verify:batch:e2e -- \
+  e2e/store/logging-mock.spec.ts e2e/admin/logging-mock.spec.ts
+```
+
+`packages/logging/src/policy.test.ts` adalah guard statis pasca-migrasi: ia
+memindai `apps/store/src` dan `apps/admin/src` untuk nama helper engine legacy
+dan `console.*` langsung di `apps/<app>/src/app/api`, sehingga engine yang sudah
+dihapus tidak bisa masuk lagi tanpa membuat guard ini merah.
+
+Kedua spec terdaftar pada **kedua** `testMatch` di
+[`playwright.mock.config.ts`](../../playwright.mock.config.ts) (regex memuat
+`logging`). Konfigurasi itu menjalankan app store/admin lewat dua file runner
+test-only:
+
+- [`e2e/support/logging-server.mjs`](../../e2e/support/logging-server.mjs) —
+  pembungkus `next dev` yang menyimpan stdout mentah proses app ke file artifact
+  (port/env/`reuseExistingServer` tidak berubah: store 3110, admin 3111).
+- [`e2e/support/logging-artifacts.ts`](../../e2e/support/logging-artifacts.ts) —
+  reader toleran: file belum ada, baris non-JSON (`next dev`), dan baris parsial
+  dianggap "belum teramati", supaya spec bisa `expect.poll` sampai capture
+  muncul.
+
+Artifact ditulis ke direktori sementara sistem **di luar repo**
+(`E2E_LOGGING_DIR`, dibuat dengan `mkdtemp` dan dipakai ulang bila sudah ada),
+dengan file `store-stdout.log` dan `admin-stdout.log`. Assertion-nya: tepat dua
+record per `requestId` kanonik (satu event bisnis + satu completion `GET 200`),
+envelope enam field tanpa binding bisnis, header `x-request-id` berupa UUID buatan
+server yang berbeda untuk dua request dengan incoming id sama, serta incoming id
+maupun query mentah tidak muncul di record.
+
+Bukti yang dicatat parent untuk run pilot ini: **2/2 PASS**
+(`/tmp/logging-real-e2e-green.log`), types E2E PASS
+(`/tmp/logging-e2e-types.log`), dan ESLint 0 error dengan satu warning `Pages
+dir` root (`/tmp/logging-e2e-lint.log`). RED-nya adalah header/body/ID sudah
+benar tetapi artifact capture belum ada sehingga `expect.poll` timeout
+(`/tmp/logging-real-e2e-red.log`).
+
+### Evidence gelombang migrasi logging (batch besar)
+
+Migrasi logging dieksekusi sebagai gelombang batch besar atas permintaan
+eksplisit user, jadi siklus RED→GREEN per file hanya tercatat untuk sebagian
+seam: core package 18 test, facade app 2 test, dua route pilot 5 test,
+`jubelio-sales-client.test.ts` 133 test, slice lifecycle 38 pass / 2 skipped, dan
+`jubelio-sales-settlement` 35 pass / 1 skipped.
+
+Gate akhir dijalankan **satu kali sebagai batch** (parent, 2026-10-23) pada DB
+disposable `marketplace_discounts_test_logging_01a1646c` dengan kredensial
+provider palsu, tanpa Docker, remote action, atau provider live:
+
+| Gate | Hasil |
+|---|---|
+| `npm run verify:types:store` / `verify:types:admin` | PASS keduanya |
+| `npm run verify:unit:slice -- packages/logging/src/policy.test.ts` | 3/3 PASS |
+| ESLint scoped pada seluruh 186 file TS yang berubah | 0 error |
+| `npm run lint:admin` | 0 error, 36 warning |
+| `npm run lint:store` | **1 error pre-existing** (`apps/store/src/components/Header.tsx:39`) — **tidak** hijau |
+| `npm run verify:batch:unit` | 163 file pass, 1776 test pass, 12 skipped (1788 total) |
+| Sweep mock E2E penuh (`playwright.mock.config.ts`, semua spec) | 152 pass, 0 fail |
+| `npm run build:store` + `npm run build:admin` | keduanya "Compiled successfully" |
+
+Batas bukti (jangan dikutip tanpa bagian ini):
+
+- **`lint:store` tidak hijau.** Satu-satunya error adalah
+  `react-hooks/set-state-in-effect` di `apps/store/src/components/Header.tsx:39`,
+  file tanpa diff pada pekerjaan logging — isu repo pre-existing di luar scope,
+  bukan regresi migrasi. Jangan menulis "lint kedua app bersih".
+- Skip **bukan** pass; jangan menyimpulkan distribusi penyebabnya tanpa membaca
+  log run-nya.
+- RED/GREEN per file hanya ada untuk subset seam di atas. End-state dibuktikan
+  tabel gate, bukan klaim per file yang tidak punya log RED.
+- Korelasi `requestId` pada server Next nyata tetap dipusatkan pada dua spec di
+  atas; endpoint lain memakai wrapper yang sama tetapi belum punya artifact E2E
+  sendiri. Cakupan wrapper-nya sendiri sudah penuh: store 33 dari 34 `route.ts`
+  dan admin 71 dari 72, dengan satu-satunya pengecualian `auth/[...all]/route.ts`
+  (catch-all Better Auth). Empat route store yang terakhir dibungkus —
+  `/api/addresses*`, `/api/onboarding/sync` — kini juga ber-`requestId` kanonik
+  (angka cakupan:
+  [`features/logging.md`](../features/logging.md#pengecualian-yang-harus-dibaca-bersama-tabel)).
+- Bukti diambil dari artifact stdout lokal (`E2E_LOGGING_DIR`) dan test sink;
+  jangan menambah endpoint debug/log-capture di production untuk memperoleh
+  bukti.
+- Mock E2E ini memakai provider loopback dengan kredensial palsu. Pemblokiran
+  jaringan non-loopback hanya berlaku pada run full unit, jadi jangan
+  mengklaim seluruh jaringan E2E diblokir; jalankan dengan ladder di bawah
+  (L0 → L1 → L2 → L3) untuk perubahan berikutnya.
+- Bila Playwright gagal, diagnosis hanya dari report Markdown/teks; jangan
+  membuka attachment `.png`.
 
 ## Prerequisites
 

@@ -18,7 +18,7 @@ import {
   type OrderView,
 } from "./order-finalize";
 import { reconcileJubelioChannelStatusForOrder } from "./jubelio-channel-mirror";
-import { createLogger, serializeError, type Logger } from "./logger";
+import { createModuleLogger } from "./logger";
 
 /**
  * Sales-Order settlement pipeline (plan: jubelio-sales-api-switching,
@@ -34,6 +34,72 @@ import { createLogger, serializeError, type Logger } from "./logger";
  * No automatic retry, no automatic refund, never Path 2
  * (`/sales/packlists/create-invoice-payment`).
  */
+
+/**
+ * Module-scope logger: hanya nama module yang diikat di sini. `requestId`
+ * dibaca dari scope AsyncLocalStorage saat baris ditulis, jadi membuatnya sekali
+ * ketika module dievaluasi (sebelum scope HTTP ada) adalah benar.
+ */
+const log = createModuleLogger("jubelio-sales-settlement");
+
+/**
+ * Status hasil rekonsiliasi channel-status yang boleh dicetak ke log. Nilai
+ * remote/bebas apa pun diproyeksikan menjadi `unknown`; daftar ini hanya
+ * memengaruhi baris log, bukan nilai balik atau keputusan bisnis mana pun.
+ */
+const KNOWN_MIRROR_LOG_STATUSES = [
+  "confirmed",
+  "in_flight",
+  "needs_investigation",
+  "rejected",
+  "skipped",
+  "unknown",
+] as const;
+
+type KnownMirrorLogStatus = (typeof KNOWN_MIRROR_LOG_STATUSES)[number];
+
+function isKnownMirrorLogStatus(value: string): value is KnownMirrorLogStatus {
+  return (KNOWN_MIRROR_LOG_STATUSES as readonly string[]).includes(value);
+}
+
+/** Bentuk token kode yang boleh diteruskan: uppercase + angka + underscore. */
+const SAFE_LOG_CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
+
+/** Proyeksi error statis milik module ini; teks asli provider tidak disalin. */
+class SettlementLogError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "SettlementLogError";
+    this.code = code;
+  }
+}
+
+/**
+ * Error dependency (penyimpanan/transport/gateway) diproyeksikan statis: pesan
+ * konstan milik module, dan `code` hanya bila bentuknya token aman. `message`,
+ * `stack`, `cause`, serta teks hasil provider tidak pernah disalin ke log.
+ */
+function safeDependencyErrorLog(error: unknown): SettlementLogError {
+  return new SettlementLogError(
+    "Sales-Order settlement gagal pada lapisan penyimpanan, transport atau gateway",
+    knownLogCode(error)
+  );
+}
+
+function knownLogCode(error: unknown): string | undefined {
+  try {
+    if (typeof error !== "object" || error === null || !("code" in error)) {
+      return undefined;
+    }
+    const code = error.code;
+    return typeof code === "string" && SAFE_LOG_CODE.test(code) ? code : undefined;
+  } catch {
+    // Nilai hostile (getter/proxy melempar) tidak membawa sinyal aman.
+    return undefined;
+  }
+}
 
 export type SettlementOutcome =
   | { status: "fulfilled"; pickupCode: string | null }
@@ -91,9 +157,8 @@ async function loadOrder(orderId: string): Promise<SettleOrderRow | null> {
  */
 export async function settleJubelioSalesOrder(
   orderId: string,
-  options: { logger?: Logger; readOnlyRecovery?: boolean } = {}
+  options: { readOnlyRecovery?: boolean } = {}
 ): Promise<SettlementOutcome> {
-  const log = options.logger ?? createLogger({ module: "jubelio-sales-settlement", orderId });
   const order = await loadOrder(orderId);
   if (!order || order.paymentStatus !== "paid") {
     return { status: "skipped" };
@@ -127,8 +192,10 @@ export async function settleJubelioSalesOrder(
     const message =
       "Sales-Order cancel is active while payment is paid — manual reconciliation required";
     await blockOrderFulfillment(orderId, message);
-    log.warn("settlement blocked by active cancel", { message });
-    await reconcileChannelMirrorAfterManualReview(orderId, log, "cancel_active");
+    log.warn(
+      `Order ${orderId}: settlement blocked by an active cancel, manual reconciliation required`
+    );
+    await reconcileChannelMirrorAfterManualReview(orderId, "cancel_active");
     return { status: "manual_review", message };
   }
 
@@ -145,7 +212,6 @@ export async function settleJubelioSalesOrder(
 
   const invoiceResult = await ensureJubelioInvoice({
     orderId,
-    logger: log,
     ...(recoveryForwarded ? { readOnlyRecovery: true } : {}),
   });
   if (invoiceResult.status !== "confirmed") {
@@ -154,7 +220,7 @@ export async function settleJubelioSalesOrder(
         orderId,
         `Sales-Order invoice is unverified: ${invoiceResult.message}`
       );
-      await reconcileChannelMirrorAfterManualReview(orderId, log, "invoice");
+      await reconcileChannelMirrorAfterManualReview(orderId, "invoice");
       return { status: "manual_review", message: invoiceResult.message };
     }
     return { status: "pending" };
@@ -162,7 +228,6 @@ export async function settleJubelioSalesOrder(
 
   const paymentResult = await ensureJubelioPayment({
     orderId,
-    logger: log,
     ...(recoveryForwarded ? { readOnlyRecovery: true } : {}),
   });
   if (paymentResult.status !== "confirmed") {
@@ -171,7 +236,7 @@ export async function settleJubelioSalesOrder(
         orderId,
         `Sales-Order payment is unverified: ${paymentResult.message}`
       );
-      await reconcileChannelMirrorAfterManualReview(orderId, log, "payment");
+      await reconcileChannelMirrorAfterManualReview(orderId, "payment");
       return { status: "manual_review", message: paymentResult.message };
     }
     return { status: "pending" };
@@ -195,9 +260,7 @@ export async function settleJubelioSalesOrder(
           eq(orders.status, "processing")
         )
       );
-    log.info("delivery fulfillment gate completed in processing", {
-      branchId: order.branchId,
-    });
+    log.info(`Order ${orderId}: delivery fulfillment gate completed in processing`);
     return { status: "fulfilled", pickupCode: null };
   }
 
@@ -213,7 +276,7 @@ export async function settleJubelioSalesOrder(
     pickupDate: order.pickupDate,
     pickupTime: order.pickupTime,
   };
-  const fulfilled = await fulfillPaidOrder(orderId, view, log);
+  const fulfilled = await fulfillPaidOrder(orderId, view);
   if (!fulfilled.claimed) {
     return { status: "skipped" };
   }
@@ -222,27 +285,28 @@ export async function settleJubelioSalesOrder(
   // fail or unfulfill pickup: a mirror failure is logged and left to the
   // sweep's bounded GET-only reconciliation.
   try {
-    const mirror = await reconcileJubelioChannelStatusForOrder(db, {
-      orderId,
-      logger: log,
-    });
-    log.info("channel-status mirror reconciled after fulfillment", {
-      outcome: mirrorOutcomeStatus(mirror),
-    });
+    const mirror = await reconcileJubelioChannelStatusForOrder(db, { orderId });
+    log.info(
+      `Order ${orderId}: channel-status mirror reconciled after fulfillment (${mirrorOutcomeStatusForLog(mirror)})`
+    );
   } catch (error) {
-    log.error("channel-status mirror reconciliation failed after fulfillment", {
-      error: serializeError(error),
-    });
+    log.error(
+      `Order ${orderId}: channel-status mirror reconciliation failed after fulfillment`,
+      safeDependencyErrorLog(error)
+    );
   }
   return { status: "fulfilled", pickupCode: fulfilled.pickupCode ?? null };
 }
 
-function mirrorOutcomeStatus(
+function mirrorOutcomeStatusForLog(
   mirror:
     | { status: string; [key: string]: unknown }
     | undefined
-): string {
-  return typeof mirror?.status === "string" ? mirror.status : "unknown";
+): KnownMirrorLogStatus {
+  const status = mirror?.status;
+  return typeof status === "string" && isKnownMirrorLogStatus(status)
+    ? status
+    : "unknown";
 }
 
 /**
@@ -255,22 +319,17 @@ function mirrorOutcomeStatus(
  */
 async function reconcileChannelMirrorAfterManualReview(
   orderId: string,
-  log: Logger,
   step: "cancel_active" | "invoice" | "payment"
 ): Promise<void> {
   try {
-    const mirror = await reconcileJubelioChannelStatusForOrder(db, {
-      orderId,
-      logger: log,
-    });
-    log.info("channel-status mirror reconciled after settlement manual review", {
-      step,
-      outcome: mirrorOutcomeStatus(mirror),
-    });
+    const mirror = await reconcileJubelioChannelStatusForOrder(db, { orderId });
+    log.info(
+      `Order ${orderId}: channel-status mirror reconciled after settlement manual review (${step}, ${mirrorOutcomeStatusForLog(mirror)})`
+    );
   } catch (error) {
     log.error(
-      "channel-status mirror reconciliation failed after settlement manual review",
-      { step, error: serializeError(error) }
+      `Order ${orderId}: channel-status mirror reconciliation failed after settlement manual review (${step})`,
+      safeDependencyErrorLog(error)
     );
   }
 }
@@ -281,10 +340,8 @@ async function reconcileChannelMirrorAfterManualReview(
  * missed webhook) resume exactly where their durable ledger left off.
  */
 export async function reconcileSettlements(
-  limit = 50,
-  logger?: Logger
+  limit = 50
 ): Promise<{ scanned: number; fulfilled: number; review: number; pending: number }> {
-  const log = logger ?? createLogger({ module: "settlement-reconcile" });
   const stuck = await db
     .select({
       id: orders.id,
@@ -306,7 +363,6 @@ export async function reconcileSettlements(
   let pending = 0;
   for (const row of stuck) {
     const outcome = await settleJubelioSalesOrder(row.id, {
-      logger: log,
       // Ticket 07 — a paid-but-blocked DELIVERY order re-drives through the
       // GET-only recovery (the verified manual_review ops); everything else
       // keeps the legacy (option-off) settlement.
@@ -319,12 +375,9 @@ export async function reconcileSettlements(
     else if (outcome.status === "manual_review") review++;
     else pending++;
   }
-  log.info("settlement reconciliation completed", {
-    scanned: stuck.length,
-    fulfilled,
-    review,
-    pending,
-  });
+  log.info(
+    `Settlement reconciliation completed: scanned ${stuck.length}, fulfilled ${fulfilled}, review ${review}, pending ${pending}`
+  );
   return { scanned: stuck.length, fulfilled, review, pending };
 }
 
@@ -338,7 +391,7 @@ export async function reconcileSettlements(
  */
 export async function reconcileJubelioSalesOperations(
   limit = 50,
-  options: { logger?: Logger; staleCutoffMs?: number } = {}
+  options: { staleCutoffMs?: number } = {}
 ): Promise<{
   scanned: number;
   confirmed: number;
@@ -346,7 +399,6 @@ export async function reconcileJubelioSalesOperations(
   marked: number;
   pending: number;
 }> {
-  const log = options.logger ?? createLogger({ module: "sales-op-reconcile" });
   const staleCutoff = Date.now() - (options.staleCutoffMs ?? 15 * 60_000);
   const rows = await db
     .select()
@@ -361,11 +413,6 @@ export async function reconcileJubelioSalesOperations(
   const gateway = getDefaultJubelioSalesGateway();
 
   for (const op of rows) {
-    const opLog = log.child({
-      orderId: op.orderId,
-      operationId: op.id,
-      type: op.type,
-    });
     const aged = op.dispatchedAt != null && op.dispatchedAt.getTime() < staleCutoff;
 
     if (op.type === "cancel" && op.salesOrderId != null) {
@@ -377,11 +424,11 @@ export async function reconcileJubelioSalesOperations(
           });
           if (done) {
             confirmed++;
-            await releaseConfirmedSalesOrderHold(op.orderId, opLog);
+            await releaseConfirmedSalesOrderHold(op.orderId);
             released++;
-            opLog.info("cancel reconciled by GET — hold released", {
-              salesOrderId: op.salesOrderId,
-            });
+            log.info(
+              `Order ${op.orderId}: cancel operation ${op.id} reconciled by GET, hold released (sales order ${op.salesOrderId})`
+            );
             continue;
           }
         } else if (aged) {
@@ -396,7 +443,10 @@ export async function reconcileJubelioSalesOperations(
         pending++;
         continue;
       } catch (error) {
-        opLog.warn("cancel reconcile GET failed", { error: String(error) });
+        log.warn(
+          `Order ${op.orderId}: cancel operation ${op.id} reconcile GET failed`,
+          safeDependencyErrorLog(error)
+        );
         pending++;
         continue;
       }
@@ -416,13 +466,16 @@ export async function reconcileJubelioSalesOperations(
       try {
         const step =
           op.type === "invoice"
-            ? await ensureJubelioInvoice({ orderId: op.orderId, logger: opLog })
-            : await ensureJubelioPayment({ orderId: op.orderId, logger: opLog });
+            ? await ensureJubelioInvoice({ orderId: op.orderId })
+            : await ensureJubelioPayment({ orderId: op.orderId });
         if (step.status === "confirmed") confirmed++;
         else if (step.status === "manual_review") marked++;
         else pending++;
       } catch (error) {
-        opLog.warn("settlement reconcile failed", { error: String(error) });
+        log.warn(
+          `Order ${op.orderId}: ${op.type} operation ${op.id} settlement reconcile failed`,
+          safeDependencyErrorLog(error)
+        );
         pending++;
       }
       continue;
@@ -442,12 +495,8 @@ export async function reconcileJubelioSalesOperations(
     }
   }
 
-  log.info("sales operation reconciliation completed", {
-    scanned: rows.length,
-    confirmed,
-    released,
-    marked,
-    pending,
-  });
+  log.info(
+    `Sales operation reconciliation completed: scanned ${rows.length}, confirmed ${confirmed}, released ${released}, marked ${marked}, pending ${pending}`
+  );
   return { scanned: rows.length, confirmed, released, marked, pending };
 }

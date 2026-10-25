@@ -21,6 +21,15 @@ import {
 import type { ClientAddressInput } from "@/lib/client-addresses";
 import type { RegionLevel, ShipmentRegion } from "@/lib/shipment-regions";
 import { Input } from "@/components/ui/input";
+import { ReadOnlyInput } from "@/components/ui/read-only-input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 // =========================================================
 // DeliveryQuotePanel — the checkout step-1 delivery block:
@@ -89,6 +98,21 @@ const regionLevels: RegionLevel[] = ["provinces", "cities", "districts", "areas"
 const regionFields = ["provinceId", "cityId", "districtId", "areaId"] as const;
 const regionLabels = ["Provinsi", "Kota/Kabupaten", "Kecamatan", "Kelurahan/Area"];
 
+/** Satu-satunya definisi "alamat siap dipakai" untuk draft maupun alamat terpakai. */
+function isCompleteAddress(address: ClientAddressInput | null): boolean {
+  return Boolean(
+    address &&
+      address.recipientName.trim() &&
+      address.phone.trim() &&
+      address.fullAddress.trim() &&
+      address.provinceId &&
+      address.cityId &&
+      address.districtId &&
+      address.areaId &&
+      address.postalCode
+  );
+}
+
 function CheckoutRegion({ index, parentId, value, onPick }: {
   index: number; parentId?: string; value: string; onPick: (value: string, postalCode?: string) => void;
 }) {
@@ -133,9 +157,13 @@ export default function DeliveryQuotePanel({
   repriceSync,
 }: DeliveryQuotePanelProps) {
   const [addresses, setAddresses] = useState<AddressOption[] | null>(null);
-  const [newMode, setNewMode] = useState(Boolean(initialNewAddress));
-  const [newAddress, setNewAddress] = useState<ClientAddressInput>(initialNewAddress ?? emptyAddress);
+  // Alamat baru hidup sebagai DRAFT di modal sampai customer menekan
+  // "Gunakan alamat ini"; hanya alamat terpakai yang ikut quote.
+  const [appliedNewAddress, setAppliedNewAddress] = useState<ClientAddressInput | null>(initialNewAddress ?? null);
   const [saveAddress, setSaveAddress] = useState(initialSaveAddress ?? false);
+  const [addressModalOpen, setAddressModalOpen] = useState(false);
+  const [draftAddress, setDraftAddress] = useState<ClientAddressInput>(initialNewAddress ?? emptyAddress);
+  const [draftSaveAddress, setDraftSaveAddress] = useState(initialSaveAddress ?? false);
   const [addressLoadError, setAddressLoadError] = useState(false);
   const [addressRetry, setAddressRetry] = useState(0);
   const [addressId, setAddressId] = useState<string | null>(initialAddressId ?? null);
@@ -146,6 +174,7 @@ export default function DeliveryQuotePanel({
   const [category, setCategory] = useState<DeliveryCategoryFilter>("all");
   const serviceGroupName = useId();
   const serviceOptionsId = useId();
+  const newAddressDialogId = useId();
   const [phase, setPhase] = useState<QuotePhase>("idle");
   const [error, setError] = useState<string | null>(null);
   // Request generation + AbortController so a slow/stale quote can never
@@ -194,18 +223,38 @@ export default function DeliveryQuotePanel({
     };
   }, [onAddressChange, addressRetry]);
 
-  const readyNewAddress = newMode && Boolean(newAddress.recipientName.trim() && newAddress.phone.trim() &&
-    newAddress.fullAddress.trim() && newAddress.provinceId && newAddress.cityId &&
-    newAddress.districtId && newAddress.areaId && newAddress.postalCode);
-  const destinationKey = newMode ? JSON.stringify(newAddress) : addressId;
+  const readyNewAddress = isCompleteAddress(appliedNewAddress);
+  const draftReady = isCompleteAddress(draftAddress);
+  const destinationKey = readyNewAddress && appliedNewAddress ? JSON.stringify(appliedNewAddress) : addressId;
+  const destination = readyNewAddress && appliedNewAddress
+    ? { newAddress: appliedNewAddress }
+    : addressId
+      ? { addressId }
+      : null;
   useEffect(() => {
-    onAddressSelected?.(newMode
-      ? readyNewAddress ? { id: "", recipientName: newAddress.recipientName, phone: newAddress.phone,
-        fullAddress: newAddress.fullAddress, postalCode: newAddress.postalCode } : null
-      : addresses?.find((address) => address.id === addressId) ?? null);
-    onNewAddressChange?.(readyNewAddress ? newAddress : null);
-    onSaveAddressChange?.(newMode && saveAddress);
-  }, [addresses, addressId, newMode, newAddress, readyNewAddress, saveAddress, onAddressSelected, onNewAddressChange, onSaveAddressChange]);
+    onAddressSelected?.(readyNewAddress && appliedNewAddress
+      ? { id: "", recipientName: appliedNewAddress.recipientName, phone: appliedNewAddress.phone,
+        fullAddress: appliedNewAddress.fullAddress, postalCode: appliedNewAddress.postalCode }
+      : (addresses?.find((address) => address.id === addressId) ?? null));
+    onNewAddressChange?.(readyNewAddress ? appliedNewAddress : null);
+    onSaveAddressChange?.(readyNewAddress && saveAddress);
+  }, [addresses, addressId, appliedNewAddress, readyNewAddress, saveAddress, onAddressSelected, onNewAddressChange, onSaveAddressChange]);
+
+  function openAddressModal() {
+    setDraftAddress(appliedNewAddress ?? emptyAddress);
+    setDraftSaveAddress(saveAddress);
+    setAddressModalOpen(true);
+  }
+
+  function applyDraftAddress() {
+    if (!draftReady) return;
+    userSelectedAddress.current = true;
+    setAppliedNewAddress(draftAddress);
+    setSaveAddress(draftSaveAddress);
+    setAddressId(null);
+    onAddressChange?.(null);
+    setAddressModalOpen(false);
+  }
 
   const runQuote = useCallback(
     async (generation: number, destination: { addressId: string } | { newAddress: ClientAddressInput } | null) => {
@@ -265,7 +314,6 @@ export default function DeliveryQuotePanel({
   // request (items, quantities, prices, branch). Any change clears the
   // selection and the money (no stale pricing), then re-quotes.
   useEffect(() => {
-    const destination = newMode ? readyNewAddress ? { newAddress } : null : addressId ? { addressId } : null;
     setPage(1);
     setCategory("all");
     if (!destination || itemIds.length === 0) {
@@ -288,7 +336,7 @@ export default function DeliveryQuotePanel({
       abortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- itemsKey is intentionally part of the requote key
-  }, [destinationKey, newMode, readyNewAddress, itemsKey, itemIds.length]);
+  }, [destinationKey, readyNewAddress, itemsKey, itemIds.length]);
 
   function pickService(service: DeliveryQuoteService) {
     setSelected(service);
@@ -325,14 +373,21 @@ export default function DeliveryQuotePanel({
   return (
     <section aria-label="Quote Pengiriman" className="space-y-4">
       <div>
-        <Label htmlFor="deliveryAddress" className="mb-1.5 block">
-          Alamat Pengiriman
-        </Label>
-        <Select
-          value={newMode ? "new" : addressId ?? ""}
+        <h3 className="mb-3 text-base font-semibold">Alamat Pengiriman</h3>
+        {addresses === null && !addressLoadError && (
+          <p role="status" className="mb-3 text-sm text-muted-foreground">Memuat alamat tersimpan…</p>
+        )}
+        {addresses && addresses.length === 0 && !addressLoadError && !readyNewAddress && (
+          <div className="mb-3 rounded-lg border bg-muted/30 p-4">
+            <p className="text-sm font-medium">Belum ada alamat tersimpan.</p>
+            <p className="mt-1 text-sm text-muted-foreground">Tambahkan alamat pengiriman lewat tombol di bawah.</p>
+          </div>
+        )}
+        {addresses && addresses.length > 0 && <Select
+          value={addressId ?? ""}
           onValueChange={(value) => {
             userSelectedAddress.current = true;
-            setNewMode(false);
+            setAppliedNewAddress(null);
             setAddressId(value);
             onAddressChange?.(value);
           }}
@@ -345,7 +400,6 @@ export default function DeliveryQuotePanel({
             <SelectValue placeholder="Pilih alamat pengiriman" />
           </SelectTrigger>
           <SelectContent>
-            {newMode && <SelectItem value="new">Alamat baru</SelectItem>}
             {(addresses ?? []).map((address) => (
               <SelectItem key={address.id} value={address.id} disabled={!address.regionReady}>
                 {address.fullAddress}
@@ -354,40 +408,42 @@ export default function DeliveryQuotePanel({
               </SelectItem>
             ))}
           </SelectContent>
-        </Select>
+        </Select>}
         {addressLoadError && (
           <p role="alert" className="mt-1.5 text-sm text-destructive">
             Alamat belum dapat dimuat. <Button type="button" variant="link" className="h-auto p-0" onClick={() => setAddressRetry((n) => n + 1)}>Coba lagi</Button>
           </p>
         )}
-        <Button type="button" variant="link" className="mt-1 px-0" onClick={() => {
-          userSelectedAddress.current = true;
-          setNewMode(true);
-          setAddressId(null);
-          onAddressChange?.(null);
-        }}>Gunakan alamat baru</Button>
-        {newMode && <div className="mt-3 grid gap-3 rounded-lg border p-4 sm:grid-cols-2">
-          <div><Label htmlFor="checkout-recipient">Nama Penerima</Label><Input id="checkout-recipient" value={newAddress.recipientName} onChange={(e) => setNewAddress((prev) => ({ ...prev, recipientName: e.target.value }))} /></div>
-          <div><Label htmlFor="checkout-phone">Telepon Penerima</Label><Input id="checkout-phone" value={newAddress.phone} onChange={(e) => setNewAddress((prev) => ({ ...prev, phone: e.target.value }))} /></div>
-          {regionFields.map((field, index) => <CheckoutRegion key={`${field}:${index > 0 ? newAddress[regionFields[index - 1]] : "root"}`}
-            index={index} value={newAddress[field]} parentId={index > 0 ? newAddress[regionFields[index - 1]] : undefined}
-            onPick={(id, postalCode) => setNewAddress((prev) => {
-              const next = { ...prev, [field]: id, postalCode: postalCode ?? "" };
-              for (let n = index + 1; n < regionFields.length; n++) next[regionFields[n]] = "";
-              return next;
-            })} />)}
-          <div><Label htmlFor="checkout-postal">Kode Pos</Label><Input id="checkout-postal" value={newAddress.postalCode} readOnly /></div>
-          <div className="sm:col-span-2"><Label htmlFor="checkout-street">Alamat Lengkap</Label><Input id="checkout-street" value={newAddress.fullAddress} placeholder="Jalan, nomor rumah, unit, dan patokan" onChange={(e) => setNewAddress((prev) => ({ ...prev, fullAddress: e.target.value }))} /></div>
-          <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={saveAddress} onChange={(e) => {
-            setSaveAddress(e.target.checked);
-            if (!e.target.checked) setNewAddress((prev) => ({ ...prev, isDefault: false }));
-          }} />Simpan alamat</label>
-          {saveAddress && <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={newAddress.isDefault} onChange={(e) => setNewAddress((prev) => ({ ...prev, isDefault: e.target.checked }))} />Jadikan alamat utama</label>}
-        </div>}
-        {addresses && addresses.length === 0 && !addressLoadError && !newMode && (
-          <p className="mt-1.5 text-sm text-muted-foreground">
-            Belum ada alamat tersimpan. Tambahkan alamat di akun Anda.
-          </p>
+        <Button
+          type="button"
+          variant="outline"
+          className="mt-3 w-full sm:w-auto"
+          aria-haspopup="dialog"
+          aria-expanded={addressModalOpen}
+          aria-controls={newAddressDialogId}
+          onClick={openAddressModal}
+        >
+          <span aria-hidden="true" className="text-lg leading-none">+</span>
+          Gunakan alamat baru
+        </Button>
+        {readyNewAddress && appliedNewAddress && (
+          <div role="group" aria-label="Alamat baru terpakai" className="mt-4 rounded-lg border bg-muted/30 p-4 text-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 space-y-1">
+                <p className="text-xs font-medium text-muted-foreground">Alamat pengiriman baru</p>
+                <p className="break-words font-medium">{appliedNewAddress.recipientName}</p>
+                <p className="break-words">{appliedNewAddress.phone}</p>
+                <p className="break-words">{appliedNewAddress.fullAddress}</p>
+                <p className="break-words text-muted-foreground">Kode pos {appliedNewAddress.postalCode}</p>
+                <p className="text-xs text-muted-foreground">
+                  {saveAddress ? "Akan disimpan di buku alamat." : "Tidak disimpan di buku alamat."}
+                </p>
+              </div>
+              <Button type="button" variant="outline" size="sm" onClick={openAddressModal}>
+                Ubah alamat
+              </Button>
+            </div>
+          </div>
         )}
       </div>
 
@@ -409,7 +465,7 @@ export default function DeliveryQuotePanel({
             variant="outline"
             size="sm"
             className="mt-3"
-            onClick={() => void runQuote((generationRef.current += 1), newMode ? readyNewAddress ? { newAddress } : null : addressId ? { addressId } : null)}
+            onClick={() => void runQuote((generationRef.current += 1), destination)}
           >
             Coba lagi
           </Button>
@@ -546,26 +602,74 @@ export default function DeliveryQuotePanel({
         </div>
       )}
 
-      <div className="flex justify-end">
+      <div className="space-y-3 border-t pt-4">
+        <p className="text-sm text-muted-foreground" role="status">
+          {!destination
+            ? "Pilih alamat tersimpan atau gunakan alamat baru untuk melihat ongkir."
+            : selected
+              ? "Layanan pengiriman sudah dipilih. Klik Lanjut untuk melanjutkan ke pembayaran."
+              : "Pilih layanan pengiriman sebelum melanjutkan."}
+        </p>
         <Button
           type="button"
           variant="outline"
-          size="sm"
+          className="w-full sm:w-auto"
           onClick={() => {
-            const destination = newMode ? readyNewAddress ? { newAddress } : null : addressId ? { addressId } : null;
             if (!destination) return;
             generationRef.current += 1;
             void runQuote(generationRef.current, destination);
           }}
-          disabled={phase === "loading" || (newMode ? !readyNewAddress : !addressId) || itemIds.length === 0}
+          disabled={phase === "loading" || !destination || itemIds.length === 0}
         >
           {phase === "loading" ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Memeriksa ongkir…</>
           ) : (
             "Periksa ongkir"
           )}
         </Button>
       </div>
+      <Dialog open={addressModalOpen} onOpenChange={setAddressModalOpen}>
+        <DialogContent id={newAddressDialogId} className="max-h-[90dvh] gap-0 overflow-hidden p-0 sm:max-w-2xl">
+          <div className="flex max-h-[90dvh] min-h-0 flex-col">
+          <DialogHeader className="p-6 pb-3">
+            <DialogTitle>Alamat baru</DialogTitle>
+            <DialogDescription>
+              Lengkapi alamat penerima, lalu tekan “Gunakan alamat ini” untuk menghitung ongkir ke alamat tersebut.
+            </DialogDescription>
+          </DialogHeader>
+          {/* Body scrolls; aksi utama tetap terlihat di footer (mobile 390px). */}
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
+            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2"><Label htmlFor="checkout-recipient">Nama Penerima</Label><Input id="checkout-recipient" autoComplete="shipping name" value={draftAddress.recipientName} onChange={(e) => setDraftAddress((prev) => ({ ...prev, recipientName: e.target.value }))} /></div>
+            <div className="space-y-2"><Label htmlFor="checkout-phone">Telepon Penerima</Label><Input id="checkout-phone" type="tel" autoComplete="shipping tel" value={draftAddress.phone} onChange={(e) => setDraftAddress((prev) => ({ ...prev, phone: e.target.value }))} /></div>
+            {regionFields.map((field, index) => <CheckoutRegion key={`${field}:${index > 0 ? draftAddress[regionFields[index - 1]] : "root"}`}
+              index={index} value={draftAddress[field]} parentId={index > 0 ? draftAddress[regionFields[index - 1]] : undefined}
+              onPick={(id, postalCode) => setDraftAddress((prev) => {
+                const next = { ...prev, [field]: id, postalCode: postalCode ?? "" };
+                for (let n = index + 1; n < regionFields.length; n++) next[regionFields[n]] = "";
+                return next;
+              })} />)}
+            <div className="space-y-2"><Label htmlFor="checkout-postal">Kode Pos</Label><ReadOnlyInput id="checkout-postal" value={draftAddress.postalCode} hint="Terisi otomatis dari Kelurahan/Area." /></div>
+            <div className="space-y-2 sm:col-span-2"><Label htmlFor="checkout-street">Alamat Lengkap</Label><Input id="checkout-street" value={draftAddress.fullAddress} placeholder="Jalan, nomor rumah, unit, dan patokan" onChange={(e) => setDraftAddress((prev) => ({ ...prev, fullAddress: e.target.value }))} /></div>
+            <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={draftSaveAddress} onChange={(e) => {
+              setDraftSaveAddress(e.target.checked);
+              if (!e.target.checked) setDraftAddress((prev) => ({ ...prev, isDefault: false }));
+            }} />Simpan alamat</label>
+            {draftSaveAddress && <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={draftAddress.isDefault} onChange={(e) => setDraftAddress((prev) => ({ ...prev, isDefault: e.target.checked }))} />Jadikan alamat utama</label>}
+            </div>
+          </div>
+          <DialogFooter className="gap-2 border-t p-6 pt-4">
+            {!draftReady && (
+              <p className="mr-auto self-center text-xs text-muted-foreground">
+                Lengkapi nama, telepon, wilayah, dan alamat untuk memakai alamat ini.
+              </p>
+            )}
+            <Button type="button" variant="outline" onClick={() => setAddressModalOpen(false)}>Batal</Button>
+            <Button type="button" onClick={applyDraftAddress} disabled={!draftReady}>Gunakan alamat ini</Button>
+          </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

@@ -32,7 +32,7 @@ import {
   statusMessage,
   type Batch,
   type BatchRow,
-} from "./price-change-bulk-client";
+} from "./price-change-shared";
 
 // =========================================================
 // Excel harga — template → upload (staging) → review → apply → report/retry
@@ -64,7 +64,7 @@ function targetLabel(row: BatchRow): string {
   return row.preview.inputTargetRaw ?? "—";
 }
 
-export function PriceChangeExcelClient() {
+export function PriceChangeExcelClient({ onBatchChange, onApplied }: { onBatchChange?: (batch: Batch) => void; onApplied?: () => void }) {
   const { hasPermission } = useAuth();
   const canEdit = hasPermission("prices", "edit");
 
@@ -80,7 +80,10 @@ export function PriceChangeExcelClient() {
 
   const replaceBatch = async (next: Batch) => {
     setBatch(next);
-    setRows(await loadBatchRows(next.id));
+    onBatchChange?.(next);
+    const allRows = await loadBatchRows(next.id);
+    setRows(allRows);
+    onBatchChange?.({ ...next, rows: allRows });
   };
 
   const upload = async (file: File, parentBatchId?: string) => {
@@ -186,6 +189,7 @@ export function PriceChangeExcelClient() {
       }
       applyKeyRef.current = null;
       const applied = payload.data as Batch;
+      onApplied?.();
       await replaceBatch(applied);
       const halted = haltMessage(applied.haltReason);
       if (halted !== null) toast.error(halted);
@@ -207,90 +211,65 @@ export function PriceChangeExcelClient() {
   const visibleRows = rows.slice(0, MAX_VISIBLE_ROWS);
 
   return (
-    <Card>
+    <Card className="min-w-0">
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <FileSpreadsheet className="h-5 w-5" /> Excel harga
+          <FileSpreadsheet className="h-5 w-5 shrink-0" /><h2>Import harga Excel</h2>
         </CardTitle>
-        <CardDescription>
-          Unduh template berversi, unggah workbook untuk di-review, lalu terapkan
-          baris yang valid. Setiap upload hanya staging; baris bermasalah dicatat
-          sebagai gagal dan bisa dikoreksi lewat batch baru yang tertaut ke baris
-          gagal batch asal.
-        </CardDescription>
+        <CardDescription>Siapkan file, unggah untuk review, lalu terapkan harga.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            data-testid="excel-template"
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() =>
-              window.location.assign("/api/admin/price-changes/template")
-            }
-          >
-            <Download className="h-4 w-4" /> Unduh template
-          </Button>
-          <p className="text-sm text-muted-foreground">
-            Sheet <span className="font-mono">Harga</span>, marker{" "}
-            <span className="font-mono">OKCIR_MARKDOWN_V1</span>, kolom{" "}
-            <span className="font-mono">sku</span> /{" "}
-            <span className="font-mono">action</span> /{" "}
-            <span className="font-mono">new_price</span>.
-          </p>
+        <div className="grid gap-4 lg:grid-cols-3">
+          <section aria-labelledby="price-template-step" className="min-w-0 space-y-4 rounded-lg border bg-muted/30 p-5">
+            <h3 id="price-template-step" className="font-semibold">1. Siapkan file</h3>
+            <p className="text-sm text-muted-foreground">Gunakan template untuk mengisi SKU dan harga baru.</p>
+            <Button data-testid="excel-template" type="button" variant="outline" size="sm"
+              onClick={() => window.location.assign("/api/admin/price-changes/template")}>
+              <Download className="h-4 w-4" />Unduh template
+            </Button>
+            <details className="text-sm">
+              <summary className="cursor-pointer font-medium">Format file</summary>
+              <div className="mt-3 space-y-2 break-words text-xs text-muted-foreground">
+                <p>Sheet <span className="font-mono">Harga</span>, versi <span className="font-mono">markdown_v1</span>.</p>
+                <p>Kolom <span className="font-mono">sku</span>, <span className="font-mono">action</span>, dan <span className="font-mono">new_price</span>. Gunakan template tanpa mengganti struktur kolom.</p>
+                <p>Baris gagal dapat dikoreksi melalui file baru yang tertaut ke hasil import asal.</p>
+              </div>
+            </details>
+          </section>
+          {canEdit ? (
+            <form onSubmit={submitUpload} aria-labelledby="price-upload-step" className="min-w-0 space-y-4 rounded-lg border p-5 lg:col-span-2">
+              <h3 id="price-upload-step" className="font-semibold">2. Unggah untuk review</h3>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="min-w-0 space-y-2 sm:col-span-2">
+                  <Label htmlFor="excel-file">File Excel (.xlsx)</Label>
+                  <Input id="excel-file" data-testid="excel-file" name="workbook" type="file"
+                    accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    aria-describedby="excel-upload-notice"
+                    className="h-auto min-h-10 w-full min-w-0 py-2 file:mr-3 file:cursor-pointer file:rounded-md file:border file:border-input file:bg-card file:px-3 file:py-1" />
+                </div>
+                <div className="min-w-0 space-y-2 sm:col-span-2">
+                  <Label htmlFor="excel-reason">Alasan (opsional)</Label>
+                  <Input id="excel-reason" data-testid="excel-reason" value={reason}
+                    onChange={(event) => setReason(event.target.value)} placeholder="mis. koreksi harga akhir bulan" />
+                </div>
+              </div>
+              <div className="space-y-3 border-t pt-4">
+                <Button data-testid="excel-upload" type="submit" disabled={busy}>
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}Unggah workbook
+                </Button>
+                <p id="excel-upload-notice" className="text-sm text-muted-foreground"><strong className="font-medium text-foreground">Upload belum mengubah harga.</strong> Periksa hasil sebelum menerapkan.</p>
+                {fileName !== null ? <p className="break-all text-xs text-muted-foreground">File terakhir: {fileName}</p> : null}
+              </div>
+            </form>
+          ) : <section aria-label="2. Unggah untuk review" className="rounded-lg border p-5 lg:col-span-2">
+            <h3 className="mb-3 font-semibold">2. Unggah untuk review</h3>
+            <p className="text-sm text-muted-foreground">Anda dapat mengunduh template dan laporan. Upload dan penerapan harga memerlukan izin edit harga.</p>
+          </section>}
         </div>
 
-        {canEdit ? (
-          <form
-            onSubmit={submitUpload}
-            className="flex flex-wrap items-end gap-3 rounded-md border p-3"
-          >
-            <div className="space-y-1">
-              <Label htmlFor="excel-reason">Alasan (opsional)</Label>
-              <Input
-                id="excel-reason"
-                data-testid="excel-reason"
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                placeholder="mis. koreksi harga akhir bulan"
-                className="max-w-xs"
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="excel-file">Workbook .xlsx</Label>
-              <Input
-                id="excel-file"
-                data-testid="excel-file"
-                name="workbook"
-                type="file"
-                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                className="max-w-xs"
-              />
-            </div>
-            <Button
-              data-testid="excel-upload"
-              type="submit"
-              disabled={busy}
-            >
-              {busy ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Upload className="h-4 w-4" />
-              )}
-              Unggah workbook
-            </Button>
-            {fileName !== null ? (
-              <p className="text-xs text-muted-foreground">{fileName}</p>
-            ) : null}
-          </form>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            Anda dapat mengunduh template/laporan, tetapi staging dan apply
-            memerlukan izin edit harga.
-          </p>
-        )}
-
+        <section aria-labelledby="price-review-step" className="min-w-0 space-y-4 border-t pt-6">
+          <h3 id="price-review-step" className="font-semibold">3. Review &amp; terapkan</h3>
+          {batch === null && fatal === null ? <p className="rounded-md border bg-muted/30 p-4 text-sm text-muted-foreground">Hasil review akan muncul setelah file diunggah.</p> : null}
         {fatal !== null ? (
           <div
             data-testid="excel-fatal"
@@ -308,10 +287,13 @@ export function PriceChangeExcelClient() {
         ) : null}
 
         {batch !== null ? (
-          <div className="space-y-3">
+          <div className="min-w-0 space-y-4">
+            <p className="text-sm text-muted-foreground">Setiap baris yang berhasil diterapkan langsung mengubah harga. Baris lain dapat gagal atau masih tertunda.</p>
             <div
+              id="excel-results"
+              tabIndex={-1}
               data-testid="excel-batch-summary"
-              className="flex flex-wrap items-center gap-3"
+              className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 p-4"
             >
               <Badge variant={status?.tone === "error" ? "destructive" : "secondary"}>
                 {status?.text}
@@ -473,6 +455,7 @@ export function PriceChangeExcelClient() {
             ) : null}
           </div>
         ) : null}
+        </section>
       </CardContent>
     </Card>
   );

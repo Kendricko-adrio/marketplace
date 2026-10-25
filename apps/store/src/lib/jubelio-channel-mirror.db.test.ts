@@ -964,7 +964,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.recovered).toBeGreaterThanOrEqual(1);
@@ -1017,7 +1016,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.skippedFresh).toBeGreaterThanOrEqual(1);
@@ -1053,7 +1051,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.investigated).toBeGreaterThanOrEqual(1);
@@ -1074,7 +1071,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.missedOrdersScanned).toBeGreaterThanOrEqual(1);
@@ -1122,7 +1118,6 @@ describe.skipIf(!schemaState.ready)(
 
       await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       // Ticket #06: the stale pending intent of the completed order is
@@ -1184,7 +1179,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.pendingTerminalAborted).toBeGreaterThanOrEqual(1);
@@ -1236,7 +1230,6 @@ describe.skipIf(!schemaState.ready)(
 
       await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       // #05: failed_payment orders are governed by the per-order Gagal
@@ -1303,7 +1296,6 @@ describe.skipIf(!schemaState.ready)(
 
       await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       const [readyIntent] = await getIntent(readyFixture.orderId);
@@ -1442,7 +1434,6 @@ describe.skipIf(!schemaState.ready)(
       const first = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(first.missedDispatched).toBe(1);
       expect(gateway.editCalls).toHaveLength(1);
@@ -1460,7 +1451,6 @@ describe.skipIf(!schemaState.ready)(
       const second = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(second.missedDispatched).toBe(0);
       expect(gateway.editCalls).toHaveLength(1);
@@ -1500,7 +1490,6 @@ describe.skipIf(!schemaState.ready)(
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       // Neither confirmed nor investigated orders enter the window (the
       // gateway would throw on any GET — none happens).
@@ -1824,10 +1813,6 @@ describe.skipIf(!schemaState.ready)(
   }
 );
 
-function silentLogger() {
-  return { info: () => {}, warn: () => {}, error: () => {}, child: () => silentLogger() } as never;
-}
-
 describe.skipIf(!schemaState.ready)(
   "ticket #06 — sweep finds COMPLETED orders and keeps target ordering",
   () => {
@@ -1853,7 +1838,6 @@ describe.skipIf(!schemaState.ready)(
       const first = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(first.missedOrdersScanned).toBeGreaterThanOrEqual(1);
       expect(first.missedDispatched).toBeGreaterThanOrEqual(1);
@@ -1869,7 +1853,6 @@ describe.skipIf(!schemaState.ready)(
       const second = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(second.missedDispatched).toBe(0);
       expect(gateway.editCalls).toHaveLength(1);
@@ -1897,7 +1880,6 @@ describe.skipIf(!schemaState.ready)(
       await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       const [intent] = await getIntent(fixture.orderId);
@@ -1911,7 +1893,6 @@ describe.skipIf(!schemaState.ready)(
       const second = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(second.missedDispatched).toBe(0);
       expect(gateway.editCalls).toHaveLength(1);
@@ -1937,7 +1918,6 @@ describe.skipIf(!schemaState.ready)(
       await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       const intents = await getIntent(fixture.orderId);
@@ -2156,7 +2136,6 @@ describe.skipIf(!schemaState.ready)(
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       // The scan→write boundary does not treat the id-0 row as a verified
@@ -2192,7 +2171,6 @@ describe.skipIf(!schemaState.ready)(
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 50,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(summary.verifikasiOrdersScanned).toBe(0);
       expect(await getIntent(fixture.orderId)).toHaveLength(0);
@@ -2213,7 +2191,6 @@ describe.skipIf(!schemaState.ready)(
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 50,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(summary.gagalBayarOrdersScanned).toBe(0);
       expect(await getIntent(fixture.orderId)).toHaveLength(0);
@@ -2270,7 +2247,6 @@ describe.skipIf(!schemaState.ready)(
         return reconcileChannelStatusMirrorForSweep(db!, {
           limit: 1,
           gateway: g as unknown as JubelioSalesGateway,
-          logger: silentLogger(),
         });
       };
 
@@ -2324,7 +2300,6 @@ describe.skipIf(!schemaState.ready)(
 
       await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: controlledGateway({ editSnapshot: hostile }) as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       const [intent] = await getIntent(fixture.orderId);
@@ -2361,7 +2336,6 @@ describe.skipIf(!schemaState.ready)(
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 1,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       // The bounded window must SKIP the create+invoice-only order entirely
@@ -2425,7 +2399,6 @@ describe.skipIf(!schemaState.ready)(
         return reconcileChannelStatusMirrorForSweep(db!, {
           limit: 2,
           gateway,
-          logger: silentLogger(),
         });
       };
 
@@ -2878,7 +2851,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.verifikasiOrdersScanned).toBeGreaterThanOrEqual(1);
@@ -2896,7 +2868,6 @@ describe.skipIf(!schemaState.ready)(
       // bounded window — no duplicate POST.
       const second = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(summary.verifikasiDispatched).toBe(1);
       expect(gateway.editCalls).toHaveLength(1);
@@ -2919,7 +2890,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(gateway.editCalls).toHaveLength(0);
@@ -2950,7 +2920,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.missedDispatched).toBeGreaterThanOrEqual(1);
@@ -2995,7 +2964,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.recovered).toBeGreaterThanOrEqual(1);
@@ -3334,7 +3302,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.gagalBayarOrdersScanned).toBeGreaterThanOrEqual(1);
@@ -3352,7 +3319,6 @@ describe.skipIf(!schemaState.ready)(
       // the bounded window — no duplicate POST.
       const second = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(gateway.editCalls).toHaveLength(1);
       expect(await getIntent(fixture.orderId)).toHaveLength(1);
@@ -3392,7 +3358,6 @@ describe.skipIf(!schemaState.ready)(
 
       const first = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(gateway.editCalls).toHaveLength(0); // zero POST
@@ -3409,7 +3374,6 @@ describe.skipIf(!schemaState.ready)(
       // the second pass scans no Gagal Bayar orders at all.
       const second = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(second.gagalBayarOrdersScanned).toBe(0);
       expect(gateway.editCalls).toHaveLength(0);
@@ -3441,7 +3405,6 @@ describe.skipIf(!schemaState.ready)(
 
       await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(gateway.editCalls).toHaveLength(1);
@@ -3573,7 +3536,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.missedDispatched).toBeGreaterThanOrEqual(1);
@@ -3670,7 +3632,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: controlledGateway({}) as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       const [failedIntent] = await getIntent(failedFixture.orderId);

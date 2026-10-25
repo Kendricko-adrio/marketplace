@@ -23,7 +23,7 @@ import {
   type JubelioSalesOrderExpectation,
 } from "./jubelio-sales-expected";
 import type { PersistedOrderPricingRow } from "./versioned-pricing";
-import { createLogger, serializeError, type Logger } from "./logger";
+import { createModuleLogger } from "./logger";
 
 /**
  * Durable per-order channel-status mirror reconciliation (tickets #03, #04,
@@ -115,6 +115,73 @@ import { createLogger, serializeError, type Logger } from "./logger";
  * remains a FUTURE-FACING CONTRACT ONLY: no lawful runtime `cancelled`
  * writer exists, so nothing dispatches it and no cancel API/UI is added.
  */
+
+/**
+ * Module-scope logger: hanya nama module yang di-bind di sini. Field korelasi
+ * dibaca dari scope aktif saat baris ditulis, jadi aman dibuat sekali saat
+ * import (sebelum ada request scope). Satu module untuk per-order seam dan
+ * sweep — keduanya bagian dari mirror yang sama.
+ */
+const log = createModuleLogger("jubelio-channel-mirror");
+
+/**
+ * Technical failure codes this module is allowed to describe in a log line.
+ * Every value is a literal owned here — never text copied from a provider,
+ * transport or persistence layer.
+ */
+type ChannelMirrorLogCode = "AMBIGUOUS" | "TRANSIENT" | "DEFINITIVE";
+
+/**
+ * Safe technical projection for the `error` field of this module's log lines.
+ *
+ * The logging core keeps the `name`/`message`/`stack`/`cause` of whatever it is
+ * given, redacted by shape only. Passing a raw caught value would therefore
+ * publish free text that a provider, transport or persistence layer put into
+ * `message`, `stack` or `cause`. This class is consequently the ONLY value this
+ * module hands to a log line: the message is chosen here and the optional
+ * `code` is one of the allowlisted literals above.
+ *
+ * The caught value is never lost from the business flow: the returned outcome
+ * and every thrown error keep their own message, classification and ids
+ * exactly as before.
+ */
+class ChannelMirrorDependencyError extends Error {
+  readonly code?: ChannelMirrorLogCode;
+
+  constructor(message: string, code?: ChannelMirrorLogCode) {
+    super(message);
+    this.name = "ChannelMirrorDependencyError";
+    this.code = code;
+  }
+}
+
+/**
+ * Classifies a caught dependency failure into the static projection above. The
+ * kind is derived from the gateway's own boolean classification flags, never
+ * from provider-controlled text; every other caught value is described
+ * generically, because its text belongs to the layer that threw it.
+ */
+function safeDependencyErrorLog(error: unknown): ChannelMirrorDependencyError {
+  try {
+    if (error instanceof JubelioSalesGatewayError) {
+      const kind: ChannelMirrorLogCode = error.options.ambiguous
+        ? "AMBIGUOUS"
+        : error.options.retryable
+          ? "TRANSIENT"
+          : "DEFINITIVE";
+      return new ChannelMirrorDependencyError(
+        "Jubelio channel mirror gagal pada lapisan gateway atau penyimpanan",
+        kind
+      );
+    }
+  } catch {
+    // A hostile value (throwing getter or proxy trap) carries no safe signal:
+    // fall through to the generic projection instead of failing the caller.
+  }
+  return new ChannelMirrorDependencyError(
+    "Jubelio channel mirror gagal pada lapisan gateway atau penyimpanan"
+  );
+}
 
 // Accept both the complete app DB schema and the focused test schema: these
 // operations need only the SQL query builders.
@@ -1363,9 +1430,8 @@ async function recoverPossiblySentIntent(input: {
   intent: JubelioChannelStatusIntent;
   context: MirrorContext;
   gateway: JubelioSalesGateway;
-  log: Logger;
 }): Promise<ReconcileChannelStatusOutcome> {
-  const { db, intent, context, gateway, log } = input;
+  const { db, intent, context, gateway } = input;
   // Ticket 01: the recovery read is version-aware too. The PAIRED stored
   // records (create intent + order pricing row) are validated before ANY
   // provider read — an unknown/malformed pair or a drifting snapshot is a
@@ -1381,8 +1447,7 @@ async function recoverPossiblySentIntent(input: {
       { reason: authority.reason }
     );
     log.error(
-      "channel-status recovery refused by the stored provider contract — no provider read, investigation recorded",
-      { salesOrderId: intent.salesOrderId, reason: authority.reason }
+      `Order ${intent.orderId}: channel-status recovery refused by the stored provider contract — no provider read, investigation recorded (sales order ${intent.salesOrderId}, ${authority.reason})`
     );
     if (reviewed) {
       return {
@@ -1411,10 +1476,9 @@ async function recoverPossiblySentIntent(input: {
         observedStatus: observed,
       });
       if (confirmed) {
-        log.info("channel-status edit recovered by GET", {
-          salesOrderId: intent.salesOrderId,
-          targetVersion: intent.targetVersion,
-        });
+        log.info(
+          `Order ${intent.orderId}: channel-status edit recovered by GET (sales order ${intent.salesOrderId}, target version ${intent.targetVersion}, ${intent.targetStatus})`
+        );
         return { status: "confirmed", intent: confirmed };
       }
       return { status: "in_flight", message: "Recovery claim was lost", intent };
@@ -1429,20 +1493,19 @@ async function recoverPossiblySentIntent(input: {
         observedStatus: observed,
       }
     );
-    log.error("channel-status recovery found no confirmed target — investigation recorded", {
-      salesOrderId: intent.salesOrderId,
-      reason: mismatch ?? "RECOVERY_MARKER_NOT_OBSERVED",
-    });
+    log.error(
+      `Order ${intent.orderId}: channel-status recovery found no confirmed target — investigation recorded (sales order ${intent.salesOrderId}, ${mismatch ?? "RECOVERY_MARKER_NOT_OBSERVED"})`
+    );
     if (reviewed) {
       return { status: "needs_investigation", message: "Recovery mismatch", intent: reviewed };
     }
     return { status: "in_flight", message: "Recovery claim was lost", intent };
   } catch (error) {
     const classified = classifyGatewayError(error);
-    log.warn("channel-status recovery GET failed", {
-      salesOrderId: intent.salesOrderId,
-      error: serializeError(error),
-    });
+    log.warn(
+      `Order ${intent.orderId}: channel-status recovery GET failed (sales order ${intent.salesOrderId})`,
+      safeDependencyErrorLog(error)
+    );
     if (classified.kind === "ambiguous" || classified.kind === "transient") {
       // Ambiguous or transient GET failure: stay possibly_sent; the next
       // bounded sweep retries GET-only (never a re-POST).
@@ -1551,8 +1614,7 @@ export async function abortPendingIntentForStartedCancel(
 async function cancelBlockedGagalBayarDisposition(
   db: ChannelMirrorDb,
   context: MirrorContext,
-  orderId: string,
-  log: Logger
+  orderId: string
 ): Promise<ReconcileChannelStatusOutcome> {
   const salesOrderId = context.create?.salesOrderId;
   const latest = await getLatestJubelioChannelStatusIntent(db, orderId);
@@ -1560,13 +1622,7 @@ async function cancelBlockedGagalBayarDisposition(
     const aborted = await abortPendingIntentForStartedCancel(db, latest.id);
     if (aborted) {
       log.warn(
-        "gagal bayar marker withheld — Sales-Order cancel path started (durable mismatch recorded)",
-        {
-          orderId,
-          salesOrderId: latest.salesOrderId,
-          staleTarget: latest.targetStatus,
-          supersededVersion: latest.targetVersion,
-        }
+        `Order ${orderId}: gagal bayar marker withheld — Sales-Order cancel path started, durable mismatch recorded (sales order ${latest.salesOrderId}, stale target ${latest.targetStatus}, version ${latest.targetVersion})`
       );
       return { status: "skipped", reason: "cancel_started" };
     }
@@ -1620,11 +1676,9 @@ async function cancelBlockedGagalBayarDisposition(
       intent: recorded.intent,
     };
   }
-  log.warn("gagal bayar marker withheld — Sales-Order cancel path started (durable mismatch recorded)", {
-    orderId,
-    salesOrderId,
-    supersededVersion: recorded.intent.targetVersion,
-  });
+  log.warn(
+    `Order ${orderId}: gagal bayar marker withheld — Sales-Order cancel path started, durable mismatch recorded (sales order ${salesOrderId}, version ${recorded.intent.targetVersion})`
+  );
   return { status: "skipped", reason: "cancel_started" };
 }
 
@@ -1639,14 +1693,10 @@ export async function reconcileJubelioChannelStatusForOrder(
   input: {
     orderId: string;
     gateway?: JubelioSalesGateway;
-    logger?: Logger;
     /** Test/sweep override for the fresh-claim in-flight guard cutoff. */
     staleCutoffMs?: number;
   }
 ): Promise<ReconcileChannelStatusOutcome> {
-  const log =
-    input.logger?.child({ orderId: input.orderId, module: "jubelio-channel-mirror" }) ??
-    createLogger({ module: "jubelio-channel-mirror", orderId: input.orderId });
   const context = await loadMirrorContext(db, input.orderId);
   if (!context || !context.create) {
     return { status: "skipped", reason: "not_eligible" };
@@ -1660,7 +1710,7 @@ export async function reconcileJubelioChannelStatusForOrder(
     // recorded and immediately aborted, deduped per order) instead of any
     // edit. Zero POST, zero GET; the cancel/hold release is untouched.
     if (isGagalBayarBlockedByStartedCancel(context)) {
-      return cancelBlockedGagalBayarDisposition(db, context, input.orderId, log);
+      return cancelBlockedGagalBayarDisposition(db, context, input.orderId);
     }
     // Neither a committed ready+verified state (`Siap Proses`) nor a
     // paid-but-blocked operator investigation (`Menunggu Verifikasi`): a
@@ -1715,7 +1765,6 @@ export async function reconcileJubelioChannelStatusForOrder(
         intent: latest,
         context,
         gateway: input.gateway ?? getDefaultJubelioChannelMirrorGateway(),
-        log,
       });
     }
     if (latest.status === "rejected") {
@@ -1747,23 +1796,18 @@ export async function reconcileJubelioChannelStatusForOrder(
       targetStatus: derivedTarget,
     });
     if (!superseded) {
-      log.warn("stale pending channel intent not superseded — committed state changed", {
-        orderId: input.orderId,
-        staleTarget: latest.targetStatus,
-        derivedTarget,
-      });
+      log.warn(
+        `Order ${input.orderId}: stale pending channel intent not superseded — committed state changed (stale target ${latest.targetStatus}, derived target ${derivedTarget})`
+      );
       return {
         status: "in_flight",
         message: "Stale pending intent not superseded",
         intent: latest,
       };
     }
-    log.info("stale pending channel intent superseded by the committed local state", {
-      orderId: input.orderId,
-      staleTarget: latest.targetStatus,
-      supersededVersion: latest.targetVersion,
-      derivedTarget,
-    });
+    log.info(
+      `Order ${input.orderId}: stale pending channel intent superseded by the committed local state (stale target ${latest.targetStatus}, version ${latest.targetVersion}, derived target ${derivedTarget})`
+    );
     const recorded = await recordJubelioChannelStatusIntent(db, {
       orderId: input.orderId,
       salesOrderId,
@@ -1803,7 +1847,7 @@ export async function reconcileJubelioChannelStatusForOrder(
       derivedTarget === CHANNEL_STATUS_GAGAL_BAYAR &&
       claimed.reason === "cancel_started"
     ) {
-      return cancelBlockedGagalBayarDisposition(db, context, input.orderId, log);
+      return cancelBlockedGagalBayarDisposition(db, context, input.orderId);
     }
     return { status: "in_flight", message: "Dispatch claim lost", intent };
   }
@@ -1826,8 +1870,7 @@ export async function reconcileJubelioChannelStatusForOrder(
       { reason: authority.reason }
     );
     log.error(
-      "channel edit refused by the stored provider contract — zero provider read, investigation recorded",
-      { salesOrderId, reason: authority.reason }
+      `Order ${input.orderId}: channel edit refused by the stored provider contract — zero provider read, investigation recorded (sales order ${salesOrderId}, ${authority.reason})`
     );
     if (reviewed) {
       return {
@@ -1856,10 +1899,10 @@ export async function reconcileJubelioChannelStatusForOrder(
       // failure after the claim: the edit was NOT yet attempted — keep the
       // claim possibly_sent so the sweep retries with an aged GET-only
       // pass. Never an investigation for a transient read failure.
-      log.warn("channel edit pre-read failed transiently — stays possibly_sent", {
-        salesOrderId,
-        error: serializeError(error),
-      });
+      log.warn(
+        `Order ${input.orderId}: channel edit pre-read failed transiently — stays possibly_sent (sales order ${salesOrderId})`,
+        safeDependencyErrorLog(error)
+      );
       return { status: "in_flight", message: classified.message, intent: claimedIntent };
     }
     // Definitive read failure (incomplete shape / canceled / unknown SO):
@@ -1871,10 +1914,9 @@ export async function reconcileJubelioChannelStatusForOrder(
         reason: safeLocalEditCode(classified.code) ?? "PRE_READ_FAILED",
       }
     );
-    log.error("channel edit pre-read failed closed — investigation recorded", {
-      salesOrderId,
-      reason: safeLocalEditCode(classified.code) ?? "PRE_READ_FAILED",
-    });
+    log.error(
+      `Order ${input.orderId}: channel edit pre-read failed closed — investigation recorded (sales order ${salesOrderId}, ${safeLocalEditCode(classified.code) ?? "PRE_READ_FAILED"})`
+    );
     if (reviewed) {
       return { status: "needs_investigation", message: classified.message, intent: reviewed };
     }
@@ -1893,10 +1935,9 @@ export async function reconcileJubelioChannelStatusForOrder(
       claimedIntent.id,
       { reason: preMismatch, observedStatus: preRead.channelStatus }
     );
-    log.error("channel edit pre-read mismatch — zero POST, investigation recorded", {
-      salesOrderId,
-      reason: preMismatch,
-    });
+    log.error(
+      `Order ${input.orderId}: channel edit pre-read mismatch — zero POST, investigation recorded (sales order ${salesOrderId}, ${preMismatch})`
+    );
     if (reviewed) {
       return { status: "needs_investigation", message: preMismatch, intent: reviewed };
     }
@@ -1954,8 +1995,7 @@ export async function reconcileJubelioChannelStatusForOrder(
       const aborted = await abortClaimedIntentForStartedCancel(db, claimedIntent.id);
       if (aborted) {
         log.warn(
-          "gagal bayar marker withheld at the pre-POST boundary — Sales-Order cancel path started (zero POST)",
-          { orderId: input.orderId, salesOrderId }
+          `Order ${input.orderId}: gagal bayar marker withheld at the pre-POST boundary — Sales-Order cancel path started, zero POST (sales order ${salesOrderId})`
         );
         return { status: "skipped", reason: "cancel_started" };
       }
@@ -1993,17 +2033,16 @@ export async function reconcileJubelioChannelStatusForOrder(
         intent: claimedIntent,
       };
     }
-    log.info("channel status edit confirmed by GET", {
-      salesOrderId,
-      targetVersion: claimedIntent.targetVersion,
-    });
+    log.info(
+      `Order ${input.orderId}: channel status edit confirmed by GET (sales order ${salesOrderId}, ${derivedTarget}, target version ${claimedIntent.targetVersion})`
+    );
     return { status: "confirmed", intent: confirmed };
   } catch (error) {
     const classified = classifyGatewayError(error);
     if (classified.kind === "ambiguous") {
       log.error(
-        "channel edit outcome unknown — stays possibly_sent for GET-only recovery",
-        { salesOrderId, error: serializeError(error) }
+        `Order ${input.orderId}: channel edit outcome unknown — stays possibly_sent for GET-only recovery (sales order ${salesOrderId})`,
+        safeDependencyErrorLog(error)
       );
       return { status: "in_flight", message: classified.message, intent: claimedIntent };
     }
@@ -2026,10 +2065,9 @@ export async function reconcileJubelioChannelStatusForOrder(
         claimedIntent.id,
         { reason: localRefusalCode }
       );
-      log.error("channel edit failed closed locally — investigation recorded", {
-        salesOrderId,
-        reason: localRefusalCode,
-      });
+      log.error(
+        `Order ${input.orderId}: channel edit failed closed locally — investigation recorded (sales order ${salesOrderId}, ${localRefusalCode})`
+      );
       if (reviewed) {
         return {
           status: "needs_investigation",
@@ -2047,7 +2085,9 @@ export async function reconcileJubelioChannelStatusForOrder(
       // only.
       { reason: "EDIT_PROVIDER_REJECTED" }
     );
-    log.warn("channel edit definitively rejected", { salesOrderId });
+    log.warn(
+      `Order ${input.orderId}: channel edit definitively rejected for sales order ${salesOrderId}`
+    );
     if (rejected) {
       return { status: "rejected", message: classified.message, intent: rejected };
     }
@@ -2496,13 +2536,11 @@ export async function reconcileChannelStatusMirrorForSweep(
     limit?: number;
     staleCutoffMs?: number;
     gateway?: JubelioSalesGateway;
-    logger?: Logger;
   } = {}
 ): Promise<ChannelStatusSweepSummary> {
   const limit = input.limit ?? 50;
   const staleCutoffMs = input.staleCutoffMs ?? CHANNEL_STATUS_MIRROR_STALE_CUTOFF_MS;
   const gateway = input.gateway ?? getDefaultJubelioChannelMirrorGateway();
-  const log = input.logger ?? createLogger({ module: "jubelio-channel-sweep" });
   const summary: ChannelStatusSweepSummary = {
     possiblySentScanned: 0,
     skippedFresh: 0,
@@ -2555,7 +2593,6 @@ export async function reconcileChannelStatusMirrorForSweep(
         intent,
         context,
         gateway,
-        log,
       });
       if (outcome.status === "confirmed") summary.recovered++;
       else if (outcome.status === "needs_investigation") summary.investigated++;
@@ -2567,11 +2604,10 @@ export async function reconcileChannelStatusMirrorForSweep(
         await touchChannelStatusIntentForRotation(db, intent.id);
       }
     } catch (error) {
-      log.warn("channel-status sweep recovery failed", {
-        orderId: intent.orderId,
-        salesOrderId: intent.salesOrderId,
-        error: serializeError(error),
-      });
+      log.warn(
+        `Order ${intent.orderId}: channel-status sweep recovery failed (sales order ${intent.salesOrderId})`,
+        safeDependencyErrorLog(error)
+      );
       summary.stillUnknown++;
       // Same rotation, no arbitrary error text persisted.
       await touchChannelStatusIntentForRotation(db, intent.id);
@@ -2671,10 +2707,10 @@ export async function reconcileChannelStatusMirrorForSweep(
       if (aborted) summary.pendingTerminalAborted++;
       else summary.pendingTerminalSkipped++;
     } catch (error) {
-      log.warn("channel-status sweep pending-terminal disposition failed", {
-        orderId: row.orderId,
-        error: serializeError(error),
-      });
+      log.warn(
+        `Order ${row.orderId}: channel-status sweep pending-terminal disposition failed`,
+        safeDependencyErrorLog(error)
+      );
       summary.pendingTerminalSkipped++;
     }
   }
@@ -2804,14 +2840,13 @@ export async function reconcileChannelStatusMirrorForSweep(
       const outcome = await reconcileJubelioChannelStatusForOrder(db, {
         orderId: row.id,
         gateway,
-        logger: log,
       });
       if (outcome.status === "confirmed") summary.missedDispatched++;
     } catch (error) {
-      log.warn("channel-status sweep missed-order reconciliation failed", {
-        orderId: row.id,
-        error: serializeError(error),
-      });
+      log.warn(
+        `Order ${row.id}: channel-status sweep missed-order reconciliation failed`,
+        safeDependencyErrorLog(error)
+      );
       summary.missedFailed++;
     }
   }
@@ -2900,14 +2935,13 @@ export async function reconcileChannelStatusMirrorForSweep(
       const outcome = await reconcileJubelioChannelStatusForOrder(db, {
         orderId: row.id,
         gateway,
-        logger: log,
       });
       if (outcome.status === "confirmed") summary.verifikasiDispatched++;
     } catch (error) {
-      log.warn("channel-status sweep paid-but-blocked reconciliation failed", {
-        orderId: row.id,
-        error: serializeError(error),
-      });
+      log.warn(
+        `Order ${row.id}: channel-status sweep paid-but-blocked reconciliation failed`,
+        safeDependencyErrorLog(error)
+      );
       summary.verifikasiFailed++;
     }
   }
@@ -3012,18 +3046,19 @@ export async function reconcileChannelStatusMirrorForSweep(
       const outcome = await reconcileJubelioChannelStatusForOrder(db, {
         orderId: row.id,
         gateway,
-        logger: log,
       });
       if (outcome.status === "confirmed") summary.gagalBayarDispatched++;
     } catch (error) {
-      log.warn("channel-status sweep failed-payment reconciliation failed", {
-        orderId: row.id,
-        error: serializeError(error),
-      });
+      log.warn(
+        `Order ${row.id}: channel-status sweep failed-payment reconciliation failed`,
+        safeDependencyErrorLog(error)
+      );
       summary.gagalBayarFailed++;
     }
   }
 
-  log.info("channel-status mirror sweep completed", { ...summary });
+  log.info(
+    `Channel-status mirror sweep completed (possibly-sent scanned ${summary.possiblySentScanned}, fresh ${summary.skippedFresh}, recovered ${summary.recovered}, investigated ${summary.investigated}, still unknown ${summary.stillUnknown}, pending-terminal aborted ${summary.pendingTerminalAborted}, skipped ${summary.pendingTerminalSkipped}, missed scanned ${summary.missedOrdersScanned}, missed dispatched ${summary.missedDispatched}, missed failed ${summary.missedFailed}, verifikasi scanned ${summary.verifikasiOrdersScanned}, verifikasi dispatched ${summary.verifikasiDispatched}, verifikasi failed ${summary.verifikasiFailed}, gagal bayar scanned ${summary.gagalBayarOrdersScanned}, gagal bayar dispatched ${summary.gagalBayarDispatched}, gagal bayar failed ${summary.gagalBayarFailed})`
+  );
   return summary;
 }

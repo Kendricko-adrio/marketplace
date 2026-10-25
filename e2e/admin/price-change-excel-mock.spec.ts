@@ -286,12 +286,20 @@ test.afterAll(async () => {
   await pool.end();
 });
 
-test("template berversi diunduh lewat HTTP dan bisa dibaca reader independen", async () => {
+test("UI dan template memakai markdown_v1 tanpa label merek", async () => {
+  const page = await hqContext.newPage();
+  await page.goto("/admin/products/harga");
+  await page.getByRole("button", { name: "Import Excel", exact: true }).click();
+  await page.getByText("Format file", { exact: true }).click();
+  await expect(page.getByText("markdown_v1", { exact: true })).toBeVisible();
+  await expect(page.locator("main")).not.toContainText(/okcir/i);
+  await page.close();
   const response = await hqContext.request.get("/api/admin/price-changes/template");
   expect(response.status()).toBe(200);
   expect(response.headers()["content-type"]).toContain("spreadsheetml.sheet");
   const sheet = sheetOf(new Uint8Array(await response.body()));
-  expect(sheet).toContain(">OKCIR_MARKDOWN_V1<");
+  expect(sheet).toContain(">markdown_v1<");
+  expect(sheet).not.toMatch(/okcir/i);
   expect(sheet).toContain(">sku<");
   expect(sheet).toContain(">action<");
   expect(sheet).toContain(">new_price<");
@@ -319,6 +327,7 @@ test("upload staging, apply parsial, laporan dan subset gagal yang jujur", async
 
   const page = await hqContext.newPage();
   await page.goto("/admin/products/harga");
+  await page.getByRole("button", { name: "Import Excel", exact: true }).click();
   await page.getByTestId("excel-file").setInputFiles({
     name: "harga-e2e.xlsx",
     mimeType: XLSX_MIME,
@@ -410,6 +419,7 @@ test("koreksi subset gagal menjadi batch baru tertaut, tanpa mengulang baris lam
 
   const page = await hqContext.newPage();
   await page.goto("/admin/products/harga");
+  await page.getByRole("button", { name: "Import Excel", exact: true }).click();
   await page.getByTestId("excel-file").setInputFiles({
     name: "harga-e2e.xlsx",
     mimeType: XLSX_MIME,
@@ -520,6 +530,7 @@ test("workbook fatal ditolak sebelum ada batch atau harga berubah", async () => 
 
   const page = await hqContext.newPage();
   await page.goto("/admin/products/harga");
+  await page.getByRole("button", { name: "Import Excel", exact: true }).click();
   await page.getByTestId("excel-file").setInputFiles({
     name: "macro.xlsm",
     mimeType: XLSX_MIME,

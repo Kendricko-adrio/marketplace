@@ -283,6 +283,54 @@ describe.skipIf(!dbReady)(
       await setGate("1");
     });
 
+    it("list memfilter jalur sebelum pagination, memberi count kedua jalur, revision dan kapasitas global tanpa literal kode", async () => {
+      const before = await listDiscountOffers({ state: "archived", limit: 50 }, ACTOR);
+      const owned: string[] = [];
+      for (const activationKind of ["public", "public", "manual_only"] as const) {
+        const created = await createPublicDraftOffer({ requestKey: uuid(), activationKind,
+          ...(activationKind === "manual_only" ? { codes: ["UXLISTSECRET2026"] } : {}),
+        }, ACTOR);
+        const saved = await saveDiscountOfferDraft({ offerId: created.data.id,
+          expectedOfferVersion: created.data.version, expectedDraftVersion: created.data.draftVersion,
+          terms: { ...DRAFT_TERMS, benefit: { kind: "shipping", paramsVersion: 1, capAmount: "20000" } },
+        }, ACTOR);
+        const policy = await setDiscountOfferPolicy({ offerId: saved.id, requestKey: uuid(),
+          expectedOfferVersion: saved.version, expectedPolicyVersion: saved.policyVersion,
+          quotaCount: 100, budgetAmount: "2000000", perClientLimit: 1,
+        }, ACTOR);
+        const reviewed = await reviewDiscountOffer({ offerId: saved.id,
+          expectedOfferVersion: policy.data.version, expectedDraftVersion: policy.data.draftVersion,
+        }, ACTOR);
+        const published = await publishDiscountOffer({ offerId: saved.id, requestKey: uuid(),
+          expectedOfferVersion: reviewed.offerVersion, expectedDraftVersion: reviewed.draftVersion,
+          expectedPolicyVersion: reviewed.policyVersion, reviewFingerprint: reviewed.fingerprint,
+        }, ACTOR);
+        await setDiscountOfferState({ offerId: saved.id, requestKey: uuid(),
+          expectedVersion: published.data.version, state: "archived",
+        }, ACTOR);
+        await pool!.query("UPDATE discount_offer_usage SET consumed_count=90,reserved_count=10,consumed_amount=1800000,reserved_amount=200000 WHERE offer_id=$1", [saved.id]);
+        owned.push(saved.id);
+      }
+      const first = await listDiscountOffers({ activationKind: "public", state: "archived", limit: 1 }, ACTOR);
+      expect(first.countsByActivationKind.public).toBe(before.countsByActivationKind.public + 2);
+      expect(first.countsByActivationKind.manual_only).toBe(before.countsByActivationKind.manual_only + 1);
+      expect(first.pagination.total).toBe(before.countsByActivationKind.public + 2);
+      expect(first.data).toHaveLength(1);
+      expect(first.data[0].activationKind).toBe("public");
+      const all = await listDiscountOffers({ state: "archived", limit: 50 }, VIEW_ACTOR);
+      const row = all.data.find((offer) => offer.id === owned[0])!;
+      expect(row.liveRevision).toMatchObject({ revisionNo: 1, kind: "shipping", scope: "shipping", capAmount: "20000" });
+      expect(row.capacitySummary).toMatchObject({ basis: "global", availableCount: 0, availableAmount: "0", consumedCount: 90, heldCount: 10 });
+      const manual = await listDiscountOffers({ activationKind: "manual_only", state: "archived", limit: 50 }, ACTOR);
+      expect(manual.data.every((offer) => offer.activationKind === "manual_only")).toBe(true);
+      expect(JSON.stringify(manual)).not.toContain("UXLISTSECRET2026");
+      expect(manual.data.find((offer) => offer.id === owned[2])?.codes[0].maskedCode).toContain("•");
+      await pool!.query("DELETE FROM discount_offer_usage WHERE offer_id=$1", [owned[0]]);
+      const missing = await listDiscountOffers({ state: "archived", limit: 50 }, ACTOR);
+      expect(missing.data.find((offer) => offer.id === owned[0])?.capacitySummary).toBeNull();
+      await expect(listDiscountOffers({ activationKind: "invalid" }, ACTOR)).rejects.toMatchObject({ code: "INPUT_INVALID" });
+    });
+
     // =========================================================
 // Seam T — Manual Promo Code administration (ticket 09)
 // =========================================================

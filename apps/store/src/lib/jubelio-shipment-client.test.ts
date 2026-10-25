@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-vi.mock("./logger", () => ({ createLogger: () => ({ info: vi.fn(), error: vi.fn() }), serializeError: () => ({ name: "Error" }) }));
 const input = { origin: { zipcode: "10110", name: "Branch", phone: "021999999" }, destination: { zipcode: "01234", area_id: "01010101" }, weight: 290, items: [{ item_name: "Fixture", value: 100000, quantity: 1, weight: 250, length: 30, width: 20, height: 10 }] };
 beforeEach(() => {
   vi.resetModules(); vi.stubEnv("NODE_ENV", "test"); vi.stubEnv("APP_ENV", "staging"); vi.stubEnv("E2E_PROVIDER_MOCKS", "true");

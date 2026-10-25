@@ -6,10 +6,16 @@ import {
   lockRedemptionOwners,
   releaseReservedRedemption,
 } from "./discount-lifecycle";
-import type { Logger } from "./logger";
+import { createModuleLogger } from "./logger";
+
+/**
+ * Module logger: hanya nama module yang di-bind di sini. Field korelasi dibaca
+ * dari scope aktif saat baris ditulis, jadi aman dibuat sekali saat import.
+ */
+const log = createModuleLogger("checkout-recovery");
 
 /** Bagian existing sweep, bukan worker/outbox baru. Tidak menginisialisasi Snap. */
-export async function resumeUndispatchedCheckoutCreates(limit: number, log: Logger): Promise<number> {
+export async function resumeUndispatchedCheckoutCreates(limit: number): Promise<number> {
   const rows = await db.select({ operation: jubelioSalesOperations }).from(jubelioSalesOperations)
     .innerJoin(checkoutRequests, eq(checkoutRequests.orderId, jubelioSalesOperations.orderId))
     .innerJoin(orders, and(eq(orders.id, checkoutRequests.orderId), eq(orders.userId, checkoutRequests.clientId)))
@@ -21,11 +27,11 @@ export async function resumeUndispatchedCheckoutCreates(limit: number, log: Logg
     try {
       if (operation.payload.type !== "create") continue;
       const outcome = await dispatchJubelioSalesCreate({ orderId: operation.orderId,
-        create: operation.payload.create, checkoutRecovery: true, logger: log });
+        create: operation.payload.create, checkoutRecovery: true });
       if (outcome.status === "confirmed") resumed++;
-      log.info("checkout create intent recovery completed", { orderId: operation.orderId, status: outcome.status });
+      log.info(`Order ${operation.orderId}: checkout create intent recovery completed (${outcome.status})`);
     } catch {
-      log.error("checkout create intent recovery unavailable", { orderId: operation.orderId });
+      log.error(`Order ${operation.orderId}: checkout create intent recovery unavailable`);
     }
   }
   const rejected = await db.select({ orderId: jubelioSalesOperations.orderId }).from(jubelioSalesOperations)
@@ -33,14 +39,14 @@ export async function resumeUndispatchedCheckoutCreates(limit: number, log: Logg
     .where(and(eq(jubelioSalesOperations.type, "create"), eq(jubelioSalesOperations.status, "rejected"),
       isNull(jubelioSalesOperations.holdAccountedAt))).limit(Math.min(50, Math.max(1, limit)));
   for (const row of rejected) {
-    try { await finalizeRejectedCheckoutCreate(row.orderId, log); }
-    catch { log.error("rejected checkout hold accounting unavailable", { orderId: row.orderId }); }
+    try { await finalizeRejectedCheckoutCreate(row.orderId); }
+    catch { log.error(`Order ${row.orderId}: rejected checkout hold accounting unavailable`); }
   }
   return resumed;
 }
 
 /** Hanya bukti definitive pre-apply rejection; tidak pernah dipakai untuk ambiguity. */
-export async function finalizeRejectedCheckoutCreate(orderId: string, log: Logger): Promise<void> {
+export async function finalizeRejectedCheckoutCreate(orderId: string): Promise<void> {
   const [discovered] = await db.select().from(checkoutRequests).where(eq(checkoutRequests.orderId, orderId)).limit(1);
   if (!discovered) return;
   const redemption = await findRedemptionForOrder(orderId);
@@ -80,5 +86,5 @@ export async function finalizeRejectedCheckoutCreate(orderId: string, log: Logge
       midtransFailureStatus: "sales_order_rejected", updatedAt: new Date() }).where(eq(orders.id, orderId));
     return true;
   });
-  if (accounted) log.info("definitively rejected checkout hold released once", { orderId });
+  if (accounted) log.info(`Order ${orderId}: definitively rejected checkout hold released once`);
 }

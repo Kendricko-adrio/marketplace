@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 
 import { guard } from "@/lib/rbac/guard";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { readDiscountOfferHistory } from "@/lib/discount-operations-read";
 import {
   discountFailureResponse,
@@ -19,12 +20,22 @@ import {
 // remains the only place an authorized promo editor sees a literal.
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-discount-history");
+
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function GET(request: NextRequest, { params }: RouteContext) {
-  const guardResult = await guard("discounts", "view", { request });
+async function discountHistory(
+  request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("discounts", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const { id } = await params;
@@ -34,13 +45,14 @@ export async function GET(request: NextRequest, { params }: RouteContext) {
       actorUserId: requireActorId(ctx.user.id),
       limit,
     });
-    logger.info("discounts.history", {
-      outcome: "success",
-      offerId: id,
-      entryCount: history.length,
-    });
-    return discountSuccessResponse(logger, history);
+    log.info(
+      `discounts history (offer ${id}, entryCount ${history.length}, outcome success)`
+    );
+    return discountSuccessResponse(history);
   } catch (error) {
-    return discountFailureResponse(logger, error, "discounts.history.failure");
+    return discountFailureResponse(error, "discounts history gagal");
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(discountHistory, "admin-discount-history");

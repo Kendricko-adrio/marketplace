@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
 import { buildActorContext } from "@/lib/rbac/roles-service";
 import {
@@ -24,6 +24,24 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-user-detail");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/hash library
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
 // z.strictObject rejects unknown keys — a legacy `role` payload fails 400.
 const updateUserSchema = z.strictObject({
   name: z.string().min(2).max(100).optional(),
@@ -35,54 +53,53 @@ const updateUserSchema = z.strictObject({
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function GET(
+async function userDetail(
   _request: NextRequest,
   { params }: RouteContext
-) {
-  const guardResult = await guard("users", "view", {});
+): Promise<Response> {
+  const guardResult = await guard("users", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger } = guardResult;
 
   try {
     const { id } = await params;
     const user = await getUserDetail(id);
     if (!user) {
-      logger.warn("users.detail.not_found", {
-        outcome: "denied",
-        userId: id,
-      });
+      log.warn(
+        `users detail ditolak: user tidak ditemukan (userId ${id}, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "User not found", code: "NOT_FOUND" },
         { status: 404 }
       );
     }
-    logger.info("users.detail", { outcome: "success", userId: id });
+    log.info(`users detail (userId ${id}, outcome success)`);
     return NextResponse.json({ success: true, data: user });
-  } catch (error) {
-    logger.error("users.detail.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    log.error(
+      "users detail gagal (outcome error)",
+      new RouteLogError("users detail gagal")
+    );
     return internalErrorResponse();
   }
 }
 
-export async function PUT(
+async function updateUserAccount(
   request: NextRequest,
   { params }: RouteContext
-) {
-  const guardResult = await guard("users", "edit", { request });
+): Promise<Response> {
+  const guardResult = await guard("users", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
+  let userId: string | null = null;
   try {
     const { id } = await params;
+    userId = id;
     const body = updateUserSchema.safeParse(await request.json());
     if (!body.success) {
-      logger.warn("users.update.invalid_body", {
-        outcome: "denied",
-        userId: id,
-      });
+      log.warn(
+        `users update ditolak: body tidak valid (userId ${id}, outcome denied)`
+      );
       return NextResponse.json(
         {
           success: false,
@@ -103,40 +120,31 @@ export async function PUT(
       reason: body.data.reason ?? null,
     });
 
-    logger.info("users.update", {
-      outcome: "success",
-      actorId: actor.userId,
-      userId: id,
-      roleId: updated.role?.id ?? null,
-      policyVersion: actor.policyVersion,
-    });
+    // Email/nama/alasan free-text user tidak pernah masuk log.
+    log.info(
+      `users update (actor ${actor.userId}, userId ${id}, roleId ${updated.role?.id ?? "none"}, policyVersion ${actor.policyVersion}, outcome success)`
+    );
     return NextResponse.json({ success: true, data: updated });
   } catch (error) {
     const mapped = mapServiceError(error);
     if (mapped) {
-      logger.warn("users.update.denied", {
-        outcome: "denied",
-        userId: (await params).id,
-        code: (error as { code?: string }).code,
-      });
+      log.warn(
+        `users update denied (userId ${userId ?? "unknown"}, code ${(error as { code?: string }).code}, outcome denied)`
+      );
       return mapped;
     }
-    logger.error("users.update.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+    log.error(
+      `users update gagal (userId ${userId ?? "unknown"}, outcome error)`,
+      new RouteLogError("users update gagal")
+    );
     return internalErrorResponse();
   }
 }
 
-/**
- * Users are soft-deactivated, never hard-deleted (audit attribution and
- * identity reservation). The legacy hard DELETE is answered with 405.
- */
-export async function DELETE(
+async function rejectHardDelete(
   _request: NextRequest,
   { params }: RouteContext
-) {
+): Promise<Response> {
   const { id } = await params;
   return NextResponse.json(
     {
@@ -148,3 +156,11 @@ export async function DELETE(
     { status: 405, headers: { Allow: "GET, PUT" } }
   );
 }
+
+/**
+ * Users are soft-deactivated, never hard-deleted (audit attribution and
+ * identity reservation). The legacy hard DELETE is answered with 405.
+ */
+export const GET = withRequestContext(userDetail, "admin-user-detail");
+export const PUT = withRequestContext(updateUserAccount, "admin-user-detail");
+export const DELETE = withRequestContext(rejectHardDelete, "admin-user-detail");

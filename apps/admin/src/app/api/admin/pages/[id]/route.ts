@@ -2,23 +2,43 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { staticPages } from "@/db";
 import { eq, and, ne } from "drizzle-orm";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
-import { serializeError } from "@/lib/logger";
 import { updatePageSchema } from "@/lib/static-pages";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-page-detail");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/driver tidak
+ * pernah masuk log.
+ */
+class PageDetailLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PageDetailLogError";
+  }
+}
+
+type RouteContext = { params: Promise<{ id: string }> };
 
 // -----------------------------
 // GET /api/admin/pages/[id] — single page [pages:view]
 // -----------------------------
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const guardResult = await guard("pages", "view", { request });
+async function pageDetail(
+  _request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("pages", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger } = guardResult;
 
+  let pageId: string | null = null;
   try {
     const { id } = await params;
+    pageId = id;
     const rows = await db
       .select({
         id: staticPages.id,
@@ -35,19 +55,23 @@ export async function GET(
       .limit(1);
 
     if (!rows.length) {
+      log.warn(
+        `pages.detail ditolak: halaman tidak ditemukan (pageId ${id}, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Halaman tidak ditemukan." },
         { status: 404 }
       );
     }
 
-    logger.info("pages.detail", { outcome: "success", pageId: id });
+    log.info(`pages.detail (pageId ${id}, outcome success)`);
     return NextResponse.json({ success: true, data: rows[0] });
-  } catch (error) {
-    logger.error("pages.detail.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error(
+      `pages.detail gagal (pageId ${pageId ?? "unknown"}, outcome error)`,
+      new PageDetailLogError("pages detail gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch page" },
       { status: 500 }
@@ -59,20 +83,23 @@ export async function GET(
 // PUT /api/admin/pages/[id] — update page [pages:edit]
 // Body: { slug?, title?, content?, isPublished?, displayOrder? }
 // -----------------------------
-export async function PUT(
+async function updatePage(
   request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const guardResult = await guard("pages", "edit", { request });
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("pages", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger } = guardResult;
 
+  let pageId: string | null = null;
   try {
     const { id } = await params;
+    pageId = id;
     const body = await request.json();
     const parsed = updatePageSchema.safeParse(body);
     if (!parsed.success) {
-      logger.warn("pages.update.invalid_body", { outcome: "denied" });
+      log.warn(
+        `pages.update ditolak: body tidak valid (pageId ${id}, outcome denied)`
+      );
       return NextResponse.json(
         {
           success: false,
@@ -92,6 +119,9 @@ export async function PUT(
       .where(eq(staticPages.id, id))
       .limit(1);
     if (!existing.length) {
+      log.warn(
+        `pages.update ditolak: halaman tidak ditemukan (pageId ${id}, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Halaman tidak ditemukan." },
         { status: 404 }
@@ -106,6 +136,9 @@ export async function PUT(
         .where(and(eq(staticPages.slug, data.slug), ne(staticPages.id, id)))
         .limit(1);
       if (clash.length) {
+        log.warn(
+          `pages.update ditolak: slug sudah digunakan (pageId ${id}, outcome denied)`
+        );
         return NextResponse.json(
           { success: false, error: "Slug sudah digunakan." },
           { status: 409 }
@@ -127,13 +160,14 @@ export async function PUT(
       })
       .where(eq(staticPages.id, id));
 
-    logger.info("pages.update", { outcome: "success", pageId: id });
+    log.info(`pages.update (pageId ${id}, outcome success)`);
     return NextResponse.json({ success: true, data: { id } });
-  } catch (error) {
-    logger.error("pages.update.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error(
+      `pages.update gagal (pageId ${pageId ?? "unknown"}, outcome error)`,
+      new PageDetailLogError("pages update gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to update page" },
       { status: 500 }
@@ -144,22 +178,26 @@ export async function PUT(
 // -----------------------------
 // DELETE /api/admin/pages/[id] — delete page [pages:delete]
 // -----------------------------
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const guardResult = await guard("pages", "delete", { request });
+async function deletePage(
+  _request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("pages", "delete");
   if (!guardResult.ok) return guardResult.response;
-  const { logger } = guardResult;
 
+  let pageId: string | null = null;
   try {
     const { id } = await params;
+    pageId = id;
     const existing = await db
       .select({ id: staticPages.id })
       .from(staticPages)
       .where(eq(staticPages.id, id))
       .limit(1);
     if (!existing.length) {
+      log.warn(
+        `pages.delete ditolak: halaman tidak ditemukan (pageId ${id}, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Halaman tidak ditemukan." },
         { status: 404 }
@@ -168,16 +206,21 @@ export async function DELETE(
 
     await db.delete(staticPages).where(eq(staticPages.id, id));
 
-    logger.info("pages.delete", { outcome: "success", pageId: id });
+    log.info(`pages.delete (pageId ${id}, outcome success)`);
     return NextResponse.json({ success: true, data: { id } });
-  } catch (error) {
-    logger.error("pages.delete.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error(
+      `pages.delete gagal (pageId ${pageId ?? "unknown"}, outcome error)`,
+      new PageDetailLogError("pages delete gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to delete page" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(pageDetail, "admin-page-detail");
+export const PUT = withRequestContext(updatePage, "admin-page-detail");
+export const DELETE = withRequestContext(deletePage, "admin-page-detail");

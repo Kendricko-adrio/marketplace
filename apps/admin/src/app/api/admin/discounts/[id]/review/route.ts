@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { z } from "zod";
 
 import { guard } from "@/lib/rbac/guard";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import {
   reviewDiscountOffer,
   DiscountAdministrationError,
@@ -21,6 +22,13 @@ import {
 // provider call, and explicitly not a quote or an order.
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-discount-review");
+
 type RouteContext = { params: Promise<{ id: string }> };
 
 const reviewSchema = z.strictObject({
@@ -30,21 +38,23 @@ const reviewSchema = z.strictObject({
   proposedCodes: z.array(z.string().min(1).max(128)).max(50).optional(),
 });
 
-export async function POST(request: NextRequest, { params }: RouteContext) {
-  const guardResult = await guard("discounts", "edit", { request });
+async function reviewOffer(
+  request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("discounts", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const parsed = reviewSchema.safeParse(
       await request.json().catch(() => null)
     );
     if (!parsed.success) {
-      logger.warn("discounts.review.invalid_body", { outcome: "denied" });
+      log.warn("discounts review ditolak: body tidak valid (outcome denied)");
       return discountFailureResponse(
-        logger,
         new DiscountAdministrationError(400, "INPUT_INVALID", "Invalid request body"),
-        "discounts.review.denied"
+        "discounts review ditolak"
       );
     }
 
@@ -54,17 +64,15 @@ export async function POST(request: NextRequest, { params }: RouteContext) {
       requireActorId(ctx.user.id)
     );
 
-    logger.info("discounts.review", {
-      outcome: "success",
-      offerId: id,
-      canPublish: result.canPublish,
-      offerVersion: result.offerVersion,
-      draftVersion: result.draftVersion,
-      actorId: ctx.user.id,
-      policyVersion: ctx.policy.policyVersion,
-    });
-    return discountSuccessResponse(logger, result);
+    // Usulan kode (literal) tidak pernah masuk log.
+    log.info(
+      `discounts review (offer ${id}, canPublish ${result.canPublish}, offerVersion ${result.offerVersion}, draftVersion ${result.draftVersion}, actor ${ctx.user.id}, policyVersion ${ctx.policy.policyVersion}, outcome success)`
+    );
+    return discountSuccessResponse(result);
   } catch (error) {
-    return discountFailureResponse(logger, error, "discounts.review.failure");
+    return discountFailureResponse(error, "discounts review gagal");
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(reviewOffer, "admin-discount-review");

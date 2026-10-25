@@ -28,6 +28,9 @@ against the actual code, then implement the smallest coherent change.
 - Start from the files the packet names. Read those before anything else. Widen the
   search only when the packet is provably wrong about a path or symbol, and say so in
   your report. Do not spend turns rediscovering the repo or re-reading the whole spec.
+- The approved blueprint (file table, exported contracts, UX state matrix) is the
+  structure contract. A path, symbol, state, or label missing from it is escalated, not
+  invented; touching a file outside the table is reported as a deviation.
 - If the packet names mandatory skills (e.g. `tdd`, `nextjs`), read each `SKILL.md`
   once before editing, then follow it.
 - Respect the repository constraints that apply to every change: schema only under
@@ -54,6 +57,7 @@ Parent commands to run: <cheapest-first list of exact commands, including the
   affected mock E2E spec path and any new spec that must be added to
   playwright.mock.config.ts testMatch>
 Decisions taken inside approved scope: <or "none">
+Blueprint deviations: <or "none">
 Open risks / escalations: <or "none">
 ```
 

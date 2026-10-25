@@ -17,7 +17,30 @@ import {
   DiscountAvailabilityError,
   readAvailableOffers,
 } from "@/lib/discount-availability";
-import { requestLogger, serializeError, withRequestId, type Logger } from "@/lib/logger";
+import {
+  createModuleLogger,
+  getRequestId,
+  withRequestContext,
+} from "@/lib/logger";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("discounts-available");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Next/provider
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini. Kontrak HTTP
+ * gagal (status/body) tidak berubah.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 const selectedIdsSchema = z
   .array(z.string().min(1).max(128))
@@ -40,49 +63,42 @@ const availableRequestSchema = z.strictObject({
   cursor: z.string().min(1).max(128).optional(),
 });
 
-function failure(
-  log: Logger,
-  status: number,
-  code: string,
-  error: string
-): NextResponse {
-  return withRequestId(
-    NextResponse.json(
-      { success: false, code, error, requestId: log.requestId },
-      { status, headers: { "Cache-Control": "no-store" } }
-    ),
-    log
+/**
+ * Amplop kegagalan route ini. `requestId` di body tetap ada dengan bentuk yang
+ * sama, kini berasal dari scope HTTP kanonik (`getRequestId()`), bukan logger
+ * legacy; header `x-request-id` ditambahkan wrapper.
+ */
+function failure(status: number, code: string, error: string): NextResponse {
+  return NextResponse.json(
+    { success: false, code, error, requestId: getRequestId() },
+    { status, headers: { "Cache-Control": "no-store" } }
   );
 }
 
-export async function POST(request: NextRequest) {
-  let log = requestLogger(request, { module: "discounts-available" });
+/** HTTP adapter: auth, gate versi, admission, baca body, map ke status/body. */
+async function readDiscountAvailability(request: NextRequest): Promise<Response> {
   try {
     const access = await requireOnboardedApiSession();
-    if (!access.ok) return withRequestId(access.response, log);
+    if (!access.ok) return access.response;
     const { session } = access;
-    log = log.child({ userId: session.user.id });
 
     let contractVersion: 0 | 1 | null = null;
     try {
       contractVersion = await getDiscountsContractVersion();
-    } catch (gateError) {
-      log.error("discount availability gate unavailable", {
-        outcome: "error",
-        error: serializeError(gateError),
-      });
+    } catch {
+      log.error(
+        "discount availability gate unavailable (outcome error)",
+        new RouteLogError("discount availability gate unavailable")
+      );
       return failure(
-        log,
         503,
         "PRICING_UNAVAILABLE",
         "Daftar promo belum dapat dibaca. Silakan coba beberapa saat lagi."
       );
     }
     if (contractVersion !== 1) {
-      log.warn("discount availability rejected — versioned gate is off", {
-        outcome: "unsupported_version",
-      });
-      return failure(log, 400, "UNSUPPORTED_VERSION", "Fitur promo belum aktif.");
+      log.warn("discount availability rejected — versioned gate is off (outcome unsupported_version)");
+      return failure(400, "UNSUPPORTED_VERSION", "Fitur promo belum aktif.");
     }
 
     await admitCheckoutRequest({
@@ -93,11 +109,10 @@ export async function POST(request: NextRequest) {
     const body = await readCheckoutJson(request);
     const parsed = availableRequestSchema.safeParse(body);
     if (!parsed.success) {
-      log.warn("discount availability body rejected", {
-        outcome: "invalid_input",
-        issueCount: parsed.error.issues.length,
-      });
-      return failure(log, 400, "INPUT_INVALID", "Data permintaan tidak valid.");
+      log.warn(
+        `discount availability body rejected (outcome invalid_input, ${parsed.error.issues.length} issue)`
+      );
+      return failure(400, "INPUT_INVALID", "Data permintaan tidak valid.");
     }
 
     const data = await readAvailableOffers({
@@ -113,71 +128,75 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    log.info("discount availability read", {
-      outcome: "ok",
-      offerCount: data.items.length,
-      eligibleCount: data.items.filter((item) => item.eligible).length,
-      hasNextPage: data.nextCursor != null,
-    });
-    return withRequestId(
-      NextResponse.json(
-        { success: true, data },
-        { headers: { "Cache-Control": "no-store" } }
-      ),
-      log
+    log.info(
+      `discount availability read (outcome ok, offers ${data.items.length}, eligible ${
+        data.items.filter((item) => item.eligible).length
+      }, hasNextPage ${data.nextCursor != null})`
+    );
+    return NextResponse.json(
+      { success: true, data },
+      { headers: { "Cache-Control": "no-store" } }
     );
   } catch (error) {
     if (error instanceof CheckoutAdmissionError) {
-      if (error.status === 503) log.error("discount availability admission unavailable", { code: error.code });
-      else log.warn("discount availability admission denied", { code: error.code });
-      return withRequestId(
-        NextResponse.json(
-          {
-            success: false,
-            code: error.code,
-            error: error.message,
-            requestId: log.requestId,
+      if (error.status === 503) {
+        log.error(
+          `discount availability admission unavailable (code ${error.code})`,
+          new RouteLogError("discount availability admission unavailable")
+        );
+      } else {
+        log.warn(`discount availability admission denied (code ${error.code})`);
+      }
+      return NextResponse.json(
+        {
+          success: false,
+          code: error.code,
+          error: error.message,
+          requestId: getRequestId(),
+        },
+        {
+          status: error.status,
+          headers: {
+            "Cache-Control": "no-store",
+            ...(error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {}),
           },
-          {
-            status: error.status,
-            headers: {
-              "Cache-Control": "no-store",
-              ...(error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {}),
-            },
-          }
-        ),
-        log
+        }
       );
     }
     if (error instanceof CheckoutInputError) {
       const limitExceeded = error.status === 413;
-      log.warn("discount availability body rejected", {
-        outcome: limitExceeded ? "limit_exceeded" : "invalid_input",
-        underlyingStatus: error.status,
-      });
+      log.warn(
+        `discount availability body rejected (outcome ${
+          limitExceeded ? "limit_exceeded" : "invalid_input"
+        }, underlying status ${error.status})`
+      );
       return limitExceeded
-        ? failure(log, 413, "INPUT_LIMIT_EXCEEDED", "Data permintaan melebihi batas ukuran.")
-        : failure(log, 400, "INPUT_INVALID", "Data permintaan tidak valid.");
+        ? failure(413, "INPUT_LIMIT_EXCEEDED", "Data permintaan melebihi batas ukuran.")
+        : failure(400, "INPUT_INVALID", "Data permintaan tidak valid.");
     }
     if (error instanceof DiscountAvailabilityError) {
       const notFound = error.code === "NOT_FOUND";
-      log.warn("discount availability context rejected", { code: error.code });
+      log.warn(`discount availability context rejected (code ${error.code})`);
       return failure(
-        log,
         notFound ? 404 : 400,
         error.code,
         error.message
       );
     }
-    log.error("discount availability failed", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+    log.error(
+      "discount availability failed (outcome error)",
+      new RouteLogError("discount availability failed")
+    );
     return failure(
-      log,
       503,
       "PRICING_UNAVAILABLE",
       "Daftar promo gagal dibaca. Silakan coba beberapa saat lagi."
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(
+  readDiscountAvailability,
+  "discounts-available"
+);

@@ -8,7 +8,7 @@ import {
   jubelioStockOperations,
 } from "@/db";
 import { eq, and, asc, sql, ilike, or, gte, lte } from "drizzle-orm";
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import { parsePagination } from "@/lib/pagination";
@@ -17,24 +17,40 @@ import { DELIVERY_STAGE_LABELS } from "@/lib/delivery-workflow";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-orders-list");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/driver tidak
+ * pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
 // GET /api/admin/orders   [orders:view]
 //
 // Branch scope comes from the Current Policy: own-branch view is pinned to
 // the Home Branch (a client `branchId` param cannot widen it); all-branch
 // view may optionally filter by `branchId`.
-export async function GET(request: NextRequest) {
-  const guardResult = await guard("orders", "view", { request });
+async function listOrders(request: NextRequest): Promise<Response> {
+  const guardResult = await guard("orders", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const authorization = branchScopeFromAuthorization(ctx.authorization);
     if (!authorization) {
-      logger.warn("orders.list.scope_unresolvable", {
-        outcome: "denied",
-        reason: "missing_home_branch",
-        userId: ctx.user.id,
-      });
+      log.warn(
+        `orders list ditolak: branch scope tidak dapat ditentukan (userId ${ctx.user.id}, reason missing_home_branch, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Forbidden", code: "DENIED" },
         { status: 403 }
@@ -49,7 +65,9 @@ export async function GET(request: NextRequest) {
       const stage = searchParams.get("stage");
       const dates = [searchParams.get("from"), searchParams.get("to")];
       if (!DELIVERY_QUEUES.includes(queue as DeliveryQueue) || (stage && !DELIVERY_STAGE_LABELS.includes(stage)) || dates.some((date) => date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(date))))) {
-        logger.warn("orders.list.invalid_filters", { outcome: "denied" });
+        log.warn(
+          `orders list ditolak: filter pengiriman tidak valid (scope ${authorization.mode}, outcome denied)`
+        );
         return NextResponse.json({ success: false, error: "Invalid delivery filters" }, { status: 400 });
       }
       const result = await listDeliveryWork(db, {
@@ -57,7 +75,9 @@ export async function GET(request: NextRequest) {
         branchId: searchParams.get("branchId"), search: searchParams.get("search"),
         from: dates[0], to: dates[1], page: parsePagination(searchParams.get("page"), "20").page,
       });
-      logger.info("orders.list.delivery", { outcome: "success", scope: authorization.mode, ...result.pagination });
+      log.info(
+        `orders list delivery served (scope ${authorization.mode}, page ${result.pagination.page}, total ${result.pagination.total}, baseTotal ${result.pagination.baseTotal}, outcome success)`
+      );
       return NextResponse.json({ success: true, ...result });
     }
     const status = searchParams.get("status");
@@ -172,12 +192,9 @@ export async function GET(request: NextRequest) {
       stockNeedsReview: Boolean(row.stockNeedsReview),
     }));
 
-    logger.info("orders.list", {
-      outcome: "success",
-      total,
-      page,
-      scope: authorization.mode,
-    });
+    log.info(
+      `orders list served (scope ${authorization.mode}, page ${page}, limit ${limit}, total ${total}, baseTotal ${baseTotal}, outcome success)`
+    );
     return NextResponse.json({
       success: true,
       data: ordersWithDetails,
@@ -189,14 +206,17 @@ export async function GET(request: NextRequest) {
         totalPages: Math.ceil(total / limit),
       },
     });
-  } catch (error) {
-    logger.error("orders.list.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    log.error(
+      "orders list gagal (outcome error)",
+      new RouteLogError("orders list gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch orders" },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(listOrders, "admin-orders-list");

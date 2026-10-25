@@ -1039,7 +1039,6 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
       await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
       await page.getByRole("combobox").click();
       await page.getByRole("option", { name: "10:00" }).click();
-      await page.getByRole("button", { name: "Lanjut" }).click();
       await page.getByLabel("Nomor Telepon *").fill(CONTACT_PHONE);
       await page.getByLabel("Email *").fill(CONTACT_EMAIL);
       await page.getByRole("button", { name: "Lanjut" }).click();
@@ -1444,6 +1443,101 @@ test.describe("shipping subsidy delivery (ticket 11)", () => {
       approvedPricing: service.pricing,
       promoSelection,
     } as Record<string, unknown>;
+  }
+
+  for (const width of [1280, 390]) {
+    test(`delivery payment review exposes working promo and readable sections (${width}px)`, async () => {
+      const intent = await deliveryIntent({ kind: "none" });
+      const addressResponse = await storeContext.request.post("/api/addresses", { data: DESTINATION });
+      expect(addressResponse.ok()).toBe(true);
+      const address = (await addressResponse.json()).data;
+      const page = await storeContext.newPage();
+      await page.setViewportSize({ width, height: 900 });
+      await page.addInitScript((ids) => {
+        sessionStorage.setItem("checkoutSelectedItemIds", JSON.stringify(ids));
+      }, intent.itemIds);
+      try {
+        await page.goto("/checkout");
+        await page.getByText("Kirim ke alamat", { exact: true }).click();
+        await page.getByLabel("Alamat Pengiriman", { exact: true }).click();
+        await page.getByRole("option", { name: /Jl\. Shipping Fixture No\. 1/ }).click();
+        await page.getByRole("radio", { name: /JNE REG Fixture/ }).check();
+        // Delivery: kontak pemesan = email akun (read-only) + telepon penerima.
+        await expect(page.locator("#contactEmail")).toHaveValue(TEST_USERS.store.email);
+        await page.screenshot({ path: `${process.env.TEMP ?? "/tmp"}/checkout-contact-${width}.png`, fullPage: true });
+        await page.getByRole("button", { name: "Lanjut", exact: true }).click();
+        const review = page.getByRole("heading", { name: "Pembayaran", exact: true }).locator("..");
+        const code = review.getByLabel("Punya kode promo?");
+        await expect(code).toBeVisible();
+        await expect(review.getByRole("heading", { name: "Detail Pengiriman" })).toBeVisible();
+        await expect(review.getByText("Dikirim dari", { exact: true })).toBeVisible();
+        await expect(review.getByText("Layanan kurir", { exact: true })).toBeVisible();
+        await expect(page.getByRole("heading", { name: "Ringkasan", exact: true })).toHaveCount(0);
+        const costs = review.getByRole("region", { name: "Rincian Pembayaran" });
+        await expect(costs.getByText("Rp 196.500", { exact: true })).toBeVisible();
+        await code.fill(SHIP_CODE);
+        await code.press("Tab");
+        await expect(review.getByRole("button", { name: "Terapkan", exact: true })).toBeFocused();
+        await page.keyboard.press("Enter");
+        await expect(review.getByText(SHIP_CODE, { exact: true })).toBeVisible();
+        await expect(costs.getByText("Rp 181.500", { exact: true })).toBeVisible();
+        await expect(costs.getByText("- Rp 15.000", { exact: true })).toBeVisible();
+        // Shipping is shown once before subsidy, then subtracted exactly once.
+        await expect(costs.getByText("Rp 30.000", { exact: true })).toBeVisible();
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await page.screenshot({ path: `${process.env.TEMP ?? "/tmp"}/checkout-payment-${width}.png`, fullPage: true });
+        await page.getByRole("checkbox").check();
+        await code.fill("TIDAKVALID123");
+        await review.getByRole("button", { name: "Terapkan", exact: true }).click();
+        await expect(review.getByRole("alert")).toBeVisible();
+        await expect(costs.getByText("Rp 181.500", { exact: true })).toBeVisible();
+        await expect(review.getByText(SHIP_CODE, { exact: true })).toBeVisible();
+        await review.getByRole("button", { name: /Subsidi Ongkir Mock/ }).click();
+        await expect(costs.getByText("Rp 176.500", { exact: true })).toBeVisible();
+        await expect(page.getByRole("checkbox")).not.toBeChecked();
+        await expect(page.getByRole("button", { name: "Bayar Sekarang" })).toBeDisabled();
+        await review.getByRole("button", { name: /Coupon Kecil Mock/ }).click();
+        await expect(page.getByRole("dialog", { name: "Total pesanan naik" })).toBeVisible();
+        await page.getByRole("button", { name: "Batal", exact: true }).click();
+        await expect(costs.getByText("Rp 176.500", { exact: true })).toBeVisible();
+        await review.getByRole("button", { name: /Coupon Kecil Mock/ }).click();
+        await page.getByRole("button", { name: "Ya, ganti promo", exact: true }).click();
+        await expect(costs.getByText("Rp 190.950", { exact: true })).toBeVisible();
+        await expect(costs.getByText("- Rp 5.000", { exact: true })).toBeVisible();
+        await review.getByRole("button", { name: /Subsidi Ongkir Mock/ }).click();
+        await expect(costs.getByText("Rp 176.500", { exact: true })).toBeVisible();
+        if (width === 390) {
+          await code.fill(SHIP_CODE);
+          await review.getByRole("button", { name: "Terapkan", exact: true }).click();
+          await page.getByRole("button", { name: "Ya, ganti promo", exact: true }).click();
+          await expect(costs.getByText("Rp 181.500", { exact: true })).toBeVisible();
+          await review.getByRole("button", { name: "Lepas kode", exact: true }).click();
+          await expect(page.getByRole("dialog", { name: "Total pesanan naik" })).toBeVisible();
+          await page.getByRole("button", { name: "Batal", exact: true }).click();
+          await expect(costs.getByText("Rp 181.500", { exact: true })).toBeVisible();
+        }
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        // Observe the public submit seam without creating another provider order.
+        let submitted: Record<string, unknown> | undefined;
+        await page.route("**/api/checkout/place-order", async (route) => {
+          submitted = route.request().postDataJSON();
+          await route.fulfill({ status: 503, json: { success: false, error: "Fixture: pembayaran belum tersedia." } });
+        });
+        await page.getByRole("checkbox").check();
+        await page.getByRole("button", { name: "Bayar Sekarang" }).click();
+        await expect.poll(() => submitted).toBeDefined();
+        expect(submitted).toMatchObject(width === 390 ? {
+          fulfillmentMethod: "delivery", promoSelection: { kind: "manual", code: SHIP_CODE },
+          approvedPricing: { total: "181500", shippingCost: "15000", shippingSubsidy: "15000" },
+        } : {
+          fulfillmentMethod: "delivery", promoSelection: { kind: "public", offerId: SHIP_PUBLIC_ID },
+          approvedPricing: { total: "176500", shippingCost: "10000", shippingSubsidy: "20000" },
+        });
+      } finally {
+        await page.close();
+        await storeContext.request.delete(`/api/addresses/${address.id}`);
+      }
+    }, 120_000);
   }
 
   test("public shipping: preview/pickup-disabled/swap confirmation/place menyimpan snapshot original+net dan satu allocation", async () => {

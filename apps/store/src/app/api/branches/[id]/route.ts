@@ -2,11 +2,29 @@ import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { branches } from "@/db";
 import { eq } from "drizzle-orm";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 
-export async function GET(
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("store-branch");
+
+/**
+ * Proyeksi teknis statis untuk jalur kegagalan tak terduga. Nilai yang
+ * tertangkap tidak pernah masuk log; kontrak HTTP tetap sama.
+ */
+class BranchDetailLogError extends Error {
+  constructor() {
+    super("store branch: gagal memuat detail branch");
+    this.name = "BranchDetailLogError";
+  }
+}
+
+async function getBranch(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
-) {
+): Promise<Response> {
   try {
     const { id } = await params;
 
@@ -38,11 +56,16 @@ export async function GET(
       success: true,
       data: branch[0],
     });
-  } catch (error) {
-    console.error("Error fetching branch:", error);
+  } catch {
+    log.error(
+      "Detail branch gagal dimuat (outcome error)",
+      new BranchDetailLogError()
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch branch" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(getBranch, "store-branch");

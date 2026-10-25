@@ -23,7 +23,8 @@ const deliveryLocationId = 920002;
 const deliveryStreet = "Jl. Versioned Delivery E2E No. 1";
 let deliveryAddressId = "";
 let packagingBefore: Array<{ value: string; type: string; description: string | null }> = [];
-const contactEmails = [contactEmail, deliveryContactEmail];
+// Delivery memakai email AKUN (read-only di checkout) → ikut dibersihkan.
+const contactEmails = [contactEmail, deliveryContactEmail, TEST_USERS.store.email];
 
 // This delivery order is placed from a SYNTHETIC origin branch, i.e. never the
 // Home Branch the seeder pins on both seeded admin users (branchIds[0], see
@@ -274,11 +275,10 @@ test("gate1 pickup review uses the versioned goods-only tax contract without a s
   await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
   await page.getByRole("combobox").click();
   await page.getByRole("option", { name: "10:00" }).click();
-  await page.getByRole("button", { name: "Lanjut" }).click();
   await page.getByLabel("Nomor Telepon *").fill("081234567890");
   await page.getByLabel("Email *").fill("versioned-checkout@example.test");
   await page.getByRole("button", { name: "Lanjut" }).click();
-  await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
   await expect(page.getByText("Rp 166.500", { exact: true }).first()).toBeVisible();
   await expect(page.getByText(/Biaya (Layanan|layanan)/)).toHaveCount(0);
   await page.close();
@@ -323,7 +323,6 @@ test("gate1 pickup persists immutable pricing through real Snap creation, detail
   await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
   await page.getByRole("combobox").click();
   await page.getByRole("option", { name: "10:00" }).click();
-  await page.getByRole("button", { name: "Lanjut" }).click();
   await page.getByLabel("Nomor Telepon *").fill("081234567890");
   await page.getByLabel("Email *").fill(contactEmail);
   await page.getByRole("button", { name: "Lanjut" }).click();
@@ -414,9 +413,8 @@ test("gate1 delivery keeps PPN on goods only and the provider payable on net goo
   if (await periksa.isVisible().catch(() => false)) await periksa.click();
   await expect(page.getByText("JNE REG Fixture")).toBeVisible({ timeout: 20_000 });
   await page.getByText("JNE REG Fixture").click();
-  await page.getByRole("button", { name: "Lanjut" }).click();
-  await page.getByLabel("Nomor Telepon *").fill("081234567890");
-  await page.getByLabel("Email *").fill(deliveryContactEmail);
+  // Kontak pemesan delivery = email akun (read-only) + telepon penerima alamat.
+  await expect(page.locator("#contactEmail")).toHaveValue(TEST_USERS.store.email);
   await page.getByRole("button", { name: "Lanjut" }).click();
   await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
   // PPN atas barang saja: 150.000 + 30.000 ongkir + 16.500 = 196.500, tanpa fee.

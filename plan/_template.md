@@ -1,60 +1,127 @@
-# Plan: <title>
+# Plan: <judul>
 
-> Status of the plan as a whole is tracked in [`index.md`](index.md) only —
-> never in this file. This file tracks **per-feature** status below.
+> Status plan secara keseluruhan hanya dicatat di [`index.md`](index.md) —
+> tidak pernah di file ini. File ini hanya mencatat **status per fitur** di bawah.
 
-## Goal / Motivation
+## Tujuan / Motivasi
 
-<Why this plan exists; what problem it solves; links to related docs.>
+<Mengapa plan ini ada; masalah yang diselesaikan; tautan ke docs terkait.>
 
 ## Scope
 
-<What is in this plan; describe observable acceptance criteria.>
+<Apa yang termasuk dalam plan ini; tulis acceptance criteria yang dapat diamati.>
 
 ## Approval
 
-- Shared understanding confirmed by the user: <link to conversation/decision record; pending until confirmed>
-- Complete scope and acceptance/verify criteria approved by the user: <link to approval; pending until approved>
+- Kesepahaman bersama dikonfirmasi user: <tautan ke percakapan/decision record; pending sampai dikonfirmasi>
+- Complete scope dan acceptance/verify criteria disetujui user: <tautan approval; pending sampai disetujui>
 
-Do not mark this plan or a feature Ready while approval is pending or a
-behavior-affecting decision is unresolved. Approval of the plan does not
-approve subagents, commits, remote access, or deployment.
+Jangan menandai plan atau fitur ini `Ready` selama approval masih pending atau
+masih ada keputusan yang memengaruhi perilaku. Approval plan tidak menyetujui
+subagent, commit, remote access, atau deployment.
 
 ## Non-scope
 
-<Explicitly out of scope; possible follow-ups.>
+<Secara eksplisit di luar scope; kemungkinan follow-up.>
 
-## Features
+## Rancangan teknis
 
-| # | Feature | Status | verify: | Notes |
+> Checklist advisory: isi bagian yang relevan, dan catat sisanya sebagai open
+> item. Untuk perubahan kecil satu sesi, cukup 4–6 baris (file yang disentuh +
+> state UI terkait). Jangan menebak path saat implementasi.
+
+| Path | Aksi | Tanggung jawab (1–3 baris) | Layer | Seam test |
 |---|---|---|---|---|
-| 1 | <feature name> | Draft | <command or observable behavior> | <deps, ordering> |
+| `apps/<app>/src/app/api/<fitur>/route.ts` | modify | <kontrak HTTP, validasi, pemetaan outcome> | route | `e2e/<app>/<fitur>-mock.spec.ts` |
+| `apps/<app>/src/features/<domain>/<operasi>-service.ts` | create | <use case, invariant, urutan operasi> | service | `<operasi>-service.test.ts` |
+
+Layer mengikuti [`docs/architecture/code-organization.md`](../docs/architecture/code-organization.md):
+`route.ts` / `-service.ts` / `-repository.ts` / `-client.ts` / komponen UI /
+schema `packages/db/src/schema/`.
+
+Kontrak export untuk file baru atau file yang kontraknya berubah (nama
+fungsi/tipe + parameter, **tanpa body kode**):
+
+- `<module>`: `<namaFungsi>(input: Input): Promise<Result>` — <satu baris perilaku>
+
+Keputusan struktur yang non-obvious (modul/folder baru, pemecahan file, shared vs
+app-local), beserta alasan dan alternatif yang ditolak:
+
+- **Keputusan:** <...> · **Alasan:** <...> · **Ditolak:** <...>
+
+Discovery — hal yang memang belum diketahui; jangan ditebak saat implementasi:
+
+- `discovery:` <pertanyaan konkret dan siapa/apa yang menjawab>
+
+## Rancangan UX
+
+> Wajib diisi bila perubahan memengaruhi UI. Jika tidak, tulis
+> `N/A — <alasan>`.
+
+- **Tugas dan pengguna:** <siapa penggunanya, kondisi awal, hasil sukses>
+- **Halaman/pattern referensi:** <halaman existing yang disepakati sebagai patokan konsistensi>
+- **Hierarki dan primary action:** <informasi utama, aksi dominan, aksi sekunder>
+
+Component reuse map:
+
+| Elemen | Existing / Baru | Path komponen | Catatan |
+|---|---|---|---|
+| <elemen> | Existing | `packages/ui/src/components/ui/<komponen>` | <varian/props yang dipakai> |
+
+State matrix — isi label/copy final, bukan placeholder:
+
+| Layar / komponen | Idle | Loading | Empty | Error | Sukses | Disabled / tanpa izin | Unsaved |
+|---|---|---|---|---|---|---|---|
+| <layar> | <...> | <...> | <...> | <...> | <...> | <...> | <...> |
+
+- **Viewport dan responsive:** <viewport sasaran dan perilaku di tiap ukuran>
+- **Accessibility:** <keyboard/focus, label field, kontras yang harus diperiksa>
+- **Prototype:** <path prototype bila user memintanya — mengikat untuk struktur
+  layar, alur, penamaan tombol/aksi, dan state; token serta komponen existing
+  tetap sumber kebenaran visual>
+
+## Fitur
+
+| # | Fitur | Status | verify: | Catatan |
+|---|---|---|---|---|
+| 1 | <nama fitur> | Draft | <command atau perilaku yang dapat diamati> | <dependensi, urutan> |
 | 2 | | Draft | | |
 
-Per-feature status values (same lifecycle as the plan):
-- **Draft** — feature defined but not started.
-- **Ready** — feature fully specified within the user's approved plan scope;
-  eligible for implementation.
-- **In Progress** — implementation started.
-- **Done** — feature implemented, its `verify:` passes (tests per `AGENTS.md`
-  §5), and its docs are updated.
+Status per fitur (lifecycle sama dengan plan):
+- **Draft** — fitur terdefinisi tetapi belum dikerjakan.
+- **Ready** — fitur sudah terspesifikasi lengkap dalam scope plan yang disetujui
+  user; siap diimplementasikan.
+- **In Progress** — implementasi dimulai.
+- **Done** — fitur terimplementasi, `verify:`-nya lulus (test sesuai `AGENTS.md`
+  §5), dan docs-nya diperbarui.
 
 ## Implementation notes
 
-<Sequencing, dependencies, and independently verifiable vertical slices.
-Subagent lanes are optional and require separate user authorization; do not
-assign overlapping writers to one checkout.>
+<Urutan, dependensi, dan vertical slice yang dapat diverifikasi sendiri.
+Ticket mewarisi Rancangan teknis/Rancangan UX di atas; subagent lane opsional dan
+butuh izin user terpisah; jangan memberi satu checkout ke dua writer.>
+
+## Deviation log
+
+| Ticket / slice | Rencana (path/kontrak) | Aktual | Alasan | Dampak |
+|---|---|---|---|---|
+| <...> | <...> | <...> | <...> | <...> |
+
+Deviasi hanya boleh menyentuh nama/penempatan file selama konvensi layer dan
+kontrak export tetap utuh. Perubahan perilaku, scope, atau modul baru di luar
+rancangan tetap memerlukan keputusan user.
 
 ## Open questions
 
-- <question — resolution; unresolved behavior-affecting questions block Ready>
+- <pertanyaan — resolusi; pertanyaan yang memengaruhi perilaku memblokir Ready>
 
-## Retirement checklist (when the plan reaches Done)
+## Retirement checklist (saat plan mencapai Done)
 
-- [ ] Every feature's `verify:` passes (tests per `AGENTS.md` §5).
-- [ ] Enduring content extracted to `docs/` per `docs/README.md` destination
-      rules (feature docs updated; `docs/api-reference.md` entries added if
-      endpoints changed; deployment docs if applicable).
-- [ ] Plan file deleted (git history is the archive).
-- [ ] [`index.md`](index.md) entry updated to **Done** with date + one-line
-      outcome summary (validated by the main agent; delegation only if authorized).
+- [ ] Semua fitur lulus `verify:` (test sesuai `AGENTS.md` §5).
+- [ ] Konten enduring diekstrak ke `docs/` sesuai aturan tujuan di
+      `docs/README.md` (docs fitur diperbarui; entri `docs/api-reference.md`
+      ditambahkan bila endpoint berubah; docs deployment bila relevan).
+- [ ] File plan dihapus (git history adalah arsipnya).
+- [ ] Entri [`index.md`](index.md) diperbarui ke **Done** dengan tanggal +
+      ringkasan hasil satu baris (divalidasi main agent; delegasi hanya bila
+      diizinkan).

@@ -35,7 +35,10 @@ const chartConfig = {
 
 export default function RevenueTrendChart({ trend }: RevenueTrendChartProps) {
   return (
-    <div>
+    // `relative` keeps the absolutely positioned sr-only fallback anchored to
+    // this island: without it the fallback's containing block is the initial
+    // containing block, so it escapes <main> and grows the page scroll area.
+    <div className="relative">
       <ChartContainer config={chartConfig} className="h-72 w-full">
         <AreaChart
           accessibilityLayer
@@ -99,26 +102,31 @@ export default function RevenueTrendChart({ trend }: RevenueTrendChartProps) {
       </ChartContainer>
 
       {/* Accessible fallback: the full 30-day series as a screen-reader
-          table (visually hidden — the chart above is the visual form). */}
-      <table data-testid="analytics-trend-table" className="sr-only">
-        <caption>Tren pendapatan 30 hari terakhir (kalender WIB)</caption>
-        <thead>
-          <tr>
-            <th scope="col">Tanggal</th>
-            <th scope="col">Pendapatan</th>
-            <th scope="col">Pesanan</th>
-          </tr>
-        </thead>
-        <tbody>
-          {trend.map((point) => (
-            <tr key={point.date}>
-              <th scope="row">{formatTrendDate(point.date)}</th>
-              <td>{formatRupiah(point.revenue)}</td>
-              <td>{point.orders}</td>
+          table (visually hidden — the chart above is the visual form).
+          The wrapper carries `sr-only`: `overflow` does not clip a
+          `display: table` box, so 30 rows marked sr-only directly would
+          still grow the scrollable area of the page. */}
+      <div className="sr-only">
+        <table data-testid="analytics-trend-table">
+          <caption>Tren pendapatan 30 hari terakhir (kalender WIB)</caption>
+          <thead>
+            <tr>
+              <th scope="col">Tanggal</th>
+              <th scope="col">Pendapatan</th>
+              <th scope="col">Pesanan</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {trend.map((point) => (
+              <tr key={point.date}>
+                <th scope="row">{formatTrendDate(point.date)}</th>
+                <td>{formatRupiah(point.revenue)}</td>
+                <td>{point.orders}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

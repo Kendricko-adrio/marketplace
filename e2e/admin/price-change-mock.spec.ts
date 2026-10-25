@@ -155,24 +155,25 @@ test("HQ stage → review → apply, source tidak berubah dan histori tercatat",
   // Reuse the signed-in HQ context: the test's default page has no admin cookies.
   const page = await hqContext.newPage();
   await page.goto(`${ADMIN_BASE_URL}/admin/products/harga`);
-  await page.getByRole("textbox", { name: "Cari produk" }).fill("E2E Price Change");
-  await page.getByRole("button", { name: "Cari produk" }).click();
-  await page.getByRole("button", { name: /E2E Price Change Product/ }).click();
-  await expect(page.getByText(SKU)).toBeVisible();
-  await page.getByRole("button", { name: "Pilih", exact: true }).click();
+  await page.getByRole("searchbox", { name: "Cari SKU atau nama produk" }).fill("E2E Price Change");
+  await page.getByRole("button", { name: "Cari SKU", exact: true }).click();
+  const skuRow = page.getByRole("table", { name: "Harga coret SKU", exact: true }).getByRole("row").filter({ hasText: SKU });
+  await skuRow.getByRole("button", { name: "Ubah", exact: true }).click();
 
   await page.locator("#target").fill(TARGET_PRICE);
-  await page.getByRole("button", { name: /Stage untuk review/ }).click();
+  await page.getByRole("button", { name: "Lihat review", exact: true }).click();
 
   // Review shows the independent literals, including the impact.
-  await expect(page.getByText("Review", { exact: true })).toBeVisible();
+  await expect(page.getByRole("dialog")).toContainText("Review & hasil perubahan harga");
   await expect(page.getByText("Rp 300.000").first()).toBeVisible();
   await expect(page.getByText("Rp 150.000").first()).toBeVisible();
   await expect(page.getByText(/Turun Rp 150\.000/)).toBeVisible();
 
-  await page.getByRole("button", { name: "Apply", exact: true }).click();
-  await expect(page.getByText(/Hasil: applied/)).toBeVisible();
-  await expect(page.getByText("Histori harga")).toBeVisible();
+  await page.getByTestId("bulk-apply").click();
+  await expect(page.getByTestId("bulk-status")).toContainText("1 baris diterapkan.");
+  await page.getByRole("button", { name: "Tutup", exact: true }).click();
+  await skuRow.getByRole("button", { name: "Riwayat", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("Histori harga");
   await expect(page.getByRole("cell", { name: "Set", exact: true })).toBeVisible();
 
   const variant = await pool.query<{ price: string }>(

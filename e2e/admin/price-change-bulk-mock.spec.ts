@@ -280,7 +280,7 @@ test("seleksi 30 SKU lintas halaman, review target fixed, apply pending lalu res
   await expect(page.getByRole("checkbox", { name: `Pilih SKU ${MARKDOWN_SKU}` })).toBeChecked();
   await expect(page.getByTestId("bulk-selection-count")).toHaveText("Terpilih: 30 SKU");
 
-  await page.getByRole("button", { name: "Set harga" }).click();
+  await page.getByRole("button", { name: "Ubah massal (% dari base)", exact: true }).click();
   await page.getByLabel("Diskon (%) dari base").fill(BULK_DISCOUNT_PERCENT);
   await page.getByTestId("bulk-stage").click();
 
@@ -376,40 +376,20 @@ test("seleksi 30 SKU lintas halaman, review target fixed, apply pending lalu res
   await page.close();
 });
 
-test("restore SKU tanpa Markdown menjadi unchanged tanpa revision", async () => {
+test("restore tanpa target disabled di UI; API tetap no-op tanpa revision", async () => {
   const page = await hqContext.newPage();
   await page.goto(`${ADMIN_BASE_URL}/admin/products/harga`);
-
   await page.getByTestId("bulk-search").fill(RESTORE_SKU);
   await page.getByTestId("bulk-search").press("Enter");
-  await page.getByRole("checkbox", { name: `Pilih SKU ${RESTORE_SKU}` }).click();
-  await expect(page.getByTestId("bulk-selection-count")).toHaveText("Terpilih: 1 SKU");
-
-  await page.getByRole("button", { name: "Restore Markdown" }).click();
-  await expect(page.getByText("Markdown terbaru akan dilepas.")).toBeVisible();
-  await page.getByTestId("bulk-stage").click();
-
-  await expect(page.getByTestId("bulk-review-counts")).toContainText(
-    "1 baris · 1 diterima · 0 error"
-  );
-  const reviewRow = page
-    .getByTestId("bulk-review-table")
-    .getByRole("row")
-    .filter({ hasText: RESTORE_SKU });
-  await expect(reviewRow).toContainText("tidak ada Markdown aktif");
-
-  await Promise.all([
-    page.waitForResponse((response) => isApplyRequest(response.url(), response.request().method())),
-    page.getByTestId("bulk-apply").click(),
-  ]);
-  await expect(page.getByTestId("bulk-status")).toContainText("Tidak ada perubahan harga.");
-
-  const revisions = await pool.query<{ count: number }>(
-    "SELECT count(*)::int AS count FROM variant_price_revision WHERE variant_id=$1",
-    [variantId(RESTORE_SKU)]
-  );
-  expect(revisions.rows[0].count, "restore tanpa Markdown tidak membuat revision").toBe(0);
-
+  await page.getByRole("checkbox", { name: `Pilih SKU ${RESTORE_SKU}` }).check();
+  await expect(page.getByRole("button", { name: "Restore terpilih", exact: true })).toBeDisabled();
+  const staged = await hqContext.request.post("/api/admin/price-changes", { data: { requestKey: randomUUID(), rows: [{ sku: RESTORE_SKU, action: "restore_base" }] } });
+  expect(staged.ok()).toBe(true);
+  const batchId = (await staged.json()).data.id;
+  const result = await hqContext.request.post(`/api/admin/price-changes/${batchId}/apply`, { data: { requestKey: randomUUID() } });
+  expect((await result.json()).data).toMatchObject({ state: "applied", unchangedCount: 1, appliedCount: 0 });
+  const history = await hqContext.request.get(`/api/admin/prices/${variantId(RESTORE_SKU)}/history`);
+  expect((await history.json()).data.revisions).toEqual([]);
   await page.close();
 });
 
@@ -422,6 +402,7 @@ test("shortcut persen dari source 100001 dibekukan ke target 85001", async () =>
   await page.getByRole("checkbox", { name: `Pilih SKU ${PERCENT_SKU}` }).click();
   await expect(page.getByTestId("bulk-selection-count")).toHaveText("Terpilih: 1 SKU");
 
+  await page.getByRole("button", { name: "Ubah massal (% dari base)", exact: true }).click();
   await page.getByLabel("Diskon (%) dari base").fill(PERCENT_DISCOUNT);
   await page.getByTestId("bulk-stage").click();
 

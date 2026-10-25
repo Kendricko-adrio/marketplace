@@ -33,7 +33,7 @@ import {
   readSettlementAuthorityRecord,
   type VersionedSalesOrderExpectation,
 } from "./jubelio-sales-expected";
-import { createLogger, serializeError, type Logger } from "./logger";
+import { createModuleLogger } from "./logger";
 import {
   findRedemptionForOrder,
   lockRedemptionOwners,
@@ -60,6 +60,13 @@ import {
  *   - cancel cannot clear a second hold: this order's hold was already
  *     cleared at create confirmation. A subsequent sync restores availability.
  */
+
+/**
+ * Module-scope logger: hanya nama module yang diikat di sini. `requestId`
+ * dibaca dari scope AsyncLocalStorage saat baris ditulis, jadi membuatnya sekali
+ * ketika module dievaluasi (sebelum scope HTTP ada) adalah benar.
+ */
+const log = createModuleLogger("jubelio-sales-lifecycle");
 
 let defaultSalesGateway: JubelioSalesGateway | null = null;
 
@@ -175,14 +182,18 @@ async function accountConfirmedHold(orderId: string, type: "create" | "cancel"):
   }
 }
 
-export async function mirrorConfirmedSalesOrderHold(orderId: string, logger?: Logger): Promise<void> {
-  if (await accountConfirmedHold(orderId, "create")) logger?.info("confirmed SO hold accounted", { orderId });
+export async function mirrorConfirmedSalesOrderHold(orderId: string): Promise<void> {
+  if (await accountConfirmedHold(orderId, "create")) {
+    log.info(`Order ${orderId}: confirmed sales order hold accounted`);
+  }
 }
 
-export async function releaseConfirmedSalesOrderHold(orderId: string, logger?: Logger): Promise<void> {
+export async function releaseConfirmedSalesOrderHold(orderId: string): Promise<void> {
   // If create confirmation crashed before accounting, finish it first.
   await accountConfirmedHold(orderId, "create");
-  if (await accountConfirmedHold(orderId, "cancel")) logger?.info("confirmed SO cancel accounted", { orderId });
+  if (await accountConfirmedHold(orderId, "cancel")) {
+    log.info(`Order ${orderId}: confirmed sales order cancel accounted`);
+  }
 }
 
 /** Finish committed confirmations left between provider GET and local accounting. */
@@ -233,6 +244,50 @@ function gatewayKnownIds(error: unknown): {
   };
 }
 
+/** Kode teknis gateway yang aman dicetak: token uppercase, bukan teks provider. */
+const SAFE_LOG_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+/**
+ * Proyeksi teknis statis untuk field `error` satu baris log.
+ *
+ * Nilai caught tidak pernah dikirim apa adanya: `message`, `stack` dan `cause`
+ * milik lapisan transport/penyimpanan/provider bisa memuat teks bebas pelanggan
+ * yang tidak bisa dipulihkan oleh redaksi berbasis key. Class ini hanya membawa
+ * ringkasan statis milik module ini dan kode teknis allowlisted. Nilai asli
+ * tetap dipakai apa adanya oleh alur bisnis — message/classification/return
+ * tidak berubah.
+ */
+class JubelioSalesLifecycleLogError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "JubelioSalesLifecycleLogError";
+    this.code = code;
+  }
+}
+
+/** Kode gateway yang boleh dicetak; teks bebas provider selalu dibuang. */
+function knownGatewayCode(error: unknown): string | undefined {
+  try {
+    if (!(error instanceof JubelioSalesGatewayError)) return undefined;
+    const code = error.options.code;
+    return typeof code === "string" && SAFE_LOG_CODE.test(code)
+      ? code
+      : undefined;
+  } catch {
+    // Nilai hostile (getter/proxy melempar) tidak membawa sinyal aman.
+    return undefined;
+  }
+}
+
+function safeDependencyErrorLog(error: unknown): JubelioSalesLifecycleLogError {
+  return new JubelioSalesLifecycleLogError(
+    "Jubelio sales operation gagal pada lapisan penyimpanan, transport atau gateway",
+    knownGatewayCode(error)
+  );
+}
+
 /**
  * Keeps a KNOWN returned provider id durable when the stage outcome was
  * ambiguous/failed: the id must stay reconcilable by GET, but is never a
@@ -240,8 +295,7 @@ function gatewayKnownIds(error: unknown): {
  */
 async function persistKnownReturnedIds(
   operationId: string,
-  ids: { salesOrderId?: number; invoiceId?: number; paymentId?: number },
-  log: Logger
+  ids: { salesOrderId?: number; invoiceId?: number; paymentId?: number }
 ): Promise<void> {
   try {
     if (ids.salesOrderId != null) {
@@ -255,8 +309,8 @@ async function persistKnownReturnedIds(
     }
   } catch (error) {
     log.error(
-      "Jubelio returned provider id could not be persisted after an ambiguous outcome",
-      { operationId, error: serializeError(error) }
+      `Operation ${operationId}: returned provider id could not be persisted after an ambiguous outcome`,
+      safeDependencyErrorLog(error)
     );
   }
 }
@@ -284,13 +338,9 @@ export async function dispatchJubelioSalesCreate(input: {
   orderId: string;
   create: JubelioSalesOrderCreateRequest;
   gateway?: JubelioSalesGateway;
-  logger?: Logger;
   /** Hanya existing sweep: claim tetap memakai ledger yang sama. */
   checkoutRecovery?: boolean;
 }): Promise<DispatchCreateResult> {
-  const log =
-    input.logger?.child({ orderId: input.orderId, module: "jubelio-sales-create" }) ??
-    createLogger({ module: "jubelio-sales-create", orderId: input.orderId });
   const reference = input.create.note;
   const recorded = await recordJubelioSalesIntent(db, {
     orderId: input.orderId,
@@ -302,7 +352,7 @@ export async function dispatchJubelioSalesCreate(input: {
   if (recorded.operation.status === "confirmed") {
     // A previous attempt already confirmed this create (crash/replay).
     if (recorded.operation.salesOrderId != null) {
-      await mirrorConfirmedSalesOrderHold(input.orderId, log);
+      await mirrorConfirmedSalesOrderHold(input.orderId);
       return { status: "confirmed", salesOrderId: recorded.operation.salesOrderId };
     }
   }
@@ -335,9 +385,9 @@ export async function dispatchJubelioSalesCreate(input: {
   }
 
   const gateway = input.gateway ?? getDefaultJubelioSalesGateway();
-  log.info("Jubelio sales order create dispatched", {
-    operationId: recorded.operation.id,
-  });
+  log.info(
+    `Order ${input.orderId}: sales order create dispatched (operation ${recorded.operation.id})`
+  );
   let result: Awaited<ReturnType<JubelioSalesGateway["createSalesOrder"]>>;
   try {
     result = await gateway.createSalesOrder({
@@ -365,15 +415,15 @@ export async function dispatchJubelioSalesCreate(input: {
     if (classified.kind === "ambiguous") {
       await persistKnownReturnedIds(
         recorded.operation.id,
-        gatewayKnownIds(error),
-        log
+        gatewayKnownIds(error)
       );
       await markJubelioSalesOperationManualReview(db, recorded.operation.id, {
         message: classified.message,
       });
-      log.error("Jubelio sales create outcome unknown — manual review", {
-        error: serializeError(error),
-      });
+      log.error(
+        `Order ${input.orderId}: sales order create outcome unknown, manual review (operation ${recorded.operation.id})`,
+        safeDependencyErrorLog(error)
+      );
       return { status: "manual_review", message: classified.message };
     }
     // Definitive pre-apply rejection (4xx / invalid input / backpressure):
@@ -381,7 +431,12 @@ export async function dispatchJubelioSalesCreate(input: {
     await markJubelioSalesOperationRejectedAfterClaim(db, recorded.operation.id, {
       message: classified.message,
     });
-    log.warn("Jubelio sales create rejected", { message: classified.message });
+    const rejectionCode = knownGatewayCode(error);
+    log.warn(
+      `Order ${input.orderId}: sales order create rejected (${classified.kind}${
+        rejectionCode === undefined ? "" : `, ${rejectionCode}`
+      })`
+    );
     return { status: "rejected", message: classified.message };
   }
   // Local persistence errors are NOT provider rejections: the remote SO may
@@ -392,17 +447,15 @@ export async function dispatchJubelioSalesCreate(input: {
     channelStatusMatches,
   });
   if (!channelStatusMatches) {
-    log.error("Jubelio create channel marker differs after core confirmation", {
-      operationId: recorded.operation.id,
-      salesOrderId: result.salesOrderId,
-      reason: "CREATE_MARKER_MISMATCH",
-    });
+    log.error(
+      `Order ${input.orderId}: sales order ${result.salesOrderId} confirmed but the channel marker differs (CREATE_MARKER_MISMATCH)`
+    );
   }
   if (!confirmed) return { status: "in_flight" };
-  await mirrorConfirmedSalesOrderHold(input.orderId, log);
-  log.info("Jubelio sales order created and confirmed", {
-    salesOrderId: result.salesOrderId, operationId: recorded.operation.id,
-  });
+  await mirrorConfirmedSalesOrderHold(input.orderId);
+  log.info(
+    `Order ${input.orderId}: sales order ${result.salesOrderId} created and confirmed (operation ${recorded.operation.id})`
+  );
   return { status: "confirmed", salesOrderId: result.salesOrderId };
 }
 
@@ -426,12 +479,7 @@ export async function dispatchJubelioSalesCancel(input: {
   orderId: string;
   reason: string;
   gateway?: JubelioSalesGateway;
-  logger?: Logger;
 }): Promise<DispatchCancelResult> {
-  const log =
-    input.logger?.child({ orderId: input.orderId, module: "jubelio-sales-cancel" }) ??
-    createLogger({ module: "jubelio-sales-cancel", orderId: input.orderId });
-
   const createOp = await getJubelioSalesOperation(db, {
     orderId: input.orderId,
     type: "create",
@@ -470,7 +518,7 @@ export async function dispatchJubelioSalesCancel(input: {
     },
   });
   if (recorded.operation.status === "confirmed") {
-    await releaseConfirmedSalesOrderHold(input.orderId, log);
+    await releaseConfirmedSalesOrderHold(input.orderId);
     return {
       status: "confirmed",
       salesOrderId: createOp.salesOrderId,
@@ -489,13 +537,11 @@ export async function dispatchJubelioSalesCancel(input: {
   }
 
   const gateway = input.gateway ?? getDefaultJubelioSalesGateway();
-  log.info("Jubelio sales order cancel dispatched", {
-    salesOrderId: createOp.salesOrderId,
-    reason: input.reason,
-  });
-  let result: Awaited<ReturnType<JubelioSalesGateway["cancelSalesOrder"]>>;
+  log.info(
+    `Order ${input.orderId}: sales order ${createOp.salesOrderId} cancel dispatched (operation ${recorded.operation.id})`
+  );
   try {
-    result = await gateway.cancelSalesOrder({
+    await gateway.cancelSalesOrder({
       salesOrderId: createOp.salesOrderId,
       operationId: recorded.operation.id,
     });
@@ -505,9 +551,10 @@ export async function dispatchJubelioSalesCancel(input: {
       await markJubelioSalesOperationManualReview(db, recorded.operation.id, {
         message: classified.message,
       });
-      log.error("Jubelio sales cancel outcome unknown — manual review", {
-        error: serializeError(error),
-      });
+      log.error(
+        `Order ${input.orderId}: sales order ${createOp.salesOrderId} cancel outcome unknown, manual review (operation ${recorded.operation.id})`,
+        safeDependencyErrorLog(error)
+      );
       return { status: "manual_review", message: classified.message };
     }
     // The pre-read inside the gateway may have found the SO already canceled
@@ -516,17 +563,22 @@ export async function dispatchJubelioSalesCancel(input: {
     await markJubelioSalesOperationRejectedAfterClaim(db, recorded.operation.id, {
       message: classified.message,
     });
-    log.warn("Jubelio sales cancel rejected", { message: classified.message });
+    const rejectionCode = knownGatewayCode(error);
+    log.warn(
+      `Order ${input.orderId}: sales order ${createOp.salesOrderId} cancel rejected (${classified.kind}${
+        rejectionCode === undefined ? "" : `, ${rejectionCode}`
+      })`
+    );
     return { status: "rejected", message: classified.message };
   }
   const confirmed = await markJubelioSalesOperationConfirmed(
     db, recorded.operation.id, { salesOrderId: createOp.salesOrderId }
   );
   if (!confirmed) return { status: "in_flight" };
-  await releaseConfirmedSalesOrderHold(input.orderId, log);
-  log.info("Jubelio sales order canceled and accounting reconciled", {
-    salesOrderId: createOp.salesOrderId, alreadyCanceled: result.alreadyCanceled,
-  });
+  await releaseConfirmedSalesOrderHold(input.orderId);
+  log.info(
+    `Order ${input.orderId}: sales order ${createOp.salesOrderId} canceled and accounting reconciled`
+  );
   return { status: "confirmed", salesOrderId: createOp.salesOrderId };
 }
 
@@ -649,7 +701,6 @@ export type SettlementStepResult =
 export async function ensureJubelioInvoice(input: {
   orderId: string;
   gateway?: JubelioSalesGateway;
-  logger?: Logger;
   /**
    * Ticket 07 — the SYSTEM GET-only recovery: verified manual_review
    * operations reconcile by GET (never a POST); anything unverifiable stays
@@ -657,10 +708,6 @@ export async function ensureJubelioInvoice(input: {
    */
   readOnlyRecovery?: boolean;
 }): Promise<SettlementStepResult> {
-  const log =
-    input.logger?.child({ orderId: input.orderId, module: "jubelio-sales-invoice" }) ??
-    createLogger({ module: "jubelio-sales-invoice", orderId: input.orderId });
-
   const orderRows = await db
     .select({
       total: orders.total,
@@ -693,14 +740,14 @@ export async function ensureJubelioInvoice(input: {
   const authority = await loadSettlementAuthority(input.orderId);
   if (authority.kind === "hold") {
     if (input.readOnlyRecovery === true) {
-      log.warn("settlement authority unavailable — invoice recovery held", {
-        message: authority.message,
-      });
+      log.warn(
+        `Order ${input.orderId}: settlement authority unavailable, invoice recovery held`
+      );
       return { status: "in_flight" };
     }
-    log.error("settlement authority unavailable — invoice held for review", {
-      message: authority.message,
-    });
+    log.error(
+      `Order ${input.orderId}: settlement authority unavailable, invoice held for review`
+    );
     return { status: "manual_review", message: authority.message };
   }
   const expectedEnvelope =
@@ -737,22 +784,22 @@ export async function ensureJubelioInvoice(input: {
                 .update(orders)
                 .set({ jubelioInvoiceId: existing.invoiceId, updatedAt: new Date() })
                 .where(eq(orders.id, input.orderId));
-              log.info("Jubelio invoice recovered by GET (read-only recovery)", {
-                invoiceId: existing.invoiceId,
-              });
+              log.info(
+                `Order ${input.orderId}: invoice ${existing.invoiceId} recovered by GET (read-only recovery)`
+              );
               return { status: "confirmed" };
             }
             return { status: "in_flight" };
           }
-          log.warn("recovery invoice verification failed", {
-            invoiceId: existing.invoiceId,
-            message: verified.message,
-          });
+          log.warn(
+            `Order ${input.orderId}: invoice ${existing.invoiceId} recovery verification failed`
+          );
           return { status: "in_flight" };
         } catch (error) {
-          log.warn("recovery invoice GET failed", {
-            error: serializeError(error),
-          });
+          log.warn(
+            `Order ${input.orderId}: invoice ${existing.invoiceId} recovery GET failed`,
+            safeDependencyErrorLog(error)
+          );
           // Held either way: never a POST during recovery.
           return { status: "in_flight" };
         }
@@ -789,9 +836,9 @@ export async function ensureJubelioInvoice(input: {
                 .update(orders)
                 .set({ jubelioInvoiceId: existing.invoiceId, updatedAt: new Date() })
                 .where(eq(orders.id, input.orderId));
-              log.info("Jubelio invoice reconciled by GET", {
-                invoiceId: existing.invoiceId,
-              });
+              log.info(
+                `Order ${input.orderId}: invoice ${existing.invoiceId} reconciled by GET`
+              );
               return { status: "confirmed" };
             }
             return { status: "in_flight" };
@@ -802,10 +849,10 @@ export async function ensureJubelioInvoice(input: {
           return { status: "manual_review", message: verified.message };
         } catch (error) {
           const classified = classifyGatewayError(error);
-          log.warn("Jubelio invoice reconcile-by-GET failed", {
-            invoiceId: existing.invoiceId,
-            error: serializeError(error),
-          });
+          log.warn(
+            `Order ${input.orderId}: invoice ${existing.invoiceId} reconcile-by-GET failed`,
+            safeDependencyErrorLog(error)
+          );
           if (classified.kind === "ambiguous") {
             return { status: "in_flight" };
           }
@@ -824,9 +871,9 @@ export async function ensureJubelioInvoice(input: {
     // Ticket 07 — the recovery NEVER re-POSTs a previously rejected write;
     // it stays held until humans settle it outside the app.
     if (input.readOnlyRecovery === true) {
-      log.info("recovery held — the invoice operation was already rejected", {
-        orderId: input.orderId,
-      });
+      log.info(
+        `Order ${input.orderId}: recovery held, the invoice operation was already rejected`
+      );
       return { status: "in_flight" };
     }
     return {
@@ -838,9 +885,9 @@ export async function ensureJubelioInvoice(input: {
   // Ticket 07 — the recovery NEVER records an intent/POST for a MISSING
   // operation; it stays held (in_flight) until escalation resolves it.
   if (input.readOnlyRecovery === true) {
-    log.info("recovery held — no invoice operation exists to verify", {
-      orderId: input.orderId,
-    });
+    log.info(
+      `Order ${input.orderId}: recovery held, no invoice operation exists to verify`
+    );
     return { status: "in_flight" };
   }
 
@@ -895,9 +942,9 @@ export async function ensureJubelioInvoice(input: {
       result.invoiceId
     );
     if (!persisted) {
-      log.warn("Jubelio invoice id persistence lost the claim", {
-        invoiceId: result.invoiceId,
-      });
+      log.warn(
+        `Order ${input.orderId}: invoice ${result.invoiceId} id persistence lost the dispatch claim`
+      );
       return { status: "in_flight" };
     }
     const verified = await verifyInvoiceAgainstOrder({
@@ -924,10 +971,9 @@ export async function ensureJubelioInvoice(input: {
       .update(orders)
       .set({ jubelioInvoiceId: result.invoiceId, updatedAt: new Date() })
       .where(eq(orders.id, input.orderId));
-    log.info("Jubelio invoice created and verified", {
-      invoiceId: result.invoiceId,
-      invoiceNo: result.invoice.invoiceNo,
-    });
+    log.info(
+      `Order ${input.orderId}: invoice ${result.invoiceId} created and verified`
+    );
     return { status: "confirmed" };
   } catch (error) {
     const classified = classifyGatewayError(error);
@@ -938,22 +984,27 @@ export async function ensureJubelioInvoice(input: {
     // pointer and never authorizes another POST.
     await persistKnownReturnedIds(
       recorded.operation.id,
-      gatewayKnownIds(error),
-      log
+      gatewayKnownIds(error)
     );
     if (classified.kind === "ambiguous") {
       await markJubelioSalesOperationManualReview(db, recorded.operation.id, {
         message,
       });
-      log.error("Jubelio invoice conversion outcome unknown — manual review", {
-        error: serializeError(error),
-      });
+      log.error(
+        `Order ${input.orderId}: invoice conversion outcome unknown, manual review (operation ${recorded.operation.id})`,
+        safeDependencyErrorLog(error)
+      );
       return { status: "manual_review", message };
     }
     await markJubelioSalesOperationManualReview(db, recorded.operation.id, {
       message,
     });
-    log.warn("Jubelio invoice conversion rejected — manual review", { message });
+    const rejectionCode = knownGatewayCode(error);
+    log.warn(
+      `Order ${input.orderId}: invoice conversion rejected, manual review (operation ${recorded.operation.id}; ${classified.kind}${
+        rejectionCode === undefined ? "" : `, ${rejectionCode}`
+      })`
+    );
     return { status: "manual_review", message };
   }
 }
@@ -1079,7 +1130,6 @@ async function verifyInvoiceAgainstOrder(input: {
 export async function ensureJubelioPayment(input: {
   orderId: string;
   gateway?: JubelioSalesGateway;
-  logger?: Logger;
   /**
    * Ticket 07 — the SYSTEM GET-only recovery: verified manual_review
    * operations reconcile by GET (never a POST); anything unverifiable stays
@@ -1087,10 +1137,6 @@ export async function ensureJubelioPayment(input: {
    */
   readOnlyRecovery?: boolean;
 }): Promise<SettlementStepResult> {
-  const log =
-    input.logger?.child({ orderId: input.orderId, module: "jubelio-sales-payment" }) ??
-    createLogger({ module: "jubelio-sales-payment", orderId: input.orderId });
-
   const orderRows = await db
     .select({
       total: orders.total,
@@ -1106,9 +1152,9 @@ export async function ensureJubelioPayment(input: {
   if (!order?.jubelioInvoiceId) {
     // Ticket 07 — a recovery never guesses an invoice id (no POST); held.
     if (input.readOnlyRecovery === true) {
-      log.info("recovery held — no invoice id to verify the payment against", {
-        orderId: input.orderId,
-      });
+      log.info(
+        `Order ${input.orderId}: recovery held, no invoice id to verify the payment against`
+      );
       return { status: "in_flight" };
     }
     return {
@@ -1130,14 +1176,14 @@ export async function ensureJubelioPayment(input: {
   const authority = await loadSettlementAuthority(input.orderId);
   if (authority.kind === "hold") {
     if (input.readOnlyRecovery === true) {
-      log.warn("settlement authority unavailable — payment recovery held", {
-        message: authority.message,
-      });
+      log.warn(
+        `Order ${input.orderId}: settlement authority unavailable, payment recovery held`
+      );
       return { status: "in_flight" };
     }
-    log.error("settlement authority unavailable — payment held for review", {
-      message: authority.message,
-    });
+    log.error(
+      `Order ${input.orderId}: settlement authority unavailable, payment held for review`
+    );
     return { status: "manual_review", message: authority.message };
   }
   const invoiceId = order.jubelioInvoiceId;
@@ -1175,10 +1221,9 @@ export async function ensureJubelioPayment(input: {
             existing.payload.type === "payment" ? existing.payload.payment : null;
           const mismatch = await verifyPayment(payment, intent);
           if (mismatch) {
-            log.warn("recovery payment verification failed", {
-              paymentId: existing.paymentId,
-              message: mismatch,
-            });
+            log.warn(
+              `Order ${input.orderId}: payment ${existing.paymentId} recovery verification failed`
+            );
             // Held: the op stays manual_review (never a flip without proof).
             return { status: "in_flight" };
           }
@@ -1192,16 +1237,17 @@ export async function ensureJubelioPayment(input: {
               .update(orders)
               .set({ jubelioPaymentId: existing.paymentId, updatedAt: new Date() })
               .where(eq(orders.id, input.orderId));
-            log.info("Jubelio payment recovered by GET (read-only recovery)", {
-              paymentId: existing.paymentId,
-            });
+            log.info(
+              `Order ${input.orderId}: payment ${existing.paymentId} recovered by GET (read-only recovery)`
+            );
             return { status: "confirmed" };
           }
           return { status: "in_flight" };
         } catch (error) {
-          log.warn("recovery payment GET failed", {
-            error: serializeError(error),
-          });
+          log.warn(
+            `Order ${input.orderId}: payment ${existing.paymentId} recovery GET failed`,
+            safeDependencyErrorLog(error)
+          );
           return { status: "in_flight" };
         }
       }
@@ -1235,9 +1281,9 @@ export async function ensureJubelioPayment(input: {
               .update(orders)
               .set({ jubelioPaymentId: existing.paymentId, updatedAt: new Date() })
               .where(eq(orders.id, input.orderId));
-            log.info("Jubelio payment reconciled by GET", {
-              paymentId: existing.paymentId,
-            });
+            log.info(
+              `Order ${input.orderId}: payment ${existing.paymentId} reconciled by GET`
+            );
             return { status: "confirmed" };
           }
           return { status: "in_flight" };
@@ -1257,9 +1303,9 @@ export async function ensureJubelioPayment(input: {
     // Ticket 07 — a recovery never re-POSTs a previously rejected/aborted
     // payment write; it stays held (in_flight) until escalation resolves it.
     if (input.readOnlyRecovery === true) {
-      log.info("recovery held — the payment operation was already rejected", {
-        orderId: input.orderId,
-      });
+      log.info(
+        `Order ${input.orderId}: recovery held, the payment operation was already rejected`
+      );
       return { status: "in_flight" };
     }
     return {
@@ -1271,9 +1317,9 @@ export async function ensureJubelioPayment(input: {
   // Ticket 07 — the recovery NEVER records an intent/POST for a MISSING
   // payment operation; it stays held (in_flight).
   if (input.readOnlyRecovery === true) {
-    log.info("recovery held — no payment operation exists to verify", {
-      orderId: input.orderId,
-    });
+    log.info(
+      `Order ${input.orderId}: recovery held, no payment operation exists to verify`
+    );
     return { status: "in_flight" };
   }
 
@@ -1281,7 +1327,9 @@ export async function ensureJubelioPayment(input: {
   if (accountId == null) {
     const message =
       "JUBELIO_PAYMENT_ACCOUNT_ID is not configured; the invoice payment cannot be created";
-    log.error(message);
+    log.error(
+      `Order ${input.orderId}: JUBELIO_PAYMENT_ACCOUNT_ID is not configured; the invoice payment cannot be created`
+    );
     // Record the intent + manual review so ops sees the blocked settlement.
     const reference = `OKCIR_SO_PAYMENT:${input.orderId}:${crypto.randomUUID()}`;
     const recorded = await recordJubelioSalesIntent(db, {
@@ -1366,16 +1414,14 @@ export async function ensureJubelioPayment(input: {
       if (mismatch) {
         await persistKnownReturnedIds(
           recorded.operation.id,
-          { paymentId: result.paymentId },
-          log
+          { paymentId: result.paymentId }
         );
         await markJubelioSalesOperationManualReview(db, recorded.operation.id, {
           message: mismatch,
         });
-        log.error("Jubelio payment does not match the stored expected payable — manual review", {
-          paymentId: result.paymentId,
-          message: mismatch,
-        });
+        log.error(
+          `Order ${input.orderId}: payment ${result.paymentId} does not match the stored expected payable, manual review`
+        );
         return { status: "manual_review", message: mismatch };
       }
     }
@@ -1391,10 +1437,9 @@ export async function ensureJubelioPayment(input: {
       .update(orders)
       .set({ jubelioPaymentId: result.paymentId, updatedAt: new Date() })
       .where(eq(orders.id, input.orderId));
-    log.info("Jubelio payment created and verified", {
-      paymentId: result.paymentId,
-      invoiceId: order.jubelioInvoiceId,
-    });
+    log.info(
+      `Order ${input.orderId}: payment ${result.paymentId} created and verified (invoice ${order.jubelioInvoiceId})`
+    );
     return { status: "confirmed" };
   } catch (error) {
     const classified = classifyGatewayError(error);
@@ -1404,15 +1449,15 @@ export async function ensureJubelioPayment(input: {
     // reconcilable by GET (never a confirmed pointer).
     await persistKnownReturnedIds(
       recorded.operation.id,
-      gatewayKnownIds(error),
-      log
+      gatewayKnownIds(error)
     );
     await markJubelioSalesOperationManualReview(db, recorded.operation.id, {
       message,
     });
-    log.error("Jubelio payment not confirmed — manual review", {
-      error: serializeError(error),
-    });
+    log.error(
+      `Order ${input.orderId}: payment not confirmed, manual review (operation ${recorded.operation.id})`,
+      safeDependencyErrorLog(error)
+    );
     return { status: "manual_review", message };
   }
 }

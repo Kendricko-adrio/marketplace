@@ -17,6 +17,12 @@ export default defineConfig({
       ),
       "@marketplace/db/src": path.resolve(import.meta.dirname, "../../packages/db/src"),
       "@marketplace/db": path.resolve(import.meta.dirname, "../../packages/db/src"),
+      // Resolve the logging core straight from source so unit tests never depend
+      // on the package's dist artifact being built first.
+      "@marketplace/logging": path.resolve(
+        import.meta.dirname,
+        "../../packages/logging/src/index.ts"
+      ),
       "@marketplace/ui": path.resolve(import.meta.dirname, "../../packages/ui/src"),
     },
   },

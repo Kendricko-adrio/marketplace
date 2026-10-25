@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildSalesOrderPayload,
   createJubelioSalesGateway,
   type JubelioSalesGateway,
 } from "./jubelio-sales-client";
-import type { Logger } from "./logger";
+import { JubelioRequestQueueError } from "./jubelio-request-scheduler";
+import { getRequestId, withRequestContext } from "./logger";
 
 type RecordedRequest = {
   method: string;
@@ -57,11 +58,67 @@ type SchedulerStub = {
   queuedCount: number;
 };
 
+type LogRecord = Record<string, unknown>;
+
+/** Fixed envelope of one application log line (maintainable-code §7.2). */
+const FIXED_LOG_FIELDS = [
+  "app",
+  "level",
+  "message",
+  "module",
+  "requestId",
+  "timestamp",
+];
+
+/** Canonical server-generated UUID — an incoming header is never canonical. */
+const CANONICAL_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * External sink under test: the process stdout. Logger internals (module
+ * logger, core, root instance) are never imported or mocked here, so a line is
+ * observed exactly where production writes it.
+ */
+function captureStdout(): { captured: string[]; restore: () => void } {
+  const captured: string[] = [];
+  const spy = vi.spyOn(process.stdout, "write").mockImplementation(
+    (chunk: string | Uint8Array): boolean => {
+      captured.push(
+        typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")
+      );
+      return true;
+    }
+  );
+  return { captured, restore: () => spy.mockRestore() };
+}
+
+/** Application records of this gateway module only (other modules are noise). */
+function moduleLogRecords(captured: string[], module: string): LogRecord[] {
+  const records: LogRecord[] = [];
+  for (const line of captured.join("").split("\n")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null) continue;
+    const record = parsed as LogRecord;
+    if (record.app === "store" && record.module === module) {
+      records.push(record);
+    }
+  }
+  return records;
+}
+
+function messageOf(record: LogRecord): string {
+  return typeof record.message === "string" ? record.message : "";
+}
+
 function makeGateway(overrides: {
   fetchImpl?: typeof fetch;
   scheduler?: SchedulerStub;
   env?: Record<string, string>;
-  logger?: Logger;
 }): JubelioSalesGateway {
   return createJubelioSalesGateway({
     env: overrides.env ?? {
@@ -78,7 +135,6 @@ function makeGateway(overrides: {
       overrides.fetchImpl ??
       (async () => new Response("{}", { status: 200 }) as Response),
     scheduler: overrides.scheduler ?? passThroughScheduler(),
-    logger: overrides.logger,
   });
 }
 
@@ -1867,29 +1923,14 @@ describe("Jubelio sales gateway reads, backpressure and logging", () => {
     ).toHaveLength(0);
   });
 
-  it("logs structured info/error with credentials and tokens redacted", async () => {
-    const events: Array<{
-      level: string;
-      message: string;
-      context?: Record<string, unknown>;
-    }> = [];
-    const makeLog = (bound: Record<string, unknown> = {}): Logger => ({
-      requestId: "request-sales-1",
-      debug: (message, context) =>
-        events.push({ level: "debug", message, context: { ...bound, ...context } }),
-      info: (message, context) =>
-        events.push({ level: "info", message, context: { ...bound, ...context } }),
-      warn: (message, context) =>
-        events.push({ level: "warn", message, context: { ...bound, ...context } }),
-      error: (message, context) =>
-        events.push({ level: "error", message, context: { ...bound, ...context } }),
-      child: (context) => makeLog({ ...bound, ...context }),
-    });
-    const { fetchImpl } = stubFetch((request) => {
+  it("logs structured info/error with canonical request correlation and redacted credentials", async () => {
+    const secretToken = "secret-token";
+    const { fetchImpl, requests } = stubFetch((request) => {
       if (request.path === "/login") {
-        return Response.json({ token: "secret-token" });
+        return Response.json({ token: secretToken });
       }
       if (request.path === "/sales/orders/" && request.method === "POST") {
+        // The provider payload carries customer PII; it must never be logged.
         return Response.json(
           { statusCode: "500", error: "Internal Server Error", customer_name: "Private Customer", email: "private@example.test" },
           { status: 500 }
@@ -1897,35 +1938,110 @@ describe("Jubelio sales gateway reads, backpressure and logging", () => {
       }
       throw new Error(`Unexpected request: ${request.method} ${request.path}`);
     });
-    const gateway = makeGateway({
-      fetchImpl,
-      logger: makeLog(),
-    });
+    // The gateway is built BEFORE the request scope: correlation must be read
+    // when the line is written, never bound when the logger/gateway is created.
+    const gateway = makeGateway({ fetchImpl });
 
-    await expect(
-      gateway.createSalesOrder({ ...salesOrderCreateInput, operationId: "log-op" })
-    ).rejects.toMatchObject({ options: { ambiguous: true } });
+    const { captured, restore } = captureStdout();
+    try {
+      let scopeRequestId: string | null = null;
+      let rejection: unknown = null;
+      // The real gateway runs inside an HTTP request scope; no logger is
+      // injected and no provider is reached (stubbed fetch only).
+      const handler = withRequestContext(async () => {
+        scopeRequestId = getRequestId();
+        try {
+          await gateway.createSalesOrder({
+            ...salesOrderCreateInput,
+            operationId: "log-op",
+          });
+        } catch (error) {
+          rejection = error;
+        }
+        // Standard response so the canonical header stays observable.
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
 
-    expect(
-      events.some(
-        (event) =>
-          event.message === "Jubelio HTTP request started" &&
-          event.context?.path === "/sales/orders/"
-      )
-    ).toBe(true);
-    expect(
-      events.some(
-        (event) =>
-          event.message === "Jubelio sales write outcome unknown" &&
-          event.level === "error"
-      )
-    ).toBe(true);
-    expect(JSON.stringify(events)).not.toContain("secret-token");
-    expect(JSON.stringify(events)).not.toContain("test-account@example.test");
-    expect(JSON.stringify(events)).not.toContain("test-account-placeholder-password");
-    expect(JSON.stringify(events)).not.toContain(salesOrderCreateInput.customerName);
-    expect(JSON.stringify(events)).not.toContain("Private Customer");
-    expect(JSON.stringify(events)).not.toContain("private@example.test");
+      const response = await handler();
+
+      // Unchanged business outcome: the 500 create stays ambiguous, one POST.
+      expect(rejection).toMatchObject({ options: { ambiguous: true } });
+      expect(
+        requests.filter(
+          (request) =>
+            request.method === "POST" && request.path === "/sales/orders/"
+        )
+      ).toHaveLength(1);
+
+      // Canonical correlation: response header === active scope === log line.
+      const responseRequestId = response.headers.get("x-request-id");
+      expect(responseRequestId).toMatch(CANONICAL_UUID);
+      expect(scopeRequestId).toBe(responseRequestId);
+
+      const records = moduleLogRecords(captured, "jubelio-sales");
+      expect(records.length).toBeGreaterThan(0);
+      for (const record of records) {
+        expect(record.app).toBe("store");
+        expect(record.module).toBe("jubelio-sales");
+        expect(record.requestId).toBe(responseRequestId);
+        expect(record.level === "info" || record.level === "error").toBe(true);
+        // Fixed envelope plus the optional safe `error` field only: no free
+        // path/method/status/service runtime metadata, no context object.
+        expect(
+          Object.keys(record)
+            .filter((key) => key !== "error")
+            .sort()
+        ).toEqual(FIXED_LOG_FIELDS);
+        const projected = record.error;
+        if (projected !== undefined) {
+          expect(typeof projected).toBe("object");
+          for (const key of Object.keys(projected as Record<string, unknown>)) {
+            expect(["name", "message", "code", "stack", "cause"]).toContain(
+              key
+            );
+          }
+        }
+      }
+
+      // Method/path/status stay searchable in the MESSAGE, and both outcomes
+      // (info request + error write outcome) are present.
+      const writeLines = records.filter((record) =>
+        messageOf(record).includes("/sales/orders/")
+      );
+      expect(writeLines.length).toBeGreaterThan(0);
+      for (const record of writeLines) {
+        expect(messageOf(record)).toContain("POST");
+      }
+      expect(
+        records.some(
+          (record) =>
+            record.level === "info" &&
+            messageOf(record).includes("POST /sales/orders/")
+        )
+      ).toBe(true);
+      expect(
+        records.some(
+          (record) =>
+            record.level === "error" &&
+            messageOf(record).includes("POST /sales/orders/") &&
+            messageOf(record).includes("500")
+        )
+      ).toBe(true);
+
+      const rawLog = captured.join("");
+      expect(rawLog).not.toContain(secretToken);
+      expect(rawLog).not.toContain("test-account@example.test");
+      expect(rawLog).not.toContain("test-account-placeholder-password");
+      expect(rawLog).not.toContain(salesOrderCreateInput.customerName);
+      expect(rawLog).not.toContain("Private Customer");
+      expect(rawLog).not.toContain("private@example.test");
+      expect(rawLog).not.toContain("Internal Server Error");
+    } finally {
+      restore();
+    }
   });
 });
 
@@ -3311,5 +3427,229 @@ describe("returned provider ids are persisted before independent verification", 
       },
     });
     expect(requests.filter((request) => request.method === "GET")).toHaveLength(0);
+  });
+});
+
+// =====================================================================
+// Log privacy (review follow-up).
+//
+// A caught dependency failure is never forwarded to the log line: its
+// `message`, `stack` and `cause` belong to the transport, persistence or
+// provider layer and can carry free-text customer data (a recipient name, a
+// street address) that key-based redaction cannot recover. The `error` field
+// therefore only carries a static technical projection chosen by this module.
+// Business outcomes — classification, code, thrown message/options — stay
+// exactly what they were.
+// =====================================================================
+
+describe("Jubelio sales gateway log privacy and pre-send observability", () => {
+  it("logs a queue rejection of the create POST as a pre-send failure (never ambiguous, zero fetch)", async () => {
+    // A real queue rejection: the scheduler refuses the LOGIN task before any
+    // HTTP call, so the sales-order POST is provably never sent.
+    const scheduler: SchedulerStub = {
+      schedule: <T>(): Promise<T> =>
+        Promise.reject(new JubelioRequestQueueError("QUEUE_FULL")),
+      activeCount: 0,
+      queuedCount: 0,
+    };
+    const { fetchImpl, requests } = stubFetch(() => {
+      throw new Error("no HTTP request may start after a queue rejection");
+    });
+    const gateway = makeGateway({ fetchImpl, scheduler });
+
+    const { captured, restore } = captureStdout();
+    try {
+      // Unchanged business classification: pre-send, non-ambiguous, retryable,
+      // with the queue code preserved.
+      await expect(
+        gateway.createSalesOrder({
+          ...salesOrderCreateInput,
+          operationId: "queue-full-op",
+        })
+      ).rejects.toMatchObject({
+        message: "Jubelio request queue is full",
+        options: { code: "QUEUE_FULL", ambiguous: false, retryable: true },
+      });
+
+      // Nothing left the process boundary.
+      expect(requests).toHaveLength(0);
+
+      const records = moduleLogRecords(captured, "jubelio-sales");
+      // The pre-send failure of the ORDER POST must stay observable: the queue
+      // branch classifies the failure but the line identifies which write was
+      // NOT sent.
+      const notSent = records.filter(
+        (record) =>
+          record.level === "error" &&
+          messageOf(record).includes("POST /sales/orders/") &&
+          messageOf(record).includes("tidak dikirim")
+      );
+      expect(notSent).toHaveLength(1);
+      // ... and the `error` field is a technical projection, not the raw value.
+      const projected = notSent[0].error as Record<string, unknown> | undefined;
+      expect(projected).toBeDefined();
+      expect(typeof projected?.name).toBe("string");
+      expect(typeof projected?.message).toBe("string");
+    } finally {
+      restore();
+    }
+  });
+
+  it("never copies transport free text (message, cause, stack) into the log while the business error stays unchanged", async () => {
+    const customerMarker = "Private Transport Customer";
+    const addressMarker = "PrivateStreet42";
+    const transportMessage = `Provider transport exposed customer ${customerMarker} address ${addressMarker}`;
+    // Transport failures commonly carry the raw upstream body as `cause`.
+    const transportError = new Error(transportMessage, {
+      cause: new Error(`upstream 502 body: ${customerMarker} / ${addressMarker}`),
+    });
+    // A realistic stack: its first line repeats the message.
+    transportError.stack = `Error: ${transportMessage}\n    at fetchTransport (${addressMarker}.js:1:1)`;
+
+    const { fetchImpl, requests } = stubFetch((request) => {
+      if (request.path === "/login") return Promise.reject(transportError);
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    const { captured, restore } = captureStdout();
+    try {
+      let rejection: unknown = null;
+      // The handler catches the gateway rejection and answers normally: the
+      // HTTP wrapper logs whatever the handler throws, so leaving it uncaught
+      // would make the wrapper (not the gateway) the leaking component here.
+      const handler = withRequestContext(async () => {
+        try {
+          await gateway.createSalesOrder({
+            ...salesOrderCreateInput,
+            operationId: "transport-op",
+          });
+        } catch (error) {
+          rejection = error;
+        }
+        return new Response(JSON.stringify({ ok: false }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+      await handler();
+
+      // Business behaviour untouched: same thrown message, same classification.
+      expect(rejection).toMatchObject({
+        name: "JubelioSalesGatewayError",
+        message: transportMessage,
+        options: { ambiguous: false, retryable: true },
+      });
+      // Only the LOGIN was attempted; the order POST was never sent.
+      expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+        "POST /login",
+      ]);
+
+      const rawLog = captured.join("");
+      expect(rawLog).not.toContain(customerMarker);
+      expect(rawLog).not.toContain(addressMarker);
+
+      const records = moduleLogRecords(captured, "jubelio-sales");
+      // The request attempt is still traceable (info), and the failure keeps a
+      // safe technical `error` record.
+      expect(
+        records.some(
+          (record) =>
+            record.level === "info" && messageOf(record).includes("POST /login")
+        )
+      ).toBe(true);
+      const failures = records.filter(
+        (record) => record.level === "error" && record.error !== undefined
+      );
+      expect(failures.length).toBeGreaterThan(0);
+      for (const record of failures) {
+        const projected = record.error as Record<string, unknown>;
+        expect(typeof projected.name).toBe("string");
+        expect(typeof projected.message).toBe("string");
+        // Fixed allowlist of the `error` field, even for a hostile value.
+        for (const key of Object.keys(projected)) {
+          expect(["name", "message", "code", "stack", "cause"]).toContain(
+            key
+          );
+        }
+      }
+    } finally {
+      restore();
+    }
+  });
+
+  it("logs an edit confirmation mismatch with a static summary, never the raw remote channel status", async () => {
+    // An arbitrary provider-owned string: it may contain a customer name, so a
+    // free-text value like this must never reach the log line.
+    const providerChannelStatus = "Private Channel Customer42";
+    const { fetchImpl, requests } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/orders/" && request.method === "POST") {
+        return Response.json({ id: EDIT_SO_ID });
+      }
+      if (request.path === `/sales/orders/${EDIT_SO_ID}`) {
+        return Response.json(
+          editSnapshotBody({ channel_status: providerChannelStatus })
+        );
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    const { captured, restore } = captureStdout();
+    try {
+      let rejection: unknown = null;
+      const handler = withRequestContext(async () => {
+        try {
+          await gateway.editSalesOrder({
+            edit: readEditSnapshot(),
+            targetChannelStatus: "Siap Proses",
+            operationId: "op-edit-mismatch",
+          });
+        } catch (error) {
+          rejection = error;
+        }
+        return new Response(JSON.stringify({ ok: false }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+      await handler();
+
+      // Unchanged business outcome: the same code and classification, and the
+      // thrown message still carries the detailed mismatch.
+      expect(rejection).toMatchObject({
+        options: {
+          code: "EDIT_CONFIRM_MISMATCH",
+          ambiguous: true,
+          retryable: false,
+        },
+      });
+      expect((rejection as Error).message).toContain("edit is not confirmed");
+      expect((rejection as Error).message).toContain(providerChannelStatus);
+
+      // One edit POST plus one confirmation GET — never repeated.
+      expect(requests.map((request) => `${request.method} ${request.path}`)).toEqual([
+        "POST /login",
+        "POST /sales/orders/",
+        `GET /sales/orders/${EDIT_SO_ID}`,
+      ]);
+
+      // The log line keeps the ids and a generic mismatch summary only.
+      const rawLog = captured.join("");
+      expect(rawLog).not.toContain(providerChannelStatus);
+      expect(rawLog).not.toContain("Private Channel");
+
+      const records = moduleLogRecords(captured, "jubelio-sales");
+      const mismatchLines = records.filter(
+        (record) =>
+          record.level === "error" &&
+          messageOf(record).includes(`sales order ${EDIT_SO_ID}`) &&
+          messageOf(record).includes("belum terkonfirmasi")
+      );
+      expect(mismatchLines).toHaveLength(1);
+    } finally {
+      restore();
+    }
   });
 });

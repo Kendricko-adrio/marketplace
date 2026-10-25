@@ -55,7 +55,7 @@ import {
   calculateOrderPricing,
 } from "@/lib/order-pricing";
 import { buildPaymentItemDetails } from "@/lib/payment-item-details";
-import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
+import { createModuleLogger, getRequestId, withRequestContext } from "@/lib/logger";
 import { claimAndFailOrder } from "@/lib/order-finalize";
 import { initializeReservedOrderPayment } from "@/lib/payment-initialization";
 import { verifyCheckoutStock } from "@marketplace/db/src/checkout-live-stock";
@@ -86,6 +86,24 @@ import { finalizeRejectedCheckoutCreate } from "@/lib/checkout-recovery";
 import { AcceptedCheckoutReplay, CheckoutRequestConflictError, normalizeCheckoutApproval, checkoutIntentFingerprint, findAcceptedCheckout, checkoutResultResponse, type CheckoutRecovery } from "@/lib/checkout-request";
 import type { CheckoutReviewPromo } from "@/lib/checkout-review";
 import { applyOfferBenefitToPricing } from "@/lib/offer-pricing";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("checkout-place-order");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari Midtrans,
+ * Jubelio, atau DB tidak pernah masuk log — hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 /**
  * Promo kandidat ditolak authoritative di dalam transaksi (kapasitas/minimum/
@@ -238,9 +256,8 @@ export async function isCheckoutPaused(): Promise<boolean> {
   }
 }
 
-export async function POST(request: NextRequest) {
+async function postPlaceOrder(request: NextRequest): Promise<Response> {
   const recovery: CheckoutRecovery = {};
-  const log = requestLogger(request, { module: "checkout-result" });
   try {
     const response = await placeOrder(request, recovery);
     if (response.status >= 400 && recovery.identity) {
@@ -251,26 +268,28 @@ export async function POST(request: NextRequest) {
       for (const wait of waits) {
         if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
         const accepted = await findAcceptedCheckout(recovery.identity);
-        if (accepted) return checkoutResultResponse(accepted, !recovery.committed, log);
+        if (accepted) return checkoutResultResponse(accepted, !recovery.committed);
       }
     }
     return response;
   } catch (error) {
     if (error instanceof CheckoutRequestConflictError) {
-      log.warn("checkout request key conflict", { code: error.code });
-      return withRequestId(NextResponse.json({ success: false, code: error.code, error: error.message, requestId: log.requestId }, { status: 409, headers: { "Cache-Control": "no-store" } }), log);
+      log.warn(`checkout request key conflict (code ${error.code})`);
+      return NextResponse.json({ success: false, code: error.code, error: error.message, requestId: getRequestId() }, { status: 409, headers: { "Cache-Control": "no-store" } });
     }
-    log.error("checkout result recovery unavailable", { committed: !!recovery.committed });
-    return withRequestId(NextResponse.json({ success: false, code: "POLICY_UNAVAILABLE", error: "Status checkout belum dapat dibaca. Coba lagi dengan request yang sama.", requestId: log.requestId }, { status: 503, headers: { "Cache-Control": "no-store" } }), log);
+    log.error(
+      `checkout result recovery unavailable (committed ${!!recovery.committed})`,
+      new RouteLogError("checkout result recovery unavailable")
+    );
+    return NextResponse.json({ success: false, code: "POLICY_UNAVAILABLE", error: "Status checkout belum dapat dibaca. Coba lagi dengan request yang sama.", requestId: getRequestId() }, { status: 503, headers: { "Cache-Control": "no-store" } });
   }
 }
 
 async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
-  let log = requestLogger(request, { module: "place-order" });
   log.info("place order requested");
   try {
     const access = await requireOnboardedApiSession();
-    if (!access.ok) return withRequestId(access.response, log);
+    if (!access.ok) return access.response;
     const { session } = access;
 
     const body = await readCheckoutJson(request);
@@ -284,17 +303,14 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
       : placeOrderSchema.safeParse(body);
 
     if (!parsed.success) {
-      log.warn("invalid request body", { issueCount: parsed.error.issues.length });
-      return withRequestId(
-        NextResponse.json(
-          {
-            success: false,
-            error: "Invalid request body",
-            details: parsed.error.issues,
-          },
-          { status: 400 }
-        ),
-        log
+      log.warn(`invalid request body (${parsed.error.issues.length} issue)`);
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Invalid request body",
+          details: parsed.error.issues,
+        },
+        { status: 400 }
       );
     }
 
@@ -303,15 +319,15 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
       recovery.identity = { clientId: session.user.id, requestKey: parsed.data.requestKey,
         fingerprint: checkoutIntentFingerprint(parsed.data) };
       const accepted = await findAcceptedCheckout(recovery.identity);
-      if (accepted) return checkoutResultResponse(accepted, true, log);
+      if (accepted) return checkoutResultResponse(accepted, true);
     }
     if (await isCheckoutPaused()) {
       log.warn("checkout rejected — new checkouts are paused");
-      return withRequestId(NextResponse.json({ success: false, code: "POLICY_UNAVAILABLE", error: "Checkout sedang dijeda sementara." }, { status: 503 }), log);
+      return NextResponse.json({ success: false, code: "POLICY_UNAVAILABLE", error: "Checkout sedang dijeda sementara." }, { status: 503 });
     }
     const contractVersion = await getDiscountsContractVersion();
     if (contractVersion === 0 && (parsed.data.requestKey || parsed.data.reviewToken || parsed.data.promoSelection)) {
-      return withRequestId(NextResponse.json({ success: false, code: "UNSUPPORTED_VERSION", error: "Checkout berversi belum aktif." }, { status: 400 }), log);
+      return NextResponse.json({ success: false, code: "UNSUPPORTED_VERSION", error: "Checkout berversi belum aktif." }, { status: 400 });
     }
     let reviewed: CheckoutReviewVerification | null = null;
     if (contractVersion === 1) {
@@ -342,13 +358,6 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
       : (parsed.data as { selectedItemIds: string[] }).selectedItemIds;
     const pickupDate = isDelivery ? null : (parsed.data as { pickupDate: string }).pickupDate;
     const pickupTime = isDelivery ? null : (parsed.data as { pickupTime: string }).pickupTime;
-    log = log.child({
-      userId: session.user.id,
-      itemCount: selectedItemIds.length,
-      ...(isDelivery
-        ? { fulfillmentMethod: "delivery", ...("addressId" in deliveryBody! ? { addressId: deliveryBody.addressId } : { addressType: "new" }) }
-        : { pickupDate: pickupDate!, pickupTime: pickupTime! }),
-    });
 
     // ===== Load the user's cart =====
     const cartRows = await db
@@ -358,7 +367,7 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
       .limit(1);
 
     if (cartRows.length === 0) {
-      log.warn("checkout rejected — cart is empty");
+      log.warn(`checkout rejected — cart is empty (user ${session.user.id})`);
       return NextResponse.json(
         { success: false, error: "Cart is empty" },
         { status: 400 }
@@ -395,19 +404,16 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
     // caller's cart (or none at all) is not the caller's data — presented as
     // not found. The legacy pickup checkout keeps its 400 contract.
     if ((isDelivery || contractVersion === 1) && selectedItems.length !== selectedItemIds.length) {
-      log.warn("delivery checkout rejected — selected items not owned", {
-        selectedItemIds,
-      });
-      return withRequestId(
-        NextResponse.json(
-          { success: false, error: "Barang keranjang tidak ditemukan." },
-          { status: 404 }
-        ),
-        log
+      log.warn(
+        `delivery checkout rejected — selected items not owned (${selectedItemIds.length} selected, user ${session.user.id})`
+      );
+      return NextResponse.json(
+        { success: false, error: "Barang keranjang tidak ditemukan." },
+        { status: 404 }
       );
     }
     if (selectedItems.length === 0) {
-      log.warn("checkout rejected — no selected cart items", { selectedItemIds });
+      log.warn("checkout rejected — no selected cart items");
       return NextResponse.json(
         { success: false, error: "No selected items to checkout" },
         { status: 400 }
@@ -436,24 +442,20 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
       );
     }
     if (branchIds.size > 1) {
-      log.warn("multi-branch checkout rejected", {
-        branchIds: Array.from(branchIds),
-      });
-      return withRequestId(
-        NextResponse.json(
-          {
-            success: false,
-            error:
-              "Tidak bisa checkout barang di branch yang berbeda. Pilih barang dari satu cabang saja.",
-          },
-          { status: 400 }
-        ),
-        log
+      log.warn(
+        `multi-branch checkout rejected (${branchIds.size} branch, user ${session.user.id})`
+      );
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            "Tidak bisa checkout barang di branch yang berbeda. Pilih barang dari satu cabang saja.",
+        },
+        { status: 400 }
       );
     }
 
     const branchId = Array.from(branchIds)[0];
-    log = log.child({ branchId });
 
     // ===== Load the branch and validate operating hours =====
     const branch = await db
@@ -463,14 +465,14 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
       .limit(1);
 
     if (branch.length === 0 || branch[0].status !== "aktif") {
-      log.warn("checkout rejected — branch unavailable", { branchId });
+      log.warn(`checkout rejected — branch unavailable (branch ${branchId})`);
       return NextResponse.json(
         { success: false, error: "Branch is no longer available" },
         { status: 400 }
       );
     }
     if (branch[0].jubelioLocationId == null) {
-      log.warn("checkout rejected — branch is not linked to Jubelio", { branchId });
+      log.warn(`checkout rejected — branch is not linked to Jubelio (branch ${branchId})`);
       return NextResponse.json(
         { success: false, error: "Branch is not linked to Jubelio inventory" },
         { status: 409 }
@@ -478,10 +480,9 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
     }
     const unmappedItem = selectedItems.find((item) => item.jubelioItemId == null);
     if (unmappedItem) {
-      log.warn("checkout rejected — product is not linked to Jubelio", {
-        variantId: unmappedItem.variantId,
-        productName: unmappedItem.productName,
-      });
+      log.warn(
+        `checkout rejected — product is not linked to Jubelio (variant ${unmappedItem.variantId}, product ${unmappedItem.productName})`
+      );
       return NextResponse.json(
         {
           success: false,
@@ -500,12 +501,9 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
         pickupTime!
       );
       if (!slotValidation.ok) {
-        return withRequestId(
-          NextResponse.json(
-            { success: false, error: slotValidation.error },
-            { status: 400 }
-          ),
-          log
+        return NextResponse.json(
+          { success: false, error: slotValidation.error },
+          { status: 400 }
         );
       }
     }
@@ -546,10 +544,7 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
         .where(eq(clients.id, session.user.id))
         .limit(1);
       if (!clientRow) {
-        return withRequestId(
-          NextResponse.json({ success: false, code: "NOT_FOUND", error: "Akun tidak ditemukan.", requestId: log.requestId }, { status: 404, headers: { "Cache-Control": "no-store" } }),
-          log
-        );
+        return NextResponse.json({ success: false, code: "NOT_FOUND", error: "Akun tidak ditemukan.", requestId: getRequestId() }, { status: 404, headers: { "Cache-Control": "no-store" } });
       }
       const evaluation =
         requestedSelection.kind === "manual"
@@ -567,16 +562,12 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
             });
       if (!evaluation.ok) {
         const mapped = mapOfferReasonToHttp(evaluation.reason);
-        log.warn("checkout promo rejected before commit", {
-          outcome: "promo_ineligible",
-          reason: evaluation.reason,
-        });
-        return withRequestId(
-          NextResponse.json(
-            { success: false, code: mapped.code, error: offerReasonMessage(evaluation.reason), requestId: log.requestId },
-            { status: mapped.status, headers: { "Cache-Control": "no-store" } }
-          ),
-          log
+        log.warn(
+          `checkout promo rejected before commit (outcome promo_ineligible, ${evaluation.reason})`
+        );
+        return NextResponse.json(
+          { success: false, code: mapped.code, error: offerReasonMessage(evaluation.reason), requestId: getRequestId() },
+          { status: mapped.status, headers: { "Cache-Control": "no-store" } }
         );
       }
       offerCandidate = evaluation.candidate;
@@ -599,9 +590,7 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
               benefitId: evaluation.candidate.benefitId,
               benefitAmount: evaluation.candidate.benefitAmount,
             };
-      log = log.child({ offerId: evaluation.candidate.offerId });
     }
-
     if (pricingSnapshot && !isDelivery) {
       const currentFingerprint = buildCheckoutReviewContextFingerprint({
         clientId: session.user.id, contactPhone: phone, contactEmail: email,
@@ -635,26 +624,23 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
       productName: item.productName,
     })));
     if (!stockCheck.ok) {
-      const stockFailure = {
-        reason: stockCheck.reason,
-        detail: stockCheck.detail,
-        productName: stockCheck.productName,
-        itemIds: selectedItems.map((item) => item.jubelioItemId),
-        locationId: branch[0].jubelioLocationId,
-      };
       if (stockCheck.reason === "unavailable") {
-        log.error("checkout rejected — Jubelio stock unavailable", stockFailure);
+        log.error(
+          `checkout rejected — Jubelio stock unavailable (reason ${stockCheck.reason}, detail ${stockCheck.detail ?? "-"}, branch ${branchId})`
+        );
       } else {
-        log.warn("checkout rejected — Jubelio stock insufficient", stockFailure);
+        log.warn(
+          `checkout rejected — Jubelio stock insufficient (product ${stockCheck.productName}, branch ${branchId})`
+        );
       }
-      return withRequestId(NextResponse.json({
+      return NextResponse.json({
         success: false,
         error: stockCheck.reason === "insufficient"
           ? `Stok ${stockCheck.productName} di cabang ini tidak mencukupi. Silakan kurangi jumlah atau pilih barang lain.`
           : "Stok Jubelio belum dapat diverifikasi. Silakan coba beberapa saat lagi.",
-      }, { status: stockCheck.reason === "insufficient" ? 409 : 503 }), log);
+      }, { status: stockCheck.reason === "insufficient" ? 409 : 503 });
     }
-    log.info("Jubelio stock verified before Sales Order", { itemCount: selectedItems.length });
+    log.info(`Jubelio stock verified before Sales Order (${selectedItems.length} item)`);
 
     // ===== Calculate totals (method-aware) =====
     const subtotal = pricingSnapshot?.subtotal ?? calculateLineItemSubtotal(
@@ -710,18 +696,17 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
         // approval → the user re-approves the NEW money. Either way NOTHING
         // local has been created yet.
         if (!chosen || chosen.originFingerprint !== deliveryBody!.originFingerprint) {
-          log.warn("delivery quote must be re-approved", { changedService: !chosen });
-          return withRequestId(
-            NextResponse.json(
-              {
-                success: false,
-                error: REPRICE_REQUIRED_MESSAGE,
-                code: "DELIVERY_REPRICE_REQUIRED",
-                data: { services: quote.services },
-              },
-              { status: 409 }
-            ),
-            log
+          log.warn(
+            `delivery quote must be re-approved (changed service ${!chosen}, branch ${branchId})`
+          );
+          return NextResponse.json(
+            {
+              success: false,
+              error: REPRICE_REQUIRED_MESSAGE,
+              code: "DELIVERY_REPRICE_REQUIRED",
+              data: { services: quote.services },
+            },
+            { status: 409 }
           );
         }
         // Baseline quote fresh: ongkir customer SEBELUM subsidi. Quote cost
@@ -752,10 +737,7 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
             .where(eq(clients.id, session.user.id))
             .limit(1);
           if (!clientRow) {
-            return withRequestId(
-              NextResponse.json({ success: false, code: "NOT_FOUND", error: "Akun tidak ditemukan.", requestId: log.requestId }, { status: 404, headers: { "Cache-Control": "no-store" } }),
-              log
-            );
+            return NextResponse.json({ success: false, code: "NOT_FOUND", error: "Akun tidak ditemukan.", requestId: getRequestId() }, { status: 404, headers: { "Cache-Control": "no-store" } });
           }
           const evaluation = selection.kind === "manual"
             ? await evaluateSelectedManualCode({
@@ -776,16 +758,12 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
               });
           if (!evaluation.ok) {
             const mapped = mapOfferReasonToHttp(evaluation.reason);
-            log.warn("delivery promo rejected before commit", {
-              outcome: "promo_ineligible",
-              reason: evaluation.reason,
-            });
-            return withRequestId(
-              NextResponse.json(
-                { success: false, code: mapped.code, error: offerReasonMessage(evaluation.reason), requestId: log.requestId },
-                { status: mapped.status, headers: { "Cache-Control": "no-store" } }
-              ),
-              log
+            log.warn(
+              `delivery promo rejected before commit (outcome promo_ineligible, ${evaluation.reason})`
+            );
+            return NextResponse.json(
+              { success: false, code: mapped.code, error: offerReasonMessage(evaluation.reason), requestId: getRequestId() },
+              { status: mapped.status, headers: { "Cache-Control": "no-store" } }
             );
           }
           offerCandidate = evaluation.candidate;
@@ -807,7 +785,6 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
                   benefitId: evaluation.candidate.benefitId,
                   benefitAmount: evaluation.candidate.benefitAmount,
                 };
-          log = log.child({ offerId: evaluation.candidate.offerId });
         }
         // Approval dibandingkan dengan NET customer (subsidi sudah diterapkan),
         // bukan harga quote original; perubahan quote/benefit memaksa approve ulang.
@@ -827,18 +804,15 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
           (contractVersion === 1 ? normalizeCheckoutApproval(deliveryBody!.approvedPricing) : deliveryBody!.approvedPricing) as unknown as OrderPricing,
           netPricing
         ).approved) {
-          log.warn("delivery quote must be re-approved", { changed: "pricing" });
-          return withRequestId(
-            NextResponse.json(
-              {
-                success: false,
-                error: REPRICE_REQUIRED_MESSAGE,
-                code: "DELIVERY_REPRICE_REQUIRED",
-                data: { services: quote.services },
-              },
-              { status: 409 }
-            ),
-            log
+          log.warn("delivery quote must be re-approved (changed pricing)");
+          return NextResponse.json(
+            {
+              success: false,
+              error: REPRICE_REQUIRED_MESSAGE,
+              code: "DELIVERY_REPRICE_REQUIRED",
+              data: { services: quote.services },
+            },
+            { status: 409 }
           );
         }
         pricing = netPricing;
@@ -885,35 +859,29 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
               : requoteError.code === "UNAVAILABLE"
                 ? 502
                 : 400;
-          log.error("delivery placement data failed", {
-            code: requoteError.code,
-            error: serializeError(requoteError),
-          });
-          return withRequestId(
-            NextResponse.json(
-              { success: false, error: requoteError.message },
-              { status }
-            ),
-            log
+          log.error(
+            `delivery placement data failed (code ${requoteError.code})`,
+            new RouteLogError("delivery placement data failed")
+          );
+          return NextResponse.json(
+            { success: false, error: requoteError.message },
+            { status }
           );
         }
         const reprice = requoteError instanceof QuoteDeliveryError;
-        log.error("delivery placement quote failed", {
-          code: reprice ? requoteError.code : "PROVIDER",
-        });
+        log.error(
+          `delivery placement quote failed (code ${reprice ? requoteError.code : "PROVIDER"})`
+        );
         // A failed/empty/no-service quote NEVER proceeds with a zero or stale
         // ongkir: the same 409 reprice contract forces the fresh selection.
-        return withRequestId(
-          NextResponse.json(
-            {
-              success: false,
-              error: REPRICE_REQUIRED_MESSAGE,
-              code: "DELIVERY_REPRICE_REQUIRED",
-              data: { services: [] },
-            },
-            { status: 409 }
-          ),
-          log
+        return NextResponse.json(
+          {
+            success: false,
+            error: REPRICE_REQUIRED_MESSAGE,
+            code: "DELIVERY_REPRICE_REQUIRED",
+            data: { services: [] },
+          },
+          { status: 409 }
         );
       }
     } else {
@@ -982,13 +950,9 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
     // the reservation TTL.
     const paymentStartedAt = new Date();
     const expiresAt = new Date(paymentStartedAt.getTime() + ttlMinutes * 60_000);
-    log = log.child({ orderId });
-    log.info("creating order", {
-      ppnRatePercent: pricing.ppnRatePercent,
-      ppnAmount: pricing.ppnAmount,
-      total: pricing.total,
-      ttlMinutes,
-    });
+    log.info(
+      `creating order: order ${orderId}, total ${pricing.total}, ppn ${pricing.ppnAmount} @ ${pricing.ppnRatePercent}%, ttl ${ttlMinutes} menit`
+    );
 
     const createRequest: JubelioSalesOrderCreateRequest = {
       ...(pricingSnapshot ? {
@@ -1260,11 +1224,9 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
             pricing: pricingSnapshot!,
           }));
           reservedRedemptionId = inserted.redemptionId;
-          log.info("redemption reserved atomically with order", {
-            redemptionId: inserted.redemptionId,
-            offerId: candidate.offerId,
-            benefitAmount: candidate.benefitAmount,
-          });
+          log.info(
+            `redemption reserved atomically with order: redemption ${inserted.redemptionId}, offer ${candidate.offerId}, benefit ${candidate.benefitAmount}`
+          );
         }
 
         // ===== Create order items (with real product names) =====
@@ -1348,10 +1310,9 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
               snapshot[0]?.availableStock == null || snapshot[0]?.providerStockSyncedAt?.getTime() !== stockCheck.observedAt.getTime()
             );
           }
-          log.info("local SO hold created", {
-            variantId: item.variantId,
-            quantity: item.quantity,
-          });
+          log.info(
+            `local SO hold created: variant ${item.variantId}, quantity ${item.quantity}, order ${orderId}`
+          );
         }
 
         // ===== Persist the create intent BEFORE any provider POST =====
@@ -1374,20 +1335,17 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
 
       // Provider call stays OUTSIDE the DB transaction: exactly one SO create
       // POST, confirmed via GET before Midtrans is involved.
-      log.info("Jubelio sales order create dispatched");
+      log.info(`Jubelio sales order create dispatched (order ${orderId})`);
       const createOutcome = await dispatchJubelioSalesCreate({
         orderId,
         create: createRequest,
-        logger: log,
       });
-      log.info("Jubelio sales order create completed", {
-        status: createOutcome.status,
-      });
+      log.info(`Jubelio sales order create completed (order ${orderId}, status ${createOutcome.status})`);
 
       if (createOutcome.status !== "confirmed") {
         if (createOutcome.status === "rejected") {
           // Definitive pre-apply rejection: release the hold, fail the order.
-          if (recovery.identity) await finalizeRejectedCheckoutCreate(orderId, log);
+          if (recovery.identity) await finalizeRejectedCheckoutCreate(orderId);
           else await db.transaction(async (tx) => {
             const orderRows = await tx
               .select({ branchId: orders.branchId })
@@ -1424,25 +1382,22 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
                 and(eq(orders.id, orderId), eq(orders.status, "pending_payment"))
               );
           });
-          return withRequestId(
-            NextResponse.json(
-              {
-                success: false,
-                error:
-                  "Stock produk berubah atau tidak mencukupi. Silakan periksa keranjang Anda.",
-              },
-              { status: 409 }
-            ),
-            log
+          return NextResponse.json(
+            {
+              success: false,
+              error:
+                "Stock produk berubah atau tidak mencukupi. Silakan periksa keranjang Anda.",
+            },
+            { status: 409 }
           );
         }
         // manual_review / in_flight: the create may have been applied or is
         // still unknown. Keep the hold, keep the order pending, never retry.
         const message =
           "Pesanan sedang diproses. Tim kami akan mengonfirmasi ketersediaan stok — silakan cek status pesanan atau hubungi kami.";
-        return withRequestId(
-          NextResponse.json({ success: false, error: message }, { status: 503 }),
-          log
+        return NextResponse.json(
+          { success: false, error: message },
+          { status: 503 }
         );
       }
 
@@ -1491,183 +1446,167 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
             }
           });
         },
-        compensate: async (error) => {
+        compensate: async () => {
           await claimAndFailOrder(
             orderId,
             "Payment initialization failed",
-            "initialization_error",
-            log
+            "initialization_error"
           );
-          log.error("payment initialization failed; sales-order cancel dispatched", {
-            error: serializeError(error),
-          });
+          log.error(
+            `order ${orderId}: payment initialization failed; sales-order cancel dispatched`,
+            new RouteLogError("payment initialization failed")
+          );
         },
       });
 
       const midtransResult = initialized.payment;
       if (initialized.persistenceError) {
-        log.error("payment created but local metadata needs reconciliation", {
-          error: serializeError(initialized.persistenceError),
-        });
+        log.error(
+          `order ${orderId}: payment created but local metadata needs reconciliation`,
+          new RouteLogError("payment metadata persistence failed")
+        );
       }
 
-      log.info("order placed successfully", {
-        redirectUrl: !!midtransResult.redirectUrl,
-        ppnRatePercent: pricing.ppnRatePercent,
-        ppnAmount: pricing.ppnAmount,
-        total: pricing.total,
-      });
+      log.info(
+        `order placed successfully: order ${orderId}, total ${pricing.total}, ppn ${pricing.ppnAmount} @ ${pricing.ppnRatePercent}%, redirect ${midtransResult.redirectUrl ? "ada" : "kosong"}`
+      );
       if (recovery.identity) {
         const accepted = await findAcceptedCheckout(recovery.identity);
         if (!accepted) throw new Error("Accepted checkout tidak ditemukan setelah commit.");
-        return checkoutResultResponse(accepted, false, log);
+        return checkoutResultResponse(accepted, false);
       }
-      return withRequestId(
-        NextResponse.json({ success: true, orderId, redirectUrl: midtransResult.redirectUrl, token: midtransResult.token }), log
-      );
+      return NextResponse.json({ success: true, orderId, redirectUrl: midtransResult.redirectUrl, token: midtransResult.token });
     } catch (checkoutError) {
       if (recovery.identity && (recovery.committed || checkoutError instanceof AcceptedCheckoutReplay)) {
-        log.error("checkout completion interrupted; reading retained result", { committed: !!recovery.committed });
+        log.error(
+          `checkout completion interrupted; reading retained result (committed ${!!recovery.committed})`
+        );
         const accepted = await findAcceptedCheckout(recovery.identity);
-        if (accepted) return checkoutResultResponse(accepted, !recovery.committed, log);
+        if (accepted) return checkoutResultResponse(accepted, !recovery.committed);
         throw checkoutError;
       }
       if (checkoutError instanceof CheckoutRequestConflictError || checkoutError instanceof CheckoutReviewRequiredError) throw checkoutError;
       if (checkoutError instanceof RedemptionReviewChangedError) throw new CheckoutReviewRequiredError();
       if (checkoutError instanceof PromoReservationError) {
-        log.warn("checkout promo rejected at commit", {
-          code: checkoutError.code,
-          reason: checkoutError.reason,
-        });
-        return withRequestId(
-          NextResponse.json(
-            {
-              success: false,
-              code: checkoutError.code,
-              error: checkoutError.safeMessage,
-              requestId: log.requestId,
-            },
-            { status: checkoutError.status, headers: { "Cache-Control": "no-store" } }
-          ),
-          log
+        log.warn(
+          `checkout promo rejected at commit (code ${checkoutError.code}, reason ${checkoutError.reason})`
+        );
+        return NextResponse.json(
+          {
+            success: false,
+            code: checkoutError.code,
+            error: checkoutError.safeMessage,
+            requestId: getRequestId(),
+          },
+          { status: checkoutError.status, headers: { "Cache-Control": "no-store" } }
         );
       }
       if (checkoutError instanceof PricingContractError) {
-        log.warn("checkout source changed before commit", { code: checkoutError.code });
-        return withRequestId(NextResponse.json({ success: false, code: "CHECKOUT_REVIEW_REQUIRED", error: checkoutError.message }, { status: 409 }), log);
+        log.warn(`checkout source changed before commit (code ${checkoutError.code})`);
+        return NextResponse.json({ success: false, code: "CHECKOUT_REVIEW_REQUIRED", error: checkoutError.message }, { status: 409 });
       }
       // Insufficient stock → 400 (customer can retry / pick fewer units).
       if (checkoutError instanceof InsufficientStockError) {
-        log.warn("insufficient stock — checkout transaction rolled back", {
-          productName: checkoutError.productName,
-          missingSnapshot: checkoutError.missingSnapshot,
-        });
-        return withRequestId(
-          NextResponse.json(
-            {
-              success: false,
-              error: checkoutError.missingSnapshot
-                ? "Stok berubah saat checkout. Silakan coba lagi."
-                : checkoutError.message,
-            },
-            { status: checkoutError.missingSnapshot ? 503 : 400 }
-          ),
-          log
+        log.warn(
+          `insufficient stock — checkout transaction rolled back (product ${checkoutError.productName}, missingSnapshot ${checkoutError.missingSnapshot})`
+        );
+        return NextResponse.json(
+          {
+            success: false,
+            error: checkoutError.missingSnapshot
+              ? "Stok berubah saat checkout. Silakan coba lagi."
+              : checkoutError.message,
+          },
+          { status: checkoutError.missingSnapshot ? 503 : 400 }
         );
       }
       if (recovery.identity) {
-        log.error("checkout transaction unavailable", { code: "POLICY_UNAVAILABLE" });
-        return withRequestId(NextResponse.json({ success: false, code: "POLICY_UNAVAILABLE",
-          error: "Checkout belum dapat diselesaikan. Coba kembali dengan request yang sama.", requestId: log.requestId },
-          { status: 503, headers: { "Cache-Control": "no-store" } }), log);
+        log.error("checkout transaction unavailable (code POLICY_UNAVAILABLE)");
+        return NextResponse.json({ success: false, code: "POLICY_UNAVAILABLE",
+          error: "Checkout belum dapat diselesaikan. Coba kembali dengan request yang sama.", requestId: getRequestId() },
+          { status: 503, headers: { "Cache-Control": "no-store" } });
       }
       const err = checkoutError as {
         message?: string;
         httpStatusCode?: number;
         ApiResponse?: unknown;
       };
-      log.error("Midtrans payment creation failed", {
-        httpStatusCode: err.httpStatusCode,
-      });
+      log.error(
+        `Midtrans payment creation failed (http status ${err.httpStatusCode ?? "-"})`,
+        new RouteLogError("midtrans payment creation failed")
+      );
       // The compensation path marks the order failed and cancels the SO;
       // checked-out cart rows are preserved so the customer can retry.
-      return withRequestId(
-        NextResponse.json(
-          {
-            success: false,
-            error:
-              err.message ||
-              "Failed to initiate payment. Your cart is preserved — please try again.",
-          },
-          { status: 502 }
-        ),
-        log
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            err.message ||
+            "Failed to initiate payment. Your cart is preserved — please try again.",
+        },
+        { status: 502 }
       );
     }
   } catch (error) {
     if (error instanceof CheckoutRequestConflictError) throw error;
     if (error instanceof CheckoutAdmissionError) {
-      if (error.status === 503) log.error("checkout admission unavailable", { code: error.code });
-      else log.warn("checkout admission denied", { code: error.code });
-      return withRequestId(NextResponse.json({ success: false, code: error.code, error: error.message, requestId: log.requestId },
-        { status: error.status, headers: { "Cache-Control": "no-store", ...(error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {}) } }), log);
+      if (error.status === 503) log.error(`checkout admission unavailable (code ${error.code})`);
+      else log.warn(`checkout admission denied (code ${error.code})`);
+      return NextResponse.json({ success: false, code: error.code, error: error.message, requestId: getRequestId() },
+        { status: error.status, headers: { "Cache-Control": "no-store", ...(error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {}) } });
     }
     if (error instanceof CheckoutReviewRequiredError) {
-      log.warn("checkout review rejected", {
-        code: error.code,
-        requiresAcknowledgement: error.requiresAcknowledgement,
-      });
-      return withRequestId(NextResponse.json(
+      log.warn(
+        `checkout review rejected (code ${error.code}, requiresAcknowledgement ${error.requiresAcknowledgement ?? "-"})`
+      );
+      return NextResponse.json(
         {
           success: false,
           code: error.code,
           error: error.message,
-          requestId: log.requestId,
+          requestId: getRequestId(),
           ...(error.requiresAcknowledgement
             ? { data: { requiresAcknowledgement: error.requiresAcknowledgement } }
             : {}),
         },
-        { status: 409, headers: { "Cache-Control": "no-store" } }), log);
+        { status: 409, headers: { "Cache-Control": "no-store" } });
     }
     if (error instanceof CheckoutReviewUnavailableError) {
-      log.error("checkout review unavailable", { code: "PRICING_UNAVAILABLE" });
-      return withRequestId(NextResponse.json({ success: false, code: "PRICING_UNAVAILABLE", error: "Review checkout belum tersedia.", requestId: log.requestId }, { status: 503, headers: { "Cache-Control": "no-store" } }), log);
+      log.error("checkout review unavailable (code PRICING_UNAVAILABLE)");
+      return NextResponse.json({ success: false, code: "PRICING_UNAVAILABLE", error: "Review checkout belum tersedia.", requestId: getRequestId() }, { status: 503, headers: { "Cache-Control": "no-store" } });
     }
     if (error instanceof PromoReservationError) {
-      log.warn("checkout promo rejected", { code: error.code, reason: error.reason });
-      return withRequestId(
-        NextResponse.json(
-          { success: false, code: error.code, error: error.safeMessage, requestId: log.requestId },
-          { status: error.status, headers: { "Cache-Control": "no-store" } }
-        ),
-        log
+      log.warn(`checkout promo rejected (code ${error.code}, reason ${error.reason})`);
+      return NextResponse.json(
+        { success: false, code: error.code, error: error.safeMessage, requestId: getRequestId() },
+        { status: error.status, headers: { "Cache-Control": "no-store" } }
       );
     }
     if (error instanceof RedemptionReviewChangedError) {
-      log.warn("checkout promo review changed", { code: "CHECKOUT_REVIEW_REQUIRED" });
-      return withRequestId(
-        NextResponse.json(
-          { success: false, code: "CHECKOUT_REVIEW_REQUIRED", error: error.message, requestId: log.requestId },
-          { status: 409, headers: { "Cache-Control": "no-store" } }
-        ),
-        log
+      log.warn("checkout promo review changed (code CHECKOUT_REVIEW_REQUIRED)");
+      return NextResponse.json(
+        { success: false, code: "CHECKOUT_REVIEW_REQUIRED", error: error.message, requestId: getRequestId() },
+        { status: 409, headers: { "Cache-Control": "no-store" } }
       );
     }
     if (error instanceof CheckoutInputError) {
-      log.warn("checkout body rejected", { status: error.status });
-      return withRequestId(NextResponse.json({ success: false, error: error.message }, { status: error.status }), log);
+      log.warn(`checkout body rejected (status ${error.status})`);
+      return NextResponse.json({ success: false, error: error.message }, { status: error.status });
     }
     if (error instanceof PricingContractError) {
-      log.warn("checkout pricing input rejected", { code: error.code });
-      return withRequestId(NextResponse.json({ success: false, error: "Data harga atau keranjang tidak valid.", code: error.code }, { status: 400 }), log);
+      log.warn(`checkout pricing input rejected (code ${error.code})`);
+      return NextResponse.json({ success: false, error: "Data harga atau keranjang tidak valid.", code: error.code }, { status: 400 });
     }
-    log.error("place order failed", { errorType: error instanceof Error ? error.name : "UnknownError" });
-    return withRequestId(
-      NextResponse.json(
-        { success: false, error: "Failed to place order" },
-        { status: 500 }
-      ),
-      log
+    log.error(
+      `place order failed (${error instanceof Error ? error.name : "UnknownError"})`,
+      new RouteLogError("place order failed")
+    );
+    return NextResponse.json(
+      { success: false, error: "Failed to place order" },
+      { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(postPlaceOrder, "checkout-place-order");

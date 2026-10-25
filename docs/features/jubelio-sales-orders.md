@@ -2,13 +2,57 @@
 
 The storefront checks out through **Jubelio Sales Orders** for every new
 order. Inventory adjustments are retired from the runtime paths (plan:
-`plan/jubelio-sales-api-switching.md`). This document is the implemented
+`.scratch/jubelio-sales-api-switching/plan/jubelio-sales-api-switching.md`). This document is the implemented
 behavior plus the sandbox-observed provider contract. For pickup, the SO,
 invoice and Jubelio payment contain only goods (zero discount, item/SO tax
 and shipping); the website and Midtrans include website PPN on goods. For
 example, Rp100,000 goods at 11% produce a Rp100,000 SO/invoice/payment but
 a Rp111,000 order/Midtrans charge. Confirmation compares provider money to
 the goods subtotal, not the website total. Delivery checkout is not active.
+
+> **LEGACY (gate `0`).** Paragraf di atas menjelaskan order versi 0: verifikasi
+> provider membandingkan uang provider dengan **subtotal barang**, dan delivery
+> dianggap belum aktif. Order baru pada gate `1` memakai kontrak provider v2
+> dengan expected payable **net barang + net ongkir**; lihat
+> [Kontrak provider berversi (v2)](#kontrak-provider-berversi-v2) dan
+> [delivery orders](delivery-orders.md).
+
+## Kontrak provider berversi (v2)
+
+Kontrak baru menambahkan versi pada dua record tersimpan: baris order
+(`pricing_contract_version=1`, `pricing_engine_version=1`,
+`provider_contract_version=2` + `pricing_snapshot`) dan intent operasi `create`
+(`providerContractVersion: 2`). Ringkasan kontrak uang dan decoder:
+[versioned-checkout-pricing.md](versioned-checkout-pricing.md).
+
+**Payable provider.** Expected payable kontrak v2 adalah **net barang + net
+ongkir**, bukan subtotal dan bukan total customer (PPN website tidak dijurnal ke
+provider). Contoh delivery barang 150000 + ongkir 30000 → provider 180000,
+customer 196500. Intent menyimpan `originalShipmentCost` (ongkir sebelum
+subsidi), `shippingCost` (net), dan `expectedProviderPayable`; baris item tetap
+membawa `discAmount: 0`, `taxAmount: 0`, source `INTERNAL`, unit dan `taxId`
+valid.
+
+**Fail closed sebelum provider write.** `jubelio-sales-expected.ts` men-decode
+intent tersimpan dan memastikan bentuk/identity/unit/tax/money sah, lalu
+`readSettlementAuthorityRecord` mewajibkan baris order persis `1/1/2` dan
+nilainya sama dengan intent (`SALES_CONTRACT_RECORD_DRIFT`). Intent legacy tanpa
+versi wajib berpasangan dengan baris order `0/0/0`; pasangan campuran ditolak.
+Tidak ada fallback ke master/config dan tidak ada reprice dari quote terbaru.
+
+**Returned ID dan ambiguity.** ID SO/invoice/payment yang sudah dikembalikan
+provider disimpan/dipertahankan segera untuk rekonsiliasi, sebelum verifikasi
+berikutnya bisa gagal. Timeout, 5xx, sukses tanpa ID, GET verifikasi gagal, atau
+selisih nominal menahan tahap berikutnya **dan** fulfillment; hasilnya
+`manual_review`, bukan retry POST buta, bukan cancel otomatis, dan bukan
+penurunan diskon. Order yang sudah paid tetap paid tanpa pickup code.
+
+**Pemakaian expected payable.** `jubelio-sales-lifecycle.ts` mengambil otoritas
+lewat `readSettlementAuthorityRecord`: branch kontrak v2 membandingkan invoice
+dan payment terhadap `expectedProviderPayable` yang tersimpan (net barang + net
+ongkir), sedangkan branch legacy (intent unversioned + baris order `0/0/0`) tetap
+memakai `orders.subtotal` seperti sebelumnya. Versi unknown atau dua record yang
+tidak setuju ditahan tanpa provider write.
 
 ## Lifecycle (Path 1 settlement only)
 

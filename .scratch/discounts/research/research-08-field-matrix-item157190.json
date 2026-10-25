@@ -1,0 +1,118 @@
+{
+  "run": "RESEARCH08-FIELD-MATRIX-ITEM157190-2026-10-18T10-10-10-571Z",
+  "scope": "Read-only discovery product157190 Celana Okcir Bagus atas arahan pemilik; endpoint matrix disepakati invoice-only, business-write protocol belum approved.",
+  "createAttempts": 0,
+  "events": [
+    {
+      "at": "2026-10-18T10:10:10.572Z",
+      "label": "login",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "at": "2026-10-18T10:10:15.114Z",
+      "label": "login",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-18T10:10:15.119Z",
+      "label": "master-identity",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/157190"
+    },
+    {
+      "at": "2026-10-18T10:10:15.308Z",
+      "label": "master-identity",
+      "phase": "response",
+      "http": 200,
+      "snapshot": {
+        "item_group_id": 55269,
+        "item_group_name": "Celana Okcir Bagus",
+        "sell_price": "1000000.0000",
+        "is_active": true,
+        "sell_unit": null,
+        "uom_name": "Buah",
+        "sell_tax_id": null,
+        "sales_acct_id": null,
+        "cogs_acct_id": null,
+        "invt_acct_id": null,
+        "product_skus": [
+          {
+            "item_id": 157190,
+            "item_code": "Testasd",
+            "sell_price": 1000000,
+            "end_qty": 21
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T10:10:15.314Z",
+      "label": "sku-stock",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "input": {
+        "ids": [
+          157190
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T10:10:15.450Z",
+      "label": "sku-stock",
+      "phase": "response",
+      "http": 200,
+      "snapshot": {
+        "rows": [
+          {
+            "item_id": 157190,
+            "location_id": 2,
+            "on_hand": 21,
+            "on_order": 1,
+            "available": 20
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T10:10:15.456Z",
+      "label": "identity-summary",
+      "master": {
+        "item_group_id": 55269,
+        "item_group_name": "Celana Okcir Bagus",
+        "sell_price": "1000000.0000",
+        "is_active": true,
+        "sell_unit": null,
+        "uom_name": "Buah",
+        "sell_tax_id": null,
+        "sales_acct_id": null,
+        "cogs_acct_id": null,
+        "invt_acct_id": null,
+        "product_skus": [
+          {
+            "item_id": 157190,
+            "item_code": "Testasd",
+            "sell_price": 1000000,
+            "end_qty": 21
+          }
+        ]
+      },
+      "stock": {
+        "rows": [
+          {
+            "item_id": 157190,
+            "location_id": 2,
+            "on_hand": 21,
+            "on_order": 1,
+            "available": 20
+          }
+        ]
+      },
+      "businessWrites": 0
+    }
+  ]
+}

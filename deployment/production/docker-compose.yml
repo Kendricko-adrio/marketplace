@@ -65,6 +65,11 @@ services:
       <<: *pg-conn
       NODE_ENV: production
       APP_ENV: production
+      # Store hanya diakses lewat Caddy (port tidak dipublish). Caddy menimpa
+      # X-Real-IP/X-Forwarded-For dengan remote_host, jadi admission checkout
+      # boleh memakai IP itu; tanpa flag ini preview/place-order gagal tertutup
+      # 503 POLICY_UNAVAILABLE. Lihat docs/deployment-docs/discounts-cutover.md.
+      CHECKOUT_TRUST_PROXY: "true"
       # Better Auth (store)
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
       BETTER_AUTH_URL: "https://store.adfsport.cloud"

@@ -16,7 +16,7 @@ Not installed: `ask-matt` (its generic routing may conflict with our approved pr
 
 ## Before using a tracker-dependent skill
 
-This repo currently has [`plan/index.md`](../../plan/index.md) and [`tasks.md`](../../tasks.md), but **not** Matt's `docs/agents/issue-tracker.md` configuration. The plan index is not an issue tracker. Before publishing from `to-spec`, `to-tickets`, or `wayfinder`, ask the owner to choose an issue-tracker destination (GitHub Issues, local markdown, or an agreed alternative) and explicitly approve that configuration. The project plan lifecycle and Ready approval gate remain the source of truth for conceptual plans; do not silently create a parallel plan state machine. No setup skill or remote publication was run during installation.
+Tracker [Local Markdown](../agents/issue-tracker.md) sudah dikonfigurasi. Semua artefak kerja mengikuti [layout per fitur](../../.scratch/README.md): research di `research/`, spec/plan di `plan/`, decision map/tickets di `wayfinder/`, dan implementation map/tickets di `ticket/`, semuanya di `.scratch/<feature>/`. Status plan hanya di `index.md` fitur, bukan global index atau map kedua. Contoh lokasi upstream tunduk pada policy ini; vendored skills tetap tidak dimodifikasi. Publikasi complete spec dan breakdown masih memerlukan approval masing-masing; perubahan tracker atau publikasi remote tidak diizinkan otomatis. Plan Done tetap disimpan dan enduring content dirangkum ke `docs/`.
 
 ## Pi and project policy
 

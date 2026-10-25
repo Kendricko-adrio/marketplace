@@ -1,19 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest, NextResponse } from "next/server";
-import { guardAllow, guardDeny, guardMock, loggerModuleMock, makeLogger } from "@/test-support/route-test";
+import { guardAllow, guardDeny, guardMock, loggerModuleMock } from "@/test-support/route-test";
 import { mockShipmentRegions } from "@/test-support/shipment-regions";
 vi.mock("@/lib/rbac/guard", async () => ({ guard: (await import("@/test-support/route-test")).guardMock }));
 vi.mock("@/lib/logger", () => loggerModuleMock());
 import { GET } from "./route";
-const logger = makeLogger();
-beforeEach(() => { guardMock.mockReset(); guardAllow(logger); mockShipmentRegions(); });
+beforeEach(() => { guardMock.mockReset(); guardAllow(); mockShipmentRegions(); });
 const request = (query: string) => new NextRequest(`http://localhost/api/admin/shipment/regions?${query}`);
 describe("admin Shipment hierarchy", () => {
   it("requires branches edit and returns canonical string options", async () => {
     const response = await GET(request("level=areas&parentId=010203"));
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ success: true, data: [{ id: "0102030004", name: "Kelurahan Fixture", parentId: "010203", postalCode: "01234" }] });
-    expect(guardMock).toHaveBeenCalledWith("branches", "edit", expect.anything());
+    // `guard` dipanggil tanpa options: request/logger dibaca dari scope HTTP wrapper.
+    expect(guardMock).toHaveBeenCalledWith("branches", "edit");
   });
   it.each(["", "level=toString", "level=cities", "level=areas&parentId=abc"])("rejects invalid query %s", async (query) => {
     expect((await GET(request(query))).status).toBe(400);

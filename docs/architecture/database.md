@@ -111,6 +111,23 @@ payment_type verbatim (`qris`, `gopay`, `credit_card`, `bank_transfer`,
 migration was required to repurpose them (comment-only change in
 `packages/db/src/schema/orders.ts`).
 
+## Markdown price history (ticket 03)
+
+Tabel harga Markdown dimiliki schema bersama: `price_change_batch`,
+`price_change_batch_row`, `variant_price_revision`, dan
+`variant_price_current` (`packages/db/src/schema/prices.ts`, migrasi
+`0041_even_wong.sql`). Target Markdown **tidak** ditulis ke
+`product_variant.price`; source sync hanya mengubah source, dan proyeksi
+efektif dihitung saat read. FK variant/revision/current memakai `RESTRICT`
+sehingga histori harga menahan cascade delete catalog.
+
+Satu detail urutan: baris batch menyimpan `applied_revision_id` (FK ke
+revision), sedangkan revision menyimpan `batch_row_id` dengan UNIQUE tanpa FK
+balik — dua arah FK akan menjadi siklus yang tidak bisa dihapus FK-ordered oleh
+seeder. Saat reset, seeder mereset `price_change_batch_row`
+(`state='pending'`, `applied_revision_id=NULL`) sebelum menghapus revision.
+Lihat [../features/markdown-pricing.md](../features/markdown-pricing.md).
+
 ## Seeder Must Stay in Sync
 
 Whenever a table/column is added or removed in `packages/db/src/schema/`,

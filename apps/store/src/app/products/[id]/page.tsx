@@ -24,7 +24,13 @@ interface ProductVariant {
   sku: string;
   color: string | null;
   size: string | null;
+  /** Effective price (Markdown applied when active). */
   price: string;
+  /** Source (Jubelio base) price of THIS variant. */
+  sourcePrice?: string;
+  storedTarget?: string | null;
+  markdownActive?: boolean;
+  markdownRevisionId?: string | null;
   isDefault: boolean;
   images: string[];
   branchStock: BranchStock[];
@@ -63,11 +69,7 @@ export default function ProductDetailPage() {
   const [product, setProduct] = useState<Product | null>(null);
   const [loading, setLoading] = useState(true);
   const [quantity, setQuantity] = useState(1);
-  const [selectedColor, setSelectedColor] = useState<string | null>(null);
-  const [selectedSize, setSelectedSize] = useState<string | null>(null);
-  const [selectedVariant, setSelectedVariant] = useState<ProductVariant | null>(
-    null
-  );
+  const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null);
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
   const [addingToCart, setAddingToCart] = useState(false);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
@@ -86,9 +88,7 @@ export default function ProductDetailPage() {
             prod.variants.find((v: ProductVariant) => v.isDefault) ||
             prod.variants[0];
           if (defaultVariant) {
-            setSelectedVariant(defaultVariant);
-            if (defaultVariant.color) setSelectedColor(defaultVariant.color);
-            if (defaultVariant.size) setSelectedSize(defaultVariant.size);
+            setSelectedVariantId(defaultVariant.id);
           }
         }
       } catch (error) {
@@ -100,25 +100,30 @@ export default function ProductDetailPage() {
     fetchProduct();
   }, [productId]);
 
-  // Update selected variant when color/size changes
-  useEffect(() => {
-    if (!product) return;
+  const sellableVariants = product?.variants.filter(
+    (v) => v.branchStock.some((b) => b.available > 0)
+  ) ?? [];
+  const selectedVariant = sellableVariants.find((v) => v.id === selectedVariantId) ?? null;
+  const selectedColor = selectedVariant?.color ?? null;
+  const selectedSize = selectedVariant?.size ?? null;
+  const availableColors = [...new Set(sellableVariants.map((v) => v.color).filter((c): c is string => !!c))];
+  const availableSizes = [...new Set(sellableVariants
+    .filter((v) => v.color === selectedColor)
+    .map((v) => v.size).filter((s): s is string => !!s))];
+  const availableBranches = selectedVariant?.branchStock.filter((b) => b.available > 0) ?? [];
+  const selectedBranchStock = availableBranches.find((b) => b.branchId === selectedBranchId);
+  const maxQuantity = selectedBranchStock?.available ?? 0;
 
-    const matchingVariant = product.variants.find((v) => {
-      const colorMatch = !selectedColor || v.color === selectedColor;
-      const sizeMatch = !selectedSize || v.size === selectedSize;
-      return colorMatch && sizeMatch;
-    });
-
-    if (matchingVariant) {
-      setSelectedVariant(matchingVariant);
-      setSelectedBranchId(null);
-      setSelectedImageIndex(0);
-    }
-  }, [selectedColor, selectedSize, product]);
+  const selectVariant = (variant: ProductVariant | undefined) => {
+    if (!variant) return;
+    setSelectedVariantId(variant.id);
+    setSelectedBranchId(null);
+    setQuantity(1);
+    setSelectedImageIndex(0);
+  };
 
   const handleAddToCart = async () => {
-    if (!selectedVariant || !selectedBranchId) return;
+    if (!selectedVariant || !selectedBranchStock || quantity < 1 || quantity > maxQuantity) return;
     setAddingToCart(true);
     try {
       const res = await fetch("/api/cart/items", {
@@ -174,18 +179,24 @@ export default function ProductDetailPage() {
 
   const currentPrice = parseFloat(selectedVariant?.price || product.basePrice);
 
-  const originalPrice = parseFloat(product.basePrice);
-  const discount = computeDiscountPercent(originalPrice, currentPrice);
+  // Only an ACTIVE Markdown shows a coretan, and the original is the SAME
+  // variant's source price — the group RRP (product.basePrice) is not used.
+  const sourcePrice = selectedVariant?.sourcePrice
+    ? parseFloat(selectedVariant.sourcePrice)
+    : undefined;
+  const originalPrice =
+    selectedVariant?.markdownActive && sourcePrice && sourcePrice > currentPrice
+      ? sourcePrice
+      : undefined;
+  const discount = originalPrice
+    ? computeDiscountPercent(originalPrice, currentPrice)
+    : 0;
 
-  const availableBranches = selectedVariant?.branchStock ?? [];
-  const selectedBranchStock = availableBranches.find(
-    (b) => b.branchId === selectedBranchId
-  );
   const stockLabel = selectedBranchId
     ? `Stok terakhir: ${selectedBranchStock?.available ?? 0}`
     : availableBranches.length > 0
     ? "Pilih cabang"
-    : "Stok cabang belum tersedia";
+    : "Stok habis";
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -235,7 +246,7 @@ export default function ProductDetailPage() {
             <h2 className="text-4xl font-bold text-primary">
               Rp {currentPrice.toLocaleString("id-ID")}
             </h2>
-            {discount > 0 && (
+            {discount > 0 && originalPrice !== undefined && (
               <div className="flex gap-4 items-center mt-2">
                 <span className="text-muted-foreground line-through">
                   Rp {originalPrice.toLocaleString("id-ID")}
@@ -248,7 +259,7 @@ export default function ProductDetailPage() {
           <hr className="my-6 border-border" />
 
           {/* Color Variants */}
-          {product.colors.length > 0 && (
+          {availableColors.length > 0 && (
             <div className="mb-6">
               <h3 className="mb-3 font-medium">
                 Warna:{" "}
@@ -257,11 +268,14 @@ export default function ProductDetailPage() {
                 </span>
               </h3>
               <div className="flex gap-3 flex-wrap">
-                {product.colors.map((color) => (
+                {availableColors.map((color) => (
                   <Button
                     key={color}
                     variant={selectedColor === color ? "default" : "outline"}
-                    onClick={() => setSelectedColor(color)}
+                    onClick={() => selectVariant(
+                      sellableVariants.find((v) => v.color === color && v.size === selectedSize) ??
+                      sellableVariants.find((v) => v.color === color)
+                    )}
                     className="rounded-full"
                   >
                     {color}
@@ -272,7 +286,7 @@ export default function ProductDetailPage() {
           )}
 
           {/* Size Variants */}
-          {product.sizes.length > 0 && (
+          {availableSizes.length > 0 && (
             <div className="mb-8">
               <h3 className="mb-3 font-medium">
                 Ukuran:{" "}
@@ -281,11 +295,11 @@ export default function ProductDetailPage() {
                 </span>
               </h3>
               <div className="flex gap-3 flex-wrap">
-                {product.sizes.map((size) => (
+                {availableSizes.map((size) => (
                   <Button
                     key={size}
                     variant={selectedSize === size ? "default" : "outline"}
-                    onClick={() => setSelectedSize(size)}
+                    onClick={() => selectVariant(sellableVariants.find((v) => v.color === selectedColor && v.size === size))}
                     className="w-12 h-12 p-0 rounded-lg text-sm"
                   >
                     {size}
@@ -309,7 +323,7 @@ export default function ProductDetailPage() {
                     <button
                       key={b.branchId}
                       type="button"
-                      onClick={() => setSelectedBranchId(b.branchId)}
+                      onClick={() => { setSelectedBranchId(b.branchId); setQuantity(1); }}
                       className={`flex items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors ${
                         isSelected
                           ? "border-primary bg-primary/5"
@@ -351,6 +365,8 @@ export default function ProductDetailPage() {
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label="Kurangi jumlah"
+                disabled={quantity <= 1 || !selectedBranchStock}
                 onClick={() => setQuantity(Math.max(1, quantity - 1))}
                 className="h-10 w-10 text-muted-foreground hover:text-foreground"
               >
@@ -358,6 +374,7 @@ export default function ProductDetailPage() {
               </Button>
               <input
                 type="text"
+                aria-label="Jumlah"
                 value={quantity}
                 readOnly
                 className="w-12 text-center border-none bg-transparent focus:outline-none"
@@ -365,9 +382,9 @@ export default function ProductDetailPage() {
               <Button
                 variant="ghost"
                 size="icon"
-                onClick={() =>
-                  setQuantity(quantity + 1)
-                }
+                aria-label="Tambah jumlah"
+                disabled={!selectedBranchStock || quantity >= maxQuantity}
+                onClick={() => setQuantity(Math.min(maxQuantity, quantity + 1))}
                 className="h-10 w-10 text-muted-foreground hover:text-foreground"
               >
                 <Plus className="w-4 h-4" />
@@ -377,7 +394,7 @@ export default function ProductDetailPage() {
             <Button
               className="flex-1 gap-2"
               size="lg"
-              disabled={addingToCart || !selectedBranchId}
+              disabled={addingToCart || !selectedBranchStock || quantity > maxQuantity}
               onClick={handleAddToCart}
             >
               <ShoppingCart className="w-5 h-5" />

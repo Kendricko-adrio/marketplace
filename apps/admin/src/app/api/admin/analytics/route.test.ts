@@ -14,8 +14,7 @@ import {
   guardAllow,
   guardDeny,
   guardMock,
-  loggerModuleMock,
-  makeLogger,
+  type RouteModuleLogger,
 } from "@/test-support/route-test";
 import { PgDialect } from "drizzle-orm/pg-core";
 import type { SQL } from "drizzle-orm";
@@ -25,6 +24,15 @@ import type { SQL } from "drizzle-orm";
 const FROZEN_NOW = new Date("2025-06-15T18:30:00Z");
 
 const state = vi.hoisted(() => ({ current: null as import("@/test-support/fake-db").FakeDb | null }));
+
+/**
+ * Stub module logger yang dipakai route. `vi.hoisted` menjaga container ini
+ * sudah ada saat factory mock dievaluasi (import `./route` berjalan lebih dulu
+ * daripada body file test).
+ */
+const captured = vi.hoisted(() => ({
+  moduleLog: null as RouteModuleLogger | null,
+}));
 
 vi.mock("@/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/db")>();
@@ -44,11 +52,26 @@ vi.mock("@/lib/rbac/guard", async () => {
   };
 });
 
-vi.mock("@/lib/logger", () => loggerModuleMock());
+vi.mock("@/lib/logger", async () => {
+  const helpers = await import("@/test-support/route-test");
+  // Route membuat logger sekali di module scope; satu stub dibagikan supaya
+  // assertion membaca event yang benar-benar ditulis route.
+  const shared = helpers.makeModuleLogger();
+  captured.moduleLog = shared;
+  return {
+    ...(await helpers.loggerModuleMock()),
+    createModuleLogger: () => shared,
+  };
+});
 
 import { GET } from "./route";
 
-const logger = makeLogger();
+/** Stub module logger milik route (dibuat saat `./route` diimpor). */
+function moduleLog(): RouteModuleLogger {
+  const value = captured.moduleLog;
+  if (!value) throw new Error("module logger route belum dibuat");
+  return value;
+}
 
 function getRequest(): NextRequest {
   return new NextRequest("http://localhost:3001/api/admin/analytics");
@@ -97,7 +120,10 @@ const recentRow = {
 beforeEach(() => {
   vi.useFakeTimers({ now: FROZEN_NOW });
   guardMock.mockReset();
-  guardAllow(logger);
+  guardAllow();
+  moduleLog().info.mockClear();
+  moduleLog().warn.mockClear();
+  moduleLog().error.mockClear();
   state.current = createFakeDb({
     selectQueue: [[kpiRow], trendRows, statusRows, [recentRow]],
   });
@@ -111,11 +137,7 @@ describe("GET /api/admin/analytics", () => {
   it("requires the analytics view grant via the unified guard", async () => {
     await GET(getRequest());
 
-    expect(guardMock).toHaveBeenCalledWith(
-      "analytics",
-      "view",
-      expect.objectContaining({ request: expect.anything() })
-    );
+    expect(guardMock).toHaveBeenCalledWith("analytics", "view");
   });
 
   it("returns the additive contract: original fields + averageOrderValue + 30-day WIB trend", async () => {
@@ -158,10 +180,9 @@ describe("GET /api/admin/analytics", () => {
       (p: { revenue: number }) => p.revenue !== 0
     );
     expect(nonZero).toHaveLength(2);
-    // Success log outcome preserved.
-    expect(logger.info).toHaveBeenCalledWith(
-      "analytics.summary",
-      expect.objectContaining({ outcome: "success", scope: "all" })
+    // Success log outcome preserved: fakta bisnis ada di dalam message.
+    expect(moduleLog().info).toHaveBeenCalledWith(
+      expect.stringContaining("analytics.summary (scope all, outcome success)")
     );
   });
 
@@ -204,7 +225,7 @@ describe("GET /api/admin/analytics", () => {
 
   it("resolves own-branch scope against the pinned Home Branch", async () => {
     guardMock.mockReset();
-    guardAllow(logger, { scope: "own_branch", homeBranchId: "b-1" });
+    guardAllow({ scope: "own_branch", homeBranchId: "b-1" });
 
     const response = await GET(getRequest());
 
@@ -235,7 +256,6 @@ describe("GET /api/admin/analytics", () => {
         // own-branch authorization without a server-pinned Home Branch.
         authorization: { allowed: true, scope: "own_branch" },
       },
-      logger,
     });
     state.current = createFakeDb();
 
@@ -282,9 +302,9 @@ describe("GET /api/admin/analytics", () => {
       success: false,
       error: "Failed to fetch analytics",
     });
-    expect(logger.error).toHaveBeenCalledWith(
-      "analytics.failure",
-      expect.objectContaining({ outcome: "error" })
+    expect(moduleLog().error).toHaveBeenCalledWith(
+      expect.stringContaining("analytics.summary gagal (outcome error)"),
+      expect.anything()
     );
   });
 });

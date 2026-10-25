@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -80,9 +81,8 @@ export default function ProductFilterEditor({
           <Label className="text-xs" htmlFor={`${idPrefix}-search`}>
             Search (opsional)
           </Label>
-          <input
+          <Input
             id={`${idPrefix}-search`}
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             value={value.search ?? ""}
             onChange={(e) => update("search", e.target.value || undefined)}
             placeholder="Ketik nama produk..."
@@ -174,11 +174,10 @@ export default function ProductFilterEditor({
           <Label className="text-xs" htmlFor={`${idPrefix}-minPrice`}>
             Harga Minimum
           </Label>
-          <input
+          <Input
             id={`${idPrefix}-minPrice`}
             type="number"
             min="0"
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             value={value.minPrice ?? ""}
             onChange={(e) => update("minPrice", e.target.value || undefined)}
             placeholder="0"
@@ -188,11 +187,10 @@ export default function ProductFilterEditor({
           <Label className="text-xs" htmlFor={`${idPrefix}-maxPrice`}>
             Harga Maksimum
           </Label>
-          <input
+          <Input
             id={`${idPrefix}-maxPrice`}
             type="number"
             min="0"
-            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
             value={value.maxPrice ?? ""}
             onChange={(e) => update("maxPrice", e.target.value || undefined)}
             placeholder="Tanpa batas"

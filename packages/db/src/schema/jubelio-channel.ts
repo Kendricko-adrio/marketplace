@@ -120,7 +120,7 @@ export const jubelioChannelStatusIntents = pgTable(
     id: text("id").primaryKey(),
     orderId: text("order_id")
       .notNull()
-      .references(() => orders.id, { onDelete: "cascade" }),
+      .references(() => orders.id, { onDelete: "restrict" }),
     // A channel edit always targets a KNOWN, confirmed Sales Order.
     salesOrderId: integer("sales_order_id").notNull(),
     // Monotonic per order: a new local stage records the next version; a

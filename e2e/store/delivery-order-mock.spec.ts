@@ -52,6 +52,7 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import crypto from "node:crypto";
 import { Pool } from "pg";
+import { deleteRetainedOrderFixtures } from "../../packages/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import { TEST_USERS } from "../config";
 dotenv.config({ path: ".env" });
@@ -130,6 +131,8 @@ const ADDRESS_CHAIN = {
 } as const;
 
 const CONTACT_EMAIL = "delivord-e2e@example.test";
+// Delivery memakai email AKUN (tampil read-only di checkout), bukan email bebas.
+const ACCOUNT_EMAIL = TEST_USERS.store.email;
 
 // Independent money (worked cases, never recomputed):
 //   case 1/3: goods 100.000 + ongkir 20.000 → PPN 13.200 → total 133.200
@@ -149,6 +152,9 @@ let orderContext: BrowserContext;
 let addressIdOne = "";
 
 let packConfigBefore: Array<Record<string, unknown>> = [];
+// Kasus uang spec ini memakai kontrak legacy (PPN atas barang + ongkir); gate
+// diskon dipin ke '0' agar hasilnya tidak bergantung state DB dari spec lain.
+let gateBefore: Array<Record<string, unknown>> = [];
 
 type MockRequestRecord = { method: string; path: string; body: Record<string, unknown> };
 
@@ -229,8 +235,7 @@ async function isolatePaymentRedirect(page: Page): Promise<void> {
 /** Drives the delivery flow to the review step and clicks the place button. */
 async function driveDeliveryToPlace(
   page: Page,
-  street: string,
-  email: string
+  street: string
 ): Promise<{ orderId: string; redirectUrl: string; body: Record<string, unknown>; response: unknown }> {
   await page.goto("/cart");
   await page.getByRole("checkbox").first().check();
@@ -248,9 +253,8 @@ async function driveDeliveryToPlace(
   await expect(page.getByText("JNE REG Fixture")).toBeVisible({ timeout: 20_000 });
   await page.getByText("JNE REG Fixture").click();
   await expect(page.getByRole("region", { name: "Quote Pengiriman" }).getByText("Rp 20.000", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Lanjut" }).click();
-  await page.getByLabel("Nomor Telepon *").fill("081234567890");
-  await page.getByLabel("Email *").fill(email);
+  // Kontak pemesan delivery: email akun read-only + telepon penerima alamat.
+  await expect(page.locator("#contactEmail")).toHaveValue(ACCOUNT_EMAIL);
   await page.getByRole("button", { name: "Lanjut" }).click();
   const review = page.getByRole("heading", { name: "Pembayaran", exact: true }).locator("..");
   await expect(review.getByText(street, { exact: true })).toBeVisible();
@@ -323,19 +327,16 @@ async function orderRow(orderId: string): Promise<Record<string, unknown>> {
 
 async function countOrders(): Promise<number> {
   const rows = await pool!.query(
-    "SELECT count(*)::int AS n FROM orders WHERE contact_email = $1",
-    [CONTACT_EMAIL]
+    `SELECT count(*)::int AS n FROM orders o
+       WHERE EXISTS (SELECT 1 FROM order_item oi WHERE oi.order_id = o.id AND oi.variant_id = $1)`,
+    [FIXTURE_VARIANT_ID]
   );
   return Number(rows.rows[0]?.n ?? 0);
 }
 
 async function deleteOrder(orderId: string): Promise<void> {
   if (!orderId) return;
-  await pool!.query(
-    "DELETE FROM jubelio_sales_operation WHERE order_id = $1",
-    [orderId]
-  );
-  await pool!.query("DELETE FROM orders WHERE id = $1", [orderId]);
+  await deleteRetainedOrderFixtures(pool!, [orderId]);
 }
 
 // ---------------------------------------------------------------------------
@@ -345,12 +346,15 @@ async function deleteOrder(orderId: string): Promise<void> {
 test.beforeAll(async ({ browser }) => {
   requireIsolatedMockRun();
   pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  gateBefore = (await pool.query("SELECT value, type, description FROM system_config WHERE key='discounts.contractVersion'")).rows;
+  await pool.query("INSERT INTO system_config (key,value,type) VALUES ('discounts.contractVersion','0','number') ON CONFLICT (key) DO UPDATE SET value='0',type='number'");
 
   // Heal leftovers from interrupted runs (own markers only — seeded rows and
   // real data are never reset).
   const stale = await pool.query<{ id: string }>(
-    "SELECT id FROM orders WHERE contact_email = $1",
-    [CONTACT_EMAIL]
+    `SELECT id FROM orders o
+       WHERE EXISTS (SELECT 1 FROM order_item oi WHERE oi.order_id = o.id AND oi.variant_id = $1)`,
+    [FIXTURE_VARIANT_ID]
   );
   for (const row of stale.rows) await deleteOrder(row.id);
 
@@ -440,8 +444,9 @@ test.beforeAll(async ({ browser }) => {
 test.afterAll(async () => {
   if (pool) {
     const stale = await pool.query<{ id: string }>(
-      "SELECT id FROM orders WHERE contact_email = $1",
-      [CONTACT_EMAIL]
+      `SELECT id FROM orders o
+         WHERE EXISTS (SELECT 1 FROM order_item oi WHERE oi.order_id = o.id AND oi.variant_id = $1)`,
+      [FIXTURE_VARIANT_ID]
     );
     for (const row of stale.rows) await deleteOrder(row.id);
     await pool.query(`DELETE FROM cart_item WHERE variant_id = $1`, [FIXTURE_VARIANT_ID]);
@@ -456,6 +461,14 @@ test.afterAll(async () => {
       );
     } else {
       await pool.query("DELETE FROM system_config WHERE key='shipment.packagingWeightGrams'");
+    }
+    if (gateBefore.length > 0) {
+      await pool.query(
+        "UPDATE system_config SET value=$1, type=$2, description=$3 WHERE key='discounts.contractVersion'",
+        [gateBefore[0].value, gateBefore[0].type, gateBefore[0].description]
+      );
+    } else {
+      await pool.query("DELETE FROM system_config WHERE key='discounts.contractVersion'");
     }
     await pool.end();
   }
@@ -566,11 +579,10 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
       ["Provinsi", "Fixture Province"], ["Kota/Kabupaten", "Fixture City"],
       ["Kecamatan", "Fixture District"], ["Kelurahan/Area", "Fixture Area"],
     ]) await page.getByLabel(label, { exact: true }).selectOption({ label: option });
+    // Alamat baru baru dipakai setelah modal dikonfirmasi.
+    await page.getByRole("button", { name: "Gunakan alamat ini" }).click();
     await expect(page.getByText("JNE REG Fixture")).toBeVisible({ timeout: 20_000 });
     await page.getByText("JNE REG Fixture").click();
-    await page.getByRole("button", { name: "Lanjut" }).click();
-    await page.getByLabel("Nomor Telepon *").fill("081234567890");
-    await page.getByLabel("Email *").fill(CONTACT_EMAIL);
     await page.getByRole("button", { name: "Lanjut" }).click();
     await page.getByRole("checkbox").first().check();
     let body: { success: boolean; orderId: string } | undefined;
@@ -611,11 +623,9 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     ]) await page.getByLabel(label, { exact: true }).selectOption({ label: option });
     await page.getByLabel("Simpan alamat", { exact: true }).check();
     await page.getByLabel("Jadikan alamat utama").check();
+    await page.getByRole("button", { name: "Gunakan alamat ini" }).click();
     await expect(page.getByText("JNE REG Fixture")).toBeVisible({ timeout: 20_000 });
     await page.getByText("JNE REG Fixture").click();
-    await page.getByRole("button", { name: "Lanjut" }).click();
-    await page.getByLabel("Nomor Telepon *").fill("081234567890");
-    await page.getByLabel("Email *").fill(CONTACT_EMAIL);
     await page.getByRole("button", { name: "Lanjut" }).click();
     await page.getByRole("checkbox").first().check();
     let body: { success: boolean; orderId: string } | undefined;
@@ -686,7 +696,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
       data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
     });
     expect(add.ok(), `adding the fixture variant failed: ${await add.text()}`).toBe(true);
-    const placed = await driveDeliveryToPlace(page, ADDRESS_STREETS[0], CONTACT_EMAIL);
+    const placed = await driveDeliveryToPlace(page, ADDRESS_STREETS[0]);
     const orderId = placed.orderId;
 
     // ===== Approval request body: only the approval — never money =====
@@ -695,7 +705,9 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
       addressId: expect.any(String),
       courierId: 13,
       serviceId: 1327,
-      contactPhone: "081234567890",
+      // Telepon pemesan delivery = telepon penerima pada alamat terpilih.
+      contactPhone: "081300000001",
+      contactEmail: ACCOUNT_EMAIL,
     });
     expect(Number((placed.body.approvedPricing as Record<string, unknown>).total)).toBe(133200);
     // No stale pickup slots may ride along with a delivery submission.
@@ -860,9 +872,6 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
       .click();
     await page.getByText("JNE REG Fixture").click();
     await page.getByRole("button", { name: "Lanjut" }).click();
-    await page.getByLabel("Nomor Telepon *").fill("081234567890");
-    await page.getByLabel("Email *").fill(CONTACT_EMAIL);
-    await page.getByRole("button", { name: "Lanjut" }).click();
 
     // The quote approved at 133.200; NOW the mock rates move to 30.000.
     expect(
@@ -960,9 +969,6 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
       .click();
     await emptyQuotePage.getByRole("radio", { name: /JNE REG Fixture/ }).check();
     await emptyQuotePage.getByRole("button", { name: "Lanjut", exact: true }).click();
-    await emptyQuotePage.getByLabel("Nomor Telepon *").fill("081234567890");
-    await emptyQuotePage.getByLabel("Email *").fill(CONTACT_EMAIL);
-    await emptyQuotePage.getByRole("button", { name: "Lanjut", exact: true }).click();
     await emptyQuotePage.getByRole("checkbox").check();
     expect(
       (await mockControl("PUT", "/__control/shipment", { scenario: "rate-empty" })).status
@@ -973,7 +979,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     ]);
     expect(missing.status()).toBe(409);
     await expect(emptyQuotePage.getByRole("heading", { name: "Cara Pengiriman", exact: true })).toBeVisible();
-    await expect(emptyQuotePage.getByRole("heading", { name: "Informasi Kontak" })).toBeHidden();
+    await expect(emptyQuotePage.getByRole("heading", { name: "Pembayaran", exact: true })).toBeHidden();
     await expect(emptyQuotePage.getByText(REPRICE_MESSAGE, { exact: true })).toBeVisible();
     await expect(emptyQuotePage.getByRole("button", { name: /Coba lagi/ })).toBeVisible();
     await expect(emptyQuotePage.getByRole("button", { name: "Lanjut", exact: true })).toBeDisabled();
@@ -992,7 +998,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
       data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
     });
     expect(add.ok()).toBe(true);
-    const placed = await driveDeliveryToPlace(page, ADDRESS_STREETS[1], CONTACT_EMAIL);
+    const placed = await driveDeliveryToPlace(page, ADDRESS_STREETS[1]);
     const deliveryId = placed.orderId;
 
     // Normal verified settlement: Midtrans settle → signed webhook.
@@ -1039,7 +1045,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     expect(add2.ok()).toBe(true);
     // The ambiguous scene starts ONLY after the order/SO exists (it delays the
     // invoice conversion, not the placement).
-    const placed2 = await driveDeliveryToPlace(page2, ADDRESS_STREETS[2], CONTACT_EMAIL);
+    const placed2 = await driveDeliveryToPlace(page2, ADDRESS_STREETS[2]);
     expect((await mockControl("PUT", "/__control/scenario", { scenario: "timeout-after-apply" })).status).toBe("ok");
     expect(
       (await mockControl("PUT", "/__control/midtrans-status", {

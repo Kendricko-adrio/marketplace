@@ -42,15 +42,17 @@ Before placing a doc, check the live folder structure with `ls docs/` (do not
 rely on memory) and update `docs/features/` / `docs/deployment-docs/`
 index/README if any of them mention a file that moved.
 
-### Transient plans vs. enduring docs
+### Dokumen kerja vs. dokumentasi permanen
 
-`plan/` (a root-level folder, **not** part of `docs/`) holds **transient**
-conceptual multi-feature plans with their own lifecycle — a plan file is
-deleted when its plan reaches Done; see [`plan/README.md`](../plan/README.md).
-`docs/` holds **enduring** documentation only. When a plan retires, its
-lasting design/invariant/flow content is distilled into the appropriate
-`docs/` folder per the destination rules above; plans are never kept in
-`docs/` in raw form.
+Research, proposal/spec/plan, wayfinding, dan implementation tickets berada di
+`.scratch/<feature>/{research,plan,wayfinder,ticket}/`, dengan navigasi dan status
+plan pada `index.md` per fitur. Lihat [panduan artefak](../.scratch/README.md).
+Tidak ada register status global. Plan Done tetap disimpan bersama evidence.
+
+`docs/` hanya menyimpan dokumentasi permanen: rangkum desain, invariant, flow,
+API, dan operasional yang sudah diverifikasi ke tujuan yang sesuai di atas.
+Jangan menyimpan draft research/plan/ticket baru di `docs/` atau `.agents/`.
+ADRs dan referensi arsitektur permanen tetap berada di `docs/`.
 
 ## Rules
 
@@ -71,6 +73,7 @@ lasting design/invariant/flow content is distilled into the appropriate
 | Third-party APIs | `docs/jubelio-api/README.md` |
 | Internal architecture | `docs/architecture/README.md` |
 | Testing | `docs/testing/README.md` |
+| Agent tooling (MCP servers, Context7) | `docs/agents/mcp-tooling.md` |
 | Home delivery lifecycle | [`docs/features/home-delivery.md`](features/home-delivery.md) |
 | Delivery follow-up | [`docs/features/delivery-follow-up.md`](features/delivery-follow-up.md) |
 | Delivery handoff and tracking | [`docs/features/delivery-tracking.md`](features/delivery-tracking.md) |
@@ -78,5 +81,9 @@ lasting design/invariant/flow content is distilled into the appropriate
 | Guided admin delivery workflow | [`docs/features/admin-delivery-workflow.md`](features/admin-delivery-workflow.md) |
 | Delivery orders and settlement | [`docs/features/delivery-orders.md`](features/delivery-orders.md) |
 | Delivery checkout quotes | [`docs/features/delivery-quotes.md`](features/delivery-quotes.md) |
+| Versioned checkout pricing (money snapshot, PPN goods-only, provider payable) | [`docs/features/versioned-checkout-pricing.md`](features/versioned-checkout-pricing.md) |
+| Discount Offer administration (public fixed-goods lifecycle, review, publish, capacity) | [`docs/features/discount-administration.md`](features/discount-administration.md) |
+| Promo checkout pickup/delivery (kode promo, kupon, review pembayaran, subsidi ongkir, lifecycle Redemption) | [`docs/features/discount-redemption.md`](features/discount-redemption.md) |
+| Manual Markdown price changes (per-SKU target, projection, apply/history, provider whole-line discount) | [`docs/features/markdown-pricing.md`](features/markdown-pricing.md) |
 | Mandatory verified branch Shipment regions | [`docs/features/branch-shipping-regions.md`](features/branch-shipping-regions.md) |
 | Client address book, branch shipping origin and parcel master | [`docs/features/client-addresses.md`](features/client-addresses.md) |

@@ -45,10 +45,23 @@ import type {
   ShipmentCreateRequestPayload,
 } from "@marketplace/db/src/schema";
 import { writeAuditEvent } from "@/lib/rbac/audit-writer";
-import { createLogger, serializeError } from "@/lib/logger";
+import { createModuleLogger } from "@/lib/logger";
 import { deliverySettlementBlocker } from "@/lib/delivery-settlement";
 
-const log = createLogger({ module: "shipment-fulfillment" });
+const log = createModuleLogger("shipment-fulfillment");
+
+/**
+ * Static, module-owned projection for an ambiguous dispatch. The caught value
+ * comes from the provider boundary and can carry its URL/body, so it is never
+ * logged; the same raw text is still written to the AUDIT row (that is a
+ * database record, not an application log) right where it is caught.
+ */
+class ShipmentDispatchLogError extends Error {
+  constructor() {
+    super("dispatch booking tidak menghasilkan AWB");
+    this.name = "ShipmentDispatchLogError";
+  }
+}
 
 // The executor type mirrors the app's @/db instance and the transaction
 // callback (the branches-service idiom).
@@ -438,7 +451,7 @@ export function createShipmentFulfillment(
         branchScope: "single_branch",
         branchId: order.branchId,
       });
-      log.info("shipment packed", { orderId, refNo: orderId });
+      log.info(`shipment packed (order ${orderId}, ref ${orderId})`);
       return { status: "packed" };
     });
   }
@@ -538,11 +551,10 @@ export function createShipmentFulfillment(
         branchId: actor.homeBranchId ?? null,
       });
       });
-      log.error("shipment booking left ambiguous after dispatch", {
-        orderId,
-        refNo: storedRequest.ref_no,
-        error: serializeError(error),
-      });
+      log.error(
+        `shipment booking left ambiguous after dispatch (order ${orderId}, ref ${storedRequest.ref_no}, outcome error)`,
+        new ShipmentDispatchLogError()
+      );
       throw new ShipmentFulfillmentError(
         "BOOKING_AMBIGUOUS",
         "Booking tidak pasti (dispatch terkirim tanpa AWB). Menunggu rekonsiliasi; tidak ada POST ulang."
@@ -603,7 +615,9 @@ export function createShipmentFulfillment(
       branchId: actor.homeBranchId ?? null,
     });
     });
-    log.info("shipment booked", { orderId, awb: result.awb, refNo: storedRequest.ref_no });
+    log.info(
+      `shipment booked (order ${orderId}, ref ${storedRequest.ref_no}, shipment ${result.shipment_id})`
+    );
     // Missing billing is a read-only observation AFTER durable booking success.
     // A failed/malformed GET never fails the booking and never repeats create.
     if (billedPrice === null && gateway.getAwb) {
@@ -622,8 +636,8 @@ export function createShipmentFulfillment(
             branchScope: 'single_branch', branchId: actor.homeBranchId });
         });
         billedPrice = observed;
-        log.info('shipment billed cost observed', { orderId });
-      } catch { log.error('shipment billing lookup unavailable; booking remains successful', { orderId }); }
+        log.info(`shipment billed cost observed (order ${orderId})`);
+      } catch { log.error(`shipment billing lookup unavailable; booking remains successful (order ${orderId})`); }
     }
 
     return {

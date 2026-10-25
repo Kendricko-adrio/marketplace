@@ -2,19 +2,35 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { footerConfig } from "@/db";
 import { eq } from "drizzle-orm";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
-import { serializeError } from "@/lib/logger";
 import { footerConfigSchema } from "@/lib/footer-config";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-footer");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/driver tidak
+ * pernah masuk log.
+ */
+class FooterLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FooterLogError";
+  }
+}
 
 // -----------------------------
 // GET /api/admin/footer — fetch footer config [footer:view]
 // Returns the singleton row's `data` field, or null if no row exists.
 // The client falls back to DEFAULT_FOOTER_CONFIG when data is null.
 // -----------------------------
-export async function GET(request: NextRequest) {
-  const guardResult = await guard("footer", "view", { request });
+async function getFooterConfig(_request: NextRequest): Promise<Response> {
+  const guardResult = await guard("footer", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger } = guardResult;
 
   try {
     const rows = await db
@@ -26,13 +42,14 @@ export async function GET(request: NextRequest) {
       .from(footerConfig)
       .limit(1);
 
-    logger.info("footer.get", { outcome: "success" });
+    log.info(`footer.get (hasConfig ${rows.length > 0}, outcome success)`);
     return NextResponse.json({ success: true, data: rows[0] ?? null });
-  } catch (error) {
-    logger.error("footer.get.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error(
+      "footer.get gagal (outcome error)",
+      new FooterLogError("footer get gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch footer config" },
       { status: 500 }
@@ -44,16 +61,16 @@ export async function GET(request: NextRequest) {
 // PUT /api/admin/footer — upsert footer config [footer:edit]
 // Body: FooterConfigData (validated by zod)
 // -----------------------------
-export async function PUT(request: NextRequest) {
-  const guardResult = await guard("footer", "edit", { request });
+async function saveFooterConfig(request: NextRequest): Promise<Response> {
+  const guardResult = await guard("footer", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const body = await request.json();
     const parsed = footerConfigSchema.safeParse(body);
     if (!parsed.success) {
-      logger.warn("footer.update.invalid_body", { outcome: "denied" });
+      log.warn("footer.update ditolak: body tidak valid (outcome denied)");
       return NextResponse.json(
         {
           success: false,
@@ -82,11 +99,9 @@ export async function PUT(request: NextRequest) {
         })
         .where(eq(footerConfig.id, existing[0].id));
 
-      logger.info("footer.update", {
-        outcome: "success",
-        footerConfigId: existing[0].id,
-        userId: ctx.user.id,
-      });
+      log.info(
+        `footer.update (footerConfigId ${existing[0].id}, actingUserId ${ctx.user.id}, outcome success)`
+      );
       return NextResponse.json({
         success: true,
         data: { id: existing[0].id, data },
@@ -100,20 +115,22 @@ export async function PUT(request: NextRequest) {
       updatedBy: ctx.user.id,
     });
 
-    logger.info("footer.create", {
-      outcome: "success",
-      footerConfigId: id,
-      userId: ctx.user.id,
-    });
+    log.info(
+      `footer.create (footerConfigId ${id}, actingUserId ${ctx.user.id}, outcome success)`
+    );
     return NextResponse.json({ success: true, data: { id, data } });
-  } catch (error) {
-    logger.error("footer.update.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error(
+      "footer.update gagal (outcome error)",
+      new FooterLogError("footer update gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to save footer config" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(getFooterConfig, "admin-footer");
+export const PUT = withRequestContext(saveFooterConfig, "admin-footer");

@@ -10,12 +10,33 @@ import {
   branchStocks,
 } from "@/db";
 import { eq, asc, inArray, and } from "drizzle-orm";
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard, crossBranchNotFound } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import { groupBranchStock, type BranchStockInputRow } from "@/lib/branch-stock";
+import { projectMarkdownPrice } from "@marketplace/db/src/markdown-pricing";
+import { readAdminVariantProjections } from "@/lib/variant-price-read";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-product-detail");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/driver tidak
+ * pernah masuk log.
+ */
+class ProductDetailLogError extends Error {
+  constructor() {
+    super("products detail gagal");
+    this.name = "ProductDetailLogError";
+  }
+}
+
+type RouteContext = { params: Promise<{ id: string }> };
 
 /**
  * Admin product detail (read-only)   [products:view]
@@ -30,30 +51,28 @@ export const dynamic = "force-dynamic";
  * non-carried id is a cross-branch reference and 404s so existence is not
  * disclosed. All-branch scope is unaffected.
  */
-export async function GET(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const guardResult = await guard("products", "view", { request });
+async function productDetail(
+  _request: NextRequest,
+  { params }: RouteContext
+): Promise<Response> {
+  const guardResult = await guard("products", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
+  let productId: string | null = null;
   try {
     const { id } = await params;
+    productId = id;
     const authorization = branchScopeFromAuthorization(ctx.authorization);
     if (!authorization) {
-      logger.warn("products.detail.scope_unresolvable", {
-        outcome: "denied",
-        reason: "missing_home_branch",
-        userId: ctx.user.id,
-        productId: id,
-      });
+      log.warn(
+        `products.detail scope tidak dapat ditentukan (userId ${ctx.user.id}, productId ${id}, reason missing_home_branch, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Forbidden", code: "DENIED" },
         { status: 403 }
       );
     }
-    const productLog = logger.child({ productId: id });
 
     const product = await db
       .select()
@@ -62,7 +81,7 @@ export async function GET(
       .limit(1);
 
     if (product.length === 0) {
-      crossBranchNotFound(productLog);
+      crossBranchNotFound();
       return NextResponse.json(
         { success: false, error: "Product not found" },
         { status: 404 }
@@ -97,7 +116,7 @@ export async function GET(
               .limit(1)
           : [];
       if (carried.length === 0) {
-        crossBranchNotFound(productLog);
+        crossBranchNotFound();
         return NextResponse.json(
           { success: false, error: "Product not found" },
           { status: 404 }
@@ -114,6 +133,8 @@ export async function GET(
       .from(productToCategory)
       .innerJoin(categories, eq(productToCategory.categoryId, categories.id))
       .where(eq(productToCategory.productId, productData.id));
+
+    const projections = await readAdminVariantProjections(variantIds);
 
     const variantsWithImages = await Promise.all(
       variants.map(async (variant) => {
@@ -141,6 +162,14 @@ export async function GET(
         return {
           ...variant,
           images,
+          // Markdown projection for the price panel: source and effective are
+          // explicit, the target stays stored on fallback.
+          price: projections.get(variant.id)?.effectiveUnitPrice ?? variant.price,
+          sourcePrice: projections.get(variant.id)?.sourceUnitPrice ?? variant.price,
+          storedTarget: projections.get(variant.id)?.storedTarget ?? null,
+          markdownActive: projections.get(variant.id)?.markdownActive ?? false,
+          markdownRevisionId:
+            projections.get(variant.id)?.markdownRevisionId ?? null,
         };
       })
     );
@@ -189,11 +218,9 @@ export async function GET(
       );
     }
 
-    productLog.info("products.detail", {
-      outcome: "success",
-      scope: authorization.mode,
-      variantCount: variants.length,
-    });
+    log.info(
+      `products.detail (productId ${id}, scope ${authorization.mode}, variantCount ${variants.length}, outcome success)`
+    );
 
     return NextResponse.json({
       success: true,
@@ -207,14 +234,17 @@ export async function GET(
         },
       },
     });
-  } catch (error) {
-    logger.error("products.detail.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error(
+      `products.detail gagal (productId ${productId ?? "unknown"}, outcome error)`,
+      new ProductDetailLogError()
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch product" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(productDetail, "admin-product-detail");

@@ -1,4 +1,5 @@
 "use client";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -30,9 +31,9 @@ export default function AnnouncementBarSectionForm({
     <div className="space-y-4">
       <div className="space-y-2">
         <Label htmlFor="message">Pesan Pengumuman</Label>
-        <textarea
+        <Textarea
           id="message"
-          className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          className="min-h-[80px]"
           value={message}
           onChange={(e) => update("message", e.target.value)}
           placeholder="Gratis ongkir untuk pembelian di atas Rp 200.000!"

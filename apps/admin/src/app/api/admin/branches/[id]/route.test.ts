@@ -10,12 +10,20 @@ import {
   guardAllow,
   guardMock,
   jsonRequest,
-  loggerModuleMock,
-  makeLogger,
+  type RouteModuleLogger,
 } from "@/test-support/route-test";
 
 const state = vi.hoisted(() => ({
   current: null as import("@/test-support/fake-db").FakeDb | null,
+}));
+
+/**
+ * Stub module logger yang dipakai route. `vi.hoisted` menjaga container ini
+ * sudah ada saat factory mock dievaluasi (import `./route` berjalan lebih dulu
+ * daripada body file test).
+ */
+const captured = vi.hoisted(() => ({
+  moduleLog: null as RouteModuleLogger | null,
 }));
 
 vi.mock("@/db", async (importOriginal) => {
@@ -36,12 +44,28 @@ vi.mock("@/lib/rbac/guard", async () => {
   };
 });
 
-vi.mock("@/lib/logger", () => loggerModuleMock());
+vi.mock("@/lib/logger", async () => {
+  const helpers = await import("@/test-support/route-test");
+  // Route membuat logger sekali di module scope; satu stub dibagikan supaya
+  // assertion membaca event yang benar-benar ditulis route.
+  const shared = helpers.makeModuleLogger();
+  captured.moduleLog = shared;
+  return {
+    ...(await helpers.loggerModuleMock()),
+    createModuleLogger: () => shared,
+  };
+});
 
 import { DELETE, PUT } from "./route";
 import { branchRegion, mockShipmentRegions } from "@/test-support/shipment-regions";
 
-const logger = makeLogger();
+/** Stub module logger milik route (dibuat saat `./route` diimpor). */
+function moduleLog(): RouteModuleLogger {
+  const value = captured.moduleLog;
+  if (!value) throw new Error("module logger route belum dibuat");
+  return value;
+}
+
 const branchId = "b-1";
 
 const existingRow = {
@@ -76,7 +100,10 @@ function setupDb(
 beforeEach(() => {
   mockShipmentRegions();
   guardMock.mockReset();
-  guardAllow(logger);
+  guardAllow();
+  moduleLog().info.mockClear();
+  moduleLog().warn.mockClear();
+  moduleLog().error.mockClear();
   setupDb();
 });
 
@@ -97,7 +124,7 @@ describe("PUT /api/admin/branches/[id]", () => {
   });
 
   it("own-branch editing conceals another branch before region lookup", async () => {
-    guardAllow(logger, { scope: "own_branch", homeBranchId: "other" });
+    guardAllow({ scope: "own_branch", homeBranchId: "other" });
     const fake = setupDb({ selectQueue: [[existingRow]] });
     expect((await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams())).status).toBe(404);
     expect(fetch).not.toHaveBeenCalled();
@@ -105,7 +132,7 @@ describe("PUT /api/admin/branches/[id]", () => {
   });
 
   it("own-branch editing can complete its Home Branch", async () => {
-    guardAllow(logger, { scope: "own_branch", homeBranchId: branchId });
+    guardAllow({ scope: "own_branch", homeBranchId: branchId });
     setupDb({ selectQueue: [[existingRow], [existingRow]] });
     expect((await PUT(jsonRequest(`/api/admin/branches/${branchId}`, "PUT", updateBody), routeParams())).status).toBe(200);
   });
@@ -178,9 +205,10 @@ describe("PUT /api/admin/branches/[id]", () => {
       success: false,
       error: "Branch not found",
     });
-    expect(logger.warn).toHaveBeenCalledWith(
-      "branches.update.vanished_mid_request",
-      expect.anything()
+    expect(moduleLog().warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "branches.update ditolak: branch hilang di tengah request (branchId b-1, reason branch_deleted_concurrently, outcome denied)"
+      )
     );
   });
 
@@ -200,9 +228,9 @@ describe("PUT /api/admin/branches/[id]", () => {
       success: false,
       error: "Failed to update branch",
     });
-    expect(logger.error).toHaveBeenCalledWith(
-      "branches.update.db_failure",
-      expect.objectContaining({ outcome: "error" })
+    expect(moduleLog().error).toHaveBeenCalledWith(
+      expect.stringContaining("branches.update gagal: transaksi DB (branchId b-1, outcome error)"),
+      expect.anything()
     );
   });
 });
@@ -262,9 +290,8 @@ describe("DELETE /api/admin/branches/[id]", () => {
       error:
         "Branch masih memiliki admin. Pindahkan admin sebelum menghapus branch.",
     });
-    expect(logger.warn).toHaveBeenCalledWith(
-      "branches.delete.branch_in_use",
-      expect.objectContaining({ outcome: "denied" })
+    expect(moduleLog().warn).toHaveBeenCalledWith(
+      expect.stringContaining("branches.delete ditolak: branch masih menjadi Home Branch admin (branchId b-1, reason home_branch_assignment, outcome denied)")
     );
     expect(state.current!.ops.filter((op) => op.kind === "delete")).toHaveLength(0);
   });

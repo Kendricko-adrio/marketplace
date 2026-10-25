@@ -1,0 +1,357 @@
+{
+  "run": "RESEARCH08-ALTERNATIVE-2026-10-18T09-24-17-496Z",
+  "scope": "Read-only discovery item pengganti; belum ada izin payload create yang direvisi.",
+  "createAttempts": 0,
+  "events": [
+    {
+      "at": "2026-10-18T09:24:17.497Z",
+      "label": "login",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "at": "2026-10-18T09:24:19.499Z",
+      "label": "login",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-18T09:24:19.499Z",
+      "label": "catalog-discovery",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/?page=1&pageSize=50"
+    },
+    {
+      "at": "2026-10-18T09:24:23.151Z",
+      "label": "catalog-discovery",
+      "phase": "response",
+      "http": 200,
+      "snapshot": {
+        "returnedGroups": 50,
+        "totalCount": 39048
+      }
+    },
+    {
+      "at": "2026-10-18T09:24:23.157Z",
+      "label": "stock-candidates",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "input": {
+        "ids": [
+          43809,
+          43810,
+          43811,
+          43812,
+          43819,
+          43820,
+          43821,
+          43822,
+          60344,
+          43825,
+          43823,
+          43824,
+          60345,
+          43840,
+          43841,
+          43839,
+          43843,
+          43844,
+          97256,
+          60674,
+          43849,
+          60673,
+          43845,
+          120410,
+          102774,
+          43846,
+          43847,
+          43848,
+          89556,
+          43857
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:24:24.740Z",
+      "label": "stock-candidates",
+      "phase": "response",
+      "http": 200,
+      "snapshot": {
+        "rows": [
+          {
+            "item_id": 43822,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 60344,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 43825,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 43823,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 43824,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 43849,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 43845,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 43846,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 43847,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 43848,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 43857,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 43809,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 43810,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 43811,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 43843,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 43844,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:24:24.746Z",
+      "label": "master-60344",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/60344"
+    },
+    {
+      "at": "2026-10-18T09:24:24.967Z",
+      "label": "master-60344",
+      "phase": "response",
+      "http": 200,
+      "snapshot": {
+        "sell_price": "650000.0000",
+        "is_active": true,
+        "unit": "Buah",
+        "sell_tax_id": null
+      }
+    },
+    {
+      "at": "2026-10-18T09:24:24.972Z",
+      "label": "master-43825",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/43825"
+    },
+    {
+      "at": "2026-10-18T09:24:25.139Z",
+      "label": "master-43825",
+      "phase": "response",
+      "http": 200,
+      "snapshot": {
+        "sell_price": "650000.0000",
+        "is_active": true,
+        "unit": "Buah",
+        "sell_tax_id": null
+      }
+    },
+    {
+      "at": "2026-10-18T09:24:25.144Z",
+      "label": "master-43823",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/43823"
+    },
+    {
+      "at": "2026-10-18T09:24:25.481Z",
+      "label": "master-43823",
+      "phase": "response",
+      "http": 200,
+      "snapshot": {
+        "sell_price": "650000.0000",
+        "is_active": true,
+        "unit": "Buah",
+        "sell_tax_id": null
+      }
+    },
+    {
+      "at": "2026-10-18T09:24:25.486Z",
+      "label": "discovery-summary",
+      "candidates": [
+        {
+          "item_id": 60344,
+          "location_id": 2,
+          "price": 650000,
+          "unit": "Buah",
+          "available": 1,
+          "qty": 1,
+          "disc_amount": 20000,
+          "disc": 3.076923076923077,
+          "goodsNet": 630000,
+          "original_shipment_cost": 30000,
+          "shipping_cost_discount": 20000,
+          "shipping_cost": 10000,
+          "grand_total": 640000
+        },
+        {
+          "item_id": 43825,
+          "location_id": 2,
+          "price": 650000,
+          "unit": "Buah",
+          "available": 1,
+          "qty": 1,
+          "disc_amount": 20000,
+          "disc": 3.076923076923077,
+          "goodsNet": 630000,
+          "original_shipment_cost": 30000,
+          "shipping_cost_discount": 20000,
+          "shipping_cost": 10000,
+          "grand_total": 640000
+        },
+        {
+          "item_id": 43823,
+          "location_id": 2,
+          "price": 650000,
+          "unit": "Buah",
+          "available": 1,
+          "qty": 1,
+          "disc_amount": 20000,
+          "disc": 3.076923076923077,
+          "goodsNet": 630000,
+          "original_shipment_cost": 30000,
+          "shipping_cost_discount": 20000,
+          "shipping_cost": 10000,
+          "grand_total": 640000
+        }
+      ],
+      "businessWrites": 0,
+      "createAttempts": 0
+    }
+  ],
+  "candidates": [
+    {
+      "item_id": 60344,
+      "location_id": 2,
+      "price": 650000,
+      "unit": "Buah",
+      "available": 1,
+      "qty": 1,
+      "disc_amount": 20000,
+      "disc": 3.076923076923077,
+      "goodsNet": 630000,
+      "original_shipment_cost": 30000,
+      "shipping_cost_discount": 20000,
+      "shipping_cost": 10000,
+      "grand_total": 640000
+    },
+    {
+      "item_id": 43825,
+      "location_id": 2,
+      "price": 650000,
+      "unit": "Buah",
+      "available": 1,
+      "qty": 1,
+      "disc_amount": 20000,
+      "disc": 3.076923076923077,
+      "goodsNet": 630000,
+      "original_shipment_cost": 30000,
+      "shipping_cost_discount": 20000,
+      "shipping_cost": 10000,
+      "grand_total": 640000
+    },
+    {
+      "item_id": 43823,
+      "location_id": 2,
+      "price": 650000,
+      "unit": "Buah",
+      "available": 1,
+      "qty": 1,
+      "disc_amount": 20000,
+      "disc": 3.076923076923077,
+      "goodsNet": 630000,
+      "original_shipment_cost": 30000,
+      "shipping_cost_discount": 20000,
+      "shipping_cost": 10000,
+      "grand_total": 640000
+    }
+  ]
+}

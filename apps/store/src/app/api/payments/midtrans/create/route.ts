@@ -4,16 +4,34 @@ import { orders, orderItems } from "@/db";
 import { eq } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { createPayment } from "@/lib/midtrans";
-import { requestLogger, serializeError, withRequestId } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { buildPaymentItemDetails } from "@/lib/payment-item-details";
 import { getConfigNumber } from "@/lib/config";
+import { readOrderPricing } from "@/lib/versioned-pricing";
 
-export async function POST(request: NextRequest) {
-  let log = requestLogger(request, { module: "midtrans-create" });
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("payments-midtrans-create");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari Midtrans/DB
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
+async function createRepayment(request: NextRequest): Promise<Response> {
   log.info("repayment requested");
   try {
     const access = await requireOnboardedApiSession();
-    if (!access.ok) return withRequestId(access.response, log);
+    if (!access.ok) return access.response;
     const { session } = access;
 
     const body = await request.json();
@@ -21,10 +39,10 @@ export async function POST(request: NextRequest) {
 
     if (!orderId) {
       log.warn("repayment rejected — orderId missing");
-      return withRequestId(NextResponse.json(
+      return NextResponse.json(
         { success: false, error: "orderId is required" },
         { status: 400 }
-      ), log);
+      );
     }
 
     // Load the order and verify ownership
@@ -42,19 +60,26 @@ export async function POST(request: NextRequest) {
     }
 
     const order = orderRows[0];
-    log = log.child({ orderId, userId: session.user.id });
 
     if (order.userId !== session.user.id) {
-      log.warn("repayment rejected — ownership mismatch");
+      log.warn(
+        `repayment rejected — ownership mismatch (order ${orderId}, user ${session.user.id})`
+      );
       return NextResponse.json(
         { success: false, error: "Forbidden" },
         { status: 403 }
       );
     }
 
+    // Validate every explicit version before returning an existing redirect
+    // too: unknown contracts must never reach payment or financial display.
+    const pricing = readOrderPricing(order);
+
     // Only allow re-payment for pending_payment orders (failed_payment is final)
     if (order.status !== "pending_payment") {
-      log.warn("repayment rejected — order is not pending payment", { status: order.status });
+      log.warn(
+        `repayment rejected — order is not pending payment (order ${orderId}, status ${order.status})`
+      );
       return NextResponse.json(
         {
           success: false,
@@ -68,9 +93,9 @@ export async function POST(request: NextRequest) {
     // already released the stock, and extending the reservation here would
     // contradict `orders.expiresAt`.
     if (order.expiresAt && order.expiresAt.getTime() <= Date.now()) {
-      log.warn("repayment rejected — order expired", {
-        expiresAt: order.expiresAt,
-      });
+      log.warn(
+        `repayment rejected — order expired (order ${orderId}, expires ${order.expiresAt.toISOString()})`
+      );
       return NextResponse.json(
         { success: false, error: "Order has expired. Please create a new order." },
         { status: 400 }
@@ -81,12 +106,12 @@ export async function POST(request: NextRequest) {
     // already chosen a payment method (Midtrans marks the order_id as used and
     // refuses to re-create a token for it), so a new token would fail.
     if (order.snapRedirectUrl) {
-      log.info("repayment reusing existing Snap redirect URL");
-      return withRequestId(NextResponse.json({
+      log.info(`repayment reusing existing Snap redirect URL (order ${orderId})`);
+      return NextResponse.json({
         success: true,
         redirectUrl: order.snapRedirectUrl,
         token: null,
-      }), log);
+      });
     }
 
     // Re-payment reuses the SAME confirmed Sales Order — never a new SO. The
@@ -94,9 +119,9 @@ export async function POST(request: NextRequest) {
     // before Midtrans is involved; the settlement pipeline later converts that
     // same SO to an invoice.
     if (order.jubelioSalesOrderId == null) {
-      log.warn("repayment rejected — no confirmed Jubelio Sales Order", {
-        jubelioSalesOrderId: order.jubelioSalesOrderId,
-      });
+      log.warn(
+        `repayment rejected — no confirmed Jubelio Sales Order (order ${orderId})`
+      );
       return NextResponse.json(
         {
           success: false,
@@ -128,28 +153,29 @@ export async function POST(request: NextRequest) {
 
     const result = await createPayment(
       orderId,
-      parseFloat(order.total),
+      Number(pricing.total),
       {
         first_name: session.user.name || "Customer",
         email: order.contactEmail,
         phone: order.contactPhone,
       },
       buildPaymentItemDetails({
-        items: items.map((item) => ({
-          id: item.variantId,
-          name: item.productName,
-          price: item.price,
-          quantity: item.quantity,
-        })),
-        discount: order.discount,
-        shippingCost: order.shippingCost,
-        serviceFee: order.serviceFee,
-        ppnRatePercent: order.ppnRate,
-        ppnAmount: order.ppnAmount,
-        total: order.total,
+        items: pricing.pricingContractVersion === 1
+          ? pricing.lines.map((line) => ({ id: line.variantId,
+              name: items.find((item) => item.variantId === line.variantId)?.productName ?? "Product",
+              price: line.effectiveUnitPrice, quantity: line.quantity }))
+          : items.map((item) => ({ id: item.variantId, name: item.productName, price: item.price, quantity: item.quantity })),
+        discount: pricing.pricingContractVersion === 1 ? pricing.goodsDiscount : pricing.discount,
+        shippingCost: pricing.shippingCost,
+        serviceFee: pricing.serviceFee,
+        ppnRatePercent: pricing.ppnRatePercent,
+        ppnAmount: pricing.ppnAmount,
+        total: pricing.total,
       }),
       remainingMinutes,
-      new Date()
+      // Anchor rounded-up duration backwards from the existing deadline so
+      // Midtrans expiry never extends the local reservation even by seconds.
+      order.expiresAt ? new Date(order.expiresAt.getTime() - remainingMinutes * 60_000) : new Date()
     );
 
     // Persist Snap redirect URL
@@ -157,18 +183,23 @@ export async function POST(request: NextRequest) {
       .update(orders)
       .set({ snapRedirectUrl: result.redirectUrl })
       .where(eq(orders.id, orderId));
-    log.info("repayment payment created", { redirectUrl: !!result.redirectUrl });
+    log.info(
+      `repayment payment created (order ${orderId}, redirect ${result.redirectUrl ? "ada" : "kosong"})`
+    );
 
-    return withRequestId(NextResponse.json({
+    return NextResponse.json({
       success: true,
       redirectUrl: result.redirectUrl,
       token: result.token,
-    }), log);
-  } catch (error) {
-    log.error("repayment failed", { error: serializeError(error) });
-    return withRequestId(NextResponse.json(
+    });
+  } catch {
+    log.error("repayment failed", new RouteLogError("repayment failed"));
+    return NextResponse.json(
       { success: false, error: "Failed to create payment" },
       { status: 500 }
-    ), log);
+    );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(createRepayment, "payments-midtrans-create");

@@ -9,7 +9,8 @@
     ]
   },
   "enabledMcpjsonServers": [
-    "playwright"
+    "playwright",
+    "context7"
   ],
   "spinnerTipsEnabled": true
 }

@@ -46,6 +46,7 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import crypto from "node:crypto";
 import { Pool } from "pg";
+import { deleteRetainedOrderFixtures } from "../../packages/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import { TEST_USERS } from "../config";
 
@@ -206,11 +207,10 @@ async function reachCheckoutReview(
   await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
   await page.getByRole("combobox").click();
   await page.getByRole("option", { name: "10:00" }).click();
-  await page.getByRole("button", { name: "Lanjut" }).click();
   await page.getByLabel("Nomor Telepon *").fill("081234567890");
   await page.getByLabel("Email *").fill(email);
   await page.getByRole("button", { name: "Lanjut" }).click();
-  await expect(page.getByRole("heading", { name: "Pembayaran" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
   await page.getByText(/Saya telah memeriksa pesanan/).click();
 }
 
@@ -294,14 +294,14 @@ async function postSignedWebhook(
   });
 }
 
-/** Deletes this spec's orders (and their FK-cascaded ledger rows). */
+/** Deletes this spec's retained evidence before its fixture orders. */
 async function cleanOrderRows(orderIds: string[]): Promise<void> {
   if (orderIds.length === 0) return;
   await pool.query(
     "DELETE FROM audit_log WHERE action = 'VERIFY_PICKUP_CODE' AND entity_id = ANY($1::text[])",
     [orderIds]
   );
-  await pool.query("DELETE FROM orders WHERE id = ANY($1::text[])", [orderIds]);
+  await deleteRetainedOrderFixtures(pool, orderIds);
 }
 
 // ---------------------------------------------------------------------------

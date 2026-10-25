@@ -54,6 +54,20 @@ export const HQ_SEED_GRANTS: SeedGrant[] = [
   { module: "roles", action: "delete", scope: "global" },
   { module: "footer", action: "view", scope: "global" },
   { module: "footer", action: "edit", scope: "global" },
+  // Discount administration — two separate Global Modules, each view/edit
+  // only. A fresh HQ starts able to run discounts (and their capacity) but a
+  // promo editor can still be granted discount writes without capacity
+  // writes. These are seed defaults for FRESH seeding only: no migration
+  // grants them to existing Roles, and custom Roles never receive them.
+  { module: "discounts", action: "view", scope: "global" },
+  { module: "discounts", action: "edit", scope: "global" },
+  { module: "discount_capacity", action: "view", scope: "global" },
+  { module: "discount_capacity", action: "edit", scope: "global" },
+  // Markdown price administration is its own Global Module: HQ may set or
+  // restore a SKU target, while product re-sync (products:edit) never grants
+  // price-writing authority.
+  { module: "prices", action: "view", scope: "global" },
+  { module: "prices", action: "edit", scope: "global" },
 ];
 
 export const ADMIN_SEED_GRANTS: SeedGrant[] = [

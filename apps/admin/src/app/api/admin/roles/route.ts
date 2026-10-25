@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
 import {
   grantSchema,
@@ -25,15 +25,32 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-roles");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB tidak pernah
+ * masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
 const createRoleSchema = roleIdentitySchema.extend({
   grants: z.array(grantSchema).optional(),
   cloneFromId: z.string().optional(),
 });
 
-export async function GET(request: NextRequest) {
-  const guardResult = await guard("roles", "view", { request });
+async function listRolesHandler(request: NextRequest): Promise<Response> {
+  const guardResult = await guard("roles", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger } = guardResult;
 
   try {
     const { searchParams } = new URL(request.url);
@@ -41,32 +58,31 @@ export async function GET(request: NextRequest) {
     const archived = searchParams.get("archived") === "true";
 
     const roles = await listRoles({ q, archived });
-    logger.info("roles.list", {
-      outcome: "success",
-      count: roles.length,
-      archived,
-    });
+    // Kata kunci pencarian tidak masuk log; hanya jumlah + mode arsip.
+    log.info(
+      `roles list (count ${roles.length}, archived ${archived}, outcome success)`
+    );
     return NextResponse.json({ success: true, data: roles });
   } catch (error) {
     const mapped = mapServiceError(error);
     if (mapped) return mapped;
-    logger.error("roles.list.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+    log.error(
+      "roles list gagal (outcome error)",
+      new RouteLogError("roles list gagal")
+    );
     return internalErrorResponse();
   }
 }
 
-export async function POST(request: NextRequest) {
-  const guardResult = await guard("roles", "edit", { request });
+async function createRoleHandler(request: NextRequest): Promise<Response> {
+  const guardResult = await guard("roles", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const body = createRoleSchema.safeParse(await request.json());
     if (!body.success) {
-      logger.warn("roles.create.invalid_body", { outcome: "denied" });
+      log.warn("roles create ditolak: body tidak valid (outcome denied)");
       return invalidBodyResponse();
     }
 
@@ -78,26 +94,26 @@ export async function POST(request: NextRequest) {
       cloneFromId: body.data.cloneFromId,
     });
 
-    logger.info("roles.create", {
-      outcome: "success",
-      roleId: created.id,
-      actorId: actor.userId,
-      policyVersion: actor.policyVersion,
-    });
+    log.info(
+      `roles create (roleId ${created.id}, actor ${actor.userId}, policyVersion ${actor.policyVersion}, outcome success)`
+    );
     return NextResponse.json({ success: true, data: created }, { status: 201 });
   } catch (error) {
     const mapped = mapServiceError(error);
     if (mapped) {
-      logger.warn("roles.create.denied", {
-        outcome: "denied",
-        code: (error as { code?: string }).code,
-      });
+      log.warn(
+        `roles create denied (code ${(error as { code?: string }).code}, outcome denied)`
+      );
       return mapped;
     }
-    logger.error("roles.create.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+    log.error(
+      "roles create gagal (outcome error)",
+      new RouteLogError("roles create gagal")
+    );
     return internalErrorResponse();
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(listRolesHandler, "admin-roles");
+export const POST = withRequestContext(createRoleHandler, "admin-roles");

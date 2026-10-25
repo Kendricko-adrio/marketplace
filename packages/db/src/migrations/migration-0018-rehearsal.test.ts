@@ -7,11 +7,7 @@ import { readFileSync } from "node:fs";
 import { randomUUID } from "crypto";
 import { Pool } from "pg";
 
-import {
-  ADMIN_SEED_GRANTS,
-  HQ_SEED_GRANTS,
-  INITIAL_ROLE_KEYS,
-} from "../rbac/seed-defaults";
+import { INITIAL_ROLE_KEYS } from "../rbac/seed-defaults";
 
 // =========================================================
 // Scratch-database migration rehearsal for the 0018 RBAC cutover.
@@ -65,6 +61,72 @@ function statements(sql: string): string[] {
         .trim()
     )
     .filter(Boolean);
+}
+
+// =========================================================
+// Frozen historical expectation (transcribed from 0018 itself)
+// =========================================================
+// 0018 is an audited HISTORICAL migration: it emits exactly the grant set
+// that was true at cutover time and must never be edited afterwards. The
+// tuples below are transcribed from the VALUES list of
+// `drizzle/0018_silly_mystique.sql`, NOT imported from today's seed defaults:
+// the rehearsal must stay pinned to what the migration actually wrote.
+//
+// Why this is a literal: the current seed defaults legitimately grow. Ticket
+// 06 adds the fresh HQ `discounts` / `discount_capacity` global grants, while
+// migration 0036 deliberately does NOT backfill new grants into existing
+// Roles. Importing the live arrays therefore makes a green cutover rehearsal
+// fail on a change that is correct — the migration generated 27 HQ grants and
+// the test expected 31. These literals keep the two axes independent.
+const HISTORICAL_0018_HQ_GRANTS = [
+  // Branch-aware modules — full, all-branch
+  { module: "products", action: "view", scope: "all_branches" },
+  { module: "products", action: "edit", scope: "all_branches" },
+  { module: "orders", action: "view", scope: "all_branches" },
+  { module: "orders", action: "edit", scope: "all_branches" },
+  { module: "notifications", action: "view", scope: "all_branches" },
+  { module: "notifications", action: "edit", scope: "all_branches" },
+  { module: "notifications", action: "delete", scope: "all_branches" },
+  { module: "branches", action: "view", scope: "all_branches" },
+  { module: "branches", action: "edit", scope: "all_branches" },
+  { module: "branches", action: "delete", scope: "all_branches" },
+  { module: "analytics", action: "view", scope: "all_branches" },
+  { module: "audit_log", action: "view", scope: "all_branches" },
+  // Global modules
+  { module: "customers", action: "view", scope: "global" },
+  { module: "homepage", action: "view", scope: "global" },
+  { module: "homepage", action: "edit", scope: "global" },
+  { module: "homepage", action: "delete", scope: "global" },
+  { module: "pages", action: "view", scope: "global" },
+  { module: "pages", action: "edit", scope: "global" },
+  { module: "pages", action: "delete", scope: "global" },
+  { module: "users", action: "view", scope: "global" },
+  { module: "users", action: "edit", scope: "global" },
+  { module: "users", action: "delete", scope: "global" },
+  { module: "roles", action: "view", scope: "global" },
+  { module: "roles", action: "edit", scope: "global" },
+  { module: "roles", action: "delete", scope: "global" },
+  { module: "footer", action: "view", scope: "global" },
+  { module: "footer", action: "edit", scope: "global" },
+] as const;
+
+const HISTORICAL_0018_ADMIN_GRANTS = [
+  // Least-privilege, own branch
+  { module: "products", action: "view", scope: "own_branch" },
+  { module: "orders", action: "view", scope: "own_branch" },
+  { module: "orders", action: "edit", scope: "own_branch" },
+  { module: "notifications", action: "view", scope: "own_branch" },
+  { module: "notifications", action: "edit", scope: "own_branch" },
+  { module: "notifications", action: "delete", scope: "own_branch" },
+] as const;
+
+/** Stable identity of one grant row — `module:action:scope`. */
+function grantTuple(grant: {
+  module: string;
+  action: string;
+  scope: string;
+}): string {
+  return `${grant.module}:${grant.action}:${grant.scope}`;
 }
 
 // Explicit timeouts (Vitest's 5s default is not enough for the 18-file
@@ -470,11 +532,13 @@ describe.skipIf(!url)("0018 cutover rehearsal (scratch database)", () => {
         key: "hq",
         name: "HQ",
         isSystem: true,
+        // A known member of the historical 0018 HQ set (literal, not the
+        // first entry of today's mutable seed array).
         grants: [
-          HQ_SEED_GRANTS[0] as unknown as {
-            module: string;
-            action: string;
-            scope: string;
+          {
+            module: "products",
+            action: "view",
+            scope: "all_branches",
           },
         ],
       });
@@ -515,19 +579,41 @@ describe.skipIf(!url)("0018 cutover rehearsal (scratch database)", () => {
       expect(custom.id).toBe(customId);
       expect(custom.name).toBe("Marketing");
 
-      // Grant repair is idempotent: exactly the seed sets, no duplicates, and
-      // NOTHING attached to the custom Role or the Owner.
-      const grants = await scratchPool!.query<{ role_id: string }>(
-        `SELECT "role_id" FROM "admin_role_grant"`
-      );
-      expect(grants.rows.filter((g) => g.role_id === hqId)).toHaveLength(
-        HQ_SEED_GRANTS.length
-      );
-      expect(grants.rows.filter((g) => g.role_id === adminId)).toHaveLength(
-        ADMIN_SEED_GRANTS.length
-      );
-      expect(grants.rows.filter((g) => g.role_id === ownerId)).toHaveLength(0);
-      expect(grants.rows.filter((g) => g.role_id === customId)).toHaveLength(0);
+      // Grant repair is idempotent AND pinned to what 0018 itself emits:
+      // exactly the frozen historical tuples, no duplicates, and NOTHING
+      // attached to the custom Role or the Owner.
+      const grants = await scratchPool!.query<{
+        role_id: string;
+        module: string;
+        action: string;
+        scope: string;
+      }>(`SELECT "role_id", "module", "action", "scope" FROM "admin_role_grant"`);
+      const tuplesFor = (roleId: string): string[] =>
+        grants.rows
+          .filter((g) => g.role_id === roleId)
+          .map(grantTuple)
+          .sort();
+
+      const expectedHq = HISTORICAL_0018_HQ_GRANTS.map(grantTuple).sort();
+      const expectedAdmin = HISTORICAL_0018_ADMIN_GRANTS.map(grantTuple).sort();
+      // Historical repair counts, pinned to the audited migration.
+      expect(expectedHq).toHaveLength(27);
+      expect(expectedAdmin).toHaveLength(6);
+
+      expect(tuplesFor(hqId)).toEqual(expectedHq);
+      expect(tuplesFor(adminId)).toEqual(expectedAdmin);
+      expect(tuplesFor(ownerId)).toEqual([]);
+      expect(tuplesFor(customId)).toEqual([]);
+
+      // 0018 predates the discount modules and never granted them. Later
+      // migrations (0036) deliberately do not backfill grants into existing
+      // Roles, so a discount grant appearing here would be a retroactive
+      // privilege leak, not an expectation to relax.
+      expect(
+        grants.rows.filter(
+          (g) => g.module === "discounts" || g.module === "discount_capacity"
+        )
+      ).toEqual([]);
 
       // Backfill used the legacy keys: '  HQ  ' → hq, 'admin' → admin.
       const assignments = await scratchPool!.query<{

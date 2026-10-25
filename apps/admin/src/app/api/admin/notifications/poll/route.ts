@@ -9,11 +9,28 @@ import {
   type NotificationScope,
 } from "@/lib/notifications";
 import { waitForNotification } from "@/lib/notification-broadcaster";
-import { serializeError, type Logger } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard, type PolicyContext } from "@/lib/rbac/guard";
 import type { Notification } from "@/db";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-notifications-poll");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/driver tidak
+ * pernah masuk log.
+ */
+class NotificationsPollLogError extends Error {
+  constructor() {
+    super("notifications poll gagal");
+    this.name = "NotificationsPollLogError";
+  }
+}
 
 // Fallback that maps a bare notification row (no joins) into the list-item
 // shape with null order/branch. Only used if the joined re-fetch misses.
@@ -45,12 +62,12 @@ function rawToItem(notification: Notification): NotificationListItem {
 //     they are returned immediately.
 //   - Otherwise the request waits up to ~25s for a new notification scoped to
 //     this admin's policy branch scope before returning an empty response.
-export async function GET(request: NextRequest) {
-  const guardResult = await guard("notifications", "view", { request });
+async function pollNotifications(request: NextRequest): Promise<Response> {
+  const guardResult = await guard("notifications", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
-  const scope = resolveScope(logger, ctx);
+  const scope = resolveScope(ctx);
   if (!scope) {
     return NextResponse.json(
       { success: false, error: "Forbidden", code: "DENIED" },
@@ -69,10 +86,9 @@ export async function GET(request: NextRequest) {
     if (!since) {
       const unreadCount = await getUnreadCount(scope);
       const serverNow = await getDbNow();
-      logger.info("notifications.poll.initial", {
-        outcome: "success",
-        unreadCount,
-      });
+      log.info(
+        `notifications.poll.initial (unreadCount ${unreadCount}, outcome success)`
+      );
       return NextResponse.json({
         success: true,
         data: [],
@@ -100,11 +116,9 @@ export async function GET(request: NextRequest) {
       // by toISOString while the DB stores microseconds) and re-deliver it
       // forever — a hot loop.
       const serverNow = await getDbNow();
-      logger.info("notifications.poll.catch_up", {
-        outcome: "success",
-        count: items.length,
-        unreadCount,
-      });
+      log.info(
+        `notifications.poll.catch_up (count ${items.length}, unreadCount ${unreadCount}, outcome success)`
+      );
       return NextResponse.json({
         success: true,
         data: items,
@@ -130,11 +144,9 @@ export async function GET(request: NextRequest) {
       const item = inScope ? await getNotificationItem(notification.id) : null;
       data = item ? [item] : [];
     }
-    logger.info("notifications.poll.wakeup", {
-      outcome: "success",
-      hasData: data.length > 0,
-      unreadCount,
-    });
+    log.info(
+      `notifications.poll.wakeup (hasData ${data.length > 0}, unreadCount ${unreadCount}, outcome success)`
+    );
 
     return NextResponse.json({
       success: true,
@@ -142,11 +154,12 @@ export async function GET(request: NextRequest) {
       unreadCount,
       serverNow: serverNow.toISOString(),
     });
-  } catch (error) {
-    logger.error("notifications.poll.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error(
+      "notifications.poll gagal (outcome error)",
+      new NotificationsPollLogError()
+    );
     return NextResponse.json(
       { success: false, error: "Failed to poll notifications" },
       { status: 500 }
@@ -154,14 +167,23 @@ export async function GET(request: NextRequest) {
   }
 }
 
-function resolveScope(logger: Logger, ctx: PolicyContext): NotificationScope | null {
+function resolveScope(ctx: PolicyContext): NotificationScope | null {
   const scope = notificationScopeFromAuthorization(ctx.authorization);
   if (!scope) {
-    logger.warn("notifications.poll.scope_unresolvable", {
-      outcome: "denied",
-      reason: "missing_home_branch",
-      userId: ctx.user.id,
-    });
+    log.warn(
+      `notifications.poll scope tidak dapat ditentukan (userId ${ctx.user.id}, reason missing_home_branch, outcome denied)`
+    );
   }
   return scope;
 }
+
+/**
+ * Long-poll tetap di bawah satu request scope: handler ini TIDAK melakukan
+ * streaming (menunggu `waitForNotification` lalu `NextResponse.json`), jadi
+ * scope selesai sebelum response dikirim dan `x-request-id` tetap konsisten
+ * untuk seluruh event poll pada request yang sama.
+ */
+export const GET = withRequestContext(
+  pollNotifications,
+  "admin-notifications-poll"
+);

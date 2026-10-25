@@ -10,6 +10,15 @@
 > is ambiguous stays `processing`/`paid` with `fulfillmentBlockedReason` set
 > and never exposes a pickup code.
 
+> **Kontrak uang berversi (gate `discounts.contractVersion`).** Pada gate `1`,
+> order baru menyimpan snapshot uang berversi (`pricing1/engine1/provider2`);
+> repayment, detail order dan settlement membaca snapshot itu lewat decoder
+> strict, bukan kolom/config terbaru, dan versi yang tidak dikenal fail closed.
+> Service fee kontrak baru selalu `0` dan tidak ditagih sebagai baris charge.
+> Alur di bawah yang menyebut baris `SERVICE_FEE` atau formula PPN atas
+> barang+ongkir adalah **LEGACY gate `0`**. Detail:
+> [versioned-checkout-pricing.md](versioned-checkout-pricing.md).
+
 ## Purpose
 
 End-to-end lifecycle of a customer order: checkout → Midtrans Snap payment →
@@ -200,6 +209,15 @@ fail. Otherwise a new Snap payment is created from the stored order items
 reservation TTL; the new `snapRedirectUrl` is persisted and
 `{ redirectUrl, token }` returned. The existing reservation stays in place — no
 new reservation is made.
+
+> **LEGACY gate `0`.** Baris `SERVICE_FEE` di atas tidak ada pada kontrak
+> berversi. Pada gate `1`, repayment memanggil `readOrderPricing(order)`
+> **sebelum** early return `snapRedirectUrl`, sehingga order dengan versi
+> snapshot tidak dikenal tidak pernah mengembalikan redirect maupun membuat
+> token baru. Item detail Midtrans dibangun dari snapshot tersimpan: line
+> efektif, adjustment diskon (0 di baseline), `PPN`, dan `SHIPPING` hanya bila
+> ongkir net nonzero — tanpa baris service fee — dan jumlah detailnya wajib
+> tepat sama dengan `total`.
 
 ## Emails
 

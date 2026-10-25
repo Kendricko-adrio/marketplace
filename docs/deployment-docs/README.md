@@ -59,6 +59,7 @@ deployment/
 | 19 | [logging.md](logging.md) | Log container di journald dengan retensi host 7 hari |
 | 20 | [rbac-rollout.md](rbac-rollout.md) | RBAC cutover maintenance window: verified backup/restore, paired code+schema migration, Owner bootstrap, smoke tests, monitoring, paired rollback |
 | 21 | [rbac-owner-bootstrap.md](rbac-owner-bootstrap.md) | One-time System Owner bootstrap CLI (RBAC) |
+| 22 | [discounts-cutover.md](discounts-cutover.md) | Cutover/rollout/rollback diskon: gate `discounts.contractVersion`, trusted IP + batas request proxy, UAT staging dan forward-fix |
 
 ## Quick start (staging)
 

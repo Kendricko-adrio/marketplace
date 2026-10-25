@@ -17,6 +17,8 @@ export default function nextConfig(phase: string): NextConfig {
 
   return {
     output: "standalone",
+    // Isolasi mock E2E dari dev server yang sedang dipakai developer.
+    distDir: process.env.E2E_PROVIDER_MOCKS === "true" ? ".next/mock" : ".next",
     transpilePackages: ["@marketplace/ui"],
     images: {
       unoptimized: true,

@@ -1,5 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
-import { and, eq, inArray, lt, sql } from "drizzle-orm";
+import {
+  and,
+  eq,
+  inArray,
+  isNull,
+  lt,
+  or,
+  sql,
+} from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   jubelioSalesOperations,
@@ -457,8 +465,14 @@ export async function listStaleJubelioSalesOperations(
 /**
  * Persists the remote invoice id returned by an invoice-conversion POST while
  * the operation is still `dispatched_unknown`. This runs BEFORE verification
- * so a crash leaves a reconcilable `GET /sales/invoices/{id}` handle. Returns
- * null when the claim was lost (the caller must reconcile, not re-POST).
+ * so a crash leaves a reconcilable `GET /sales/invoices/{id}` handle.
+ *
+ * Returned-id persistence is a COMPARE-AND-SET on the same durable row (also
+ * for the create/payment helpers below): a handle may be filled once and
+ * re-persisted with the SAME id (idempotent crash/replay), but a DIFFERENT id
+ * is refused (no row matched) so the first known handle is never lost. Returns
+ * null when the claim was lost or another id was already persisted — the
+ * caller must hold/reconcile, never re-POST.
  */
 export async function persistJubelioSalesInvoiceId(
   db: JubelioSalesOperationsDb,
@@ -475,7 +489,80 @@ export async function persistJubelioSalesInvoiceId(
       and(
         eq(jubelioSalesOperations.id, operationId),
         eq(jubelioSalesOperations.type, "invoice"),
-        eq(jubelioSalesOperations.status, "dispatched_unknown")
+        eq(jubelioSalesOperations.status, "dispatched_unknown"),
+        // CAS: fill once, or re-write the SAME id; a different id never wins.
+        or(
+          isNull(jubelioSalesOperations.invoiceId),
+          eq(jubelioSalesOperations.invoiceId, invoiceId)
+        )
+      )
+    )
+    .returning();
+  return updated[0] ?? null;
+}
+
+/**
+ * Persists the remote sales order id returned by a create POST while the
+ * operation is still `dispatched_unknown` — that is, BEFORE the independent
+ * confirmation GET (spec §10.2). This is only a reconciliation HANDLE: the
+ * operation is not `confirmed` and the order does not gain its
+ * `jubelio_sales_order_id` pointer until the GET proves the stored envelope.
+ * Returns null when the claim was lost or another id was already persisted.
+ */
+export async function persistJubelioSalesOrderId(
+  db: JubelioSalesOperationsDb,
+  operationId: string,
+  salesOrderId: number
+): Promise<JubelioSalesOperation | null> {
+  if (!isSafePositiveInteger(salesOrderId)) {
+    throw new Error("A persisted Jubelio sales order id must be a positive integer");
+  }
+  const updated = await db
+    .update(jubelioSalesOperations)
+    .set({ salesOrderId, updatedAt: new Date() })
+    .where(
+      and(
+        eq(jubelioSalesOperations.id, operationId),
+        eq(jubelioSalesOperations.type, "create"),
+        eq(jubelioSalesOperations.status, "dispatched_unknown"),
+        // CAS: fill once, or re-write the SAME id; a different id never wins.
+        or(
+          isNull(jubelioSalesOperations.salesOrderId),
+          eq(jubelioSalesOperations.salesOrderId, salesOrderId)
+        )
+      )
+    )
+    .returning();
+  return updated[0] ?? null;
+}
+
+/**
+ * Persists the remote payment id returned by a payment POST while the
+ * operation is still `dispatched_unknown` — BEFORE the payment verification
+ * GET (spec §10.2). Returns null when the claim was lost or another id was
+ * already persisted.
+ */
+export async function persistJubelioSalesPaymentId(
+  db: JubelioSalesOperationsDb,
+  operationId: string,
+  paymentId: number
+): Promise<JubelioSalesOperation | null> {
+  if (!isSafePositiveInteger(paymentId)) {
+    throw new Error("A persisted Jubelio payment id must be a positive integer");
+  }
+  const updated = await db
+    .update(jubelioSalesOperations)
+    .set({ paymentId, updatedAt: new Date() })
+    .where(
+      and(
+        eq(jubelioSalesOperations.id, operationId),
+        eq(jubelioSalesOperations.type, "payment"),
+        eq(jubelioSalesOperations.status, "dispatched_unknown"),
+        // CAS: fill once, or re-write the SAME id; a different id never wins.
+        or(
+          isNull(jubelioSalesOperations.paymentId),
+          eq(jubelioSalesOperations.paymentId, paymentId)
+        )
       )
     )
     .returning();

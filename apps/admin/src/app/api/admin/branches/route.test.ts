@@ -15,11 +15,19 @@ import {
   guardDeny,
   guardMock,
   jsonRequest,
-  loggerModuleMock,
-  makeLogger,
+  type RouteModuleLogger,
 } from "@/test-support/route-test";
 
 const state = vi.hoisted(() => ({ current: null as import("@/test-support/fake-db").FakeDb | null }));
+
+/**
+ * Stub module logger yang dipakai route. `vi.hoisted` menjaga container ini
+ * sudah ada saat factory mock dievaluasi (import `./route` berjalan lebih dulu
+ * daripada body file test).
+ */
+const captured = vi.hoisted(() => ({
+  moduleLog: null as RouteModuleLogger | null,
+}));
 
 vi.mock("@/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/db")>();
@@ -39,12 +47,27 @@ vi.mock("@/lib/rbac/guard", async () => {
   };
 });
 
-vi.mock("@/lib/logger", () => loggerModuleMock());
+vi.mock("@/lib/logger", async () => {
+  const helpers = await import("@/test-support/route-test");
+  // Route membuat logger sekali di module scope; satu stub dibagikan supaya
+  // assertion membaca event yang benar-benar ditulis route.
+  const shared = helpers.makeModuleLogger();
+  captured.moduleLog = shared;
+  return {
+    ...(await helpers.loggerModuleMock()),
+    createModuleLogger: () => shared,
+  };
+});
 
 import { POST } from "./route";
 import { branchRegion, mockShipmentRegions } from "@/test-support/shipment-regions";
 
-const logger = makeLogger();
+/** Stub module logger milik route (dibuat saat `./route` diimpor). */
+function moduleLog(): RouteModuleLogger {
+  const value = captured.moduleLog;
+  if (!value) throw new Error("module logger route belum dibuat");
+  return value;
+}
 
 const validBody = {
   ...branchRegion,
@@ -64,7 +87,10 @@ const createdRow = { id: "b-new", name: "Branch Baru", code: "BRX" };
 beforeEach(() => {
   mockShipmentRegions();
   guardMock.mockReset();
-  guardAllow(logger);
+  guardAllow();
+  moduleLog().info.mockClear();
+  moduleLog().warn.mockClear();
+  moduleLog().error.mockClear();
   state.current = createFakeDb({ mutationRows: [createdRow] });
 });
 
@@ -184,9 +210,9 @@ describe("POST /api/admin/branches", () => {
       success: false,
       error: "Failed to create branch",
     });
-    expect(logger.error).toHaveBeenCalledWith(
-      "branches.create.db_failure",
-      expect.objectContaining({ branchId: expect.any(String) })
+    expect(moduleLog().error).toHaveBeenCalledWith(
+      expect.stringContaining("branches.create gagal: transaksi DB (branchId "),
+      expect.anything()
     );
   });
 });

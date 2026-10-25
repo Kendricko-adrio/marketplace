@@ -33,6 +33,7 @@
 import { test, expect, type BrowserContext } from "@playwright/test";
 import bcrypt from "bcryptjs";
 import { Pool } from "pg";
+import { deleteRetainedOrderFixtures } from "../../packages/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 dotenv.config({ path: ".env" });
 
@@ -192,16 +193,8 @@ test.beforeAll(async ({ browser }) => {
   pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
   // FK-ordered reset (the children first, then identities); own markers only.
-  await pool.query(
-    `DELETE FROM delivery_tracking_event te USING delivery_shipment s
-       JOIN orders o ON o.id = s.order_id
-     WHERE o.contact_email = $1`,
-    [CONTACT_EMAIL]
-  );
-  await pool.query("DELETE FROM delivery_shipment s USING orders o WHERE s.order_id = o.id AND o.contact_email = $1", [CONTACT_EMAIL]);
-  await pool.query("DELETE FROM delivery_booking_reviews WHERE order_id IN (SELECT id FROM orders WHERE contact_email = $1)", [CONTACT_EMAIL]);
-  await pool.query("DELETE FROM jubelio_sales_operation WHERE order_id IN (SELECT id FROM orders WHERE contact_email = $1)", [CONTACT_EMAIL]);
-  await pool.query("DELETE FROM orders WHERE contact_email = $1", [CONTACT_EMAIL]);
+  const fixtureOrders = await pool.query("SELECT id FROM orders WHERE contact_email=$1", [CONTACT_EMAIL]);
+  await deleteRetainedOrderFixtures(pool, fixtureOrders.rows.map((row) => row.id));
   await pool.query("DELETE FROM admin_session WHERE user_id LIKE 'e2efup-%'");
   await pool.query("DELETE FROM admin_account WHERE user_id LIKE 'e2efup-%'");
   await pool.query('DELETE FROM "user" WHERE id LIKE $1', [`${PREFIX}-%`]);
@@ -330,16 +323,8 @@ test.afterAll(async () => {
   await viewerContext?.close().catch(() => {});
   await foreignContext?.close().catch(() => {});
   if (pool) {
-    await pool.query(
-      `DELETE FROM delivery_tracking_event te USING delivery_shipment s
-         JOIN orders o ON o.id = s.order_id
-       WHERE o.contact_email = $1`,
-      [CONTACT_EMAIL]
-    );
-    await pool.query("DELETE FROM delivery_shipment s USING orders o WHERE s.order_id = o.id AND o.contact_email = $1", [CONTACT_EMAIL]);
-    await pool.query("DELETE FROM delivery_booking_reviews WHERE order_id IN (SELECT id FROM orders WHERE contact_email = $1)", [CONTACT_EMAIL]);
-    await pool.query("DELETE FROM jubelio_sales_operation WHERE order_id IN (SELECT id FROM orders WHERE contact_email = $1)", [CONTACT_EMAIL]);
-    await pool.query("DELETE FROM orders WHERE contact_email = $1", [CONTACT_EMAIL]);
+    const fixtureOrders = await pool.query("SELECT id FROM orders WHERE contact_email=$1", [CONTACT_EMAIL]);
+    await deleteRetainedOrderFixtures(pool, fixtureOrders.rows.map((row) => row.id));
     await pool.query("DELETE FROM admin_session WHERE user_id LIKE 'e2efup-%'");
     await pool.query("DELETE FROM admin_account WHERE user_id LIKE 'e2efup-%'");
     await pool.query('DELETE FROM "user" WHERE id LIKE $1', [`${PREFIX}-%`]);

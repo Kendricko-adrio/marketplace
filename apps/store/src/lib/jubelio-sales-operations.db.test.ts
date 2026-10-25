@@ -1,3 +1,4 @@
+import { deleteRetainedOrderFixtures } from "@marketplace/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import path from "node:path";
 dotenv.config({ path: path.resolve(import.meta.dirname, "../../../../.env") });
@@ -9,6 +10,7 @@ import {
   jubelioSalesOperations,
   clients,
   orders,
+  type JubelioSalesOperationPayload,
 } from "@marketplace/db/src/schema";
 import {
   claimJubelioSalesOperationForDispatch,
@@ -16,6 +18,9 @@ import {
   markJubelioSalesOperationConfirmed,
   listStaleJubelioSalesOperations,
   markStaleJubelioSalesOperationForManualReview,
+  persistJubelioSalesInvoiceId,
+  persistJubelioSalesOrderId,
+  persistJubelioSalesPaymentId,
   recordJubelioSalesIntent,
 } from "./jubelio-sales-operations";
 
@@ -31,12 +36,14 @@ import {
 // unverified until these tests actually run. The exact blocker is logged.
 //
 // The dev database is SHARED. These tests only create rows keyed by the
-// unique "jso-dbtest" prefix and delete them in afterAll (orders cascade to
-// the operation ledger rows).
+// unique "jso-dbtest" prefix and delete them in afterAll (retained evidence
+// first, then orders and their fixture clients).
 // =========================================================
 
 const TEST_ID_PREFIX = "jso-dbtest-";
 const TEST_SO_ID = 683_790_001; // never a real remote id
+const TEST_INVOICE_ID = 459_790;
+const TEST_PAYMENT_ID = 790_001;
 
 const url = process.env.DATABASE_URL;
 
@@ -186,7 +193,14 @@ afterAll(async () => {
   if (!d || testClientIds.length === 0) return;
   // Only remove fixture IDs created by THIS test run. Never delete unrelated
   // clients merely because they share the display name "Ledger DB Test".
-  await d.delete(clients).where(inArray(clients.id, testClientIds));
+  const cleanupPool = new Pool({ connectionString: url });
+  try {
+    const fixtureOrders = await cleanupPool.query("SELECT id FROM orders WHERE user_id=ANY($1::text[])", [testClientIds]);
+    await deleteRetainedOrderFixtures(cleanupPool, fixtureOrders.rows.map((row) => row.id));
+    await d.delete(clients).where(inArray(clients.id, testClientIds));
+  } finally {
+    await cleanupPool.end();
+  }
 });
 
 describe.skipIf(!schemaState.ready)(
@@ -395,5 +409,177 @@ describe.skipIf(!schemaState.ready)(
       expect(second.created).toBe(false);
       expect(second.operation.id).toBe(operationId);
     });
+  }
+);
+
+// =========================================================
+// Returned provider id persistence is a compare-and-set on the SAME durable
+// ledger row (spec §10.2): the first known remote id must never be replaced
+// by a later/conflicting id while the operation is still `dispatched_unknown`.
+// A conflict returns null so the caller holds for reconciliation instead of
+// losing the only GET handle.
+// =========================================================
+
+type PersistedHandle = {
+  salesOrderId: number | null;
+  invoiceId: number | null;
+  paymentId: number | null;
+};
+
+type PersistHandleCase = {
+  type: "create" | "invoice" | "payment";
+  firstId: number;
+  conflictingId: number;
+  persist: (operationId: string, providerId: number) => Promise<unknown>;
+  read: (operation: PersistedHandle | null) => number | null;
+};
+
+const persistHandleCases: PersistHandleCase[] = [
+  {
+    type: "create",
+    firstId: TEST_SO_ID,
+    conflictingId: TEST_SO_ID + 1,
+    persist: (operationId, providerId) =>
+      persistJubelioSalesOrderId(d!, operationId, providerId),
+    read: (operation) => operation?.salesOrderId ?? null,
+  },
+  {
+    type: "invoice",
+    firstId: TEST_INVOICE_ID,
+    conflictingId: TEST_INVOICE_ID + 1,
+    persist: (operationId, providerId) =>
+      persistJubelioSalesInvoiceId(d!, operationId, providerId),
+    read: (operation) => operation?.invoiceId ?? null,
+  },
+  {
+    type: "payment",
+    firstId: TEST_PAYMENT_ID,
+    conflictingId: TEST_PAYMENT_ID + 1,
+    persist: (operationId, providerId) =>
+      persistJubelioSalesPaymentId(d!, operationId, providerId),
+    read: (operation) => operation?.paymentId ?? null,
+  },
+];
+
+/** Seeds one order + claimed (`dispatched_unknown`) operation of the given type. */
+async function seedClaimedOperation(input: {
+  suffix: string;
+  type: "create" | "invoice" | "payment";
+}): Promise<{ orderId: string; operationId: string }> {
+  const clientId = `${TEST_ID_PREFIX}client-${input.suffix}`;
+  const orderId = `${TEST_ID_PREFIX}order-${input.suffix}`;
+  const operationId = `${TEST_ID_PREFIX}op-${input.suffix}`;
+  testClientIds.push(clientId);
+  await d!.insert(clients).values({
+    id: clientId,
+    name: "Ledger DB Test",
+    email: `${clientId}@example.com`,
+    emailVerified: true,
+  });
+  await d!.insert(orders).values({
+    id: orderId,
+    userId: clientId,
+    contactPhone: "081234567890",
+    contactEmail: `${clientId}@example.com`,
+    subtotal: "150000",
+    total: "166500",
+  });
+  let payload: JubelioSalesOperationPayload;
+  if (input.type === "create") {
+    payload = {
+      type: "create",
+      create: {
+        contactId: -1,
+        customerName: "Ledger DB Test",
+        locationId: 61,
+        note: `OKCIR_SO_CREATE:${orderId}:${operationId}`,
+        items: [
+          {
+            itemId: 101187,
+            quantity: 1,
+            price: 150000,
+            discAmount: 0,
+            taxAmount: 0,
+            unit: "Buah",
+            taxId: 1,
+          },
+        ],
+      },
+    };
+  } else if (input.type === "invoice") {
+    payload = { type: "invoice", invoice: { salesOrderId: TEST_SO_ID } };
+  } else {
+    payload = {
+      type: "payment",
+      payment: {
+        invoiceId: TEST_INVOICE_ID,
+        accountId: 2,
+        amount: 180000,
+        contactId: -1,
+        contactName: "Customer",
+        paymentType: 0,
+        note: `OKCIR_SO_PAYMENT:${orderId}:${operationId}`,
+      },
+    };
+  }
+  await d!.insert(jubelioSalesOperations).values({
+    id: operationId,
+    orderId,
+    type: input.type,
+    reference: `OKCIR_SO_${input.type.toUpperCase()}:${orderId}:${operationId}`,
+    payload,
+    ...(input.type === "create" ? {} : { salesOrderId: TEST_SO_ID }),
+    ...(input.type === "payment" ? { invoiceId: TEST_INVOICE_ID } : {}),
+  });
+  const claimed = await claimJubelioSalesOperationForDispatch(d!, operationId);
+  expect(claimed.claimed).toBe(true);
+  return { orderId, operationId };
+}
+
+describe.skipIf(!schemaState.ready)(
+  "returned provider id persistence keeps the first handle (requires PostgreSQL)",
+  () => {
+    it.each(persistHandleCases)(
+      "$type: accepts the first id, is idempotent on the same id and refuses a conflicting id",
+      async (testCase) => {
+        const { orderId, operationId } = await seedClaimedOperation({
+          suffix: `${testCase.type}-handle-${Date.now()}`,
+          type: testCase.type,
+        });
+
+        const first = await testCase.persist(operationId, testCase.firstId);
+        expect(first).not.toBeNull();
+        const afterFirst = await getJubelioSalesOperation(d!, {
+          orderId,
+          type: testCase.type,
+        });
+        expect(testCase.read(afterFirst)).toBe(testCase.firstId);
+
+        // Re-persisting the SAME id is idempotent (crash/replay safe).
+        const replay = await testCase.persist(operationId, testCase.firstId);
+        expect(replay).not.toBeNull();
+        expect(
+          testCase.read(
+            await getJubelioSalesOperation(d!, {
+              orderId,
+              type: testCase.type,
+            })
+          )
+        ).toBe(testCase.firstId);
+
+        // A CONFLICTING id is refused and never replaces the first handle.
+        const conflict = await testCase.persist(
+          operationId,
+          testCase.conflictingId
+        );
+        expect(conflict).toBeNull();
+        const retained = await getJubelioSalesOperation(d!, {
+          orderId,
+          type: testCase.type,
+        });
+        expect(testCase.read(retained)).toBe(testCase.firstId);
+        expect(retained?.status).toBe("dispatched_unknown");
+      }
+    );
   }
 );

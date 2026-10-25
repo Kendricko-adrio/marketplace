@@ -12,13 +12,34 @@ import {
   genders,
 } from "@/db";
 import { eq, and, asc, sql } from "drizzle-orm";
-import { requestLogger, serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+import { readVariantProjections } from "@/lib/variant-price-projection";
+import { sellableVariantSql } from "@/lib/storefront-stock";
+import { sellableUnits } from "@/lib/stock";
 
-export async function GET(
-  request: NextRequest,
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("product-detail");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Next/provider
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
+/** HTTP adapter: baca produk + varian + stok cabang, map ke status/body existing. */
+async function getProductDetail(
+  _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const log = requestLogger(request, { module: "product-detail" });
+): Promise<Response> {
   try {
     const { id } = await params;
 
@@ -81,8 +102,12 @@ export async function GET(
     const variants = await db
       .select()
       .from(productVariants)
-      .where(eq(productVariants.productId, productData.id))
+      .where(and(eq(productVariants.productId, productData.id), sellableVariantSql()))
       .orderBy(asc(productVariants.isDefault));
+
+    // One query for every variant's Markdown projection (no N+1); a fallback
+    // (target >= source) reads as "no coretan" while the target stays stored.
+    const projections = await readVariantProjections(variants.map((v) => v.id));
 
     const variantsWithImagesAndStock = await Promise.all(
       variants.map(async (variant) => {
@@ -98,8 +123,7 @@ export async function GET(
             ? variantImages.map((img) => img.url)
             : (productData.images ?? []).map((img) => img.url);
 
-        // Show mapped active branches even when the last-known stock is zero.
-        // The provider is checked live at checkout; display stock is provisional.
+        // Hanya cabang dengan sellable > 0 yang dapat dipilih.
         const branchStockRows = variant.jubelioItemId == null ? [] : await db
           .select({
             branchId: branches.id,
@@ -117,19 +141,27 @@ export async function GET(
             and(
               eq(branchStocks.productVariantId, variant.id),
               eq(branches.status, "aktif"),
-              sql`${branches.jubelioLocationId} is not null`
+              sql`${branches.jubelioLocationId} is not null`,
+              sql`COALESCE(${branchStocks.availableStock}, 0) - ${branchStocks.pendingRemoteStock} > 0`
             )
           )
           .orderBy(asc(branches.name));
 
         const branchStock = branchStockRows.map((b) => ({
           ...b,
-          available:
-            Math.max(0, (b.availableStock ?? 0) - b.pendingRemoteStock),
+          available: sellableUnits(b),
         }));
 
+        const projection = projections.get(variant.id);
         return {
           ...variant,
+          // `price` stays the display/effective price the UI already reads; the
+          // source price and Markdown state are explicit for the strikethrough.
+          price: projection?.effectiveUnitPrice ?? variant.price,
+          sourcePrice: projection?.sourceUnitPrice ?? variant.price,
+          storedTarget: projection?.storedTarget ?? null,
+          markdownActive: projection?.markdownActive ?? false,
+          markdownRevisionId: projection?.markdownRevisionId ?? null,
           images,
           branchStock,
         };
@@ -144,7 +176,7 @@ export async function GET(
       ...new Set(variants.filter((v) => v.size).map((v) => v.size)),
     ];
 
-    log.info("product detail loaded", { productId: productData.id });
+    log.info(`product detail loaded: product ${productData.id}`);
     return NextResponse.json({
       success: true,
       data: {
@@ -160,11 +192,14 @@ export async function GET(
         sizes,
       },
     });
-  } catch (error) {
-    log.error("product detail failed", { error: serializeError(error) });
+  } catch {
+    log.error("product detail failed", new RouteLogError("product detail failed"));
     return NextResponse.json(
       { success: false, error: "Failed to fetch product" },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(getProductDetail, "product-detail");

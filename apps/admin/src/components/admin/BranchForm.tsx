@@ -1,11 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { RegionLevel, ShipmentRegion } from "@marketplace/db/src/shipment-regions";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ReadOnlyInput } from "@/components/ui/read-only-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
@@ -99,6 +108,7 @@ export default function BranchForm({
   regionConfigured,
   onSubmit,
 }: BranchFormProps) {
+  const router = useRouter();
   const [formData, setFormData] = useState<BranchFormData>(
     initialData ?? {
       name: "",
@@ -212,16 +222,21 @@ export default function BranchForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-8">
+    <form onSubmit={handleSubmit} className="space-y-6">
       {error && (
         <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-md">
           {error}
         </div>
       )}
 
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Informasi Cabang</h3>
-        <div className="grid gap-4 sm:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle><h3>Informasi Cabang</h3></CardTitle>
+          <CardDescription>
+            Nama, kode, alamat, dan koordinat cabang yang tampil di storefront.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2 sm:col-span-2">
             <Label htmlFor="name">Nama Cabang</Label>
             <Input
@@ -312,78 +327,89 @@ export default function BranchForm({
               </Label>
             </div>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Asal Pengiriman</h3>
-        <p className="text-sm text-muted-foreground">Wilayah Shipment wajib dipilih untuk semua cabang. Tidak mengubah kota atau alamat umum cabang.</p>
-        {legacy && <p role="status" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Wilayah pengiriman cabang belum lengkap. Lengkapi pilihan sebelum menyimpan perubahan.</p>}
-        <div className="grid gap-4 sm:grid-cols-2">
-          {REGION_SELECTORS.map(({ field, label }, index) => {
-            const lookup = lookups[index];
-            const value = formData[field];
-            const parentExists = index === 0 || !!formData[REGION_SELECTORS[index - 1].field];
-            const missing = !!value && !lookup.loading && !lookup.error && !lookup.options.some((option) => option.id === value);
-            return <div key={field} className="space-y-2">
-              <Label htmlFor={field}>{label}</Label>
-              <select id={field} required value={value} disabled={submitting || !parentExists || lookup.loading || lookup.error}
-                className="border-input bg-background w-full rounded-md border px-3 py-2 text-sm disabled:opacity-50"
-                onChange={(event) => changeRegion(index, event.target.value)}>
-                <option value="">{lookup.loading ? "Memuat wilayah…" : "Pilih wilayah"}</option>
-                {value && !lookup.options.some((option) => option.id === value) && <option value={value}>Pilihan tersimpan perlu diverifikasi</option>}
-                {lookup.options.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
-              </select>
-              {missing && <p role="alert" className="text-destructive text-sm">Wilayah tersimpan tidak tersedia. Pilih ulang wilayah ini.</p>}
-              {lookup.error && <div role="alert" className="text-destructive text-sm">Gagal memuat wilayah. <Button type="button" variant="outline" size="sm" onClick={lookup.retry}>Coba lagi — {label}</Button></div>}
-            </div>;
-          })}
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2">
-            <Label htmlFor="shippingPhone">Telepon Pengirim</Label>
-            <Input
-              id="shippingPhone"
-              type="tel"
-              inputMode="tel"
-              placeholder="021999888777"
-              value={formData.shippingPhone}
-              onChange={(e) => updateField("shippingPhone", e.target.value)}
-            />
+      <Card>
+        <CardHeader>
+          <CardTitle><h3>Asal Pengiriman</h3></CardTitle>
+          <CardDescription>
+            Wilayah Shipment wajib dipilih untuk semua cabang. Tidak mengubah
+            kota atau alamat umum cabang.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {legacy && <p role="status" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Wilayah pengiriman cabang belum lengkap. Lengkapi pilihan sebelum menyimpan perubahan.</p>}
+          <div className="grid gap-4 sm:grid-cols-2">
+            {REGION_SELECTORS.map(({ field, label }, index) => {
+              const lookup = lookups[index];
+              const value = formData[field];
+              const parentExists = index === 0 || !!formData[REGION_SELECTORS[index - 1].field];
+              const missing = !!value && !lookup.loading && !lookup.error && !lookup.options.some((option) => option.id === value);
+              return <div key={field} className="space-y-2">
+                <Label htmlFor={field}>{label}</Label>
+                <select id={field} required value={value} disabled={submitting || !parentExists || lookup.loading || lookup.error}
+                  className="border-input bg-field w-full rounded-md border px-3 py-2 text-sm disabled:opacity-50"
+                  onChange={(event) => changeRegion(index, event.target.value)}>
+                  <option value="">{lookup.loading ? "Memuat wilayah…" : "Pilih wilayah"}</option>
+                  {value && !lookup.options.some((option) => option.id === value) && <option value={value}>Pilihan tersimpan perlu diverifikasi</option>}
+                  {lookup.options.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+                </select>
+                {missing && <p role="alert" className="text-destructive text-sm">Wilayah tersimpan tidak tersedia. Pilih ulang wilayah ini.</p>}
+                {lookup.error && <div role="alert" className="text-destructive text-sm">Gagal memuat wilayah. <Button type="button" variant="outline" size="sm" onClick={lookup.retry}>Coba lagi — {label}</Button></div>}
+              </div>;
+            })}
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="shippingPostalCode">Kode Pos Asal Kirim</Label>
-            <Input
-              id="shippingPostalCode"
-              type="text"
-              inputMode="numeric"
-              placeholder="Pilih kelurahan terlebih dahulu"
-              value={formData.shippingPostalCode}
-              readOnly
-            />
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="shippingPhone">Telepon Pengirim</Label>
+              <Input
+                id="shippingPhone"
+                type="tel"
+                inputMode="tel"
+                placeholder="021999888777"
+                value={formData.shippingPhone}
+                onChange={(e) => updateField("shippingPhone", e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="shippingPostalCode">Kode Pos Asal Kirim</Label>
+              <ReadOnlyInput
+                id="shippingPostalCode"
+                type="text"
+                inputMode="numeric"
+                placeholder="Pilih kelurahan terlebih dahulu"
+                value={formData.shippingPostalCode}
+                hint="Terisi otomatis dari Kelurahan/Area."
+              />
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="shippingAddress">Alamat Asal Kirim</Label>
+              <Textarea
+                id="shippingAddress"
+                rows={2}
+                placeholder="Alamat lengkap pengirim untuk pickup kurir"
+                value={formData.shippingAddress}
+                onChange={(e) => updateField("shippingAddress", e.target.value)}
+              />
+            </div>
           </div>
-          <div className="space-y-2 sm:col-span-2">
-            <Label htmlFor="shippingAddress">Alamat Asal Kirim</Label>
-            <Textarea
-              id="shippingAddress"
-              rows={2}
-              placeholder="Alamat lengkap pengirim untuk pickup kurir"
-              value={formData.shippingAddress}
-              onChange={(e) => updateField("shippingAddress", e.target.value)}
-            />
-          </div>
+          <p className="text-sm text-muted-foreground">
+            Kode pos berasal dari kelurahan Shipment. Nama cabang dipakai sebagai nama pengirim.
+            Telepon dan alamat pengirim boleh kosong saat menyimpan, tetapi wajib untuk delivery.
+            {selectedArea && selectedArea.postalCode !== formData.shippingPostalCode && " Kode pos tersimpan sudah tidak cocok. Pilih ulang kelurahan sebelum menyimpan."}
+          </p>
+        </CardContent>
+      </Card>
 
-        </div>
-        <p className="text-sm text-muted-foreground">
-          Kode pos berasal dari kelurahan Shipment. Nama cabang dipakai sebagai nama pengirim.
-          Telepon dan alamat pengirim boleh kosong saat menyimpan, tetapi wajib untuk delivery.
-          {selectedArea && selectedArea.postalCode !== formData.shippingPostalCode && " Kode pos tersimpan sudah tidak cocok. Pilih ulang kelurahan sebelum menyimpan."}
-        </p>
-      </div>
-
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Jam Operasional</h3>
-        <div className="space-y-3">
+      <Card>
+        <CardHeader>
+          <CardTitle><h3>Jam Operasional</h3></CardTitle>
+          <CardDescription>
+            Aktifkan hari buka, lalu atur jam layanan cabang.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
           {DAY_KEYS.map(({ key, label }) => {
             const hours = formData.operatingHours[key] ?? null;
             const isOpen = hours !== null;
@@ -425,10 +451,18 @@ export default function BranchForm({
               </div>
             );
           })}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       <div className="flex items-center justify-end gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => router.push("/admin/branches")}
+          disabled={submitting}
+        >
+          Batal
+        </Button>
         <Button type="submit" disabled={submitting || !regionReady}>
           {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
           {mode === "create" ? "Buat Cabang" : "Simpan Perubahan"}

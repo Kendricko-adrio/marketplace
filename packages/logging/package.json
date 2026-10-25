@@ -1,0 +1,23 @@
+{
+  "name": "@marketplace/logging",
+  "version": "0.1.0",
+  "description": "Server-only structured logging core (Pino envelope) shared by marketplace apps",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "pino": "^10.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5"
+  }
+}

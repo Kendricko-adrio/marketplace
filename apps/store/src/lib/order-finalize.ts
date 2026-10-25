@@ -14,11 +14,64 @@ import {
   paymentFailedEmailHTML,
   paymentFailedEmailText,
 } from "@/lib/email-templates-order";
-import { createLogger, serializeError, type Logger } from "@/lib/logger";
+import { createModuleLogger } from "@/lib/logger";
 import { generatePickupCode } from "@/lib/pickup-code";
 import { dispatchJubelioSalesCancel } from "@/lib/jubelio-sales-lifecycle";
+import {
+  consumeReservedRedemption,
+  findRedemptionForOrder,
+  lockRedemptionOwners,
+  recordLatePaidReview,
+} from "@/lib/discount-lifecycle";
 
 export { generatePickupCode } from "@/lib/pickup-code";
+
+/**
+ * Module-scope logger: hanya nama module yang diikat di sini. `requestId`
+ * dibaca dari scope AsyncLocalStorage saat baris ditulis, jadi membuatnya sekali
+ * ketika module dievaluasi (sebelum scope HTTP ada) adalah benar.
+ */
+const log = createModuleLogger("order-finalize");
+
+/** Bentuk token kode yang boleh diteruskan: uppercase + angka + underscore. */
+const SAFE_LOG_CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
+
+/** Proyeksi error statis milik module ini; teks asli provider tidak disalin. */
+class OrderFinalizeLogError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "OrderFinalizeLogError";
+    this.code = code;
+  }
+}
+
+/**
+ * Error dependency (penyimpanan/transport/notifikasi) diproyeksikan statis:
+ * pesan konstan milik module, dan `code` hanya bila bentuknya token aman.
+ * `message`, `stack`, `cause`, serta teks hasil provider tidak pernah disalin
+ * ke log.
+ */
+function safeDependencyErrorLog(error: unknown): OrderFinalizeLogError {
+  return new OrderFinalizeLogError(
+    "Order finalize gagal pada lapisan penyimpanan, transport atau notifikasi",
+    knownLogCode(error)
+  );
+}
+
+function knownLogCode(error: unknown): string | undefined {
+  try {
+    if (typeof error !== "object" || error === null || !("code" in error)) {
+      return undefined;
+    }
+    const code = error.code;
+    return typeof code === "string" && SAFE_LOG_CODE.test(code) ? code : undefined;
+  } catch {
+    // Nilai hostile (getter/proxy melempar) tidak membawa sinyal aman.
+    return undefined;
+  }
+}
 
 /**
  * Map a Midtrans transaction_status to a human-readable failure reason.
@@ -108,36 +161,72 @@ export type OrderView = {
  */
 export async function claimPaidOrder(
   orderId: string,
-  logger?: Logger,
   paymentAttributes?: PaymentAttributes
 ): Promise<FinalizeResult> {
-  const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
-  const claimed = await db
-    .update(orders)
-    .set({
-      status: "processing",
-      paymentStatus: "paid",
-      ...(paymentAttributes?.paymentType
-        ? { paymentMethod: paymentAttributes.paymentType }
-        : {}),
-      ...(paymentAttributes?.transactionId
-        ? { midtransTransactionId: paymentAttributes.transactionId }
-        : {}),
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(orders.id, orderId),
-        eq(orders.status, "pending_payment"),
-        eq(orders.paymentStatus, "pending")
-      )
-    )
-    .returning({ id: orders.id });
-  if (claimed.length === 0) {
-    log.info("paid-order claim lost — already handled by another path");
-    return { claimed: false };
-  }
-  log.info("order paid → processing (awaiting Sales-Order settlement)");
+  const redemption = await findRedemptionForOrder(orderId);
+  const claimed = await db.transaction(async (tx) => {
+    // Lock group 3 before group 5: Offer → usage → client usage, then the
+    // existing order → Redemption. A concurrent webhook/sweep serializes here.
+    if (redemption && redemption.status === "reserved") {
+      await lockRedemptionOwners(tx, redemption);
+    }
+    const [current] = await tx
+      .select({ id: orders.id, status: orders.status, paymentStatus: orders.paymentStatus })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .for("update")
+      .limit(1);
+    if (!current || current.status !== "pending_payment" || current.paymentStatus !== "pending") {
+      log.info(
+        `Order ${orderId}: paid-order claim lost — already handled by another path`
+      );
+      return false;
+    }
+    await tx
+      .update(orders)
+      .set({
+        status: "processing",
+        paymentStatus: "paid",
+        ...(paymentAttributes?.paymentType
+          ? { paymentMethod: paymentAttributes.paymentType }
+          : {}),
+        ...(paymentAttributes?.transactionId
+          ? { midtransTransactionId: paymentAttributes.transactionId }
+          : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(orders.id, orderId));
+    if (redemption) {
+      const consumed = await consumeReservedRedemption(tx, {
+        identity: redemption,
+        redemptionId: redemption.id,
+        source: "midtrans",
+        correlation: paymentAttributes?.transactionId ?? null,
+      });
+      if (!consumed) {
+        // Paid authoritative must never lose its evidence: if the hold was
+        // already released, keep it released and record ONE review event.
+        const reviewed = await recordLatePaidReview(tx, {
+          orderId,
+          correlation: paymentAttributes?.transactionId ?? null,
+          reason: "Paid arrived after the Redemption was released",
+        });
+        if (reviewed) {
+          await tx.update(orders)
+            .set({ fulfillmentBlockedReason: "Paid after Redemption release; manual review required", updatedAt: new Date() })
+            .where(eq(orders.id, orderId));
+          log.warn(
+            `Order ${orderId}: paid after Redemption release — late review recorded, fulfillment blocked`
+          );
+        }
+      }
+    }
+    return true;
+  });
+  if (!claimed) return { claimed: false };
+  log.info(
+    `Order ${orderId}: paid → processing (awaiting Sales-Order settlement)`
+  );
   return { claimed: true };
 }
 
@@ -167,12 +256,10 @@ export async function blockOrderFulfillment(
  */
 export async function fulfillPaidOrder(
   orderId: string,
-  order: OrderView,
-  logger?: Logger
+  order: OrderView
 ): Promise<FinalizeResult> {
-  const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
   if (!order.branchId) {
-    log.error("cannot fulfill — order has no branchId");
+    log.error(`Order ${orderId}: cannot fulfill — order has no branchId`);
     return { claimed: false };
   }
 
@@ -246,7 +333,10 @@ export async function fulfillPaidOrder(
       sql`SELECT pg_notify('new_notification', ${JSON.stringify({ id: notificationId })})`
     );
   } catch (notifyError) {
-    log.error("admin notification insert failed", { error: serializeError(notifyError) });
+    log.error(
+      `Order ${orderId}: admin notification insert failed`,
+      safeDependencyErrorLog(notifyError)
+    );
   }
 
   // Send pickup-ready email (best-effort, outside the tx).
@@ -305,10 +395,15 @@ export async function fulfillPaidOrder(
       });
     }
   } catch (emailError) {
-    log.error("pickup-ready email failed", { error: serializeError(emailError) });
+    log.error(
+      `Order ${orderId}: pickup-ready email failed`,
+      safeDependencyErrorLog(emailError)
+    );
   }
 
-  log.info("order paid → ready_for_pickup", { pickupCode });
+  log.info(
+    `Order ${orderId}: paid → ready_for_pickup (pickup code ${pickupCode})`
+  );
   return { claimed: true, pickupCode };
 }
 
@@ -321,10 +416,9 @@ export async function fulfillPaidOrder(
 export async function claimAndFinalizePaidOrder(
   orderId: string,
   _order: OrderView,
-  logger?: Logger,
   paymentAttributes?: PaymentAttributes
 ): Promise<FinalizeResult> {
-  return claimPaidOrder(orderId, logger, paymentAttributes);
+  return claimPaidOrder(orderId, paymentAttributes);
 }
 
 /**
@@ -336,10 +430,8 @@ export async function claimAndFailOrder(
   orderId: string,
   reason: string,
   midtransStatus: string,
-  logger?: Logger,
   paymentAttributes?: PaymentAttributes
 ): Promise<FinalizeResult> {
-  const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
   const claimed = await db.transaction(async (tx) => {
     const res = await tx
       .update(orders)
@@ -371,15 +463,10 @@ export async function claimAndFailOrder(
     const outcome = await dispatchJubelioSalesCancel({
       orderId,
       reason,
-      logger: log,
     });
-    log.info("Sales-Order cancel dispatched on payment failure", {
-      status: outcome.status,
-      ...(outcome.status === "manual_review" || outcome.status === "rejected"
-        ? { message: outcome.message }
-        : {}),
-      ...(outcome.status === "skipped" ? { message: outcome.message } : {}),
-    });
+    log.info(
+      `Order ${orderId}: Sales-Order cancel dispatched on payment failure (status ${outcome.status})`
+    );
     if (outcome.status === "manual_review") {
       await blockOrderFulfillment(
         orderId,
@@ -387,9 +474,10 @@ export async function claimAndFailOrder(
       );
     }
   } catch (cancelError) {
-    log.error("Sales-Order cancel dispatch failed", {
-      error: serializeError(cancelError),
-    });
+    log.error(
+      `Order ${orderId}: Sales-Order cancel dispatch failed`,
+      safeDependencyErrorLog(cancelError)
+    );
   }
 
   // Send payment-failed email (best-effort, outside the tx).
@@ -448,10 +536,15 @@ export async function claimAndFailOrder(
       text,
     });
   } catch (emailError) {
-    log.error("payment-failed email failed", { error: serializeError(emailError) });
+    log.error(
+      `Order ${orderId}: payment-failed email failed`,
+      safeDependencyErrorLog(emailError)
+    );
   }
 
-  log.info("order failed_payment", { midtransStatus, reason });
+  log.info(
+    `Order ${orderId}: order failed_payment (midtrans status ${midtransStatus})`
+  );
   return { claimed: true };
 }
 
@@ -472,10 +565,8 @@ export type LateSettlementResult = {
  */
 export async function processLateSettlement(
   orderId: string,
-  logger?: Logger,
   paymentAttributes?: PaymentAttributes
 ): Promise<LateSettlementResult> {
-  const log = (logger ?? createLogger({ module: "late-settlement" })).child({ orderId });
   const orderRows = await db
     .select()
     .from(orders)
@@ -505,35 +596,61 @@ export async function processLateSettlement(
     const message =
       "Late payment arrived after the Sales-Order cancel path started; manual reconciliation required";
     // Keep Midtrans's authoritative paid status, block pickup, surface review.
-    await db
-      .update(orders)
-      .set({
-        status: "processing",
-        paymentStatus: "paid",
-        fulfillmentBlockedReason: message,
-        paymentFailureReason: null,
-        ...(paymentAttributes?.paymentType
-          ? { paymentMethod: paymentAttributes.paymentType }
-          : {}),
-        ...(paymentAttributes?.transactionId
-          ? { midtransTransactionId: paymentAttributes.transactionId }
-          : {}),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(orders.id, orderId),
-          eq(orders.status, "failed_payment"),
-          eq(orders.paymentStatus, "failed")
+    // One transaction: order paid attributes + conditional Redemption consume
+    // (hold belum dilepas) atau late-review event (sudah released).
+    const redemption = await findRedemptionForOrder(orderId);
+    await db.transaction(async (tx) => {
+      if (redemption && redemption.status === "reserved") {
+        await lockRedemptionOwners(tx, redemption);
+      }
+      const [updated] = await tx
+        .update(orders)
+        .set({
+          status: "processing",
+          paymentStatus: "paid",
+          fulfillmentBlockedReason: message,
+          paymentFailureReason: null,
+          ...(paymentAttributes?.paymentType
+            ? { paymentMethod: paymentAttributes.paymentType }
+            : {}),
+          ...(paymentAttributes?.transactionId
+            ? { midtransTransactionId: paymentAttributes.transactionId }
+            : {}),
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.status, "failed_payment"),
+            eq(orders.paymentStatus, "failed")
+          )
         )
-      );
-    log.warn("late settlement after cancel → manual review", { message });
+        .returning({ id: orders.id });
+      if (!updated || !redemption) return;
+      const consumed = await consumeReservedRedemption(tx, {
+        identity: redemption,
+        redemptionId: redemption.id,
+        source: "midtrans",
+        correlation: paymentAttributes?.transactionId ?? null,
+        reason: message,
+      });
+      if (!consumed) {
+        await recordLatePaidReview(tx, {
+          orderId,
+          correlation: paymentAttributes?.transactionId ?? null,
+          reason: message,
+        });
+      }
+    });
+    log.warn(`Order ${orderId}: late settlement after cancel → manual review`);
     return { status: "manual_review", message };
   }
 
-  const claimed = await claimLatePaidOrder(orderId, log, paymentAttributes);
+  const claimed = await claimLatePaidOrder(orderId, paymentAttributes);
   if (!claimed) return { status: "skipped" };
-  log.info("late settlement claimed — settlement pipeline takes over");
+  log.info(
+    `Order ${orderId}: late settlement claimed — settlement pipeline takes over`
+  );
   return { status: "settled" };
 }
 
@@ -543,37 +660,63 @@ export async function processLateSettlement(
  */
 export async function claimLatePaidOrder(
   orderId: string,
-  logger?: Logger,
   paymentAttributes?: PaymentAttributes
 ): Promise<boolean> {
-  const log = logger?.child({ orderId }) ?? createLogger({ module: "order-finalize", orderId });
-  const claimed = await db
-    .update(orders)
-    .set({
-      status: "processing",
-      paymentStatus: "paid",
-      fulfillmentBlockedReason: null,
-      paymentFailureReason: null,
-      midtransFailureStatus: null,
-      ...(paymentAttributes?.paymentType
-        ? { paymentMethod: paymentAttributes.paymentType }
-        : {}),
-      ...(paymentAttributes?.transactionId
-        ? { midtransTransactionId: paymentAttributes.transactionId }
-        : {}),
-      updatedAt: new Date(),
-    })
-    .where(
-      and(
-        eq(orders.id, orderId),
-        eq(orders.status, "failed_payment"),
-        eq(orders.paymentStatus, "failed")
-      )
-    )
-    .returning({ id: orders.id });
-  if (claimed.length === 0) {
-    log.info("late-paid claim lost — order moved on");
-    return false;
-  }
-  return true;
+  const redemption = await findRedemptionForOrder(orderId);
+  const claimed = await db.transaction(async (tx) => {
+    // Urutan lock §9.2: Offer/usage (3) → order/Redemption (5).
+    if (redemption && redemption.status === "reserved") {
+      await lockRedemptionOwners(tx, redemption);
+    }
+    const [current] = await tx
+      .select({ status: orders.status, paymentStatus: orders.paymentStatus })
+      .from(orders)
+      .where(eq(orders.id, orderId))
+      .for("update")
+      .limit(1);
+    if (!current || current.status !== "failed_payment" || current.paymentStatus !== "failed") {
+      log.info(`Order ${orderId}: late-paid claim lost — order moved on`);
+      return false;
+    }
+    await tx
+      .update(orders)
+      .set({
+        status: "processing",
+        paymentStatus: "paid",
+        fulfillmentBlockedReason: null,
+        paymentFailureReason: null,
+        midtransFailureStatus: null,
+        ...(paymentAttributes?.paymentType
+          ? { paymentMethod: paymentAttributes.paymentType }
+          : {}),
+        ...(paymentAttributes?.transactionId
+          ? { midtransTransactionId: paymentAttributes.transactionId }
+          : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(orders.id, orderId));
+    if (redemption) {
+      const consumed = await consumeReservedRedemption(tx, {
+        identity: redemption,
+        redemptionId: redemption.id,
+        source: "midtrans",
+        correlation: paymentAttributes?.transactionId ?? null,
+        reason: "Late payment on active Sales Order",
+      });
+      if (!consumed) {
+        const reviewed = await recordLatePaidReview(tx, {
+          orderId,
+          correlation: paymentAttributes?.transactionId ?? null,
+          reason: "Late payment on active Sales Order with released Redemption",
+        });
+        if (reviewed) {
+          await tx.update(orders)
+            .set({ fulfillmentBlockedReason: "Late payment after Redemption release; manual review required", updatedAt: new Date() })
+            .where(eq(orders.id, orderId));
+        }
+      }
+    }
+    return true;
+  });
+  return claimed;
 }

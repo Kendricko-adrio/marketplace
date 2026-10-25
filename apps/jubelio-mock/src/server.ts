@@ -10,7 +10,9 @@ type Scenario =
   | "timeout-before-apply"
   | "timeout-after-apply"
   | "malformed-success"
-  | "malformed-success-after-apply";
+  | "malformed-success-after-apply"
+  // Fixture-only: definitive PRE-APPLY rejection on SO create (4xx, no write).
+  | "reject-create";
 
 type MockStock = {
   locationId: number;
@@ -59,6 +61,8 @@ type SalesOrder = {
   total_disc: number;
   total_tax: number;
   grand_total: number;
+  original_shipment_cost?: number;
+  shipping_cost?: number;
   note: string;
   ref_no: string;
   is_canceled: boolean;
@@ -234,6 +238,26 @@ export const jubelioMockServer = createServer(async (request, response) => {
   }
   if (method === "GET" && url.pathname === "/__control/requests") {
     return json(response, 200, { data: requests });
+  }
+  // Controlled external Snap boundary, before the unrelated Jubelio auth.
+  // Never forwards a request; redirect remains on this loopback mock origin.
+  if (method === "POST" && url.pathname === "/snap/v1/transactions") {
+    const transaction = body.transaction_details as Record<string, unknown> | undefined;
+    const orderId = transaction?.order_id;
+    if (typeof orderId !== "string" || !/^[a-zA-Z0-9_-]{1,128}$/.test(orderId) ||
+        !Number.isSafeInteger(transaction?.gross_amount)) {
+      return json(response, 400, { error: "Invalid mock Snap transaction" });
+    }
+    const host = request.headers.host ?? "";
+    const origin = new URL(`http://${host}`);
+    if (!["127.0.0.1", "localhost", "[::1]"].includes(origin.hostname)) {
+      return json(response, 400, { error: "Invalid mock Snap origin" });
+    }
+    return json(response, 201, { token: `mock-snap-${orderId}`, redirect_url: `${origin.origin}/snap/${orderId}` });
+  }
+  if (method === "GET" && /^\/snap\/[a-zA-Z0-9_-]{1,128}$/.test(url.pathname)) {
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    return response.end("<!doctype html><html lang='id'><title>Midtrans fixture</title><h1>Pembayaran fixture</h1></html>");
   }
   if (method === "PUT" && url.pathname === "/__control/midtrans-status") {
     const orderId = String(body.orderId || "");
@@ -521,6 +545,11 @@ export const jubelioMockServer = createServer(async (request, response) => {
         location_id: Number(item.location_id),
       });
     }
+    if (scenario === "reject-create") {
+      // Definitively rejected before anything is written: the caller may
+      // safely record `rejected` (never used to fake an ambiguous outcome).
+      return badRequest(response, "Mock definitive pre-apply rejection");
+    }
     for (const [key, totalQty] of demand) {
       const stock = stocks.get(key)!;
       if (availableStock(stock) < totalQty) {
@@ -550,6 +579,8 @@ export const jubelioMockServer = createServer(async (request, response) => {
       total_disc: Number(body.total_disc),
       total_tax: Number(body.total_tax),
       grand_total: Number(body.grand_total),
+      ...(typeof body.original_shipment_cost === "number" ? { original_shipment_cost: body.original_shipment_cost } : {}),
+      ...(typeof body.shipping_cost === "number" ? { shipping_cost: body.shipping_cost } : {}),
       note: typeof body.note === "string" ? body.note : "",
       ref_no: typeof body.ref_no === "string" ? body.ref_no : "",
       is_canceled: false,
@@ -594,6 +625,8 @@ export const jubelioMockServer = createServer(async (request, response) => {
       total_disc: order.total_disc,
       total_tax: order.total_tax,
       grand_total: order.grand_total,
+      ...(order.original_shipment_cost !== undefined ? { original_shipment_cost: order.original_shipment_cost } : {}),
+      ...(order.shipping_cost !== undefined ? { shipping_cost: order.shipping_cost } : {}),
       note: order.note,
       ref_no: order.ref_no,
       is_canceled: order.is_canceled,
@@ -894,7 +927,28 @@ export const jubelioMockServer = createServer(async (request, response) => {
       note: payment.note,
       // Documented getSalesPaymentResponse types amount as a string.
       amount: String(payment.amount),
-      invoices: payment.invoices,
+      // Each association line is enriched from the CURRENT invoice store, never
+      // echoed from the payment request body: the gateway verifier compares the
+      // line's grand_total with its stored expected provider payable and
+      // requires due 0, failing closed when either field is absent
+      // (contract v2 §10.2, evidence T1/T2). `due` is the invoice's own
+      // remaining balance (grand_total - payment_amount), so it tracks the
+      // invoice state instead of the line that paid it.
+      invoices: payment.invoices.map((entry) => {
+        // Invariant from the payment POST guard: every detail line references an
+        // invoice that exists, and invoices are never deleted.
+        const invoice = invoices.get(entry.invoice_id)!;
+        return {
+          payment_detail_id: entry.payment_detail_id,
+          payment_id: entry.payment_id,
+          trx_date: entry.trx_date,
+          invoice_id: entry.invoice_id,
+          payment_amount: entry.payment_amount,
+          salesorder_id: invoice.salesorder_id,
+          grand_total: invoice.grand_total,
+          due: invoice.grand_total - invoice.payment_amount,
+        };
+      }),
     });
   }
 

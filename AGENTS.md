@@ -12,7 +12,7 @@ workspaces. Products, stock, and branch data are synced from **Jubelio**
 | `apps/store` | Storefront (customers) — http://localhost:3000 |
 | `apps/admin` | Admin dashboard (ops) — http://localhost:3001 |
 | `packages/db` | 🏛️ Shared schema owner (`@marketplace/db`) |
-| `plan/` | Conceptual multi-feature plans + status index (`plan/index.md`) |
+| `.scratch/<feature>/` | Workflow artifacts: research, plans, wayfinding, tickets + per-feature `index.md` |
 
 **Stack:** Next.js 16 (App Router) · PostgreSQL 16 + Drizzle ORM · Better Auth
 (two instances) · TypeScript · Tailwind + shadcn/ui.
@@ -86,10 +86,19 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 - **Every timestamp column uses `timestamptz`** (`withTimezone: true`) — never
   bare `timestamp`; send `Date` objects on insert. (Details:
   [`docs/architecture/database.md`](docs/architecture/database.md).)
+- **Backend structure and logging follow the `maintainable-code` skill** —
+  feature-first `route.ts` → `*-service.ts` → `*-repository.ts` / `*-client.ts`,
+  one service per business operation, no query inside `route.ts`, and
+  module-scoped loggers that are never passed as parameters. Read
+  [`.agents/skills/maintainable-code/SKILL.md`](.agents/skills/maintainable-code/SKILL.md)
+  and [`docs/architecture/code-organization.md`](docs/architecture/code-organization.md)
+  before writing or restructuring backend code.
 - **Logging is mandatory for backend logic** — every change to `/api/**` code
   must log through the app's structured logger (`apps/store/src/lib/logger.ts`
   / `apps/admin/src/lib/logger.ts`): minimum `info` on success, `error` with
   context on failure. Details: [`docs/features/logging.md`](docs/features/logging.md).
+- Keep AGENTS.md in **English**. For generated documents, follow the
+  **Indonesian documentation policy** in §6.
 - **Bahasa dokumentasi:** seluruh dokumen project yang dibuat atau di-generate
   harus menggunakan **bahasa Indonesia**, termasuk AGENTS.md, research notes,
   plans, spesifikasi, decision/implementation tickets, wayfinder maps, ADRs,
@@ -113,6 +122,16 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   Stop for new product decisions; do not silently re-plan. Read the on-demand
   [`development-workflow` skill](.agents/skills/development-workflow/SKILL.md)
   for the full process and gates.
+- **Write the technical and UX blueprint before implementation.** A nontrivial
+  spec/plan carries, inside the same file, the file-level technical blueprint
+  (full paths, responsibility, layer, exported contract, test seam) and the UX
+  blueprint (reference page, component reuse map, state matrix with final copy,
+  viewport/accessibility). Both are an **advisory checklist**: unfilled parts
+  become open items, and a requested prototype is the binding reference for
+  flow, structure, and states while existing tokens/components stay the visual
+  source of truth. A small single-session change may use a 4–6 line mini
+  version. Details: [`development-workflow` §2](.agents/skills/development-workflow/SKILL.md)
+  and [`ux-design` §3](.agents/skills/ux-design/SKILL.md).
 - **Subagents are opt-in, bounded, and edit-only implementers.** Spawn only
   when the user explicitly authorizes delegation for the current task/session;
   plan approval is not permission. For implementation handoffs, subagents may
@@ -122,22 +141,67 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   owns integration, review, and all validation: inspect the changes, run the
   relevant tests/checks, and decide any follow-up edits. No nested subagents
   without separate permission. Follow the skill's handoff, isolation, and
-  loop-stop rules.
+  loop-stop rules. Implementation handoffs use the project `implementer` agent
+  ([`.agents/agents/implementer.md`](.agents/agents/implementer.md)), whose tool
+  allowlist has no shell — a child cannot run validation even by accident. The
+  main agent owns the verification ladder in §5.
 - **Plan → execute → review applies to any behavior-affecting change.** "Code"
   is broadly defined — no loopholes: app code, config/env files, schema files,
   seeders, middleware/route configs, files under `deployment/`. Pure research,
-  standalone planning, and research/plan documents (e.g. under `plan/` or
-  `docs/`) are exempt. Multi-feature conceptual plans live in `plan/` with
-  status tracked in `plan/index.md` — see [`plan/README.md`](plan/README.md).
+  standalone planning, and research/plan documents (e.g. under `.scratch/` or
+  `docs/`) are exempt. Workflow artifacts live in `.scratch/<feature>/` with
+  plan status tracked only in that feature's `index.md` — see
+  [`.scratch/README.md`](.scratch/README.md).
   Implement approved scope one verifiable slice at a time; review against the
   approved behavior and repo standards before accepting the result.
-- **Load the matching skill first** — check available skills before starting:
-  `tdd` (tests), `systematic-debugging` (bugs, test failures, unexpected
-  behavior — never guess a fix), `nextjs` (UI), `better-auth-best-practices` (auth), `frontend-design` (design).
-  If subagents are used, they must load the matching skill too; subagent use
-  never bypasses a rule.
-- **Use Context7** for current library/framework documentation before writing
-  code — don't rely on memory for library APIs.
+- **Load the matching skill first** — the lookup is mandatory before
+  implementation, for the main agent **and** for an authorized implementer
+  subagent: `ux-design` (all coding; mandatory UX and cross-page consistency
+  gates for frontend), `maintainable-code` (backend structure, service/repository
+  boundaries, contextual logging), `tdd` (tests), `systematic-debugging` (bugs,
+  test failures, unexpected behavior — never guess a fix), `nextjs` (UI),
+  `better-auth-best-practices` (auth), `frontend-design` (visual polish within
+  the established design system). If subagents are used, they must load the
+  matching skill too; subagent use never bypasses a rule, and loading a skill
+  never grants scope, delegation, or commit/remote permission that the user did
+  not approve separately.
+- **Mandatory UX skill lookup before coding, especially frontend development.**
+  Read [`.agents/skills/ux-design/SKILL.md`](.agents/skills/ux-design/SKILL.md)
+  in full before any coding task; merely naming the skill is not loading it.
+  For frontend development (pages, components, forms, navigation, layout,
+  styling, themes/tokens, and interaction states), apply its task-flow,
+  clickability, concise-copy, spacing, accessibility, and cross-page consistency
+  gates. Reuse the established shared components and design tokens; do not
+  invent a different visual style per page. `ux-design` usability and consistency
+  requirements take precedence over conflicting aesthetic advice in
+  `frontend-design`. For backend-only work without UX impact, record that the
+  visual gates are not applicable. This requirement also applies to authorized
+  implementer subagents; the main agent still owns all validation.
+- **Context7 inquiry is mandatory before implementation.** Model knowledge stops
+  at its training cut-off, so never write library/framework API code from
+  memory. Before the first code slice that touches an external package
+  (Next.js 16, React, Drizzle ORM/drizzle-kit, Better Auth, Zod, Tailwind,
+  Playwright, Vitest, etc.):
+  1. `mcp__context7__resolve_library_id` with `{ libraryName: "<package>" }`
+     to get the canonical library ID for the installed version.
+  2. `mcp__context7__query_docs` with
+     `{ libraryId: "<id>", query: "<specific API question>" }` for every
+     uncertain signature, option, migration, or deprecation.
+  3. Record the library ID and what was confirmed in the plan/ticket/slice notes
+     (e.g. `Context7 checkpoint: <id> — <what was verified>`), so review can
+     audit it.
+  These tools come from the project server in `.pi/mcp.json` (OAuth, exposure
+  `direct`). If a lookup fails with `needs sign-in`, run `/mcp login context7`
+  (or `pi mcp login context7`) and retry. Skip the lookup only when the slice
+  touches no external API surface (pure refactor of already-confirmed code,
+  CSS/layout tweaks, docs, repo-internal logic), and say so in one line.
+  Subagents cannot call MCP tools (the `implementer` allowlist has neither
+  shell nor MCP), so the main agent runs the inquiry and passes the confirmed
+  signatures/options into the handoff packet; "the subagent should check
+  Context7" is not a valid handoff. If Context7 is unreachable, fall back to
+  the installed package types/source in `node_modules` or official vendor docs
+  and state which source replaced it — silent guessing is a violation. Setup:
+  [`docs/agents/mcp-tooling.md`](docs/agents/mcp-tooling.md).
 - **Schema edits ONLY in `packages/db/src/schema/`** — apps never define tables.
 - **Never treat the two Better Auth instances interchangeably** — cross-type
   sign-in is rejected by session hooks (`INVALID_USER_TYPE`).
@@ -153,11 +217,27 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   See [`docs/deployment-docs/README.md`](docs/deployment-docs/README.md).
 - **Documentation is part of the task, not a follow-up** — every new/changed
   endpoint and feature needs a doc entry ([`docs/README.md`](docs/README.md)).
-  When a plan in `plan/` reaches Done, the plan file is deleted (git history
-  is the archive), its entry in `plan/index.md` is marked Done, and enduring
-  content is distilled into `docs/` per the `docs/README.md` destination
-  rules. Earlier plans under `.agents/` are grandfathered in place and are
-  not required to migrate; new plans go to `plan/` only.
+  When a plan reaches Done, retain its file in `.scratch/<feature>/plan/`,
+  mark its entry in `.scratch/<feature>/index.md` Done with date and evidence,
+  and distill enduring content into `docs/` per its destination rules.
+  Existing workflow artifacts, including legacy `.agents/` plans, use the
+  same centralized layout; do not recreate the old locations.
+- **Generate workflow text artifacts by feature, not by session or skill.**
+  Before generating a file, inspect `.scratch/` and reuse the existing stable
+  kebab-case feature slug (e.g. `discounts`; do not create a separate
+  `discounts-implementation` folder). Put research and supporting evidence in
+  `research/`; proposals, specs, and plans in `plan/`; decision maps, decision
+  tickets, and design decisions in `wayfinder/`; implementation maps, tickets,
+  handoffs, and verification in `ticket/`; optional prototypes in `prototype/`.
+  Create only needed subfolders. Use descriptive Markdown filenames and
+  numbered tickets (`NN-<slug>.md`); preserve machine-readable metadata.
+  Maintain one `index.md` per feature for artifact navigation, plan approval,
+  status, blockers, and verification links. There is no global status index:
+  parallel feature branches must not share a status file. Ticket status stays
+  in each ticket, never duplicated in the index. Link cross-feature evidence
+  rather than copying it; update links when moving files. Keep skill definitions
+  in `.agents/skills/` and enduring documentation in `docs/`. This placement
+  policy overrides upstream skill output-path examples, not approval gates.
 - **Jubelio research access.** Read-only GET requests to Jubelio may run during
   research without a separate user decision, using available credentials
   securely and reporting only redacted, relevant fields (never tokens, raw
@@ -188,14 +268,54 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   components, forms, or navigation get a `*.spec.ts` under `e2e/store/` or
   `e2e/admin/` asserting user-visible behavior. The canonical way to verify
   a UI feature works is to run its Playwright spec and see it pass.
+- **Frontend acceptance also requires the `ux-design` review gate.** The main
+  agent must inspect the rendered UI and relevant interaction states, compare
+  it against an agreed peer-page/shared-pattern reference, and verify cross-page
+  consistency alongside the required Playwright coverage. JSX inspection or a
+  passing click test alone does not establish good UX. If browser verification
+  is blocked, report that limitation and do not claim frontend completion.
 - **Use the `tdd` skill** (`.agents/skills/tdd/SKILL.md`) for all test work:
   one vertical slice at a time, tests at public seams only, expected values
   from an independent source of truth (no tautological assertions), and write
   the failing test first for features and bug fixes. When an implementation is
   delegated, the subagent authors/updates tests but does not execute them; the
   main agent runs the tests and completes the red → green verification loop.
+- **Verification ladder — cheap per slice, expensive per batch.** Batching test
+  runs is allowed; skipping verification is not.
+  - **L0 (every slice, seconds):** `npm run verify:types:store` and/or
+    `npm run verify:types:admin` (`tsc --noEmit`, incremental).
+  - **L1 (every slice):** `npm run verify:unit:slice -- <explicit test paths>` —
+    only the files the slice touched. Never leave the file list implicit.
+  - **L2 (every batch of tickets):** `npm run verify:batch:unit` (serial, compact
+    reporter) plus only the mock E2E specs the batch touched:
+    `npm run verify:batch:e2e -- e2e/store/<spec>-mock.spec.ts`.
+  - **L3 (before commit/PR, and at the integration ticket):** the full suites
+    required above. The legacy `npm run test:e2e` still needs separate
+    authorization.
+  - A ticket may sit at `claimed` until its batch gate passes, but it is never
+    `resolved` without recorded L2/L3 evidence. Keep output bounded: capture to a
+    log outside the repo or print only summary/FAIL lines, and never re-run a
+    suite that already passed — record its summary line as evidence instead. New
+    mock specs must also be added to `playwright.mock.config.ts` `testMatch`, or
+    they silently never run.
 - **Keep tests deterministic.** Do not depend on random data, time-of-day, or
   external services that are not mocked / controlled in the test environment.
+- **Centralize disposable Playwright output under `/playwright/` (gitignored).**
+  Standard and mock HTML reports go to `playwright/reports/{default,mock}/`;
+  runner artifacts (Markdown, traces, screenshots, video) go to
+  `playwright/results/{default,mock}/`. Manual browser/MCP dumps go to
+  `playwright/mcp/`, optionally under a descriptive run subfolder. The MCP
+  `--output-dir` applies only to automatically named files: when passing an
+  explicit filename, include `playwright/mcp/<run>/...` from the repo root,
+  never a bare root filename. Put optional blob/JSON/custom reporter output
+  under `playwright/blob/` or `playwright/reports/<run>/`; CLI/env output
+  overrides must stay inside `playwright/`. Do not create root-level
+  `playwright-report*`, `test-results`, or `.playwright-mcp` directories, and
+  never force-add generated artifacts. Keep test specs/config tracked;
+  enduring verification summaries belong in docs or the feature's `.scratch/`
+  folder, linking to disposable artifacts when helpful. `e2e/.auth/` retains
+  its existing ignored storage-state contract. See
+  [`docs/testing/README.md`](docs/testing/README.md) for report commands.
 - **When a Playwright run fails, read the Markdown output — do NOT open the
   screenshot/image file.** Playwright emits a text/Markdown report (snapshot,
   trace, error context) alongside any `.png` attachment. Diagnose from the
@@ -203,6 +323,17 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 
 ## 6. Communication With the User
 
+- **Generate all documentation in Indonesian**, unless the user explicitly
+  requests another language. This includes research notes, proposals, wayfinder
+  maps and decision tickets, specifications, plans, ADRs, architecture/feature/API
+  documentation, and agent-facing handoffs. Preserve commonly used English
+  technical/product terms, code/API/database identifiers, file paths, commands,
+  and machine-readable tracker metadata keys/values rather than translating
+  them awkwardly or breaking automation. AGENTS.md remains the English-language
+  agent instruction file; this exception does not make English the default for
+  other generated documents. Existing documents outside the requested scope do
+  not need wholesale translation, but newly generated content must follow this
+  policy.
 - Respond in the user's language unless they request another language. When
   responding in Indonesian, keep commonly used English technical and product
   terms in English rather than translating them literally or awkwardly. This

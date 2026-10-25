@@ -21,7 +21,12 @@
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 60 9.1% 97.8%;
     --border: 180 2% 85%;
-    --input: 180 2% 85%;
+    /* Form-control surface: near-white with a 2% navy tint so an editable
+       field never reads as the gray page/disabled surface. */
+    --field: 200 27% 98%; /* #F8FAFB */
+    /* Borders on form controls are the main idle affordance (the field fill
+       is nearly white), so they are darker than --border. */
+    --input: 200 14% 62%; /* #909FAC */
     --ring: 197 58% 27%;
     --radius: 0.5rem;
     --chart-1: 199 42% 9%;
@@ -49,7 +54,8 @@
     --destructive: 0 62.8% 30.6%;
     --destructive-foreground: 60 9.1% 97.8%;
     --border: 199 42% 15%;
-    --input: 199 42% 15%;
+    --field: 197 50% 18%;
+    --input: 197 20% 40%;
     --ring: 197 58% 27%;
   }
 

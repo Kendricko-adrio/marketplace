@@ -31,6 +31,7 @@ import { calculateOrderPricing } from "@/lib/order-pricing";
 interface CartItem {
   id: string;
   quantity: number;
+  available: number;
   variantId: string;
   branchId: string | null;
   variant: {
@@ -38,7 +39,13 @@ interface CartItem {
     sku: string;
     color: string | null;
     size: string | null;
+    /** Effective price (Markdown applied when active). */
     price: string;
+    /** Same variant's source price; present on fallback too. */
+    sourcePrice?: string;
+    storedTarget?: string | null;
+    markdownActive?: boolean;
+    markdownRevisionId?: string | null;
   };
   branch: {
     id: string;
@@ -102,7 +109,8 @@ export default function CartPage() {
   }, []);
 
   const updateQuantity = async (itemId: string, newQuantity: number) => {
-    if (newQuantity < 1) return;
+    const item = cart?.items.find((i) => i.id === itemId);
+    if (!item || newQuantity < 1 || newQuantity > item.available) return;
 
     setUpdating(itemId);
     try {
@@ -115,6 +123,10 @@ export default function CartPage() {
       if (res.ok) {
         await fetchCart();
         refreshCart();
+      } else {
+        const data = await res.json();
+        toast.error(data.error || "Gagal mengubah jumlah barang");
+        await fetchCart();
       }
     } catch (error) {
       console.error("Error updating quantity:", error);
@@ -559,14 +571,19 @@ export default function CartPage() {
                                   .join(" / ")}
                               </p>
                             )}
+                            <p className="text-sm text-muted-foreground mt-1">
+                              {item.available > 0 ? `Stok terakhir: ${item.available}` : "Stok habis"}
+                            </p>
                             <div className="text-primary font-bold mt-1">
                               Rp {parseFloat(item.variant.price).toLocaleString("id-ID")}
                             </div>
-                            {parseFloat(item.product.basePrice) >
-                              parseFloat(item.variant.price) && (
+                            {item.variant.markdownActive &&
+                              item.variant.sourcePrice &&
+                              parseFloat(item.variant.sourcePrice) >
+                                parseFloat(item.variant.price) && (
                               <div className="text-xs text-muted-foreground line-through">
                                 Rp{" "}
-                                {parseFloat(item.product.basePrice).toLocaleString(
+                                {parseFloat(item.variant.sourcePrice).toLocaleString(
                                   "id-ID"
                                 )}
                               </div>
@@ -578,6 +595,7 @@ export default function CartPage() {
                                 variant="ghost"
                                 size="icon"
                                 className="h-8 w-8"
+                                aria-label="Kurangi jumlah"
                                 onClick={() => updateQuantity(item.id, item.quantity - 1)}
                                 disabled={updating === item.id || item.quantity <= 1}
                               >
@@ -590,8 +608,9 @@ export default function CartPage() {
                                 variant="ghost"
                                 size="icon"
                                 className="h-8 w-8"
+                                aria-label="Tambah jumlah"
                                 onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                                disabled={updating === item.id}
+                                disabled={updating === item.id || item.quantity >= item.available}
                               >
                                 <Plus className="h-3 w-3" />
                               </Button>

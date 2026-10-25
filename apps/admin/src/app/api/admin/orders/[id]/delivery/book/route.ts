@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { db } from "@/db";
 import { guard } from "@/lib/rbac/guard";
-import { serializeError, type Logger } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import {
   createShipmentFulfillment,
   ShipmentFulfillmentError,
@@ -18,9 +18,37 @@ import { createJubelioShipmentGateway } from "@/lib/jubelio-shipment-client";
 // fabricated 0). No physical handoff/completion happens in ticket 05.
 const emptyBodySchema = z.object({}).strict();
 
-function failure(error: unknown, logger: Logger, event: string): NextResponse {
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-order-delivery-book");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Jubelio tidak
+ * pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
+/**
+ * Map a service outcome onto the SAME status/envelope as before. The failed
+ * order id is a business identifier, so it travels in the `message`; the caught
+ * value is never logged (it can carry provider body/URL text).
+ */
+function failure(
+  error: unknown,
+  orderId: string | null,
+  event: string
+): NextResponse {
+  const order = orderId ?? "unknown";
   if (error instanceof ShipmentFulfillmentError) {
-    logger.warn(event, { outcome: "denied", code: error.code });
+    log.warn(`${event} (order ${order}, code ${error.code}, outcome denied)`);
     const status =
       error.code === "NOT_FOUND"
         ? 404
@@ -32,28 +60,34 @@ function failure(error: unknown, logger: Logger, event: string): NextResponse {
       { status }
     );
   }
-  logger.error(event, { outcome: "error", error: serializeError(error) });
+  log.error(
+    `${event} (order ${order}, outcome error)`,
+    new RouteLogError(event)
+  );
   return NextResponse.json(
     { success: false, error: "Gagal memproses pemenuhan pengiriman." },
     { status: 500 }
   );
 }
 
-export async function POST(
+async function bookDelivery(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const guardResult = await guard("orders", "edit", { request });
+): Promise<Response> {
+  const guardResult = await guard("orders", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
-  const orderLog = logger.child({ module: "delivery-book" });
+  const { ctx } = guardResult;
 
+  let orderId: string | null = null;
   try {
     const { id } = await params;
+    orderId = id;
     const body = (await request.json().catch(() => null)) as unknown;
     const parsed = emptyBodySchema.safeParse(body ?? {});
     if (!parsed.success) {
-      orderLog.warn("delivery.book.invalid_input", { outcome: "denied" });
+      log.warn(
+        `delivery book ditolak: body tidak valid (order ${id}, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Invalid request body" },
         { status: 400 }
@@ -68,7 +102,9 @@ export async function POST(
       policyVersion: ctx.policy.policyVersion,
     });
 
-    orderLog.info("delivery.book.success", { outcome: "success" });
+    log.info(
+      `delivery book sukses (order ${id}, shipment ${booked.shipmentId}, awb ${booked.awb}, outcome success)`
+    );
     return NextResponse.json({
       success: true,
       data: {
@@ -82,6 +118,9 @@ export async function POST(
       },
     });
   } catch (error) {
-    return failure(error, orderLog, "delivery.book.failed");
+    return failure(error, orderId, "delivery book gagal");
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(bookDelivery, "admin-order-delivery-book");

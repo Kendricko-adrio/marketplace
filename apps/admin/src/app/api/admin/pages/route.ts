@@ -4,11 +4,30 @@ import { staticPages } from "@/db";
 import { eq } from "drizzle-orm";
 import { withPermission } from "@/lib/rbac/route-guards";
 import { createPageSchema } from "@/lib/static-pages";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-pages");
+
+/**
+ * Proyeksi teknis statis untuk jalur kegagalan tak terduga. Nilai yang
+ * tertangkap (kemungkinan memuat SQL) tidak pernah masuk log; kontrak HTTP
+ * tetap sama.
+ */
+class PagesLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PagesLogError";
+  }
+}
 
 // -----------------------------
 // GET /api/admin/pages — list pages (HQ only)
 // -----------------------------
-export const GET = withPermission(async () => {
+async function listPages(): Promise<Response> {
   try {
     const rows = await db
       .select({
@@ -24,22 +43,26 @@ export const GET = withPermission(async () => {
       .orderBy(staticPages.displayOrder, staticPages.updatedAt);
 
     return NextResponse.json({ success: true, data: rows });
-  } catch (error) {
-    console.error("Error fetching static pages:", error);
+  } catch {
+    log.error(
+      "Daftar static page gagal dimuat (outcome error)",
+      new PagesLogError("admin pages: gagal memuat daftar page")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch pages" },
       { status: 500 }
     );
   }
-}, "pages", "view");
+}
 
 // -----------------------------
 // POST /api/admin/pages — create page (HQ only)
 // Body: { slug, title, content, isPublished?, displayOrder? }
 // -----------------------------
-
-
-export const POST = withPermission(async (_ctx, request: NextRequest) => {
+async function createPage(
+  _ctx: unknown,
+  request: NextRequest
+): Promise<Response> {
   try {
     const body = await request.json();
     const parsed = createPageSchema.safeParse(body);
@@ -83,11 +106,23 @@ export const POST = withPermission(async (_ctx, request: NextRequest) => {
       success: true,
       data: { id, slug, title, isPublished, displayOrder },
     });
-  } catch (error) {
-    console.error("Error creating static page:", error);
+  } catch {
+    log.error(
+      "Static page gagal dibuat (outcome error)",
+      new PagesLogError("admin pages: gagal membuat page")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to create page" },
       { status: 500 }
     );
   }
-}, "pages", "edit");
+}
+
+export const GET = withRequestContext(
+  withPermission(listPages, "pages", "view"),
+  "admin-pages"
+);
+export const POST = withRequestContext(
+  withPermission(createPage, "pages", "edit"),
+  "admin-pages"
+);

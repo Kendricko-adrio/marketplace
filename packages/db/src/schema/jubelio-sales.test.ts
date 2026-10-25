@@ -6,7 +6,9 @@ import { jubelioSalesOperations } from "./jubelio-sales";
 // Schema-convention guard for the durable Jubelio sales-order operation
 // ledger (plan: jubelio-sales-api-switching, Gate C.1). Every datetime column
 // MUST be timestamptz (docs/architecture/database.md), the ledger must be tied
-// to the local order with a cascade FK, and the at-most-once invariants
+// to the local order with a RESTRICT retention FK (plan/discounts-spec.md
+// §8.4: provider operations are transactional evidence and must never cascade
+// away when the order row is hard-deleted), and the at-most-once invariants
 // (one operation per (order, type); cancel and confirmed operations always
 // carry a known SO id) must be enforced by the schema itself, not only by
 // app code.
@@ -27,11 +29,14 @@ describe("jubelio_sales_operation schema conventions", () => {
     }
   });
 
-  it("is tied to the local order with an ON DELETE CASCADE FK", () => {
+  it("is tied to the local order with an ON DELETE RESTRICT retention FK", () => {
     expect(config.foreignKeys.length).toBe(1);
     const reference = config.foreignKeys[0].reference();
     expect(getTableName(reference.foreignTable)).toBe("orders");
-    expect(config.foreignKeys[0].onDelete).toBe("cascade");
+    // RESTRICT (never cascade): the ledger is provider/transactional evidence
+    // retained by spec §8.4, so a hard order delete must fail 23503 instead of
+    // silently destroying the operation history.
+    expect(config.foreignKeys[0].onDelete).toBe("restrict");
   });
 
   it("allows exactly one create and one cancel operation per order", () => {

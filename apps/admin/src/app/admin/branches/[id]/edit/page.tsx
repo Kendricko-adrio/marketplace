@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import { ChevronLeft, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import BranchForm from "@/components/admin/BranchForm";
 import type { BranchFormData } from "@/components/admin/BranchForm";
 import { useAuth } from "@/providers/auth-provider";
@@ -140,7 +142,18 @@ export default function EditBranchPage() {
 
   return (
     <div className="max-w-4xl space-y-6">
-      <h2 className="text-2xl font-bold tracking-tight">Edit Cabang</h2>
+      <div>
+        <Button asChild variant="ghost" size="sm" className="mb-2 -ml-2">
+          <Link href="/admin/branches">
+            <ChevronLeft className="h-4 w-4 mr-1" />
+            Kembali ke daftar cabang
+          </Link>
+        </Button>
+        <h2 className="text-2xl font-bold tracking-tight">Edit Cabang</h2>
+        <p className="text-muted-foreground text-sm mt-1">
+          Ubah data cabang <strong>{initialData.name}</strong> ({initialData.code}).
+        </p>
+      </div>
       <BranchForm mode="edit" initialData={initialData} regionConfigured={regionConfigured} onSubmit={handleSubmit} />
     </div>
   );

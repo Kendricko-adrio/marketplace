@@ -23,6 +23,7 @@
  *   `{ services }`.
  */
 import { createHash } from "node:crypto";
+import { buildPricingSnapshot } from "./versioned-pricing";
 import { hasConfiguredBranchRegion, type BranchShippingRegion } from "@marketplace/db/src/branch-shipping-region";
 import {
   calculateLineItemSubtotal,
@@ -42,11 +43,19 @@ export type ShipmentQuoteOriginBranch = BranchShippingRegion & {
 };
 
 export interface ShipmentQuoteItem {
+  /** Authoritative variant identity; required for pricing contract1. */
+  variantId?: string;
   branchId: string;
   itemName: string;
   quantity: number;
-  /** Current unit value (number or decimal string — pricing reuses it). */
+  /** SOURCE unit value (Jubelio base) — courier/insurance quote uses the
+   * original price, never the Markdown-effective one. */
   value: string | number;
+  /** Customer EFFECTIVE unit price (Markdown applied when active). Falls back
+   * to `value` for callers/fixtures that do not carry a projection. */
+  effectiveValue?: string | number;
+  /** Active Markdown revision, required when `effectiveValue < value`. */
+  markdownRevisionId?: string | null;
   /** Per-SKU master dims; null → the store fallback must supply usable dims. */
   dimensions: ShipmentDimensions | null;
 }
@@ -58,6 +67,7 @@ export interface ShipmentQuoteDestination {
 }
 
 export interface ShipmentQuoteInput {
+  pricingContractVersion?: 0 | 1;
   branch: ShipmentQuoteOriginBranch;
   items: ShipmentQuoteItem[];
   destination: ShipmentQuoteDestination;
@@ -230,8 +240,14 @@ export async function quoteDelivery(
     }
   }
 
-  // Goods subtotal from the CURRENT item values (never from the browser).
-  const subtotal = calculateLineItemSubtotal(
+  // Validate exact source/quantity/aggregate bounds before the rates gateway.
+  const snapshotInput = {
+    fulfillmentMethod: "delivery" as const, ppnRatePercent: input.ppnRatePercent,
+    lines: items.map((item) => ({ variantId: item.variantId ?? "", quantity: item.quantity,
+      sourceUnitPrice: item.value, effectiveUnitPrice: item.value })),
+  };
+  const initialSnapshot = input.pricingContractVersion === 1 ? buildPricingSnapshot(snapshotInput) : null;
+  const subtotal = initialSnapshot?.subtotal ?? calculateLineItemSubtotal(
     items.map((item) => ({ price: item.value, quantity: item.quantity }))
   );
 
@@ -270,11 +286,13 @@ export async function quoteDelivery(
       // A malformed usable-looking row never becomes an invented zero.
       continue;
     }
-    const pricing = calculateOrderPricing({
-      subtotal,
-      shippingCost: ratesAmount,
-      fulfillmentMethod: "delivery",
-      ppnRatePercent: input.ppnRatePercent,
+    const snapshot = initialSnapshot ? buildPricingSnapshot({ ...snapshotInput, shippingBeforeSubsidy: ratesAmount }) : null;
+    const pricing: OrderPricing = snapshot ? {
+      subtotal: snapshot.subtotal, discount: snapshot.goodsDiscount, taxableBase: snapshot.taxableBase,
+      shippingCost: snapshot.shippingCost, serviceFee: snapshot.serviceFee, ppnRatePercent: snapshot.ppnRatePercent,
+      ppnAmount: snapshot.ppnAmount, total: snapshot.total,
+    } : calculateOrderPricing({
+      subtotal, shippingCost: ratesAmount, fulfillmentMethod: "delivery", ppnRatePercent: input.ppnRatePercent,
     });
     const etaFrom = rate.eta_from;
     const etaTo = rate.eta_to;

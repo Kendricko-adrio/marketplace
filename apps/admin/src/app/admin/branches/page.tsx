@@ -56,26 +56,47 @@ export default function AdminBranchesPage() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [deleteTarget, setDeleteTarget] = useState<Branch | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  // Debounce the input so the DB is only queried after typing stops.
+  useEffect(() => {
+    const handle = setTimeout(() => {
+      setDebouncedSearch(searchTerm.trim());
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [searchTerm]);
+
+  // A new search re-slices the result set from page 1.
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch]);
+
   const fetchBranches = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/admin/branches?page=${page}&limit=10`);
+      // The search term goes to the API (server-side filter across ALL rows),
+      // not a client-side filter over the current page.
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: "10",
+      });
+      if (debouncedSearch) params.set("search", debouncedSearch);
+      const res = await fetch(`/api/admin/branches?${params.toString()}`);
       const data = await res.json();
       if (data.success) {
         setBranches(data.data);
-        setTotalPages(data.pagination.totalPages);
+        setTotalPages(Math.max(1, data.pagination.totalPages));
       }
     } catch (error) {
       console.error("Error fetching branches:", error);
     } finally {
       setLoading(false);
     }
-  }, [page]);
+  }, [page, debouncedSearch]);
 
   useEffect(() => {
     void fetchBranches();
@@ -88,16 +109,6 @@ export default function AdminBranchesPage() {
     };
     return variants[status] || "secondary";
   };
-
-  const filteredBranches = branches.filter((branch) => {
-    if (!searchTerm) return true;
-    const q = searchTerm.toLowerCase();
-    return (
-      branch.name.toLowerCase().includes(q) ||
-      branch.code.toLowerCase().includes(q) ||
-      branch.city.toLowerCase().includes(q)
-    );
-  });
 
   async function handleDelete() {
     if (!deleteTarget) return;
@@ -147,6 +158,7 @@ export default function AdminBranchesPage() {
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Cari nama/kode/kota..."
+                aria-label="Cari cabang berdasarkan nama, kode, atau kota"
                 className="pl-8"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
@@ -173,14 +185,16 @@ export default function AdminBranchesPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredBranches.length === 0 ? (
+                    {branches.length === 0 ? (
                       <TableRow>
                         <TableCell colSpan={6} className="h-24 text-center">
-                          Tidak ada cabang ditemukan.
+                          {debouncedSearch
+                            ? `Tidak ada cabang yang cocok dengan pencarian "${debouncedSearch}".`
+                            : "Belum ada cabang."}
                         </TableCell>
                       </TableRow>
                     ) : (
-                      filteredBranches.map((branch) => (
+                      branches.map((branch) => (
                         <TableRow key={branch.id}>
                           <TableCell className="font-medium">
                             <span className="inline-flex items-center gap-2">

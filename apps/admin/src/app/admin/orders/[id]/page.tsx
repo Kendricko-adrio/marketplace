@@ -162,6 +162,15 @@ interface OrderDetail {
   } | null;
   items: OrderItem[];
   stockOperations: StockOperation[];
+  /** Ticket 07 — read-only Coupon redemption state (public Offers have no code). */
+  promo: {
+    offerName: string | null;
+    benefitAmount: string;
+    status: string;
+    policyVersion: number;
+    consumedAt: string | null;
+    releasedAt: string | null;
+  } | null;
 }
 
 const STATUS_STEPS = [
@@ -1240,6 +1249,17 @@ export default function AdminOrderDetailPage() {
               <span className="text-muted-foreground">Diskon</span>
               <span>-Rp {parseFloat(order.discount).toLocaleString("id-ID")}</span>
             </div>
+            {order.promo && (
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">
+                  Promo {order.promo.offerName ?? "(tanpa nama)"}
+                </span>
+                <span>
+                  {order.promo.status} · Rp{" "}
+                  {parseFloat(order.promo.benefitAmount).toLocaleString("id-ID")}
+                </span>
+              </div>
+            )}
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">PPN ({parseFloat(order.ppnRate)}%)</span>
               <span>Rp {parseFloat(order.ppnAmount).toLocaleString("id-ID")}</span>
@@ -1248,10 +1268,13 @@ export default function AdminOrderDetailPage() {
               <span className="text-muted-foreground">Ongkos Kirim</span>
               <span>Rp {parseFloat(order.shippingCost).toLocaleString("id-ID")}</span>
             </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Biaya Layanan</span>
-              <span>Rp {parseFloat(order.serviceFee).toLocaleString("id-ID")}</span>
-            </div>
+            {/* Zero is not a charge: a legacy order with a real fee keeps the row. */}
+            {parseFloat(order.serviceFee) > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Biaya Layanan</span>
+                <span>Rp {parseFloat(order.serviceFee).toLocaleString("id-ID")}</span>
+              </div>
+            )}
             <div className="flex justify-between font-bold pt-2 border-t">
               <span>Total Pembayaran</span>
               <span className="text-primary">

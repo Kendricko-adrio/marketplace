@@ -9,6 +9,7 @@ import {
   createShipmentTracking,
   verifyShipmentSignature,
 } from "./shipment-tracking";
+import { deleteRetainedOrderFixtures } from "./testing/retained-order-fixtures";
 
 // =========================================================
 // shipment-tracking — signature + webhook ingestion + handoff/reconcile
@@ -51,7 +52,11 @@ import {
 // the global unique awb/shipment_id) and the delivery_tracking_event table
 // — MAIN'S migration; absent fields are the expected red.
 // Unreachable DB → skip (skip ≠ pass). The prefix "track-dbtest-" owns all
-// fixture rows; the seeded data is never reset.
+// fixture rows; the seeded data is never reset. Order → delivery/tracking/
+// sales-operation rows use RESTRICT retention FKs (plan/discounts-spec.md
+// §8.4), so fixture orders can only be removed through
+// deleteRetainedOrderFixtures with these EXACT owned ids — never by disabling
+// constraints or deleting shared rows.
 // =========================================================
 
 const RAW_EXACT =
@@ -63,6 +68,9 @@ const EXPECTED_HEX =
 const PREFIX = "track-dbtest-";
 const ORDER_ID = "track-order-1"; // the static fixture's ref_no
 const ORDER_ID_TWO = `${PREFIX}order-2`;
+// Every order id this spec owns: the static fixture ref_no plus the
+// prefix-scoped fixtures. Nothing else is ever deleted.
+const OWNED_ORDER_IDS = [ORDER_ID, ORDER_ID_TWO];
 const AWB = "TRACKAWB7101";
 const SHIPMENT_ID = 7101;
 const BRANCH_A_ID = `${PREFIX}branch-a`;
@@ -150,10 +158,10 @@ interface LedgerFixture {
 /** BOOKED delivery shipment + the verified order (the ticket-05 state). */
 async function seedBookedShipment(orderId: string, ledger: LedgerFixture): Promise<void> {
   if (!pool) return;
-  await pool.query("DELETE FROM delivery_tracking_event WHERE shipment_id IN (SELECT id FROM delivery_shipment WHERE order_id = $1)", [orderId]);
-  await pool.query("DELETE FROM delivery_shipment WHERE order_id = $1", [orderId]);
-  await pool.query("DELETE FROM jubelio_sales_operation WHERE order_id = $1", [orderId]);
-  await pool.query("DELETE FROM orders WHERE id = $1", [orderId]);
+  // FK-ordered cleanup of this single owned order: the retained (RESTRICT)
+  // delivery/tracking/sales-operation evidence is removed first, then the
+  // order itself, so a re-seed never trips 23503 or touches other rows.
+  await deleteRetainedOrderFixtures(pool, [orderId]);
   await pool.query("INSERT INTO client (id, name, email, email_verified, phone, onboarding_completed) VALUES ($1,'Tracking Fixture Client','track-db-client@example.test',true,'+628123456789',true) ON CONFLICT (id) DO NOTHING", [CLIENT_ID]);
   await pool.query(
     `INSERT INTO orders
@@ -452,8 +460,9 @@ describe("tracking safety regressions", () => {
 
 beforeAll(async () => {
   if (!pool) return;
-  // Delete fixture parent orders first (child ledgers/receipts cascade).
-  await pool.query(`DELETE FROM orders WHERE id LIKE '${PREFIX}order-%' OR id=$1`, [ORDER_ID]);
+  // Delete the owned fixture orders and their retained (RESTRICT) children in
+  // FK order — a bare orders delete would fail 23503.
+  await deleteRetainedOrderFixtures(pool, OWNED_ORDER_IDS);
   await pool.query(`DELETE FROM admin_session WHERE user_id LIKE '${PREFIX}user-%'`);
   await pool.query(`DELETE FROM admin_account WHERE user_id LIKE '${PREFIX}user-%'`);
   await pool.query(`DELETE FROM "user" WHERE id LIKE '${PREFIX}user-%'`);
@@ -485,12 +494,8 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (!pool) return;
-  await pool.query(
-    `DELETE FROM delivery_tracking_event te USING delivery_shipment s WHERE te.shipment_id = s.id AND (s.order_id LIKE '${PREFIX}order-%' OR s.order_id = $1)`,
-    [ORDER_ID]
-  );
-  await pool.query(`DELETE FROM delivery_shipment WHERE order_id LIKE '${PREFIX}order-%' OR order_id = $1`, [ORDER_ID]);
-  await pool.query(`DELETE FROM orders WHERE id LIKE '${PREFIX}order-%' OR id=$1`, [ORDER_ID]);
+  // Retained evidence first (RESTRICT), then the owned orders themselves.
+  await deleteRetainedOrderFixtures(pool, OWNED_ORDER_IDS);
   await pool.query(`DELETE FROM admin_session WHERE user_id LIKE '${PREFIX}user-%'`);
   await pool.query(`DELETE FROM admin_account WHERE user_id LIKE '${PREFIX}user-%'`);
   await pool.query(`DELETE FROM "user" WHERE id LIKE '${PREFIX}user-%'`);

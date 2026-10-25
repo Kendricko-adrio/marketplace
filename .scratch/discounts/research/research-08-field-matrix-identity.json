@@ -1,0 +1,413 @@
+{
+  "run": "RESEARCH08-FIELD-MATRIX-IDENTITY-2026-10-18T10-05-44-373Z",
+  "scope": "Read-only pemeriksaan product group versus SKU item55269 setelah stock lookup langsung nol.",
+  "createAttempts": 0,
+  "events": [
+    {
+      "at": "2026-10-18T10:05:44.374Z",
+      "label": "login",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "at": "2026-10-18T10:05:46.478Z",
+      "label": "login",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-18T10:05:46.483Z",
+      "label": "master-identity",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/55269"
+    },
+    {
+      "at": "2026-10-18T10:05:46.693Z",
+      "label": "master-identity",
+      "phase": "response",
+      "http": 200,
+      "snapshot": {
+        "item_group_id": 14360,
+        "sell_price": "439000.0000",
+        "is_active": true,
+        "sell_unit": "Buah",
+        "uom_name": "Buah",
+        "product_skus": [
+          {
+            "item_id": 55268,
+            "item_code": "4065453495281",
+            "sell_price": 439000,
+            "end_qty": 2
+          },
+          {
+            "item_id": 55267,
+            "item_code": "4065453495298",
+            "sell_price": 439000,
+            "end_qty": 0
+          },
+          {
+            "item_id": 55270,
+            "item_code": "4065453495304",
+            "sell_price": 439000,
+            "end_qty": 0
+          },
+          {
+            "item_id": 55269,
+            "item_code": "4065453495311",
+            "sell_price": 439000,
+            "end_qty": 0
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T10:05:46.698Z",
+      "label": "sku-stock",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "input": {
+        "ids": [
+          55268,
+          55267,
+          55270,
+          55269
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T10:05:46.855Z",
+      "label": "sku-stock",
+      "phase": "response",
+      "http": 200,
+      "snapshot": {
+        "rows": [
+          {
+            "item_id": 55268,
+            "location_id": -1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55268,
+            "location_id": 1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55268,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55268,
+            "location_id": 3,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 55268,
+            "location_id": 5,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 55268,
+            "location_id": 7,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55267,
+            "location_id": -1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55267,
+            "location_id": 1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55267,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55267,
+            "location_id": 5,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55267,
+            "location_id": 7,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55270,
+            "location_id": -1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55270,
+            "location_id": 1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55270,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55270,
+            "location_id": 5,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55270,
+            "location_id": 7,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55269,
+            "location_id": -1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55269,
+            "location_id": 1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55269,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55269,
+            "location_id": 7,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T10:05:46.861Z",
+      "label": "identity-summary",
+      "master": {
+        "item_group_id": 14360,
+        "sell_price": "439000.0000",
+        "is_active": true,
+        "sell_unit": "Buah",
+        "uom_name": "Buah",
+        "product_skus": [
+          {
+            "item_id": 55268,
+            "item_code": "4065453495281",
+            "sell_price": 439000,
+            "end_qty": 2
+          },
+          {
+            "item_id": 55267,
+            "item_code": "4065453495298",
+            "sell_price": 439000,
+            "end_qty": 0
+          },
+          {
+            "item_id": 55270,
+            "item_code": "4065453495304",
+            "sell_price": 439000,
+            "end_qty": 0
+          },
+          {
+            "item_id": 55269,
+            "item_code": "4065453495311",
+            "sell_price": 439000,
+            "end_qty": 0
+          }
+        ]
+      },
+      "stock": {
+        "rows": [
+          {
+            "item_id": 55268,
+            "location_id": -1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55268,
+            "location_id": 1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55268,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55268,
+            "location_id": 3,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 55268,
+            "location_id": 5,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          },
+          {
+            "item_id": 55268,
+            "location_id": 7,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55267,
+            "location_id": -1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55267,
+            "location_id": 1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55267,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55267,
+            "location_id": 5,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55267,
+            "location_id": 7,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55270,
+            "location_id": -1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55270,
+            "location_id": 1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55270,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55270,
+            "location_id": 5,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55270,
+            "location_id": 7,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55269,
+            "location_id": -1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55269,
+            "location_id": 1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55269,
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "item_id": 55269,
+            "location_id": 7,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          }
+        ]
+      },
+      "businessWrites": 0
+    }
+  ]
+}

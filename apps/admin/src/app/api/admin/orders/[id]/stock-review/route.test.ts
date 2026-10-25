@@ -15,17 +15,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 //   assertion), leaving the operation retryable;
 // - the existing log events (invalid input, not claimable, queued, failure)
 //   and the cross-branch 404 behaviour are preserved.
+//
+// Logging: the route uses one module-scoped facade logger, so assertions read
+// the SAME stub the module created (`captured.moduleLog`) and the business
+// facts (order id, operation id, outcome) are asserted from the `message` —
+// the contract forbids free business fields on the log record.
 
 import { createFakeDb, type FakeDb } from "@/test-support/fake-db";
 import {
   guardAllow,
   guardMock,
   jsonRequest,
-  loggerModuleMock,
-  makeLogger,
+  type RouteModuleLogger,
 } from "@/test-support/route-test";
 
 const state = vi.hoisted(() => ({ current: null as FakeDb | null }));
+
+/**
+ * Stub module logger yang dipakai route. `vi.hoisted` menjaga container ini
+ * sudah ada saat factory mock dievaluasi (import `./route` berjalan lebih dulu
+ * daripada body file test).
+ */
+const captured = vi.hoisted(() => ({
+  moduleLog: null as RouteModuleLogger | null,
+}));
 
 vi.mock("@/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/db")>();
@@ -45,11 +58,26 @@ vi.mock("@/lib/rbac/guard", async () => {
   };
 });
 
-vi.mock("@/lib/logger", () => loggerModuleMock());
+vi.mock("@/lib/logger", async () => {
+  const helpers = await import("@/test-support/route-test");
+  // Route membuat logger sekali di module scope; satu stub dibagikan supaya
+  // assertion membaca event yang benar-benar ditulis route.
+  const shared = helpers.makeModuleLogger();
+  captured.moduleLog = shared;
+  return {
+    ...(await helpers.loggerModuleMock()),
+    createModuleLogger: () => shared,
+  };
+});
 
 import { POST } from "./route";
 
-const logger = makeLogger();
+/** Stub module logger milik route (dibuat saat `./route` diimpor). */
+function moduleLog(): RouteModuleLogger {
+  const value = captured.moduleLog;
+  if (!value) throw new Error("module logger route belum dibuat");
+  return value;
+}
 
 const orderRow = { branchId: "b-1" };
 const branchlessOrderRow = { branchId: null };
@@ -68,7 +96,10 @@ function auditInserts(fake: FakeDb) {
 
 beforeEach(() => {
   guardMock.mockReset();
-  guardAllow(logger, { homeBranchId: "b-1", scope: "all_branches" });
+  guardAllow({ homeBranchId: "b-1", scope: "all_branches" });
+  moduleLog().info.mockClear();
+  moduleLog().warn.mockClear();
+  moduleLog().error.mockClear();
 });
 
 afterEach(() => {
@@ -91,9 +122,10 @@ describe("POST /api/admin/orders/[id]/stock-review", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ success: true });
-    expect(logger.info).toHaveBeenCalledWith(
-      "stock-review.queued",
-      expect.objectContaining({ outcome: "success", operationId: "op-1" })
+    expect(moduleLog().info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "stock-review queued (order o-1, operation op-1, scope all, outcome success)"
+      )
     );
 
     // The route performs no separate writes: exactly one update (the
@@ -123,10 +155,14 @@ describe("POST /api/admin/orders/[id]/stock-review", () => {
     );
 
     expect(response.status).toBe(400);
-    expect(logger.warn).toHaveBeenCalledWith(
-      "stock-review.invalid_input",
-      expect.objectContaining({ outcome: "denied" })
+    expect(moduleLog().warn).toHaveBeenCalledWith(
+      expect.stringContaining("stock-review ditolak: body tidak valid")
     );
+    expect(moduleLog().warn).toHaveBeenCalledWith(
+      expect.stringContaining("order o-1, outcome denied")
+    );
+    // Warn-only: the denied path never escalates to an error line.
+    expect(moduleLog().error).not.toHaveBeenCalled();
     expect(fake.ops).toHaveLength(0);
   });
 
@@ -144,7 +180,7 @@ describe("POST /api/admin/orders/[id]/stock-review", () => {
   });
 
   it("cross-branch order under own-branch scope: 404", async () => {
-    guardAllow(logger, { homeBranchId: "b-1", scope: "own_branch" });
+    guardAllow({ homeBranchId: "b-1", scope: "own_branch" });
     const fake = createFakeDb({ selectQueue: [[{ branchId: "b-2" }]] });
     state.current = fake;
 
@@ -171,13 +207,10 @@ describe("POST /api/admin/orders/[id]/stock-review", () => {
       success: false,
       error: "Order is not branch-scoped",
     });
-    expect(logger.warn).toHaveBeenCalledWith(
-      "stock-review.order_branch_missing",
-      expect.objectContaining({
-        outcome: "denied",
-        reason: "missing_order_branch",
-        operationId: "op-1",
-      })
+    expect(moduleLog().warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "stock-review ditolak: order tanpa branch (order o-1, operation op-1, reason missing_order_branch, outcome denied)"
+      )
     );
     // Nothing mutated, nothing audited, nothing committed.
     expect(fake.ops.filter((op) => op.kind === "update")).toHaveLength(0);
@@ -202,9 +235,10 @@ describe("POST /api/admin/orders/[id]/stock-review", () => {
       success: false,
       error: "Operation is no longer in manual review",
     });
-    expect(logger.warn).toHaveBeenCalledWith(
-      "stock-review.operation_not_claimable",
-      expect.objectContaining({ outcome: "denied", operationId: "op-1" })
+    expect(moduleLog().warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "stock-review ditolak: operation tidak lagi manual_review (order o-1, operation op-1, outcome denied)"
+      )
     );
     // The conditional claim matched no row, so the tx commits empty — but no
     // audit event may exist for a claim that did not happen.

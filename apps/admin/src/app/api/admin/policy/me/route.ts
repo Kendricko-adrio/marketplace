@@ -4,8 +4,25 @@ import { eq } from "drizzle-orm";
 
 import { auth } from "@/lib/auth";
 import { db, branches as branchesSchema } from "@/db";
-import { createLogger, serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { loadPolicy } from "@/lib/rbac/resolver";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-policy-me");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari Better Auth /
+ * policy query tidak pernah masuk log.
+ */
+class PolicyMeLogError extends Error {
+  constructor() {
+    super("policy.me gagal");
+    this.name = "PolicyMeLogError";
+  }
+}
 
 // =========================================================
 // GET /api/admin/policy/me
@@ -21,25 +38,22 @@ import { loadPolicy } from "@/lib/rbac/resolver";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+async function currentPolicy(): Promise<Response> {
   try {
     const session = await auth.api.getSession({ headers: await headers() });
     if (!session) {
-      const logger = createLogger({ module: "policy" });
-      logger.warn("policy.me.unauthenticated", { outcome: "denied" });
+      log.warn("policy.me: pengguna belum terautentikasi (outcome denied)");
       return NextResponse.json(
         { success: false, error: "Unauthorized", code: "UNAUTHENTICATED" },
         { status: 401 }
       );
     }
 
-    const logger = createLogger({ module: "policy" });
     const loaded = await loadPolicy(session.user.id);
     if (!loaded) {
-      logger.warn("policy.me.unresolvable", {
-        outcome: "denied",
-        userId: session.user.id,
-      });
+      log.warn(
+        `policy.me tidak dapat diselesaikan (userId ${session.user.id}, outcome denied)`
+      );
       return NextResponse.json(
         {
           success: false,
@@ -77,12 +91,9 @@ export async function GET() {
       (session.user as { mustResetPassword?: boolean }).mustResetPassword
     );
 
-    logger.info("policy.me.resolved", {
-      outcome: "success",
-      userId: loaded.user.id,
-      roleId: loaded.role.id,
-      policyVersion: loaded.policyVersion,
-    });
+    log.info(
+      `policy.me.resolved (userId ${loaded.user.id}, roleId ${loaded.role.id}, policyVersion ${loaded.policyVersion}, outcome success)`
+    );
 
     return NextResponse.json({
       success: true,
@@ -107,15 +118,14 @@ export async function GET() {
         mustResetPassword,
       },
     });
-  } catch (error) {
-    const logger = createLogger({ module: "policy" });
-    logger.error("policy.me.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error("policy.me gagal (outcome error)", new PolicyMeLogError());
     return NextResponse.json(
       { success: false, error: "Internal server error", code: "INTERNAL" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(currentPolicy, "admin-policy-me");

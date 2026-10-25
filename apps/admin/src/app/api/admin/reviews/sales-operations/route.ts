@@ -9,9 +9,27 @@ import {
 import { and, desc, eq, isNotNull, or } from "drizzle-orm";
 import { guard } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-sales-operations-review");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB tidak pernah
+ * masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 // GET /api/admin/reviews/sales-operations   [orders:view]
 //
@@ -21,19 +39,17 @@ export const dynamic = "force-dynamic";
 // (sales order / invoice / payment), the reason and timestamps. There are NO
 // write actions here by design: operators investigate in Jubelio and resolve
 // deliberately; a blind write could duplicate a remote operation.
-export async function GET(request: NextRequest) {
-  const guardResult = await guard("orders", "view", { request });
+async function salesOperationsReview(request: NextRequest): Promise<Response> {
+  const guardResult = await guard("orders", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const authorization = branchScopeFromAuthorization(ctx.authorization);
     if (!authorization) {
-      logger.warn("sales-review.scope_unresolvable", {
-        outcome: "denied",
-        reason: "missing_home_branch",
-        userId: ctx.user.id,
-      });
+      log.warn(
+        `sales review ditolak: branch scope tidak dapat ditentukan (userId ${ctx.user.id}, reason missing_home_branch, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Forbidden", code: "DENIED" },
         { status: 403 }
@@ -121,12 +137,10 @@ export async function GET(request: NextRequest) {
         ? blockedRows.filter((row) => row.branchId === authorization.branchId)
         : blockedRows;
 
-    logger.info("sales-review.listed", {
-      outcome: "success",
-      operations: scopedOps.length,
-      blockedOrders: scopedBlocked.length,
-      mode: authorization.mode,
-    });
+    // Tidak ada identitas customer/nilai order di log — hanya jumlah baris.
+    log.info(
+      `sales review listed (operations ${scopedOps.length}, blockedOrders ${scopedBlocked.length}, mode ${authorization.mode}, outcome success)`
+    );
 
     return NextResponse.json({
       success: true,
@@ -135,11 +149,20 @@ export async function GET(request: NextRequest) {
         blockedOrders: scopedBlocked,
       },
     });
-  } catch (error) {
-    logger.error("sales-review.list_failed", { error: serializeError(error) });
+  } catch {
+    log.error(
+      "sales review gagal (outcome error)",
+      new RouteLogError("sales review gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to load review queue" },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(
+  salesOperationsReview,
+  "admin-sales-operations-review"
+);

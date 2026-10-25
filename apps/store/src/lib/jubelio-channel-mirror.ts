@@ -12,10 +12,18 @@ import {
   JubelioSalesGatewayError,
   createJubelioSalesGateway,
   moneyEqualsSafe,
+  type JubelioSalesExpectedEnvelope,
   type JubelioSalesGateway,
   type JubelioSalesOrderEditSnapshot,
 } from "./jubelio-sales-client";
-import { createLogger, serializeError, type Logger } from "./logger";
+import {
+  JubelioSalesContractError,
+  readJubelioSalesOrderExpectation,
+  readSettlementAuthorityRecord,
+  type JubelioSalesOrderExpectation,
+} from "./jubelio-sales-expected";
+import type { PersistedOrderPricingRow } from "./versioned-pricing";
+import { createModuleLogger } from "./logger";
 
 /**
  * Durable per-order channel-status mirror reconciliation (tickets #03, #04,
@@ -50,7 +58,19 @@ import { createLogger, serializeError, type Logger } from "./logger";
  *    the gateway's own envelope/shape checks must pass — otherwise ZERO POST
  *    happens and a PII-safe investigation case is recorded. The edit is a
  *    full payload preserving SO id/number, detail ids, items and money
- *    verbatim; the ONLY intended change is `channel_status`.
+ *    verbatim; the ONLY intended change is `channel_status`. MONEY IS
+ *    VERSION-AWARE (ticket 01): the expected provider envelope (frozen
+ *    original/net shipping + payable = net goods + net shipping) is decoded
+ *    from the STORED records by the shared pure decoder
+ *    (`jubelio-sales-expected`) — the create intent, plus (at runtime) the
+ *    PAIRED order pricing row (relational versions + immutable financial
+ *    snapshot) that must agree with it — never from the provider response or
+ *    master data. The four-field envelope is passed to the pre-edit GET, the
+ *    single edit POST and the GET-only recovery, so the legacy
+ *    `grand_total == sub_total` assumption is never applied to a contract-v2
+ *    order. An unknown version, an unusable v2 envelope or a drifting stored
+ *    pair fails closed with a durable investigation case BEFORE any provider
+ *    read or write; it is never silently read with the legacy rules.
  * 5. Ambiguity after the claim (timeout, 5xx, unreadable response, failed
  *    confirmation GET) leaves the intent `possibly_sent`; recovery is
  *    GET-ONLY via the persisted SO id — never a re-POST. TRANSIENT read
@@ -95,6 +115,73 @@ import { createLogger, serializeError, type Logger } from "./logger";
  * remains a FUTURE-FACING CONTRACT ONLY: no lawful runtime `cancelled`
  * writer exists, so nothing dispatches it and no cancel API/UI is added.
  */
+
+/**
+ * Module-scope logger: hanya nama module yang di-bind di sini. Field korelasi
+ * dibaca dari scope aktif saat baris ditulis, jadi aman dibuat sekali saat
+ * import (sebelum ada request scope). Satu module untuk per-order seam dan
+ * sweep — keduanya bagian dari mirror yang sama.
+ */
+const log = createModuleLogger("jubelio-channel-mirror");
+
+/**
+ * Technical failure codes this module is allowed to describe in a log line.
+ * Every value is a literal owned here — never text copied from a provider,
+ * transport or persistence layer.
+ */
+type ChannelMirrorLogCode = "AMBIGUOUS" | "TRANSIENT" | "DEFINITIVE";
+
+/**
+ * Safe technical projection for the `error` field of this module's log lines.
+ *
+ * The logging core keeps the `name`/`message`/`stack`/`cause` of whatever it is
+ * given, redacted by shape only. Passing a raw caught value would therefore
+ * publish free text that a provider, transport or persistence layer put into
+ * `message`, `stack` or `cause`. This class is consequently the ONLY value this
+ * module hands to a log line: the message is chosen here and the optional
+ * `code` is one of the allowlisted literals above.
+ *
+ * The caught value is never lost from the business flow: the returned outcome
+ * and every thrown error keep their own message, classification and ids
+ * exactly as before.
+ */
+class ChannelMirrorDependencyError extends Error {
+  readonly code?: ChannelMirrorLogCode;
+
+  constructor(message: string, code?: ChannelMirrorLogCode) {
+    super(message);
+    this.name = "ChannelMirrorDependencyError";
+    this.code = code;
+  }
+}
+
+/**
+ * Classifies a caught dependency failure into the static projection above. The
+ * kind is derived from the gateway's own boolean classification flags, never
+ * from provider-controlled text; every other caught value is described
+ * generically, because its text belongs to the layer that threw it.
+ */
+function safeDependencyErrorLog(error: unknown): ChannelMirrorDependencyError {
+  try {
+    if (error instanceof JubelioSalesGatewayError) {
+      const kind: ChannelMirrorLogCode = error.options.ambiguous
+        ? "AMBIGUOUS"
+        : error.options.retryable
+          ? "TRANSIENT"
+          : "DEFINITIVE";
+      return new ChannelMirrorDependencyError(
+        "Jubelio channel mirror gagal pada lapisan gateway atau penyimpanan",
+        kind
+      );
+    }
+  } catch {
+    // A hostile value (throwing getter or proxy trap) carries no safe signal:
+    // fall through to the generic projection instead of failing the caller.
+  }
+  return new ChannelMirrorDependencyError(
+    "Jubelio channel mirror gagal pada lapisan gateway atau penyimpanan"
+  );
+}
 
 // Accept both the complete app DB schema and the focused test schema: these
 // operations need only the SQL query builders.
@@ -702,6 +789,11 @@ export type RejectionReasonCode = (typeof REJECTION_REASON_CODES)[number];
  * mirrorPreReadMismatch cross-check codes, the static fallbacks, and the
  * known local gateway fail-closed codes. markJubelioChannelStatusIntent
  * NeedsInvestigation refuses anything outside this list BEFORE any write.
+ *
+ * Ticket 01: the stored create-intent SNAPSHOT itself is a fail-closed
+ * precondition — an unknown provider contract version or an incomplete
+ * contract-v2 money envelope is a durable investigation case (never a silent
+ * fall back to the legacy rules, never a POST).
  */
 export const INVESTIGATION_REASON_CODES = [
   "PRE_READ_NO_VERIFIED_CREATE",
@@ -714,6 +806,9 @@ export const INVESTIGATION_REASON_CODES = [
   "PRE_READ_ITEM_MISMATCH",
   "PRE_READ_MONEY_MISMATCH",
   "PRE_READ_FAILED",
+  "SNAPSHOT_PROVIDER_VERSION_UNSUPPORTED",
+  "SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE",
+  "SNAPSHOT_RECORD_DRIFT",
   "RECOVERY_GET_FAILED",
   "RECOVERY_NO_VERIFIED_CREATE",
   "RECOVERY_MARKER_NOT_OBSERVED",
@@ -840,6 +935,13 @@ type MirrorContext = {
   payment: JubelioSalesOperation | null;
   /** A committed manual_review ledger operation (any settlement step). */
   hasManualReviewOp: boolean;
+  /**
+   * Ticket 01: the order's pricing projection (relational contract versions +
+   * immutable financial snapshot + stored money columns), read ONLY through the
+   * shared decoder — never repriced from master/config. The paired record must
+   * agree with the stored create intent before ANY provider call.
+   */
+  orderPricing: PersistedOrderPricingRow;
 };
 
 async function loadMirrorContext(
@@ -852,6 +954,18 @@ async function loadMirrorContext(
       status: orders.status,
       paymentStatus: orders.paymentStatus,
       fulfillmentBlockedReason: orders.fulfillmentBlockedReason,
+      pricingContractVersion: orders.pricingContractVersion,
+      pricingEngineVersion: orders.pricingEngineVersion,
+      providerContractVersion: orders.providerContractVersion,
+      pricingSnapshot: orders.pricingSnapshot,
+      fulfillmentMethod: orders.fulfillmentMethod,
+      subtotal: orders.subtotal,
+      discount: orders.discount,
+      shippingCost: orders.shippingCost,
+      serviceFee: orders.serviceFee,
+      ppnRate: orders.ppnRate,
+      ppnAmount: orders.ppnAmount,
+      total: orders.total,
     })
     .from(orders)
     .where(eq(orders.id, orderId))
@@ -864,12 +978,31 @@ async function loadMirrorContext(
     .where(eq(jubelioSalesOperations.orderId, orderId));
   const byType = (type: string) => ops.find((op) => op.type === type) ?? null;
   return {
-    order,
+    order: {
+      id: order.id,
+      status: order.status,
+      paymentStatus: order.paymentStatus,
+      fulfillmentBlockedReason: order.fulfillmentBlockedReason,
+    },
     create: byType("create"),
     cancel: byType("cancel"),
     invoice: byType("invoice"),
     payment: byType("payment"),
     hasManualReviewOp: ops.some((op) => op.status === "manual_review"),
+    orderPricing: {
+      pricingContractVersion: order.pricingContractVersion,
+      pricingEngineVersion: order.pricingEngineVersion,
+      providerContractVersion: order.providerContractVersion,
+      pricingSnapshot: order.pricingSnapshot,
+      fulfillmentMethod: order.fulfillmentMethod,
+      subtotal: order.subtotal,
+      discount: order.discount,
+      shippingCost: order.shippingCost,
+      serviceFee: order.serviceFee,
+      ppnRate: order.ppnRate,
+      ppnAmount: order.ppnAmount,
+      total: order.total,
+    },
   };
 }
 
@@ -1039,6 +1172,126 @@ function ledgerInvoiceIdForPreRead(context: MirrorContext): number | null {
 }
 
 /**
+ * Ticket 01: the STORED records are the only source of the expected provider
+ * money envelope — never the provider response and never master data. The
+ * decoding is NOT re-implemented here: the shared pure decoder
+ * (`jubelio-sales-expected`) validates the persisted create intent and, at
+ * runtime, that the paired order row (relational versions + immutable
+ * financial snapshot) agrees with it. This module only maps a decoder code to
+ * a STATIC, PII-free investigation reason:
+ *
+ * - unknown/unsupported stored version (incl. an unversioned intent that
+ *   carries v2 shipping money) → `SNAPSHOT_PROVIDER_VERSION_UNSUPPORTED`;
+ * - unusable v2 envelope (shape invalid, broken
+ *   `payable = net goods + net shipping`) →
+ *   `SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE`;
+ * - paired order record disagrees with the intent → `SNAPSHOT_RECORD_DRIFT`.
+ */
+const SNAPSHOT_PROVIDER_VERSION_UNSUPPORTED =
+  "SNAPSHOT_PROVIDER_VERSION_UNSUPPORTED" as const;
+const SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE =
+  "SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE" as const;
+const SNAPSHOT_RECORD_DRIFT = "SNAPSHOT_RECORD_DRIFT" as const;
+
+type SnapshotContractReason =
+  | typeof SNAPSHOT_PROVIDER_VERSION_UNSUPPORTED
+  | typeof SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE
+  | typeof SNAPSHOT_RECORD_DRIFT;
+
+/**
+ * Maps a shared-decoder failure to a static internal reason. Anything that is
+ * not a typed contract code (an unexpected decoder crash) is still a STORED
+ * record problem: fail closed with the static envelope reason — never provider
+ * or dynamic text.
+ */
+function snapshotContractReason(error: unknown): SnapshotContractReason {
+  if (error instanceof JubelioSalesContractError) {
+    switch (error.code) {
+      case "SALES_CONTRACT_UNSUPPORTED_VERSION":
+        return SNAPSHOT_PROVIDER_VERSION_UNSUPPORTED;
+      case "SALES_CONTRACT_RECORD_DRIFT":
+        return SNAPSHOT_RECORD_DRIFT;
+      case "SALES_CONTRACT_SHAPE_INVALID":
+      case "SALES_CONTRACT_PAYABLE_MISMATCH":
+        return SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE;
+    }
+  }
+  return SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE;
+}
+
+type StoredMoneyAuthority =
+  | {
+      ok: true;
+      expectation: JubelioSalesOrderExpectation;
+      /** Contract-v2 envelope for the gateway; null on the legacy branch. */
+      expected: JubelioSalesExpectedEnvelope | null;
+    }
+  | { ok: false; reason: SnapshotContractReason };
+
+function expectedEnvelopeFromExpectation(
+  expectation: JubelioSalesOrderExpectation
+): JubelioSalesExpectedEnvelope | null {
+  if (expectation.providerContractVersion === 0) return null;
+  return {
+    providerContractVersion: 2,
+    originalShipmentCost: expectation.originalShipmentCost,
+    shippingCost: expectation.shippingCost,
+    expectedProviderPayable: expectation.expectedProviderPayable,
+  };
+}
+
+/**
+ * Intent-only decode for the PURE pre-read cross-check (it receives no order
+ * row). The runtime additionally validates the paired order record through
+ * `readStoredMoneyAuthority` before ANY provider call.
+ */
+function readStoredIntentExpectation(payload: unknown): StoredMoneyAuthority {
+  try {
+    const expectation = readJubelioSalesOrderExpectation(payload);
+    return {
+      ok: true,
+      expectation,
+      expected: expectedEnvelopeFromExpectation(expectation),
+    };
+  } catch (error) {
+    return { ok: false, reason: snapshotContractReason(error) };
+  }
+}
+
+/**
+ * PAIRED-record authority for the runtime: create intent + order pricing row
+ * (relational versions + immutable financial snapshot), validated together and
+ * never recomputed from master/config. A missing/non-create payload is not a
+ * money-authority problem (the pre-read cross-check reports
+ * `PRE_READ_NO_VERIFIED_CREATE` instead).
+ */
+function readStoredMoneyAuthority(input: {
+  create: JubelioSalesOperation | null;
+  orderPricing: PersistedOrderPricingRow;
+}): StoredMoneyAuthority {
+  if (input.create?.payload?.type !== "create") {
+    return {
+      ok: true,
+      expectation: { providerContractVersion: 0 },
+      expected: null,
+    };
+  }
+  try {
+    const expectation = readSettlementAuthorityRecord({
+      createPayload: input.create.payload,
+      orderRow: input.orderPricing,
+    });
+    return {
+      ok: true,
+      expectation,
+      expected: expectedEnvelopeFromExpectation(expectation),
+    };
+  } catch (error) {
+    return { ok: false, reason: snapshotContractReason(error) };
+  }
+}
+
+/**
  * Fail-closed cross-check of a strict pre-edit GET against the verified
  * ledger: identity/location, note, ref_no, invoice link, item lines
  * (identity, quantity, unit, tax, price, amount) and money must all match
@@ -1047,6 +1300,14 @@ function ledgerInvoiceIdForPreRead(context: MirrorContext): number | null {
  * enforced by the gateway's strict pre-read parse. Returns a PII-safe reason
  * code on any divergence (the caller performs ZERO POST) or null when the
  * pre-read is safe to edit.
+ *
+ * MONEY IS VERSION-AWARE (ticket 01): the header money of a contract-v2 order
+ * is compared against the STORED envelope — `grand_total` must equal the
+ * expected provider payable (net goods + net shipping) and the GET must carry
+ * the stored original/net shipping — instead of the legacy
+ * `grand_total == sub_total` rule, which would fail-closed every delivery
+ * order and hide a genuine payable mismatch. A legacy snapshot keeps the
+ * legacy rule unchanged.
  */
 export function mirrorPreReadMismatch(input: {
   snapshot: JubelioSalesOrderEditSnapshot;
@@ -1062,6 +1323,10 @@ export function mirrorPreReadMismatch(input: {
     return "PRE_READ_NO_VERIFIED_CREATE";
   }
   const request = input.create.payload.create;
+  const authority = readStoredIntentExpectation(input.create.payload);
+  if (!authority.ok) {
+    return authority.reason;
+  }
   if (snapshot.isCanceled) {
     return "PRE_READ_SO_CANCELED";
   }
@@ -1094,22 +1359,62 @@ export function mirrorPreReadMismatch(input: {
       remote.unit !== requested.unit ||
       remote.taxId !== requested.taxId ||
       remote.price !== requested.price ||
+      !moneyEqualsSafe(remote.discAmount, requested.discAmount) ||
       // Same safe epsilon comparator as the gateway post-edit confirmation:
       // serialization noise is tolerated, a MATERIAL amount change is not.
-      !moneyEqualsSafe(remote.amount, requested.price * requested.quantity)
+      !moneyEqualsSafe(
+        remote.amount,
+        requested.price * requested.quantity - requested.discAmount
+      )
     ) {
       return "PRE_READ_ITEM_MISMATCH";
     }
   }
-  const expectedSubTotal = request.items.reduce(
-    (sum, item) => sum + item.price * item.quantity,
-    0
-  );
-  if (
-    !moneyEqualsSafe(snapshot.subTotal, expectedSubTotal) ||
-    !moneyEqualsSafe(snapshot.grandTotal, snapshot.subTotal)
-  ) {
-    return "PRE_READ_MONEY_MISMATCH";
+  const expectation = authority.expectation;
+  if (expectation.providerContractVersion === 2) {
+    // Contract v2: the payable (net goods + net shipping) is the frozen
+    // authority and the GET must still carry the stored shipping money. A
+    // missing value is a mismatch, never zero. `sub_total` is the SOURCE gross
+    // and `total_disc` the whole-line Markdown; the payable is gross - disc +
+    // net shipping (spec §10.1).
+    const grossTotal = request.items.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0
+    );
+    const discTotal = request.items.reduce(
+      (sum, item) => sum + item.discAmount,
+      0
+    );
+    if (
+      !moneyEqualsSafe(snapshot.subTotal, grossTotal) ||
+      !moneyEqualsSafe(snapshot.totalDisc, discTotal) ||
+      !moneyEqualsSafe(expectation.netGoods, grossTotal - discTotal) ||
+      snapshot.originalShipmentCost == null ||
+      snapshot.shippingCost == null ||
+      !moneyEqualsSafe(
+        snapshot.originalShipmentCost,
+        expectation.originalShipmentCost
+      ) ||
+      !moneyEqualsSafe(snapshot.shippingCost, expectation.shippingCost) ||
+      !moneyEqualsSafe(
+        snapshot.grandTotal,
+        expectation.expectedProviderPayable
+      )
+    ) {
+      return "PRE_READ_MONEY_MISMATCH";
+    }
+  } else {
+    // Legacy (unversioned) snapshot: the evidenced zero-shipping envelope.
+    const expectedSubTotal = request.items.reduce(
+      (sum, item) => sum + item.price * item.quantity,
+      0
+    );
+    if (
+      !moneyEqualsSafe(snapshot.subTotal, expectedSubTotal) ||
+      !moneyEqualsSafe(snapshot.grandTotal, snapshot.subTotal)
+    ) {
+      return "PRE_READ_MONEY_MISMATCH";
+    }
   }
   return null;
 }
@@ -1125,11 +1430,39 @@ async function recoverPossiblySentIntent(input: {
   intent: JubelioChannelStatusIntent;
   context: MirrorContext;
   gateway: JubelioSalesGateway;
-  log: Logger;
 }): Promise<ReconcileChannelStatusOutcome> {
-  const { db, intent, context, gateway, log } = input;
+  const { db, intent, context, gateway } = input;
+  // Ticket 01: the recovery read is version-aware too. The PAIRED stored
+  // records (create intent + order pricing row) are validated before ANY
+  // provider read — an unknown/malformed pair or a drifting snapshot is a
+  // durable investigation case, never resolved with the legacy rules.
+  const authority = readStoredMoneyAuthority({
+    create: context.create,
+    orderPricing: context.orderPricing,
+  });
+  if (!authority.ok) {
+    const reviewed = await markJubelioChannelStatusIntentNeedsInvestigation(
+      db,
+      intent.id,
+      { reason: authority.reason }
+    );
+    log.error(
+      `Order ${intent.orderId}: channel-status recovery refused by the stored provider contract — no provider read, investigation recorded (sales order ${intent.salesOrderId}, ${authority.reason})`
+    );
+    if (reviewed) {
+      return {
+        status: "needs_investigation",
+        message: authority.reason,
+        intent: reviewed,
+      };
+    }
+    return { status: "in_flight", message: authority.reason, intent };
+  }
   try {
-    const snapshot = await gateway.getSalesOrderForEdit(intent.salesOrderId);
+    const snapshot = await gateway.getSalesOrderForEdit(
+      intent.salesOrderId,
+      authority.expected ?? undefined
+    );
     const mismatch = mirrorPreReadMismatch({
       snapshot,
       create: context.create,
@@ -1143,10 +1476,9 @@ async function recoverPossiblySentIntent(input: {
         observedStatus: observed,
       });
       if (confirmed) {
-        log.info("channel-status edit recovered by GET", {
-          salesOrderId: intent.salesOrderId,
-          targetVersion: intent.targetVersion,
-        });
+        log.info(
+          `Order ${intent.orderId}: channel-status edit recovered by GET (sales order ${intent.salesOrderId}, target version ${intent.targetVersion}, ${intent.targetStatus})`
+        );
         return { status: "confirmed", intent: confirmed };
       }
       return { status: "in_flight", message: "Recovery claim was lost", intent };
@@ -1161,20 +1493,19 @@ async function recoverPossiblySentIntent(input: {
         observedStatus: observed,
       }
     );
-    log.error("channel-status recovery found no confirmed target — investigation recorded", {
-      salesOrderId: intent.salesOrderId,
-      reason: mismatch ?? "RECOVERY_MARKER_NOT_OBSERVED",
-    });
+    log.error(
+      `Order ${intent.orderId}: channel-status recovery found no confirmed target — investigation recorded (sales order ${intent.salesOrderId}, ${mismatch ?? "RECOVERY_MARKER_NOT_OBSERVED"})`
+    );
     if (reviewed) {
       return { status: "needs_investigation", message: "Recovery mismatch", intent: reviewed };
     }
     return { status: "in_flight", message: "Recovery claim was lost", intent };
   } catch (error) {
     const classified = classifyGatewayError(error);
-    log.warn("channel-status recovery GET failed", {
-      salesOrderId: intent.salesOrderId,
-      error: serializeError(error),
-    });
+    log.warn(
+      `Order ${intent.orderId}: channel-status recovery GET failed (sales order ${intent.salesOrderId})`,
+      safeDependencyErrorLog(error)
+    );
     if (classified.kind === "ambiguous" || classified.kind === "transient") {
       // Ambiguous or transient GET failure: stay possibly_sent; the next
       // bounded sweep retries GET-only (never a re-POST).
@@ -1283,8 +1614,7 @@ export async function abortPendingIntentForStartedCancel(
 async function cancelBlockedGagalBayarDisposition(
   db: ChannelMirrorDb,
   context: MirrorContext,
-  orderId: string,
-  log: Logger
+  orderId: string
 ): Promise<ReconcileChannelStatusOutcome> {
   const salesOrderId = context.create?.salesOrderId;
   const latest = await getLatestJubelioChannelStatusIntent(db, orderId);
@@ -1292,13 +1622,7 @@ async function cancelBlockedGagalBayarDisposition(
     const aborted = await abortPendingIntentForStartedCancel(db, latest.id);
     if (aborted) {
       log.warn(
-        "gagal bayar marker withheld — Sales-Order cancel path started (durable mismatch recorded)",
-        {
-          orderId,
-          salesOrderId: latest.salesOrderId,
-          staleTarget: latest.targetStatus,
-          supersededVersion: latest.targetVersion,
-        }
+        `Order ${orderId}: gagal bayar marker withheld — Sales-Order cancel path started, durable mismatch recorded (sales order ${latest.salesOrderId}, stale target ${latest.targetStatus}, version ${latest.targetVersion})`
       );
       return { status: "skipped", reason: "cancel_started" };
     }
@@ -1352,11 +1676,9 @@ async function cancelBlockedGagalBayarDisposition(
       intent: recorded.intent,
     };
   }
-  log.warn("gagal bayar marker withheld — Sales-Order cancel path started (durable mismatch recorded)", {
-    orderId,
-    salesOrderId,
-    supersededVersion: recorded.intent.targetVersion,
-  });
+  log.warn(
+    `Order ${orderId}: gagal bayar marker withheld — Sales-Order cancel path started, durable mismatch recorded (sales order ${salesOrderId}, version ${recorded.intent.targetVersion})`
+  );
   return { status: "skipped", reason: "cancel_started" };
 }
 
@@ -1371,14 +1693,10 @@ export async function reconcileJubelioChannelStatusForOrder(
   input: {
     orderId: string;
     gateway?: JubelioSalesGateway;
-    logger?: Logger;
     /** Test/sweep override for the fresh-claim in-flight guard cutoff. */
     staleCutoffMs?: number;
   }
 ): Promise<ReconcileChannelStatusOutcome> {
-  const log =
-    input.logger?.child({ orderId: input.orderId, module: "jubelio-channel-mirror" }) ??
-    createLogger({ module: "jubelio-channel-mirror", orderId: input.orderId });
   const context = await loadMirrorContext(db, input.orderId);
   if (!context || !context.create) {
     return { status: "skipped", reason: "not_eligible" };
@@ -1392,7 +1710,7 @@ export async function reconcileJubelioChannelStatusForOrder(
     // recorded and immediately aborted, deduped per order) instead of any
     // edit. Zero POST, zero GET; the cancel/hold release is untouched.
     if (isGagalBayarBlockedByStartedCancel(context)) {
-      return cancelBlockedGagalBayarDisposition(db, context, input.orderId, log);
+      return cancelBlockedGagalBayarDisposition(db, context, input.orderId);
     }
     // Neither a committed ready+verified state (`Siap Proses`) nor a
     // paid-but-blocked operator investigation (`Menunggu Verifikasi`): a
@@ -1447,7 +1765,6 @@ export async function reconcileJubelioChannelStatusForOrder(
         intent: latest,
         context,
         gateway: input.gateway ?? getDefaultJubelioChannelMirrorGateway(),
-        log,
       });
     }
     if (latest.status === "rejected") {
@@ -1479,23 +1796,18 @@ export async function reconcileJubelioChannelStatusForOrder(
       targetStatus: derivedTarget,
     });
     if (!superseded) {
-      log.warn("stale pending channel intent not superseded — committed state changed", {
-        orderId: input.orderId,
-        staleTarget: latest.targetStatus,
-        derivedTarget,
-      });
+      log.warn(
+        `Order ${input.orderId}: stale pending channel intent not superseded — committed state changed (stale target ${latest.targetStatus}, derived target ${derivedTarget})`
+      );
       return {
         status: "in_flight",
         message: "Stale pending intent not superseded",
         intent: latest,
       };
     }
-    log.info("stale pending channel intent superseded by the committed local state", {
-      orderId: input.orderId,
-      staleTarget: latest.targetStatus,
-      supersededVersion: latest.targetVersion,
-      derivedTarget,
-    });
+    log.info(
+      `Order ${input.orderId}: stale pending channel intent superseded by the committed local state (stale target ${latest.targetStatus}, version ${latest.targetVersion}, derived target ${derivedTarget})`
+    );
     const recorded = await recordJubelioChannelStatusIntent(db, {
       orderId: input.orderId,
       salesOrderId,
@@ -1535,17 +1847,51 @@ export async function reconcileJubelioChannelStatusForOrder(
       derivedTarget === CHANNEL_STATUS_GAGAL_BAYAR &&
       claimed.reason === "cancel_started"
     ) {
-      return cancelBlockedGagalBayarDisposition(db, context, input.orderId, log);
+      return cancelBlockedGagalBayarDisposition(db, context, input.orderId);
     }
     return { status: "in_flight", message: "Dispatch claim lost", intent };
   }
   const claimedIntent = claimed.intent;
+
+  // Ticket 01: the STORED records are the only authority for the expected
+  // provider money envelope (never the provider response, never master data).
+  // The create intent AND the paired order pricing row are validated through
+  // the shared pure decoder BEFORE the gateway is even created — an unknown
+  // version, an unusable envelope or a drifting pair is a durable
+  // investigation case, never a silent legacy read.
+  const authority = readStoredMoneyAuthority({
+    create: context.create,
+    orderPricing: context.orderPricing,
+  });
+  if (!authority.ok) {
+    const reviewed = await markJubelioChannelStatusIntentNeedsInvestigation(
+      db,
+      claimedIntent.id,
+      { reason: authority.reason }
+    );
+    log.error(
+      `Order ${input.orderId}: channel edit refused by the stored provider contract — zero provider read, investigation recorded (sales order ${salesOrderId}, ${authority.reason})`
+    );
+    if (reviewed) {
+      return {
+        status: "needs_investigation",
+        message: authority.reason,
+        intent: reviewed,
+      };
+    }
+    return {
+      status: "in_flight",
+      message: authority.reason,
+      intent: claimedIntent,
+    };
+  }
+  const expectedEnvelope = authority.expected ?? undefined;
   const gateway = input.gateway ?? getDefaultJubelioChannelMirrorGateway();
 
   // Strict pre-edit read; a read failure is NEVER classified as success.
   let preRead: JubelioSalesOrderEditSnapshot;
   try {
-    preRead = await gateway.getSalesOrderForEdit(salesOrderId);
+    preRead = await gateway.getSalesOrderForEdit(salesOrderId, expectedEnvelope);
   } catch (error) {
     const classified = classifyGatewayError(error);
     if (classified.kind === "ambiguous" || classified.kind === "transient") {
@@ -1553,10 +1899,10 @@ export async function reconcileJubelioChannelStatusForOrder(
       // failure after the claim: the edit was NOT yet attempted — keep the
       // claim possibly_sent so the sweep retries with an aged GET-only
       // pass. Never an investigation for a transient read failure.
-      log.warn("channel edit pre-read failed transiently — stays possibly_sent", {
-        salesOrderId,
-        error: serializeError(error),
-      });
+      log.warn(
+        `Order ${input.orderId}: channel edit pre-read failed transiently — stays possibly_sent (sales order ${salesOrderId})`,
+        safeDependencyErrorLog(error)
+      );
       return { status: "in_flight", message: classified.message, intent: claimedIntent };
     }
     // Definitive read failure (incomplete shape / canceled / unknown SO):
@@ -1568,10 +1914,9 @@ export async function reconcileJubelioChannelStatusForOrder(
         reason: safeLocalEditCode(classified.code) ?? "PRE_READ_FAILED",
       }
     );
-    log.error("channel edit pre-read failed closed — investigation recorded", {
-      salesOrderId,
-      reason: safeLocalEditCode(classified.code) ?? "PRE_READ_FAILED",
-    });
+    log.error(
+      `Order ${input.orderId}: channel edit pre-read failed closed — investigation recorded (sales order ${salesOrderId}, ${safeLocalEditCode(classified.code) ?? "PRE_READ_FAILED"})`
+    );
     if (reviewed) {
       return { status: "needs_investigation", message: classified.message, intent: reviewed };
     }
@@ -1590,10 +1935,9 @@ export async function reconcileJubelioChannelStatusForOrder(
       claimedIntent.id,
       { reason: preMismatch, observedStatus: preRead.channelStatus }
     );
-    log.error("channel edit pre-read mismatch — zero POST, investigation recorded", {
-      salesOrderId,
-      reason: preMismatch,
-    });
+    log.error(
+      `Order ${input.orderId}: channel edit pre-read mismatch — zero POST, investigation recorded (sales order ${salesOrderId}, ${preMismatch})`
+    );
     if (reviewed) {
       return { status: "needs_investigation", message: preMismatch, intent: reviewed };
     }
@@ -1651,8 +1995,7 @@ export async function reconcileJubelioChannelStatusForOrder(
       const aborted = await abortClaimedIntentForStartedCancel(db, claimedIntent.id);
       if (aborted) {
         log.warn(
-          "gagal bayar marker withheld at the pre-POST boundary — Sales-Order cancel path started (zero POST)",
-          { orderId: input.orderId, salesOrderId }
+          `Order ${input.orderId}: gagal bayar marker withheld at the pre-POST boundary — Sales-Order cancel path started, zero POST (sales order ${salesOrderId})`
         );
         return { status: "skipped", reason: "cancel_started" };
       }
@@ -1672,6 +2015,9 @@ export async function reconcileJubelioChannelStatusForOrder(
       edit: preRead,
       targetChannelStatus: derivedTarget,
       operationId: claimedIntent.id,
+      // Contract v2 only: the stored envelope reaches the builder AND the
+      // post-edit confirmation GET. Legacy callers keep the absent shape.
+      ...(expectedEnvelope ? { expected: expectedEnvelope } : {}),
     });
     const confirmed = await markJubelioChannelStatusIntentConfirmed(
       db,
@@ -1687,17 +2033,16 @@ export async function reconcileJubelioChannelStatusForOrder(
         intent: claimedIntent,
       };
     }
-    log.info("channel status edit confirmed by GET", {
-      salesOrderId,
-      targetVersion: claimedIntent.targetVersion,
-    });
+    log.info(
+      `Order ${input.orderId}: channel status edit confirmed by GET (sales order ${salesOrderId}, ${derivedTarget}, target version ${claimedIntent.targetVersion})`
+    );
     return { status: "confirmed", intent: confirmed };
   } catch (error) {
     const classified = classifyGatewayError(error);
     if (classified.kind === "ambiguous") {
       log.error(
-        "channel edit outcome unknown — stays possibly_sent for GET-only recovery",
-        { salesOrderId, error: serializeError(error) }
+        `Order ${input.orderId}: channel edit outcome unknown — stays possibly_sent for GET-only recovery (sales order ${salesOrderId})`,
+        safeDependencyErrorLog(error)
       );
       return { status: "in_flight", message: classified.message, intent: claimedIntent };
     }
@@ -1720,10 +2065,9 @@ export async function reconcileJubelioChannelStatusForOrder(
         claimedIntent.id,
         { reason: localRefusalCode }
       );
-      log.error("channel edit failed closed locally — investigation recorded", {
-        salesOrderId,
-        reason: localRefusalCode,
-      });
+      log.error(
+        `Order ${input.orderId}: channel edit failed closed locally — investigation recorded (sales order ${salesOrderId}, ${localRefusalCode})`
+      );
       if (reviewed) {
         return {
           status: "needs_investigation",
@@ -1741,7 +2085,9 @@ export async function reconcileJubelioChannelStatusForOrder(
       // only.
       { reason: "EDIT_PROVIDER_REJECTED" }
     );
-    log.warn("channel edit definitively rejected", { salesOrderId });
+    log.warn(
+      `Order ${input.orderId}: channel edit definitively rejected for sales order ${salesOrderId}`
+    );
     if (rejected) {
       return { status: "rejected", message: classified.message, intent: rejected };
     }
@@ -2190,13 +2536,11 @@ export async function reconcileChannelStatusMirrorForSweep(
     limit?: number;
     staleCutoffMs?: number;
     gateway?: JubelioSalesGateway;
-    logger?: Logger;
   } = {}
 ): Promise<ChannelStatusSweepSummary> {
   const limit = input.limit ?? 50;
   const staleCutoffMs = input.staleCutoffMs ?? CHANNEL_STATUS_MIRROR_STALE_CUTOFF_MS;
   const gateway = input.gateway ?? getDefaultJubelioChannelMirrorGateway();
-  const log = input.logger ?? createLogger({ module: "jubelio-channel-sweep" });
   const summary: ChannelStatusSweepSummary = {
     possiblySentScanned: 0,
     skippedFresh: 0,
@@ -2249,7 +2593,6 @@ export async function reconcileChannelStatusMirrorForSweep(
         intent,
         context,
         gateway,
-        log,
       });
       if (outcome.status === "confirmed") summary.recovered++;
       else if (outcome.status === "needs_investigation") summary.investigated++;
@@ -2261,11 +2604,10 @@ export async function reconcileChannelStatusMirrorForSweep(
         await touchChannelStatusIntentForRotation(db, intent.id);
       }
     } catch (error) {
-      log.warn("channel-status sweep recovery failed", {
-        orderId: intent.orderId,
-        salesOrderId: intent.salesOrderId,
-        error: serializeError(error),
-      });
+      log.warn(
+        `Order ${intent.orderId}: channel-status sweep recovery failed (sales order ${intent.salesOrderId})`,
+        safeDependencyErrorLog(error)
+      );
       summary.stillUnknown++;
       // Same rotation, no arbitrary error text persisted.
       await touchChannelStatusIntentForRotation(db, intent.id);
@@ -2365,10 +2707,10 @@ export async function reconcileChannelStatusMirrorForSweep(
       if (aborted) summary.pendingTerminalAborted++;
       else summary.pendingTerminalSkipped++;
     } catch (error) {
-      log.warn("channel-status sweep pending-terminal disposition failed", {
-        orderId: row.orderId,
-        error: serializeError(error),
-      });
+      log.warn(
+        `Order ${row.orderId}: channel-status sweep pending-terminal disposition failed`,
+        safeDependencyErrorLog(error)
+      );
       summary.pendingTerminalSkipped++;
     }
   }
@@ -2498,14 +2840,13 @@ export async function reconcileChannelStatusMirrorForSweep(
       const outcome = await reconcileJubelioChannelStatusForOrder(db, {
         orderId: row.id,
         gateway,
-        logger: log,
       });
       if (outcome.status === "confirmed") summary.missedDispatched++;
     } catch (error) {
-      log.warn("channel-status sweep missed-order reconciliation failed", {
-        orderId: row.id,
-        error: serializeError(error),
-      });
+      log.warn(
+        `Order ${row.id}: channel-status sweep missed-order reconciliation failed`,
+        safeDependencyErrorLog(error)
+      );
       summary.missedFailed++;
     }
   }
@@ -2594,14 +2935,13 @@ export async function reconcileChannelStatusMirrorForSweep(
       const outcome = await reconcileJubelioChannelStatusForOrder(db, {
         orderId: row.id,
         gateway,
-        logger: log,
       });
       if (outcome.status === "confirmed") summary.verifikasiDispatched++;
     } catch (error) {
-      log.warn("channel-status sweep paid-but-blocked reconciliation failed", {
-        orderId: row.id,
-        error: serializeError(error),
-      });
+      log.warn(
+        `Order ${row.id}: channel-status sweep paid-but-blocked reconciliation failed`,
+        safeDependencyErrorLog(error)
+      );
       summary.verifikasiFailed++;
     }
   }
@@ -2706,18 +3046,19 @@ export async function reconcileChannelStatusMirrorForSweep(
       const outcome = await reconcileJubelioChannelStatusForOrder(db, {
         orderId: row.id,
         gateway,
-        logger: log,
       });
       if (outcome.status === "confirmed") summary.gagalBayarDispatched++;
     } catch (error) {
-      log.warn("channel-status sweep failed-payment reconciliation failed", {
-        orderId: row.id,
-        error: serializeError(error),
-      });
+      log.warn(
+        `Order ${row.id}: channel-status sweep failed-payment reconciliation failed`,
+        safeDependencyErrorLog(error)
+      );
       summary.gagalBayarFailed++;
     }
   }
 
-  log.info("channel-status mirror sweep completed", { ...summary });
+  log.info(
+    `Channel-status mirror sweep completed (possibly-sent scanned ${summary.possiblySentScanned}, fresh ${summary.skippedFresh}, recovered ${summary.recovered}, investigated ${summary.investigated}, still unknown ${summary.stillUnknown}, pending-terminal aborted ${summary.pendingTerminalAborted}, skipped ${summary.pendingTerminalSkipped}, missed scanned ${summary.missedOrdersScanned}, missed dispatched ${summary.missedDispatched}, missed failed ${summary.missedFailed}, verifikasi scanned ${summary.verifikasiOrdersScanned}, verifikasi dispatched ${summary.verifikasiDispatched}, verifikasi failed ${summary.verifikasiFailed}, gagal bayar scanned ${summary.gagalBayarOrdersScanned}, gagal bayar dispatched ${summary.gagalBayarDispatched}, gagal bayar failed ${summary.gagalBayarFailed})`
+  );
   return summary;
 }

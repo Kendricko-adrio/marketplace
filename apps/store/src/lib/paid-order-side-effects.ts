@@ -6,18 +6,61 @@ import {
   pickupReadyEmailHTML,
   pickupReadyEmailText,
 } from "./email-templates-order";
-import { createLogger, serializeError, type Logger } from "./logger";
+import { createModuleLogger } from "./logger";
+
+/**
+ * Module-scope logger: hanya nama module yang diikat di sini. `requestId`
+ * dibaca dari scope AsyncLocalStorage saat baris ditulis, jadi membuatnya sekali
+ * ketika module dievaluasi (sebelum scope HTTP ada) adalah benar.
+ */
+const log = createModuleLogger("late-paid-side-effects");
+
+/** Bentuk token kode yang boleh diteruskan: uppercase + angka + underscore. */
+const SAFE_LOG_CODE = /^[A-Z][A-Z0-9_]{1,63}$/;
+
+/** Proyeksi error statis milik module ini; teks asli provider tidak disalin. */
+class LatePaidSideEffectsLogError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "LatePaidSideEffectsLogError";
+    this.code = code;
+  }
+}
+
+/**
+ * Error dependency (penyimpanan/transport/notifikasi) diproyeksikan statis:
+ * pesan konstan milik module, dan `code` hanya bila bentuknya token aman.
+ * `message`, `stack`, `cause`, serta teks hasil provider tidak pernah disalin
+ * ke log.
+ */
+function safeDependencyErrorLog(error: unknown): LatePaidSideEffectsLogError {
+  return new LatePaidSideEffectsLogError(
+    "Late-paid side effect gagal pada lapisan penyimpanan, transport atau notifikasi",
+    knownLogCode(error)
+  );
+}
+
+function knownLogCode(error: unknown): string | undefined {
+  try {
+    if (typeof error !== "object" || error === null || !("code" in error)) {
+      return undefined;
+    }
+    const code = error.code;
+    return typeof code === "string" && SAFE_LOG_CODE.test(code) ? code : undefined;
+  } catch {
+    // Nilai hostile (getter/proxy melempar) tidak membawa sinyal aman.
+    return undefined;
+  }
+}
 
 /** Runs the customer/admin effects after a late settlement has safely reached
  * ready_for_pickup. The notification query makes the durable admin effect
  * idempotent when reconciliation and webhook processing overlap. */
 export async function deliverLatePaidOrderSideEffects(
-  orderId: string,
-  logger?: Logger
+  orderId: string
 ): Promise<void> {
-  const log = (logger ?? createLogger({ module: "late-paid-side-effects" })).child({
-    orderId,
-  });
   const orderRows = await db
     .select()
     .from(orders)
@@ -58,9 +101,10 @@ export async function deliverLatePaidOrderSideEffects(
       );
     }
   } catch (error) {
-    log.error("late-paid admin notification failed", {
-      error: serializeError(error),
-    });
+    log.error(
+      `Order ${orderId}: late-paid admin notification failed`,
+      safeDependencyErrorLog(error)
+    );
   }
 
   try {
@@ -105,6 +149,9 @@ export async function deliverLatePaidOrderSideEffects(
       }),
     });
   } catch (error) {
-    log.error("late-paid pickup email failed", { error: serializeError(error) });
+    log.error(
+      `Order ${orderId}: late-paid pickup email failed`,
+      safeDependencyErrorLog(error)
+    );
   }
 }

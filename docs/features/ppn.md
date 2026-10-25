@@ -1,5 +1,21 @@
 # Customer PPN
 
+## Dua kontrak pajak (status per dokumentasi ini)
+
+Ada dua cara menghitung PPN yang hidup berdampingan, dipilih oleh gate
+`discounts.contractVersion` (`apps/store/src/lib/config.ts`):
+
+| Gate | Dasar pajak | Catatan |
+|---|---|---|
+| `0` (legacy, default) | barang, dan untuk delivery **ditambah ongkir** | perilaku lama, tetap dipakai order/history lama |
+| `1` (kontrak pricing1) | **barang saja** (`taxable_base = net_goods`) | order baru kontrak berversi |
+
+Dokumentasi lengkap kontrak berversi (identitas nominal, decoder, batas input,
+payable provider) ada di
+[versioned-checkout-pricing.md](versioned-checkout-pricing.md). Seluruh bagian di
+bawah ini yang menyebut ongkir masuk dasar pajak adalah **LEGACY**: sengaja tidak
+dihapus karena masih menjelaskan order dan decoder versi 0.
+
 ## Policy and configuration
 
 Customer payments include configurable PPN. The effective default and fallback
@@ -17,7 +33,13 @@ The configured value must be a decimal from 0 through 100 (up to six decimal
 places). Invalid, negative, or excessive values produce a structured warning
 and use 11%.
 
-## Calculation
+## Calculation (LEGACY — gate `0`)
+
+> **LEGACY.** Bagian ini menjelaskan `calculateOrderPricing`
+> (`apps/store/src/lib/order-pricing.ts`), yaitu formula versi 0 di mana ongkir
+> delivery ikut menjadi dasar pajak. Order baru pada gate `1` memakai dasar
+> barang saja; lihat
+> [versioned-checkout-pricing.md](versioned-checkout-pricing.md).
 
 PPN is calculated after discount and rounded upward to a whole Rupiah. For
 pickup the taxable base is goods only; the pricing helper also supports a
@@ -55,6 +77,20 @@ sum(item_details.price × quantity) = gross_amount = orders.total
 Re-payment never reads the current tax configuration. Webhooks continue to
 verify the provider gross amount against `orders.total`. PPN changes accounting
 amounts only; stock and Jubelio quantities are unaffected.
+
+### Pembaca berversi (gate `1`)
+
+Pada gate `1`, repayment dan detail order tidak membaca kolom ini secara
+langsung: keduanya melewati decoder `readOrderPricing` yang memvalidasi versi
+(`pricing1/engine1/provider2`) dan identitas nominal sebelum menampilkan uang.
+Versi yang tidak dikenal fail closed (tidak ada fallback ke rate/config
+terbaru). Snapshot legacy (versi `0`) dibaca oleh decoder legacy eksplisit dan
+tetap memakai cents `numeric(15,2)`; ia tidak pernah dihitung ulang dengan
+formula barang-saja.
+
+`serviceFee` pada kontrak baru selalu `0` dan **bukan** baris charge di UI
+maupun Midtrans; baris service fee pada order legacy yang nonzero tetap boleh
+tampil sebagai history.
 
 ## Presentation and analytics
 

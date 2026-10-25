@@ -8,7 +8,7 @@
 > map, and the `/api/admin/permissions` endpoints were all removed by the
 > slice-9 cutover (migration `0018`; deployment runbook:
 > `docs/deployment-docs/rbac-rollout.md`). The historical design notes live in
-> `docs/features/rbac-custom-roles-research.md`.
+> `.scratch/rbac/research/rbac-custom-roles-research.md`.
 
 ## Permission Catalog (code-owned)
 
@@ -40,6 +40,9 @@ Global modules (grants carry no scope; granted globally or not at all):
 | `users` | `view/edit/delete` |
 | `roles` | `view/edit/delete` (delete means archive) |
 | `footer` | `view/edit` |
+| `discounts` | `view/edit` (global only; no delete) |
+| `discount_capacity` | `view/edit` (global only; no delete) |
+| `prices` | `view/edit` (global only; no delete) |
 
 ## Policy rules (`packages/db/src/rbac/policy.ts`)
 
@@ -221,6 +224,14 @@ already denies the grant).
   starts branch operations only: `products view-own`,
   `orders view/edit-own`, `notifications view/edit/delete-own`; **no** global
   product re-sync and **no** all-scope grants.
+
+### Modul administrasi diskon
+
+`discounts` dan `discount_capacity` adalah dua **Global Modules** terpisah, masing-masing hanya `view`/`edit`, tanpa `delete` atau branch scope. Pemisahan ini memungkinkan promo editor bekerja tanpa hak menaikkan kapasitas. Module `prices` (ticket 03) berdiri sendiri untuk harga Markdown per SKU: `products:edit` (re-sync) bukan izin menulis harga. Katalog, Roles matrix dan SQL CHECK mempertahankan batas tersebut. Fresh seed HQ mendapat ketiga module view/edit; role existing/custom tidak mendapat auto-grant.
+
+Fresh seed memberikan empat grant global tersebut kepada **HQ**, tidak kepada **Admin**; System Owner tetap memakai bypass code-owned. Custom Roles existing tidak mendapat auto-grant, dan migration0036 hanya mengubah CHECK, bukan mengisi grant.
+
+`ensureInitialRoles` existing memakai defaults yang sama untuk melengkapi grant system Roles: menjalankan `db:seed` atau Owner bootstrap juga dapat melengkapi empat grant pada HQ existing. Itu bukan upgrade otomatis melalui migration atau pemberian izin kepada custom Roles. Operasi pada environment nyata tetap memerlukan izin terpisah; verifikasi fitur dilakukan hanya pada database disposable.
 
 ## Invariants (do NOT violate)
 

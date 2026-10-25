@@ -12,8 +12,11 @@ node_modules
 
 # testing
 /coverage
+/playwright/
+# Legacy output paths: keep ignored as a safeguard for old commands.
 /test-results/
 /playwright-report/
+/playwright-report-mock/
 /blob-report/
 /e2e/.auth/
 
@@ -57,5 +60,7 @@ dist/
 
 .playwright-mcp
 
-.pi
+# Pi project MCP config (.pi/mcp.json) is tracked; ignore local/generated files
+.pi/mcp-traces/
+.pi/settings.json
 .tmp

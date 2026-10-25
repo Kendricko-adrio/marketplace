@@ -7,18 +7,34 @@ import {
 } from "@/db";
 import { asc, inArray, desc } from "drizzle-orm";
 import { z } from "zod";
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
 import { validateContent } from "@/lib/homepage-content";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-homepage");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/driver tidak
+ * pernah masuk log.
+ */
+class HomepageLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "HomepageLogError";
+  }
+}
 
 // =========================================================
 // RBAC: global Homepage module — GET requires homepage:view,
 // POST requires homepage:edit (Current Policy, not a Role name).
 // =========================================================
-export async function GET(request: NextRequest) {
-  const guardResult = await guard("homepage", "view", { request });
+async function listSections(_request: NextRequest): Promise<Response> {
+  const guardResult = await guard("homepage", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger } = guardResult;
 
   try {
     const sections = await db
@@ -78,16 +94,14 @@ export async function GET(request: NextRequest) {
       return section;
     });
 
-    logger.info("homepage.list", {
-      outcome: "success",
-      count: data.length,
-    });
+    log.info(`homepage.list (count ${data.length}, outcome success)`);
     return NextResponse.json({ success: true, data });
-  } catch (error) {
-    logger.error("homepage.list.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error(
+      "homepage.list gagal (outcome error)",
+      new HomepageLogError("homepage list gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch homepage sections" },
       { status: 500 }
@@ -110,16 +124,17 @@ const createSectionSchema = z.object({
   productIds: z.array(z.string()).optional(),
 });
 
-export async function POST(request: NextRequest) {
-  const guardResult = await guard("homepage", "edit", { request });
+async function createSection(request: NextRequest): Promise<Response> {
+  const guardResult = await guard("homepage", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const body = await request.json();
     const parsed = createSectionSchema.safeParse(body);
 
     if (!parsed.success) {
+      log.warn(`homepage.create ditolak: body tidak valid (outcome denied)`);
       return NextResponse.json(
         {
           success: false,
@@ -138,6 +153,9 @@ export async function POST(request: NextRequest) {
     try {
       validatedContent = validateContent(data.type, data.content);
     } catch (e) {
+      log.warn(
+        `homepage.create ditolak: content tidak sesuai tipe section (sectionType ${data.type}, sectionId ${sectionId}, outcome denied)`
+      );
       return NextResponse.json(
         {
           success: false,
@@ -180,23 +198,25 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    logger.info("homepage.create", {
-      outcome: "success",
-      sectionId,
-      actorId: ctx.user.id,
-    });
+    log.info(
+      `homepage.create (sectionId ${sectionId}, sectionType ${data.type}, actingUserId ${ctx.user.id}, outcome success)`
+    );
     return NextResponse.json({
       success: true,
       data: { id: sectionId },
     });
-  } catch (error) {
-    logger.error("homepage.create.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error(
+      "homepage.create gagal (outcome error)",
+      new HomepageLogError("homepage create gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to create section" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(listSections, "admin-homepage");
+export const POST = withRequestContext(createSection, "admin-homepage");

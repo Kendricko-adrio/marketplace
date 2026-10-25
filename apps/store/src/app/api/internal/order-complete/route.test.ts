@@ -147,7 +147,7 @@ describe("order-complete route (ticket #06: committed-completed mirror trigger s
     ).toHaveBeenCalledTimes(1);
     expect(mirrorMock.reconcileJubelioChannelStatusForOrder).toHaveBeenCalledWith(
       expect.anything(),
-      { orderId, logger: expect.objectContaining({ child: expect.any(Function) }) }
+      { orderId }
     );
     // The committed transition happened BEFORE the mirror trigger ran.
     expect(updateSets).toEqual([expect.objectContaining({ status: "completed" })]);

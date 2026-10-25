@@ -69,9 +69,9 @@ import type {
   ShipmentCreateRequestPayload,
 } from "@marketplace/db/src/schema";
 import { writeAuditEvent } from "@/lib/rbac/audit-writer";
-import { createLogger } from "@/lib/logger";
+import { createModuleLogger } from "@/lib/logger";
 
-const log = createLogger({ module: "delivery-follow-up" });
+const log = createModuleLogger("delivery-follow-up");
 
 import { PACKING_FAILURE_REASONS } from './delivery-follow-up-contract';
 export { PACKING_FAILURE_REASONS } from './delivery-follow-up-contract';
@@ -298,7 +298,9 @@ export function createDeliveryFollowUp(db: FollowUpDb) {
     for (const row of parts.sort((left, right) => left.sortKey - right.sortKey)) {
       if (!seen.has(row.orderId)) seen.set(row.orderId, row);
     }
-    log.info("delivery follow-up list", { kind, scope: view.viewScope, rows: seen.size });
+    log.info(
+      `delivery follow-up list (kind ${kind}, scope ${view.viewScope}, rows ${seen.size})`
+    );
     return Array.from(seen.values());
   }
 
@@ -425,7 +427,9 @@ export function createDeliveryFollowUp(db: FollowUpDb) {
         branchScope: "single_branch",
         branchId: actor.homeBranchId ?? null,
       });
-      log.info("packing failed recorded", { orderId, reasonCode });
+      log.info(
+        `Order ${orderId}: packing failure recorded (reason ${reasonCode})`
+      );
       return { status: "packing_failed" as const, reasonCode };
     });
   }
@@ -526,10 +530,9 @@ export function createDeliveryFollowUp(db: FollowUpDb) {
         branchScope: "single_branch",
         branchId: actor.homeBranchId ?? null,
       });
-      log.info("booking released by trusted attestation", {
-        orderId,
-        attemptNumber: shipment.attemptCount,
-      });
+      log.info(
+        `Order ${orderId}: booking released by trusted attestation (attempt ${shipment.attemptCount})`
+      );
       return { status: "packed" as const, attemptNumber: shipment.attemptCount };
     });
   }
@@ -585,7 +588,7 @@ export function createDeliveryFollowUp(db: FollowUpDb) {
         branchScope: "single_branch",
         branchId: actor.homeBranchId ?? null,
       });
-      log.info("delivery finished manually", { orderId });
+      log.info(`Order ${orderId}: delivery finished manually`);
       return { status: "completed" as const };
     });
   }

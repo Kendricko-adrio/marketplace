@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { guard, crossBranchNotFound } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
-import { serializeError, type Logger } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import {
   createDeliveryFollowUp,
   type FollowUpListKind,
@@ -29,19 +29,35 @@ const KINDS = new Set<FollowUpListKind>([
   "all",
 ]);
 
-export async function GET(request: NextRequest) {
-  const guardResult = await guard("orders", "view", { request });
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-orders-follow-up");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB tidak pernah
+ * masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
+async function listFollowUp(request: NextRequest): Promise<Response> {
+  const guardResult = await guard("orders", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
-  const listLog: Logger = logger.child({ module: "delivery-follow-up" });
+  const { ctx } = guardResult;
 
   try {
     const authorization = branchScopeFromAuthorization(ctx.authorization);
     if (!authorization) {
-      listLog.warn("follow-up.scope_unresolvable", {
-        outcome: "denied",
-        userId: ctx.user.id,
-      });
+      log.warn(
+        `follow-up list ditolak: branch scope tidak dapat ditentukan (userId ${ctx.user.id}, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Forbidden", code: "DENIED" },
         { status: 403 }
@@ -64,7 +80,7 @@ export async function GET(request: NextRequest) {
     // disclosed — but for the LIST the scope itself already filters; the
     // policy-mismatch guard mirrors the other scoped routes.
     if (viewActor.viewScope === "own_branch" && !viewActor.homeBranchId) {
-      crossBranchNotFound(listLog);
+      crossBranchNotFound();
       return NextResponse.json(
         { success: false, error: "Order not found" },
         { status: 404 }
@@ -83,16 +99,21 @@ export async function GET(request: NextRequest) {
     });
     const byId = new Map(cases.map((row) => [row.orderId, row]));
     const data = result.data.map((row) => ({ ...byId.get(row.id), stage: row.stage, createdAt: row.createdAt }));
-    listLog.info("follow-up list served", { kind, rows: data.length, ...result.pagination });
+    log.info(
+      `follow-up list served (kind ${kind}, rows ${data.length}, page ${result.pagination.page}, total ${result.pagination.total}, outcome success)`
+    );
     return NextResponse.json({ success: true, data, pagination: result.pagination });
-  } catch (error) {
-    listLog.error("follow-up list failed", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    log.error(
+      "follow-up list gagal (outcome error)",
+      new RouteLogError("follow-up list gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Gagal memuat daftar tindak lanjut." },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(listFollowUp, "admin-orders-follow-up");

@@ -4,7 +4,26 @@ import { carts, cartItems, productVariants, branchStocks, branches } from "@/db"
 import { eq, and, sql } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
-import { requestLogger, serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+import { sellableUnits } from "@/lib/stock";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("cart-items");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Next/provider
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 const addItemSchema = z.object({
   variantId: z.string(),
@@ -28,8 +47,7 @@ async function getOrCreateCart(userId: string) {
   return cart;
 }
 
-export async function POST(request: NextRequest) {
-  const log = requestLogger(request, { module: "cart-items-add" });
+async function addCartItem(request: NextRequest): Promise<Response> {
   try {
     const access = await requireOnboardedApiSession();
     if (!access.ok) return access.response;
@@ -76,63 +94,59 @@ export async function POST(request: NextRequest) {
     }
 
     if (variant[0].jubelioItemId == null || branch[0].jubelioLocationId == null) {
-      log.warn("cart item rejected — Jubelio mapping missing", { variantId, branchId });
+      log.warn(
+        `cart item rejected — Jubelio stock mapping unavailable (variant ${variantId}, branch ${branchId})`
+      );
       return NextResponse.json({ success: false, error: "Jubelio stock mapping unavailable" }, { status: 409 });
     }
 
-    // Check branch stock for this variant
-    const stockRow = await db
-      .select()
-      .from(branchStocks)
-      .where(
-        and(
+    const cart = await getOrCreateCart(session.user.id);
+    // Lock snapshot selama mutasi agar sync/hold dan request paralel tidak
+    // meloloskan quantity berdasarkan snapshot yang sudah berubah.
+    const result = await db.transaction(async (tx) => {
+      const [stockRow] = await tx.select().from(branchStocks)
+        .where(and(
           eq(branchStocks.branchId, branchId),
           eq(branchStocks.productVariantId, variantId)
-        )
-      )
-      .limit(1);
-
-    // The local mirror is provisional: zero can recover after a fresh read
-    // from Jubelio during place-order. Do not block cart entry based on age or
-    // last-known availability; a mapped stock row is still required.
-    if (!stockRow.length) {
-      log.warn("cart item rejected — branch stock mapping missing", { variantId, branchId });
-      return NextResponse.json({ success: false, error: "Stock mapping unavailable" }, { status: 409 });
-    }
-    const cart = await getOrCreateCart(session.user.id);
-
-    const changed = await db
-      .insert(cartItems)
-      .values({
-        id: crypto.randomUUID(),
-        cartId: cart.id,
-        variantId,
-        branchId,
-        quantity,
-      })
-      .onConflictDoUpdate({
+        )).for("update");
+      if (!stockRow) return { ok: false, status: 409, error: "Stock mapping unavailable" };
+      const available = sellableUnits(stockRow);
+      if (quantity > available) {
+        return { ok: false, status: 400, error: "Stok produk di cabang ini tidak mencukupi" };
+      }
+      const changed = await tx.insert(cartItems).values({
+        id: crypto.randomUUID(), cartId: cart.id, variantId, branchId, quantity,
+      }).onConflictDoUpdate({
         target: [cartItems.cartId, cartItems.variantId, cartItems.branchId],
         set: {
           quantity: sql`${cartItems.quantity} + ${quantity}`,
           updatedAt: new Date(),
         },
-      })
-      .returning({ id: cartItems.id });
-
-    if (changed.length === 0) {
-      return NextResponse.json(
-        { success: false, error: "Insufficient stock at this branch" },
-        { status: 400 }
+        setWhere: sql`${cartItems.quantity} + ${quantity} <= ${available}`,
+      }).returning({ id: cartItems.id });
+      return changed.length
+        ? { ok: true }
+        : { ok: false, status: 400, error: "Stok produk di cabang ini tidak mencukupi" };
+    });
+    if (!result.ok) {
+      log.warn(
+        `cart item rejected — ${result.error} (variant ${variantId}, branch ${branchId}, quantity ${quantity})`
       );
+      return NextResponse.json({ success: false, error: result.error }, { status: result.status });
     }
 
-    log.info("cart item added", { variantId, branchId, quantity });
+    log.info(
+      `cart item added: variant ${variantId}, branch ${branchId}, quantity ${quantity}`
+    );
     return NextResponse.json({ success: true, message: "Item added to cart" });
-  } catch (error) {
-    log.error("cart item add failed", { error: serializeError(error) });
+  } catch {
+    log.error("cart item add failed", new RouteLogError("cart item add failed"));
     return NextResponse.json(
       { success: false, error: "Failed to add to cart" },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(addCartItem, "cart-items");

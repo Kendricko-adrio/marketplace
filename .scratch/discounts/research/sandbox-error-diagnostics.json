@@ -1,0 +1,113 @@
+{
+  "at": "2026-10-14T16:08:19.284Z",
+  "scope": "Login and GET-only diagnostics; zero additional SO create requests",
+  "createAttemptsBefore": 2,
+  "observations": [
+    {
+      "case": "login",
+      "http": 200
+    },
+    {
+      "case": "discount-account-mapping",
+      "fields": {
+        "sales_disc_acct_id": {
+          "id": 29,
+          "existsInLookup": true
+        },
+        "sales_add_disc_account_id": {
+          "id": 76,
+          "existsInLookup": true
+        },
+        "sales_acct_id": {
+          "id": 28,
+          "existsInLookup": true
+        },
+        "cash_acct_id": {
+          "id": 1,
+          "existsInLookup": true
+        },
+        "bank_acct_id": {
+          "id": 2,
+          "existsInLookup": true
+        }
+      }
+    },
+    {
+      "case": "item-account-and-unit",
+      "itemId": 43842,
+      "unit": "Buah",
+      "uom": "Buah",
+      "sellThis": true,
+      "isActive": true,
+      "sellTaxId": null,
+      "serial": false,
+      "batch": false,
+      "accounts": {
+        "sales_acct_id": {
+          "id": null,
+          "existsInLookup": false
+        },
+        "invt_acct_id": {
+          "id": null,
+          "existsInLookup": false
+        },
+        "cogs_acct_id": {
+          "id": null,
+          "existsInLookup": false
+        }
+      }
+    },
+    {
+      "case": "test-tax",
+      "matches": [
+        {
+          "tax_id": 1,
+          "rate": "0.00"
+        }
+      ]
+    },
+    {
+      "case": "baseline-current",
+      "salesorderId": 68408,
+      "contactMatches": true,
+      "isCanceled": true,
+      "invoiceId": null,
+      "subTotal": "259000.0000",
+      "totalDisc": "0.0000",
+      "grandTotal": "259000.0000",
+      "items": [
+        {
+          "itemId": 43842,
+          "unit": "Buah",
+          "taxId": 1,
+          "quantity": "1.0000",
+          "price": "259000.0000",
+          "disc": "0.00",
+          "discAmount": "0.0000",
+          "amount": "259000.0000"
+        }
+      ]
+    },
+    {
+      "case": "fixture-reconciliation",
+      "endpoint": "/wms/sales/orders/ready-to-process/",
+      "totalCount": 0,
+      "matches": [],
+      "coverageLimited": true
+    },
+    {
+      "case": "fixture-reconciliation",
+      "endpoint": "/sales/orders/cancel/",
+      "totalCount": 1,
+      "matches": [
+        {
+          "salesorderId": 68408,
+          "isCanceled": true,
+          "grandTotal": "259000.0000"
+        }
+      ],
+      "coverageLimited": true
+    }
+  ],
+  "createAttemptsAfter": 2
+}

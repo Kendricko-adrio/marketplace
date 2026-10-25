@@ -63,7 +63,7 @@ adds a prefilled message.
 
 - **`pages`** — published static pages (`isPublished = true`) from
   `static_page`, ordered by `displayOrder` then `title`, as
-  `{ label: title, href: "/pages/<slug>" }`. See [static-pages.md](./static-pages.md).
+  `{ label: title, href: "/pages/<slug>" }`. See [static-pages.md](static-pages.md).
 - **`static`** — hardcoded storefront routes: Beranda `/`, Semua Produk
   `/products`, Cabang `/branches`, Keranjang Belanja `/cart`, Checkout
   `/checkout`, Akun Saya `/account`, Masuk `/login`, Daftar `/register`.
@@ -148,4 +148,4 @@ rel="noopener noreferrer">` and internal ones as `<Link>`.
 ## Related
 
 - Endpoint details: [docs/api-reference.md](./api-reference.md)
-- Static pages (the `pages` link category): [docs/features/static-pages.md](./static-pages.md)
+- Static pages (the `pages` link category): [docs/features/static-pages.md](static-pages.md)

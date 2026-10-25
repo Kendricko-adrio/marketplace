@@ -1,3 +1,4 @@
+import { deleteRetainedOrderFixtures } from "@marketplace/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import path from "node:path";
 dotenv.config({ path: path.resolve(import.meta.dirname, "../../../../.env") });
@@ -10,7 +11,9 @@ import {
   jubelioSalesOperations,
   clients,
   orders,
+  type JubelioSalesOperationPayload,
   type JubelioSalesOrderEditRequest,
+  type PricingSnapshotPayloadV1,
 } from "@marketplace/db/src/schema";
 import { JubelioSalesGatewayError } from "./jubelio-sales-client";
 import {
@@ -27,6 +30,7 @@ import {
 } from "./jubelio-channel-mirror";
 import type {
   JubelioSalesEditResult,
+  JubelioSalesExpectedEnvelope,
   JubelioSalesGateway,
   JubelioSalesOrderEditSnapshot,
 } from "./jubelio-sales-client";
@@ -46,8 +50,7 @@ import type {
 // blocker is logged and kept RED via the environment blocker test below.
 //
 // The dev database is SHARED: fixtures are keyed by the "jcm-dbtest-" prefix
-// and deleted in afterAll (clients cascade to orders; the intents and ledger
-// rows cascade with them).
+// and deleted in afterAll (retained evidence first, then orders and clients).
 // =========================================================
 
 const PREFIX = "jcm-dbtest-";
@@ -162,6 +165,25 @@ type FixtureOptions = {
   invoiceOpStatus?: "manual_review" | "dispatched_unknown";
   /** Ticket #04: force the payment ledger op into a non-confirmed state. */
   paymentOpStatus?: "manual_review" | "dispatched_unknown";
+  /**
+   * Ticket 01: frozen unit price of the persisted create intent (defaults to
+   * the legacy PRICE fixture value).
+   */
+  unitPrice?: number;
+  /**
+   * Ticket 01: extra keys persisted into the create-intent jsonb (e.g. the
+   * contract-v2 `providerContractVersion` + shipping/payable envelope), or an
+   * unknown/malformed stored version for fail-closed fixtures.
+   */
+  createRequestExtra?: Record<string, unknown>;
+  /** Ticket 01: create-intent keys to REMOVE (a malformed stored envelope). */
+  createRequestOmit?: string[];
+  /**
+   * Ticket 01: the PAIRED order pricing record (relational versions +
+   * immutable financial snapshot) that must agree with the stored v2 intent.
+   * Absent = the legacy 0/0/0 row, so every legacy fixture is unchanged.
+   */
+  orderPricing?: V2OrderPricingFixture;
 };
 
 async function seedMirrorFixture(input: FixtureOptions): Promise<{
@@ -183,6 +205,7 @@ async function seedMirrorFixture(input: FixtureOptions): Promise<{
   })();
   const pickupCode = `K${(suffixHash % 100000).toString().padStart(5, "0")}`;
   const soId = input.salesOrderId ?? 683_990_000 + (suffixHash % 900_000) + 1;
+  const unitPrice = input.unitPrice ?? PRICE;
   testClientIds.push(clientId);
   await db!.insert(clients).values({
     id: clientId,
@@ -200,14 +223,43 @@ async function seedMirrorFixture(input: FixtureOptions): Promise<{
       input.orderStatus === "ready_for_pickup" ? null : input.blockedReason ?? null,
     contactPhone: "081234567890",
     contactEmail: `${clientId}@example.com`,
-    subtotal: String(PRICE),
-    total: String(PRICE),
+    subtotal: String(unitPrice),
+    total: String(unitPrice),
+    // Ticket 01: only a fixture that asks for it persists the paired
+    // contract-v2 pricing row (versions + immutable snapshot); legacy fixtures
+    // keep the untouched 0/0/0 legacy row.
+    ...(input.orderPricing ? v2OrderPricingFields(input.orderPricing) : {}),
   });
   // Confirmed create intent (the SO exists and is verified) — the mirror
   // always edits a KNOWN SO. The note/reference is unique per fixture (the
   // ledger's reference is globally UNIQUE).
   const createOperationId = `${PREFIX}op-create-${suffix}`;
   const note = `OKCIR_SO_CREATE:${orderId}:${createOperationId}`;
+  // The persisted create-intent snapshot is the immutable source of the
+  // expected provider money envelope (ticket 01). `createRequestExtra`/
+  // `createRequestOmit` let a fixture persist a contract-v2 envelope, or a
+  // deliberately unknown/malformed stored version, WITHOUT touching the
+  // legacy create payload of the other fixtures.
+  const createRequest: Record<string, unknown> = {
+    contactId: -1,
+    customerName: "Pelanggan Umum",
+    locationId: LOCATION_ID,
+    note,
+    channelStatus: "Belum Bayar",
+    items: [
+      {
+        itemId: ITEM_ID,
+        quantity: 1,
+        price: unitPrice,
+        discAmount: 0,
+        taxAmount: 0,
+        unit: "Buah",
+        taxId: 1,
+      },
+    ],
+    ...(input.createRequestExtra ?? {}),
+  };
+  for (const key of input.createRequestOmit ?? []) delete createRequest[key];
   await db!.insert(jubelioSalesOperations).values({
     id: createOperationId,
     orderId,
@@ -216,25 +268,8 @@ async function seedMirrorFixture(input: FixtureOptions): Promise<{
     reference: note,
     payload: {
       type: "create",
-      create: {
-        contactId: -1,
-        customerName: "Pelanggan Umum",
-        locationId: LOCATION_ID,
-        note,
-        channelStatus: "Belum Bayar",
-        items: [
-          {
-            itemId: ITEM_ID,
-            quantity: 1,
-            price: PRICE,
-            discAmount: 0,
-            taxAmount: 0,
-            unit: "Buah",
-            taxId: 1,
-          },
-        ],
-      },
-    },
+      create: createRequest,
+    } as unknown as JubelioSalesOperationPayload,
     salesOrderId: soId,
     attemptCount: 1,
     dispatchedAt: new Date(Date.now() - 60 * 60_000),
@@ -254,7 +289,7 @@ async function seedMirrorFixture(input: FixtureOptions): Promise<{
               payment: {
                 invoiceId: INVOICE_ID,
                 accountId: 1,
-                amount: PRICE,
+                amount: unitPrice,
                 contactId: -1,
                 paymentType: 0,
               },
@@ -340,7 +375,16 @@ function controlledEditSnapshot(
 }
 
 type ControlledGateway = JubelioSalesGateway & {
-  editCalls: Array<{ edit: JubelioSalesOrderEditSnapshot; target: string }>;
+  editCalls: Array<{
+    edit: JubelioSalesOrderEditSnapshot;
+    target: string;
+    expected?: JubelioSalesExpectedEnvelope;
+  }>;
+  /** Ticket 01: the contract-v2 envelope handed to every edit pre-read GET. */
+  getForEditCalls: Array<{
+    salesOrderId: number;
+    expected?: JubelioSalesExpectedEnvelope;
+  }>;
 };
 
 function controlledGateway(options: {
@@ -353,6 +397,7 @@ function controlledGateway(options: {
   soId?: number;
 }): ControlledGateway {
   const editCalls: ControlledGateway["editCalls"] = [];
+  const getForEditCalls: ControlledGateway["getForEditCalls"] = [];
   const snapshot = (overrides: Partial<JubelioSalesOrderEditSnapshot> = {}) => {
     const merged = { ...overrides };
     if (merged.note === undefined && options.note != null) merged.note = options.note;
@@ -368,15 +413,24 @@ function controlledGateway(options: {
     async getSalesOrder() {
       throw new Error("unexpected getSalesOrder in mirror test");
     },
-    async getSalesOrderForEdit() {
+    async getSalesOrderForEdit(
+      salesOrderId: number,
+      expected?: JubelioSalesExpectedEnvelope
+    ) {
+      getForEditCalls.push({ salesOrderId, expected });
       if (options.editSnapshot instanceof Error) throw options.editSnapshot;
       return options.editSnapshot ?? snapshot();
     },
     async editSalesOrder(call: {
       edit: JubelioSalesOrderEditSnapshot;
       targetChannelStatus: string;
+      expected?: JubelioSalesExpectedEnvelope;
     }) {
-      editCalls.push({ edit: call.edit, target: call.targetChannelStatus });
+      editCalls.push({
+        edit: call.edit,
+        target: call.targetChannelStatus,
+        expected: call.expected,
+      });
       if (options.editError) throw options.editError;
       if (options.editResult instanceof Error) throw options.editResult;
       return (
@@ -405,6 +459,7 @@ function controlledGateway(options: {
       throw new Error("unexpected getPayment in mirror test");
     },
     editCalls,
+    getForEditCalls,
   } as ControlledGateway;
   return gateway;
 }
@@ -419,7 +474,9 @@ async function getIntent(orderId: string) {
 }
 
 afterAll(async () => {
-  if (!db || testClientIds.length === 0) return;
+  if (!db || !pool || testClientIds.length === 0) return;
+  const fixtureOrders = await pool.query("SELECT id FROM orders WHERE user_id=ANY($1::text[])", [testClientIds]);
+  await deleteRetainedOrderFixtures(pool, fixtureOrders.rows.map((row) => row.id));
   await db.delete(clients).where(inArray(clients.id, testClientIds));
 });
 
@@ -907,7 +964,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.recovered).toBeGreaterThanOrEqual(1);
@@ -960,7 +1016,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.skippedFresh).toBeGreaterThanOrEqual(1);
@@ -996,7 +1051,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.investigated).toBeGreaterThanOrEqual(1);
@@ -1017,7 +1071,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.missedOrdersScanned).toBeGreaterThanOrEqual(1);
@@ -1065,7 +1118,6 @@ describe.skipIf(!schemaState.ready)(
 
       await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       // Ticket #06: the stale pending intent of the completed order is
@@ -1127,7 +1179,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.pendingTerminalAborted).toBeGreaterThanOrEqual(1);
@@ -1179,7 +1230,6 @@ describe.skipIf(!schemaState.ready)(
 
       await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       // #05: failed_payment orders are governed by the per-order Gagal
@@ -1246,7 +1296,6 @@ describe.skipIf(!schemaState.ready)(
 
       await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       const [readyIntent] = await getIntent(readyFixture.orderId);
@@ -1385,7 +1434,6 @@ describe.skipIf(!schemaState.ready)(
       const first = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(first.missedDispatched).toBe(1);
       expect(gateway.editCalls).toHaveLength(1);
@@ -1403,7 +1451,6 @@ describe.skipIf(!schemaState.ready)(
       const second = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(second.missedDispatched).toBe(0);
       expect(gateway.editCalls).toHaveLength(1);
@@ -1443,7 +1490,6 @@ describe.skipIf(!schemaState.ready)(
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       // Neither confirmed nor investigated orders enter the window (the
       // gateway would throw on any GET — none happens).
@@ -1767,10 +1813,6 @@ describe.skipIf(!schemaState.ready)(
   }
 );
 
-function silentLogger() {
-  return { info: () => {}, warn: () => {}, error: () => {}, child: () => silentLogger() } as never;
-}
-
 describe.skipIf(!schemaState.ready)(
   "ticket #06 — sweep finds COMPLETED orders and keeps target ordering",
   () => {
@@ -1796,7 +1838,6 @@ describe.skipIf(!schemaState.ready)(
       const first = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(first.missedOrdersScanned).toBeGreaterThanOrEqual(1);
       expect(first.missedDispatched).toBeGreaterThanOrEqual(1);
@@ -1812,7 +1853,6 @@ describe.skipIf(!schemaState.ready)(
       const second = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(second.missedDispatched).toBe(0);
       expect(gateway.editCalls).toHaveLength(1);
@@ -1840,7 +1880,6 @@ describe.skipIf(!schemaState.ready)(
       await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       const [intent] = await getIntent(fixture.orderId);
@@ -1854,7 +1893,6 @@ describe.skipIf(!schemaState.ready)(
       const second = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(second.missedDispatched).toBe(0);
       expect(gateway.editCalls).toHaveLength(1);
@@ -1880,7 +1918,6 @@ describe.skipIf(!schemaState.ready)(
       await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       const intents = await getIntent(fixture.orderId);
@@ -2099,7 +2136,6 @@ describe.skipIf(!schemaState.ready)(
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 10,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       // The scan→write boundary does not treat the id-0 row as a verified
@@ -2135,7 +2171,6 @@ describe.skipIf(!schemaState.ready)(
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 50,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(summary.verifikasiOrdersScanned).toBe(0);
       expect(await getIntent(fixture.orderId)).toHaveLength(0);
@@ -2156,7 +2191,6 @@ describe.skipIf(!schemaState.ready)(
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 50,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(summary.gagalBayarOrdersScanned).toBe(0);
       expect(await getIntent(fixture.orderId)).toHaveLength(0);
@@ -2213,7 +2247,6 @@ describe.skipIf(!schemaState.ready)(
         return reconcileChannelStatusMirrorForSweep(db!, {
           limit: 1,
           gateway: g as unknown as JubelioSalesGateway,
-          logger: silentLogger(),
         });
       };
 
@@ -2267,7 +2300,6 @@ describe.skipIf(!schemaState.ready)(
 
       await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: controlledGateway({ editSnapshot: hostile }) as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       const [intent] = await getIntent(fixture.orderId);
@@ -2304,7 +2336,6 @@ describe.skipIf(!schemaState.ready)(
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         limit: 1,
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       // The bounded window must SKIP the create+invoice-only order entirely
@@ -2368,7 +2399,6 @@ describe.skipIf(!schemaState.ready)(
         return reconcileChannelStatusMirrorForSweep(db!, {
           limit: 2,
           gateway,
-          logger: silentLogger(),
         });
       };
 
@@ -2821,7 +2851,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.verifikasiOrdersScanned).toBeGreaterThanOrEqual(1);
@@ -2839,7 +2868,6 @@ describe.skipIf(!schemaState.ready)(
       // bounded window — no duplicate POST.
       const second = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(summary.verifikasiDispatched).toBe(1);
       expect(gateway.editCalls).toHaveLength(1);
@@ -2862,7 +2890,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(gateway.editCalls).toHaveLength(0);
@@ -2893,7 +2920,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.missedDispatched).toBeGreaterThanOrEqual(1);
@@ -2938,7 +2964,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.recovered).toBeGreaterThanOrEqual(1);
@@ -3277,7 +3302,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.gagalBayarOrdersScanned).toBeGreaterThanOrEqual(1);
@@ -3295,7 +3319,6 @@ describe.skipIf(!schemaState.ready)(
       // the bounded window — no duplicate POST.
       const second = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(gateway.editCalls).toHaveLength(1);
       expect(await getIntent(fixture.orderId)).toHaveLength(1);
@@ -3335,7 +3358,6 @@ describe.skipIf(!schemaState.ready)(
 
       const first = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(gateway.editCalls).toHaveLength(0); // zero POST
@@ -3352,7 +3374,6 @@ describe.skipIf(!schemaState.ready)(
       // the second pass scans no Gagal Bayar orders at all.
       const second = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
       expect(second.gagalBayarOrdersScanned).toBe(0);
       expect(gateway.editCalls).toHaveLength(0);
@@ -3384,7 +3405,6 @@ describe.skipIf(!schemaState.ready)(
 
       await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(gateway.editCalls).toHaveLength(1);
@@ -3516,7 +3536,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: gateway as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       expect(summary.missedDispatched).toBeGreaterThanOrEqual(1);
@@ -3613,7 +3632,6 @@ describe.skipIf(!schemaState.ready)(
 
       const summary = await reconcileChannelStatusMirrorForSweep(db!, {
         gateway: controlledGateway({}) as unknown as JubelioSalesGateway,
-        logger: silentLogger(),
       });
 
       const [failedIntent] = await getIntent(failedFixture.orderId);
@@ -4194,6 +4212,657 @@ describe.skipIf(!schemaState.ready)(
       expect(outcome.status).toBe("skipped");
       expect(gateway.editCalls).toHaveLength(0);
       expect(await getIntent(fixture.orderId)).toHaveLength(1);
+    });
+  }
+);
+
+// =========================================================
+// Ticket 01 integration (discounts spec §8.3/§10.2, acceptance P03): the
+// mirror must project a contract-v2 order through the STORED money envelope —
+// on the pre-edit GET, the single edit POST and the GET-only recovery — and
+// must never apply the legacy `grand_total == sub_total` rule to v2 (a
+// delivery order would fail closed for the wrong reason and a genuine payable
+// drift would hide). Expected values are independent literals: goods 150000;
+// pickup payable 150000; delivery original/net shipping 30000 → payable
+// 180000. An unknown/malformed stored version fails closed with ZERO provider
+// write (never a silent legacy read). Provider traffic is a controlled fake at
+// the gateway boundary — no real Jubelio request.
+// =========================================================
+const V2_GOODS = 150_000;
+const V2_ORIGINAL_SHIPPING = 30_000;
+const V2_NET_SHIPPING = 30_000;
+const V2_PAYABLE = 180_000;
+const V2_PICKUP_ENVELOPE = {
+  originalShipmentCost: 0,
+  shippingCost: 0,
+  expectedProviderPayable: V2_GOODS,
+} as const;
+
+function v2Envelope(
+  overrides: Partial<JubelioSalesExpectedEnvelope> = {}
+): JubelioSalesExpectedEnvelope {
+  return {
+    providerContractVersion: 2,
+    originalShipmentCost: V2_ORIGINAL_SHIPPING,
+    shippingCost: V2_NET_SHIPPING,
+    expectedProviderPayable: V2_PAYABLE,
+    ...overrides,
+  };
+}
+
+/** Provider GET snapshot of the contract-v2 Sales Order of a fixture. */
+function v2EditSnapshot(input: {
+  note: string;
+  soId: number;
+  grandTotal?: number;
+  originalShipmentCost?: number;
+  shippingCost?: number;
+  channelStatus?: string;
+}): JubelioSalesOrderEditSnapshot {
+  return controlledEditSnapshot(
+    {
+      salesorderId: input.soId,
+      note: input.note,
+      invoiceId: INVOICE_ID,
+      channelStatus: input.channelStatus ?? "Belum Bayar",
+      subTotal: V2_GOODS,
+      grandTotal: input.grandTotal ?? V2_PAYABLE,
+      originalShipmentCost: input.originalShipmentCost ?? V2_ORIGINAL_SHIPPING,
+      shippingCost: input.shippingCost ?? V2_NET_SHIPPING,
+      items: [
+        {
+          salesorderDetailId: 74_728,
+          itemId: ITEM_ID,
+          quantity: 1,
+          price: V2_GOODS,
+          disc: 0,
+          discAmount: 0,
+          taxAmount: 0,
+          amount: V2_GOODS,
+          unit: "Buah",
+          taxId: 1,
+          locationId: LOCATION_ID,
+        },
+      ],
+    },
+    input.soId
+  );
+}
+
+/**
+ * Ticket 01: what the PAIRED order pricing record of a contract-v2 fixture must
+ * contain. Defaults agree with `v2Envelope()` (goods 150000 + net shipping
+ * 30000 → payable 180000); a negative fixture overrides the money so the
+ * immutable snapshot still decodes on its own but no longer agrees with the
+ * stored create intent.
+ */
+type V2OrderPricingFixture = {
+  netGoods?: number;
+  originalShipmentCost?: number;
+  shippingCost?: number;
+  expectedProviderPayable?: number;
+  fulfillmentMethod?: "pickup" | "delivery";
+};
+
+/** Immutable pricing1/engine1/provider2 row agreeing with the stored intent. */
+function v2OrderPricingFields(
+  input: V2OrderPricingFixture = {}
+): Partial<typeof orders.$inferInsert> {
+  const netGoods = input.netGoods ?? V2_GOODS;
+  const originalShipmentCost = input.originalShipmentCost ?? V2_ORIGINAL_SHIPPING;
+  const shippingCost = input.shippingCost ?? V2_NET_SHIPPING;
+  const expectedProviderPayable =
+    input.expectedProviderPayable ?? netGoods + shippingCost;
+  const shippingSubsidy = originalShipmentCost - shippingCost;
+  const fulfillmentMethod =
+    input.fulfillmentMethod ?? (shippingCost === 0 ? "pickup" : "delivery");
+  const total = netGoods + shippingCost;
+  const money = (value: number) => String(value);
+  const snapshot = {
+    pricingContractVersion: 1,
+    pricingEngineVersion: 1,
+    providerContractVersion: 2,
+    currency: "IDR",
+    fulfillmentMethod,
+    sourceGoodsSubtotal: money(netGoods),
+    markdownTotal: "0",
+    subtotal: money(netGoods),
+    goodsDiscount: "0",
+    netGoods: money(netGoods),
+    shippingBeforeSubsidy: money(originalShipmentCost),
+    shippingSubsidy: money(shippingSubsidy),
+    shippingCost: money(shippingCost),
+    merchantFunding: money(shippingSubsidy),
+    serviceFee: "0",
+    taxableBase: money(netGoods),
+    ppnRatePercent: "0",
+    ppnAmount: "0",
+    total: money(total),
+    expectedProviderPayable: money(expectedProviderPayable),
+    providerQuotedShippingCost: money(originalShipmentCost),
+    providerBilledShippingCost: null,
+    lines: [
+      {
+        variantId: `${PREFIX}variant-v2`,
+        quantity: 1,
+        sourceUnitPrice: money(netGoods),
+        effectiveUnitPrice: money(netGoods),
+        sourceLineAmount: money(netGoods),
+        markdownAmount: "0",
+        goodsDiscountAmount: "0",
+        netLineAmount: money(netGoods),
+        markdownRevisionId: null,
+      },
+    ],
+  };
+  return {
+    pricingContractVersion: 1,
+    pricingEngineVersion: 1,
+    providerContractVersion: 2,
+    fulfillmentMethod,
+    pricingCurrency: "IDR",
+    sourceGoodsSubtotal: money(netGoods),
+    markdownTotal: "0",
+    netGoods: money(netGoods),
+    shippingBeforeSubsidy: money(originalShipmentCost),
+    shippingSubsidy: money(shippingSubsidy),
+    merchantFunding: money(shippingSubsidy),
+    taxableBase: money(netGoods),
+    expectedProviderPayable: money(expectedProviderPayable),
+    providerQuotedShippingCost: money(originalShipmentCost),
+    subtotal: money(netGoods),
+    discount: "0",
+    shippingCost: money(shippingCost),
+    serviceFee: "0",
+    ppnRate: "0",
+    ppnAmount: "0",
+    total: money(total),
+    pricingSnapshot: snapshot as unknown as PricingSnapshotPayloadV1,
+  };
+}
+
+describe.skipIf(!schemaState.ready)(
+  "ticket 01 — contract-v2 expected envelope carried through pre-read, edit and GET-only recovery",
+  () => {
+    it("dispatches ONE status-only edit for a v2 delivery order, passing the stored envelope to the pre-read GET and the edit POST", async () => {
+      const suffix = `v2-delivery-${Date.now()}`;
+      const fixture = await seedMirrorFixture({
+        suffix,
+        orderStatus: "ready_for_pickup",
+        withInvoicePayment: true,
+        unitPrice: V2_GOODS,
+        createRequestExtra: v2Envelope(),
+        orderPricing: {},
+      });
+      const gateway = controlledGateway({
+        note: fixture.note,
+        soId: fixture.soId,
+        editSnapshot: v2EditSnapshot({ note: fixture.note, soId: fixture.soId }),
+      });
+
+      const outcome = await reconcileJubelioChannelStatusForOrder(db!, {
+        orderId: fixture.orderId,
+        gateway: gateway as unknown as JubelioSalesGateway,
+      });
+
+      expect(outcome.status).toBe("confirmed");
+      // The pre-read GET and the single edit POST both carry the STORED
+      // envelope (the real gateway enforces payable/shipping + omission from
+      // it); nothing is re-derived from the provider response.
+      expect(gateway.getForEditCalls).toHaveLength(1);
+      expect(gateway.getForEditCalls[0]).toEqual({
+        salesOrderId: fixture.soId,
+        expected: v2Envelope(),
+      });
+      expect(gateway.editCalls).toHaveLength(1);
+      expect(gateway.editCalls[0].target).toBe("Siap Proses");
+      expect(gateway.editCalls[0].expected).toEqual(v2Envelope());
+      // Status-only edit: identity, linkage and v2 money preserved verbatim.
+      expect(gateway.editCalls[0].edit).toMatchObject({
+        salesorderId: fixture.soId,
+        invoiceId: INVOICE_ID,
+        subTotal: V2_GOODS,
+        grandTotal: V2_PAYABLE,
+        originalShipmentCost: V2_ORIGINAL_SHIPPING,
+        shippingCost: V2_NET_SHIPPING,
+        totalDisc: 0,
+        totalTax: 0,
+        items: [
+          { salesorderDetailId: 74_728, itemId: ITEM_ID, amount: V2_GOODS },
+        ],
+      });
+      const intents = await getIntent(fixture.orderId);
+      expect(intents).toHaveLength(1);
+      expect(intents[0]).toMatchObject({
+        targetVersion: 1,
+        targetStatus: "Siap Proses",
+        status: "confirmed",
+        salesOrderId: fixture.soId,
+        lastObservedStatus: "Siap Proses",
+      });
+      // NONINTERFERENCE: the paid order keeps its fulfillment state.
+      const [order] = await db!
+        .select()
+        .from(orders)
+        .where(eq(orders.id, fixture.orderId));
+      expect(order.status).toBe("ready_for_pickup");
+      expect(order.paymentStatus).toBe("paid");
+    });
+
+    it("dispatches a v2 pickup order whose stored payable equals the net goods (zero shipping)", async () => {
+      const suffix = `v2-pickup-${Date.now()}`;
+      const fixture = await seedMirrorFixture({
+        suffix,
+        orderStatus: "ready_for_pickup",
+        withInvoicePayment: true,
+        unitPrice: V2_GOODS,
+        createRequestExtra: v2Envelope(V2_PICKUP_ENVELOPE),
+        orderPricing: { ...V2_PICKUP_ENVELOPE },
+      });
+      const gateway = controlledGateway({
+        note: fixture.note,
+        soId: fixture.soId,
+        editSnapshot: v2EditSnapshot({
+          note: fixture.note,
+          soId: fixture.soId,
+          grandTotal: V2_GOODS,
+          originalShipmentCost: V2_PICKUP_ENVELOPE.originalShipmentCost,
+          shippingCost: V2_PICKUP_ENVELOPE.shippingCost,
+        }),
+      });
+
+      const outcome = await reconcileJubelioChannelStatusForOrder(db!, {
+        orderId: fixture.orderId,
+        gateway: gateway as unknown as JubelioSalesGateway,
+      });
+
+      expect(outcome.status).toBe("confirmed");
+      expect(gateway.editCalls).toHaveLength(1);
+      expect(gateway.editCalls[0].expected).toEqual(
+        v2Envelope(V2_PICKUP_ENVELOPE)
+      );
+      expect(gateway.editCalls[0].edit).toMatchObject({
+        grandTotal: V2_GOODS,
+        originalShipmentCost: 0,
+        shippingCost: 0,
+      });
+      const [intent] = await getIntent(fixture.orderId);
+      expect(intent.status).toBe("confirmed");
+    });
+
+    it("fail-closes with zero POST when a v2 GET would only satisfy the legacy grand_total == sub_total rule", async () => {
+      const suffix = `v2-legacy-assumption-${Date.now()}`;
+      const fixture = await seedMirrorFixture({
+        suffix,
+        orderStatus: "ready_for_pickup",
+        withInvoicePayment: true,
+        unitPrice: V2_GOODS,
+        createRequestExtra: v2Envelope(),
+        orderPricing: {},
+      });
+      const gateway = controlledGateway({
+        note: fixture.note,
+        soId: fixture.soId,
+        editSnapshot: v2EditSnapshot({
+          note: fixture.note,
+          soId: fixture.soId,
+          grandTotal: V2_GOODS,
+        }),
+      });
+
+      const outcome = await reconcileJubelioChannelStatusForOrder(db!, {
+        orderId: fixture.orderId,
+        gateway: gateway as unknown as JubelioSalesGateway,
+      });
+
+      expect(outcome.status).toBe("needs_investigation");
+      expect(gateway.editCalls).toHaveLength(0);
+      const [intent] = await getIntent(fixture.orderId);
+      expect(intent).toMatchObject({
+        status: "needs_investigation",
+        mismatchReason: "PRE_READ_MONEY_MISMATCH",
+      });
+      expect(intent.payload).toBeNull();
+      const [order] = await db!
+        .select()
+        .from(orders)
+        .where(eq(orders.id, fixture.orderId));
+      expect(order.status).toBe("ready_for_pickup");
+      expect(order.paymentStatus).toBe("paid");
+    });
+
+    it("fail-closes on a Rp1 provider payable drift on a v2 order (no money tolerance)", async () => {
+      const suffix = `v2-rp1-${Date.now()}`;
+      const fixture = await seedMirrorFixture({
+        suffix,
+        orderStatus: "ready_for_pickup",
+        withInvoicePayment: true,
+        unitPrice: V2_GOODS,
+        createRequestExtra: v2Envelope(),
+        orderPricing: {},
+      });
+      const gateway = controlledGateway({
+        note: fixture.note,
+        soId: fixture.soId,
+        editSnapshot: v2EditSnapshot({
+          note: fixture.note,
+          soId: fixture.soId,
+          grandTotal: V2_PAYABLE - 1,
+        }),
+      });
+
+      const outcome = await reconcileJubelioChannelStatusForOrder(db!, {
+        orderId: fixture.orderId,
+        gateway: gateway as unknown as JubelioSalesGateway,
+      });
+
+      expect(outcome.status).toBe("needs_investigation");
+      expect(gateway.editCalls).toHaveLength(0);
+      const [intent] = await getIntent(fixture.orderId);
+      expect(intent.mismatchReason).toBe("PRE_READ_MONEY_MISMATCH");
+      expect(intent.payload).toBeNull();
+    });
+
+    it("fails closed on an unknown stored provider contract version with zero provider read and zero write", async () => {
+      const suffix = `v2-unknown-version-${Date.now()}`;
+      const fixture = await seedMirrorFixture({
+        suffix,
+        orderStatus: "ready_for_pickup",
+        withInvoicePayment: true,
+        unitPrice: V2_GOODS,
+        createRequestExtra: { providerContractVersion: 1 },
+      });
+      const gateway = controlledGateway({
+        note: fixture.note,
+        soId: fixture.soId,
+      });
+
+      const outcome = await reconcileJubelioChannelStatusForOrder(db!, {
+        orderId: fixture.orderId,
+        gateway: gateway as unknown as JubelioSalesGateway,
+      });
+
+      expect(outcome.status).toBe("needs_investigation");
+      expect(gateway.getForEditCalls).toHaveLength(0);
+      expect(gateway.editCalls).toHaveLength(0);
+      const [intent] = await getIntent(fixture.orderId);
+      expect(intent).toMatchObject({
+        status: "needs_investigation",
+        mismatchReason: "SNAPSHOT_PROVIDER_VERSION_UNSUPPORTED",
+      });
+      expect(intent.payload).toBeNull();
+      const [order] = await db!
+        .select()
+        .from(orders)
+        .where(eq(orders.id, fixture.orderId));
+      expect(order.status).toBe("ready_for_pickup");
+      expect(order.paymentStatus).toBe("paid");
+    });
+
+    it("fails closed on a v2 stored intent whose frozen shipping money is missing (never read as zero)", async () => {
+      const suffix = `v2-incomplete-${Date.now()}`;
+      const fixture = await seedMirrorFixture({
+        suffix,
+        orderStatus: "ready_for_pickup",
+        withInvoicePayment: true,
+        unitPrice: V2_GOODS,
+        createRequestExtra: { providerContractVersion: 2 },
+        createRequestOmit: ["originalShipmentCost"],
+      });
+      const gateway = controlledGateway({
+        note: fixture.note,
+        soId: fixture.soId,
+      });
+
+      const outcome = await reconcileJubelioChannelStatusForOrder(db!, {
+        orderId: fixture.orderId,
+        gateway: gateway as unknown as JubelioSalesGateway,
+      });
+
+      expect(outcome.status).toBe("needs_investigation");
+      expect(gateway.getForEditCalls).toHaveLength(0);
+      expect(gateway.editCalls).toHaveLength(0);
+      const [intent] = await getIntent(fixture.orderId);
+      expect(intent).toMatchObject({
+        status: "needs_investigation",
+        mismatchReason: "SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE",
+      });
+    });
+
+    it("recovers an aged possibly_sent v2 intent GET-only (stored envelope passed, zero re-POST, IDs preserved)", async () => {
+      const suffix = `v2-recovery-${Date.now()}`;
+      const fixture = await seedMirrorFixture({
+        suffix,
+        orderStatus: "ready_for_pickup",
+        withInvoicePayment: true,
+        unitPrice: V2_GOODS,
+        createRequestExtra: v2Envelope(),
+        orderPricing: {},
+      });
+      // Crash right after the claim: the edit pre-read never returned.
+      const claimer = controlledGateway({
+        note: fixture.note,
+        soId: fixture.soId,
+        editSnapshot: new Error("timeout — outcome unknown"),
+      });
+      const first = await reconcileJubelioChannelStatusForOrder(db!, {
+        orderId: fixture.orderId,
+        gateway: claimer as unknown as JubelioSalesGateway,
+      });
+      expect(first.status).toBe("in_flight");
+      expect(claimer.editCalls).toHaveLength(0);
+      const [claimed] = await getIntent(fixture.orderId);
+      expect(claimed.status).toBe("possibly_sent");
+      expect(claimed.salesOrderId).toBe(fixture.soId);
+
+      // The claim AGES (crash owner never returns): only an aged claim is
+      // GET-reconciled, and the GET shows the marker was applied.
+      await db!
+        .update(jubelioChannelStatusIntents)
+        .set({ dispatchedAt: new Date(Date.now() - 2 * 60 * 60_000) })
+        .where(eq(jubelioChannelStatusIntents.id, claimed.id));
+      const recovered = controlledGateway({
+        note: fixture.note,
+        soId: fixture.soId,
+        editSnapshot: v2EditSnapshot({
+          note: fixture.note,
+          soId: fixture.soId,
+          channelStatus: "Siap Proses",
+        }),
+      });
+
+      const second = await reconcileJubelioChannelStatusForOrder(db!, {
+        orderId: fixture.orderId,
+        gateway: recovered as unknown as JubelioSalesGateway,
+      });
+
+      expect(second.status).toBe("confirmed");
+      // GET-only: the recovery read carries the stored envelope and the
+      // edited target is never re-POSTed.
+      expect(recovered.editCalls).toHaveLength(0);
+      expect(recovered.getForEditCalls).toHaveLength(1);
+      expect(recovered.getForEditCalls[0]).toEqual({
+        salesOrderId: fixture.soId,
+        expected: v2Envelope(),
+      });
+      const [confirmed] = await getIntent(fixture.orderId);
+      expect(confirmed).toMatchObject({
+        status: "confirmed",
+        salesOrderId: fixture.soId,
+        lastObservedStatus: "Siap Proses",
+      });
+    });
+
+    it("fails closed on an unknown stored version during GET-only recovery: no read, no re-POST", async () => {
+      const suffix = `v2-recovery-unknown-${Date.now()}`;
+      const fixture = await seedMirrorFixture({
+        suffix,
+        orderStatus: "ready_for_pickup",
+        withInvoicePayment: true,
+        unitPrice: V2_GOODS,
+        createRequestExtra: { providerContractVersion: null },
+      });
+      // Fixture state: a claimed (possibly sent) edit whose owner never
+      // returned — the only path that may resolve it is GET-only recovery.
+      await db!.insert(jubelioChannelStatusIntents).values({
+        id: `${PREFIX}intent-v2-recovery-unknown-${suffix}`,
+        orderId: fixture.orderId,
+        salesOrderId: fixture.soId,
+        targetVersion: 1,
+        targetStatus: "Siap Proses",
+        status: "possibly_sent",
+        attemptCount: 1,
+        dispatchedAt: new Date(Date.now() - 2 * 60 * 60_000),
+      });
+      const gateway = controlledGateway({
+        note: fixture.note,
+        soId: fixture.soId,
+        editSnapshot: v2EditSnapshot({
+          note: fixture.note,
+          soId: fixture.soId,
+          channelStatus: "Siap Proses",
+        }),
+      });
+
+      const outcome = await reconcileJubelioChannelStatusForOrder(db!, {
+        orderId: fixture.orderId,
+        gateway: gateway as unknown as JubelioSalesGateway,
+      });
+
+      expect(outcome.status).toBe("needs_investigation");
+      expect(gateway.getForEditCalls).toHaveLength(0);
+      expect(gateway.editCalls).toHaveLength(0);
+      const [intent] = await getIntent(fixture.orderId);
+      expect(intent).toMatchObject({
+        status: "needs_investigation",
+        mismatchReason: "SNAPSHOT_PROVIDER_VERSION_UNSUPPORTED",
+      });
+      expect(intent.status).not.toBe("confirmed");
+    });
+
+    // ---------------------------------------------------------------
+    // Ticket 01 safety convergence: the runtime must validate the PAIRED
+    // stored records (order row versions + immutable financial snapshot vs the
+    // create intent) BEFORE creating/reading/writing against the gateway. A
+    // v2 intent on a legacy 0/0/0 row, or a row whose frozen money disagrees
+    // with the intent, is a durable investigation case with ZERO provider
+    // traffic — never a silently accepted legacy read.
+    // ---------------------------------------------------------------
+    it("rejects a v2 create intent paired with a legacy 0/0/0 order row before any provider read or write", async () => {
+      const suffix = `v2-pair-legacy-${Date.now()}`;
+      const fixture = await seedMirrorFixture({
+        suffix,
+        orderStatus: "ready_for_pickup",
+        withInvoicePayment: true,
+        unitPrice: V2_GOODS,
+        createRequestExtra: v2Envelope(),
+        // No `orderPricing`: the order row stays the legacy 0/0/0 pair.
+      });
+      const gateway = controlledGateway({
+        note: fixture.note,
+        soId: fixture.soId,
+        editSnapshot: v2EditSnapshot({ note: fixture.note, soId: fixture.soId }),
+      });
+
+      const outcome = await reconcileJubelioChannelStatusForOrder(db!, {
+        orderId: fixture.orderId,
+        gateway: gateway as unknown as JubelioSalesGateway,
+      });
+
+      expect(outcome.status).toBe("needs_investigation");
+      expect(gateway.getForEditCalls).toHaveLength(0);
+      expect(gateway.editCalls).toHaveLength(0);
+      const [intent] = await getIntent(fixture.orderId);
+      expect(intent).toMatchObject({
+        status: "needs_investigation",
+        mismatchReason: "SNAPSHOT_PROVIDER_VERSION_UNSUPPORTED",
+      });
+      expect(intent.payload).toBeNull();
+      const [order] = await db!
+        .select()
+        .from(orders)
+        .where(eq(orders.id, fixture.orderId));
+      expect(order.status).toBe("ready_for_pickup");
+      expect(order.paymentStatus).toBe("paid");
+    });
+
+    it("rejects a v2 intent whose order financial snapshot disagrees with it before any provider read or write", async () => {
+      const suffix = `v2-pair-drift-${Date.now()}`;
+      const fixture = await seedMirrorFixture({
+        suffix,
+        orderStatus: "ready_for_pickup",
+        withInvoicePayment: true,
+        unitPrice: V2_GOODS,
+        createRequestExtra: v2Envelope(),
+        // The order row is internally consistent (goods 150000 + net shipping
+        // 10000 → payable 160000) but the STORED INTENT froze 30000/180000.
+        orderPricing: { shippingCost: 10_000 },
+      });
+      const gateway = controlledGateway({
+        note: fixture.note,
+        soId: fixture.soId,
+        editSnapshot: v2EditSnapshot({ note: fixture.note, soId: fixture.soId }),
+      });
+
+      const outcome = await reconcileJubelioChannelStatusForOrder(db!, {
+        orderId: fixture.orderId,
+        gateway: gateway as unknown as JubelioSalesGateway,
+      });
+
+      expect(outcome.status).toBe("needs_investigation");
+      expect(gateway.getForEditCalls).toHaveLength(0);
+      expect(gateway.editCalls).toHaveLength(0);
+      const [intent] = await getIntent(fixture.orderId);
+      expect(intent).toMatchObject({
+        status: "needs_investigation",
+        mismatchReason: "SNAPSHOT_RECORD_DRIFT",
+      });
+      expect(intent.payload).toBeNull();
+    });
+
+    it("fails closed during GET-only recovery when the paired order record drifted: no read, no re-POST", async () => {
+      const suffix = `v2-recovery-drift-${Date.now()}`;
+      const fixture = await seedMirrorFixture({
+        suffix,
+        orderStatus: "ready_for_pickup",
+        withInvoicePayment: true,
+        unitPrice: V2_GOODS,
+        createRequestExtra: v2Envelope(),
+        orderPricing: { netGoods: V2_GOODS - 1, expectedProviderPayable: V2_PAYABLE - 1 },
+      });
+      await db!.insert(jubelioChannelStatusIntents).values({
+        id: `${PREFIX}intent-v2-recovery-drift-${suffix}`,
+        orderId: fixture.orderId,
+        salesOrderId: fixture.soId,
+        targetVersion: 1,
+        targetStatus: "Siap Proses",
+        status: "possibly_sent",
+        attemptCount: 1,
+        dispatchedAt: new Date(Date.now() - 2 * 60 * 60_000),
+      });
+      const gateway = controlledGateway({
+        note: fixture.note,
+        soId: fixture.soId,
+        editSnapshot: v2EditSnapshot({
+          note: fixture.note,
+          soId: fixture.soId,
+          channelStatus: "Siap Proses",
+        }),
+      });
+
+      const outcome = await reconcileJubelioChannelStatusForOrder(db!, {
+        orderId: fixture.orderId,
+        gateway: gateway as unknown as JubelioSalesGateway,
+      });
+
+      expect(outcome.status).toBe("needs_investigation");
+      expect(gateway.getForEditCalls).toHaveLength(0);
+      expect(gateway.editCalls).toHaveLength(0);
+      const [intent] = await getIntent(fixture.orderId);
+      expect(intent).toMatchObject({
+        status: "needs_investigation",
+        mismatchReason: "SNAPSHOT_RECORD_DRIFT",
+      });
     });
   }
 );

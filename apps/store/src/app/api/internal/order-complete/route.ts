@@ -8,13 +8,31 @@ import {
   orderCompletedEmailHTML,
   orderCompletedEmailText,
 } from "@/lib/email-templates-order";
-import { requestLogger, serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { reconcileJubelioChannelStatusForOrder } from "@/lib/jubelio-channel-mirror";
 
 // Internal endpoint called by the admin app to mark an order as completed
 // and send Email #2 (Order Completed). Guarded by an HMAC secret derived
 // from BETTER_AUTH_SECRET so only the admin app (which shares the secret)
 // can call it.
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("order-complete");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Next/SMTP/
+ * provider tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 function computeExpectedSecret(orderId: string): string {
   const authSecret = process.env.BETTER_AUTH_SECRET;
@@ -25,8 +43,8 @@ function computeExpectedSecret(orderId: string): string {
     .digest("hex");
 }
 
-export async function POST(request: NextRequest) {
-  const log = requestLogger(request, { module: "order-complete" });
+/** HTTP adapter internal: verifikasi HMAC, commit `completed`, jadwalkan efek samping. */
+async function completeOrder(request: NextRequest): Promise<Response> {
   let orderId: string | undefined;
   try {
     const body = await request.json();
@@ -42,12 +60,11 @@ export async function POST(request: NextRequest) {
     }
     const completedOrderId = orderId;
 
-    const orderLog = log.child({ orderId });
-
     // Verify the shared secret
     const expectedSecret = computeExpectedSecret(orderId);
     if (!expectedSecret || secret !== expectedSecret) {
-      orderLog.error("invalid shared secret — unauthorized");
+      // `orderId` belum terverifikasi di titik ini (input klien): tidak masuk log.
+      log.error("invalid shared secret — unauthorized");
       return NextResponse.json(
         { success: false, error: "Unauthorized" },
         { status: 403 }
@@ -62,7 +79,7 @@ export async function POST(request: NextRequest) {
       .limit(1);
 
     if (orderRows.length === 0) {
-      orderLog.error("order not found");
+      log.error(`Order ${orderId}: order not found`);
       return NextResponse.json(
         { success: false, error: "Order not found" },
         { status: 404 }
@@ -73,7 +90,9 @@ export async function POST(request: NextRequest) {
 
     // Only allow completion from ready_for_pickup
     if (order.status !== "ready_for_pickup") {
-      orderLog.warn("order not in ready_for_pickup", { status: order.status });
+      log.warn(
+        `Order ${orderId}: order not in ready_for_pickup (status ${order.status})`
+      );
       return NextResponse.json(
         {
           success: false,
@@ -93,7 +112,7 @@ export async function POST(request: NextRequest) {
       })
       .where(eq(orders.id, orderId));
 
-    orderLog.info("order completed", { completedAt: completedAt.toISOString() });
+    log.info(`Order ${orderId}: order completed`);
 
     // Ticket #06 — best-effort channel mirror trigger, scheduled via `after()`
     // so the admin's pickup-verification request never waits on the Jubelio
@@ -106,15 +125,14 @@ export async function POST(request: NextRequest) {
       try {
         const mirror = await reconcileJubelioChannelStatusForOrder(db, {
           orderId: completedOrderId,
-          logger: orderLog,
         });
-        orderLog.info("channel-status mirror reconciled after completion", {
-          outcome: mirror.status,
-        });
-      } catch (mirrorError) {
-        orderLog.error(
-          "channel-status mirror reconciliation failed after completion",
-          { error: serializeError(mirrorError) }
+        log.info(
+          `Order ${completedOrderId}: channel-status mirror reconciled after completion (outcome ${mirror.status})`
+        );
+      } catch {
+        log.error(
+          `Order ${completedOrderId}: channel-status mirror reconciliation failed after completion`,
+          new RouteLogError("channel-status mirror reconciliation failed")
         );
       }
     });
@@ -152,11 +170,11 @@ export async function POST(request: NextRequest) {
           html,
           text,
         });
-      } catch (emailError) {
-        log.error("completion email failed", {
-          orderId: completedOrderId,
-          error: serializeError(emailError),
-        });
+      } catch {
+        log.error(
+          `Order ${completedOrderId}: completion email failed`,
+          new RouteLogError("completion email failed")
+        );
       }
     });
 
@@ -164,14 +182,17 @@ export async function POST(request: NextRequest) {
       success: true,
       completedAt: completedAt.toISOString(),
     });
-  } catch (error) {
-    log.error("complete order failed", {
-      orderId,
-      error: serializeError(error),
-    });
+  } catch {
+    log.error(
+      `complete order failed (order ${orderId ?? "tidak diketahui"})`,
+      new RouteLogError("complete order failed")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to complete order" },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(completeOrder, "order-complete");

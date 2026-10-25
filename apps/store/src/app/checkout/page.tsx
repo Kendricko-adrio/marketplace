@@ -158,6 +158,15 @@ interface CheckoutPreviewData {
   deliveryService?: DeliveryQuoteService;
 }
 
+interface StockAdjustmentResponse {
+  code?: string;
+  error?: string;
+  adjustments?: {
+    cartItemId: string;
+    availableQuantity: number;
+  }[];
+}
+
 interface BranchWithHours {
   id: string;
   name: string;
@@ -1058,6 +1067,42 @@ export default function CheckoutPage() {
     finally { requestInFlight.current = false; setSubmitting(false); }
   }
 
+  // Stock refusal is NOT an order: apply only the server's saved reductions,
+  // remove zero-stock items from selection (not cart), and require fresh approval.
+  function handleStockAdjustment(data: StockAdjustmentResponse): boolean {
+    if (data.code !== "CHECKOUT_STOCK_ADJUSTED" || !data.adjustments?.length) return false;
+    const adjusted = new Map(data.adjustments.map((item) => [item.cartItemId, item.availableQuantity]));
+    setCart((current) => {
+      if (!current) return current;
+      const items = current.items.map((item) => {
+        const quantity = adjusted.get(item.id);
+        return quantity !== undefined && quantity > 0 ? { ...item, quantity } : item;
+      });
+      return { ...current, items, subtotal: items.reduce((sum, item) => sum + Number(item.variant.price) * item.quantity, 0) };
+    });
+    const remainingIds = new Set([...selectedItemIds].filter((id) => adjusted.get(id) !== 0));
+    setSelectedItemIds(remainingIds);
+    try {
+      sessionStorage.setItem("checkoutSelectedItemIds", JSON.stringify([...remainingIds]));
+    } catch {
+      // The current checkout selection remains authoritative if storage is unavailable.
+    }
+    setConfirmed(false);
+    setStockAdjustmentMessage(data.error || "Stok berubah. Jumlah pesanan telah disesuaikan. Periksa kembali pesanan sebelum melanjutkan.");
+    refreshCart();
+    if (fulfillmentMethod === "delivery") {
+      setDeliveryService(null);
+      setRepriceSync(null);
+      setRepriceShown(false);
+      setStep(1); // The panel's quantity fingerprint triggers a fresh quote.
+    }
+    if (!remainingIds.size) {
+      toast.error(data.error || "Stok barang pilihan habis. Barang tetap di keranjang.");
+      router.push("/cart");
+    }
+    return true;
+  }
+
   // ===== Place order =====
   const handlePlaceOrder = async () => {
     if (!confirmed || requestInFlight.current) return;
@@ -1116,7 +1161,7 @@ export default function CheckoutPage() {
             originFingerprint: deliveryService.originFingerprint,
           }),
         });
-        const data = (await res.json()) as {
+        const data = (await res.json()) as StockAdjustmentResponse & {
           success: boolean;
           orderId?: string;
           redirectUrl?: string;
@@ -1125,6 +1170,7 @@ export default function CheckoutPage() {
           data?: { services?: DeliveryQuoteService[] };
           error?: string;
         };
+        if (!data.success && handleStockAdjustment(data)) return;
         if (!data.success && data.code === "DELIVERY_REPRICE_REQUIRED") {
           // Keep the review; require a FRESH approval: clear the confirmed
           // checkbox, sync the fresh services into the panel (fresh money;
@@ -1178,6 +1224,7 @@ export default function CheckoutPage() {
         }),
       });
       const data = await res.json();
+      if (!data.success && handleStockAdjustment(data)) return;
       if (!data.success) {
         toast.error(data.error || "Failed to place order.");
         return;
@@ -1247,6 +1294,11 @@ export default function CheckoutPage() {
       </Link>
 
       <h1 className="text-3xl font-bold mb-6">Checkout</h1>
+      {stockAdjustmentMessage && (
+        <p role="alert" className="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium text-amber-900 dark:bg-amber-950/50 dark:text-amber-100">
+          {stockAdjustmentMessage}
+        </p>
+      )}
 
       {/* Step Indicator */}
       <div className="mb-8">

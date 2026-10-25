@@ -59,6 +59,7 @@ import { createModuleLogger, getRequestId, withRequestContext } from "@/lib/logg
 import { claimAndFailOrder } from "@/lib/order-finalize";
 import { initializeReservedOrderPayment } from "@/lib/payment-initialization";
 import { verifyCheckoutStock } from "@marketplace/db/src/checkout-live-stock";
+import { persistCheckoutStockAdjustments, checkoutStockAdjustmentMessage } from "@/lib/checkout-stock-adjustment";
 import {
   DeliveryQuoteDataError,
   loadQuoteOriginBranch,

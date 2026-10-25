@@ -123,7 +123,7 @@ Pengecualian yang diketahui (lihat
 | POST | `/api/cart/items` | client-session | Add variant@branch to cart (merge) |
 | PUT | `/api/cart/items/{id}` | client-session | Update cart item quantity |
 | DELETE | `/api/cart/items/{id}` | client-session | Remove a cart item |
-| POST | `/api/cart/validate-checkout` | client-session | Pre-checkout branch validation (stock is checked live at place-order) |
+| POST | `/api/cart/validate-checkout` | client-session | Validate branch and live stock before entering checkout; adjust insufficient quantities |
 | POST | `/api/checkout/validate-step-2` | client-session | Validate pickup slot vs operating hours |
 | POST | `/api/checkout/preview` | client-session | Authoritative pickup review: pricing + signed review token (read-only) |
 | POST | `/api/discounts/available` | client-session | Daftar Coupon publik pickup/delivery + disabled reason (read-only, tanpa reserve) |
@@ -490,11 +490,11 @@ Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, 
 
 #### `POST` `/api/cart/validate-checkout`
 - **Auth**: client-session
-- **Purpose**: Pre-checkout validation that the selected items' branch is still active.
+- **Purpose**: Validate the selected branch and live Jubelio stock when the customer clicks Checkout in cart, before entering `/checkout`.
 - **Params**: —
 - **Body**: `{ selectedItemIds: string[] (min 1) }`
-- **Response**: 200 `{ success: true }`; 400 invalid body / `"Cart is empty"` / `"No selected items to checkout"` / multi-branch error / `{ success: false, code: "BRANCH_INACTIVE", branchName, removedItemCount }`; 401 if unauth; 500 on error
-- **Notes**: Enforces single-branch checkout. On inactive/removed branch, deletes ALL of that branch's items from the cart. Stock is not checked or mutated here; the provider read and atomic hold happen during place-order.
+- **Response**: 200 `{ success: true }` or `{ success: false, code: "BRANCH_INACTIVE", branchName, removedItemCount }`; 400 invalid body / empty cart / missing selected items / multi-branch error; 401 if unauth; 409 missing Jubelio mapping or `{ success: false, code: "CHECKOUT_STOCK_ADJUSTED", error, adjustments: [{ cartItemId, productName, requestedQuantity, availableQuantity }] }`; 503 unavailable/incomplete/inconsistent provider stock; 500 on error
+- **Notes**: Enforces single-branch checkout and ownership of all selected IDs. On inactive/removed branch, deletes ALL of that branch's items from the caller's cart. For an active mapped branch, reads selected stock live and reconciles the mirror without clearing local holds. A verified shortage saves positive sellable quantities in one quantity-guarded transaction, returns 409 and keeps the customer in cart (e.g. 31 requested, 20 sellable → quantity 20). UI shows a popup, updates totals, retains available-item selection and requires another Checkout click. Zero-stock items stay in cart but are deselected; failed verification does not change quantities. No reservation, order, SO or payment is created here. Place-order still re-reads stock and acquires its atomic hold at Bayar Sekarang.
 
 #### `POST` `/api/checkout/validate-step-2`
 - **Auth**: client-session

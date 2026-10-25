@@ -50,6 +50,11 @@ test("Bayar Sekarang shows a clear provider-stock error and keeps the cart", asy
   const item = cart.data.items.find((i: { variantId: string; branchId: string }) => i.variantId === variant.id && i.branchId === branchId);
   try {
     let providerUnavailable = false;
+    // This test isolates the FINAL payment gate; the new cart gate is covered
+    // separately in checkout-stock-adjustment.spec.ts. Never read real Jubelio.
+    await page.route("**/api/cart/validate-checkout", (route) => route.fulfill({
+      status: 200, contentType: "application/json", body: JSON.stringify({ success: true }),
+    }));
     await page.route("**/api/checkout/place-order", async (route) => {
       await route.fulfill({
         status: providerUnavailable ? 503 : 409,

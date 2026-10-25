@@ -94,6 +94,7 @@ async function validateCheckout(request: NextRequest): Promise<Response> {
         variantId: cartItems.variantId,
         quantity: cartItems.quantity,
         productName: products.name,
+        jubelioItemId: productVariants.jubelioItemId,
       })
       .from(cartItems)
       .innerJoin(productVariants, eq(cartItems.variantId, productVariants.id))
@@ -102,7 +103,7 @@ async function validateCheckout(request: NextRequest): Promise<Response> {
         and(eq(cartItems.cartId, cart.id), inArray(cartItems.id, selectedItemIds))
       );
 
-    if (selectedItems.length === 0) {
+    if (selectedItems.length !== new Set(selectedItemIds).size) {
       return NextResponse.json(
         { success: false, error: "No selected items to checkout" },
         { status: 400 }
@@ -138,6 +139,7 @@ async function validateCheckout(request: NextRequest): Promise<Response> {
         id: branches.id,
         name: branches.name,
         status: branches.status,
+        jubelioLocationId: branches.jubelioLocationId,
       })
       .from(branches)
       .where(eq(branches.id, branchId))

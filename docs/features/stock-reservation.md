@@ -25,6 +25,27 @@ rows.
   last-known catalog stock is provisional. A local `updated_at` or old
   `provider_stock_synced_at` is never proof of live availability. Ambiguous
   create outcomes keep the hold and go to manual review.
+- The cart's **Checkout** button verifies selected Jubelio stock before
+  navigating to `/checkout` (`POST /api/cart/validate-checkout`). If 31 units
+  are requested but only 20 are sellable, quantity becomes 20, a popup explains
+  the change, totals refresh and the customer stays in cart. Positive-stock
+  items remain selected for a deliberate second Checkout click; zero-stock
+  items remain in cart but are deselected. This gate creates no stock hold or
+  order. **Bayar Sekarang** independently repeats the live read and atomic
+  hold because availability can change while filling checkout.
+- On a verified shortage at either gate, checkout refuses the entire submission
+  with HTTP 409 `CHECKOUT_STOCK_ADJUSTED`. Every insufficient selected item
+  with positive sellable stock is reduced in the customer's cart in one
+  quantity-guarded transaction (e.g. 10 requested, 5 sellable → quantity 5).
+  Zero-stock items remain unchanged in cart but are deselected from checkout;
+  if none remain, the customer returns to cart. The page shows the changes,
+  recalculates totals, clears confirmation and never automatically reposts or
+  opens payment. Delivery returns to fulfillment and requires a fresh quote
+  and service selection. Missing/invalid/unreachable provider observations
+  never adjust quantities. Later atomic-hold races still fail closed and ask
+  the customer to retry; no quantity adjustment uses an unverified snapshot.
+  Contract tests: `apps/store/src/app/api/checkout/place-order/route.test.ts`
+  and `e2e/store/checkout-stock-adjustment.spec.ts` (provider APIs stubbed).
 - Concurrency guarantees are proven against PostgreSQL in
   `apps/store/src/lib/jubelio-sales-holds.db.test.ts` (parallel checkouts
   cannot oversell; a sync refresh never clears or double-subtracts a hold).

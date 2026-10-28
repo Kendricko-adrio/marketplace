@@ -642,7 +642,17 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
     const result = await placed.json();
     expect(result.success).toBe(false);
     expect(result.code).toBe("CHECKOUT_REVIEW_REQUIRED");
-    expect((await getMockRequests()).filter((entry) => !entry.path.startsWith("/__control/"))).toEqual([]);
+    // Preflight pajak boleh membaca master (`/login` + `GET /taxes/`), tetapi
+    // review yang tidak sah tidak boleh menghasilkan penulisan bisnis maupun
+    // pembacaan stok/provider lain.
+    expect(
+      (await getMockRequests()).filter(
+        (entry) =>
+          !entry.path.startsWith("/__control/") &&
+          !(entry.path === "/login") &&
+          !(entry.method === "GET" && entry.path === "/taxes/")
+      )
+    ).toEqual([]);
   });
 
   test("place-order requires a new review when authoritative source price changes", async () => {
@@ -666,7 +676,14 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
       });
       expect(placed.status()).toBe(409);
       expect((await placed.json()).code).toBe("CHECKOUT_REVIEW_REQUIRED");
-      expect((await getMockRequests()).filter((entry) => !entry.path.startsWith("/__control/"))).toEqual([]);
+      expect(
+        (await getMockRequests()).filter(
+          (entry) =>
+            !entry.path.startsWith("/__control/") &&
+            !(entry.path === "/login") &&
+            !(entry.method === "GET" && entry.path === "/taxes/")
+        )
+      ).toEqual([]);
     } finally {
       await pool.query("UPDATE product_variant SET price='150000.00' WHERE id=$1", [FIXTURE_VARIANT_ID]);
     }
@@ -750,7 +767,15 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
       const limitedReplay = await storeContext.request.post("/api/checkout/place-order", { data: body });
       expect(limitedReplay.status()).toBe(200);
       expect((await limitedReplay.json()).data.orderId).toBe(orderId);
-      expect((await getMockRequests()).filter((entry) => !entry.path.startsWith("/__control/"))).toEqual([]);
+      // Preflight pajak hanya boleh membaca master; tidak ada penulisan bisnis.
+      expect(
+        (await getMockRequests()).filter(
+          (entry) =>
+            !entry.path.startsWith("/__control/") &&
+            !(entry.path === "/login") &&
+            !(entry.method === "GET" && entry.path === "/taxes/")
+        )
+      ).toEqual([]);
     } finally {
       await pool.query("UPDATE product_variant SET price='150000.00' WHERE id=$1", [FIXTURE_VARIANT_ID]);
     }
@@ -774,7 +799,15 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
       expect(response.status()).toBe(409);
       expect((await response.json()).code).toBe("CHECKOUT_REVIEW_REQUIRED");
     }
-    expect((await getMockRequests()).filter((entry) => !entry.path.startsWith("/__control/"))).toEqual([]);
+    // Preflight pajak hanya boleh membaca master; tidak ada penulisan bisnis.
+    expect(
+      (await getMockRequests()).filter(
+        (entry) =>
+          !entry.path.startsWith("/__control/") &&
+          !(entry.path === "/login") &&
+          !(entry.method === "GET" && entry.path === "/taxes/")
+      )
+    ).toEqual([]);
     expect((await storeContext.request.get(`/api/checkout/requests/${key}`)).status()).toBe(404);
   });
 
@@ -853,7 +886,9 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
     expect(placed.status()).toBe(201);
     const detail = (await (await storeContext.request.get(`/api/orders/${result.data.orderId}`)).json()).data;
     expectRupiah(detail.total, 196500, "delivery accepted total");
-    expectRupiah(detail.pricingSnapshot.expectedProviderPayable, 180000, "delivery provider payable");
+    // Kontrak provider3: payable provider = net barang 150000 + PPN 16500 +
+    // net ongkir 30000 = 196500, sama dengan total customer.
+    expectRupiah(detail.pricingSnapshot.expectedProviderPayable, 196500, "delivery provider payable");
   });
 
   test("a receipt insert failure rolls back the order and stock hold and the same key can succeed later", async () => {
@@ -1389,7 +1424,9 @@ test.describe("shipping subsidy delivery (ticket 11)", () => {
   const SHIP_TOTAL = 176_500;
   const SHIP_NET = 10_000;
   const SHIP_SUBSIDY = 20_000;
-  const SHIP_PAYABLE = 160_000;
+  // Kontrak provider3: payable = net goods 150000 + PPN 16500 + net ongkir
+  // 10000 = 176500, sama dengan total customer (tanpa tagihan PPN kedua).
+  const SHIP_PAYABLE = 176_500;
 
   test.beforeAll(async () => {
     await pool.query(
@@ -1692,7 +1729,7 @@ test.describe("shipping subsidy delivery (ticket 11)", () => {
          FROM jubelio_sales_operation WHERE order_id=$1 AND type='create'`,
       [result.data.orderId]);
     expect(intentRow.rows[0]).toEqual({
-      original: "30000", net: "10000", payable: "160000",
+      original: "30000", net: "10000", payable: "176500",
     });
 
     // Cart berubah setelah review: token lama tidak boleh membawa promo/uang
@@ -1756,4 +1793,168 @@ test.describe("shipping subsidy delivery (ticket 11)", () => {
     const detail = await (await storeContext.request.get(`/api/orders/${result.data.orderId}`)).json();
     expect(detail.success).toBe(true);
   }, 90_000);
+});
+
+// =========================================================
+// Preflight pajak provider3 — blokir sebelum pembayaran
+// =========================================================
+// Spec PPN §5.5/§8.12: config/master yang tidak sah menahan checkout dengan
+// 503 CHECKOUT_TAX_UNAVAILABLE, copy final, form/cart/promo dipertahankan, dan
+// TIDAK ada SO/invoice/payment/Midtrans. Lookup master (`GET /taxes/`) adalah
+// read-only yang sah; yang dilarang adalah penulisan bisnis.
+const CHECKOUT_TAX_UNAVAILABLE_COPY =
+  "Checkout belum dapat diproses karena konfigurasi pajak belum sesuai. Silakan coba lagi nanti.";
+
+/** Master yang rate-nya berbeda dari `tax.ppnRatePercent=11`. */
+const MISMATCHED_TAX_MASTER = [
+  {
+    tax_id: -2,
+    tax_name: "PPN 12%",
+    rate: "12.00",
+    tax_in: "1-1303 PPN Masukan",
+    tax_out: "2-2103 PPN Pengeluaran",
+  },
+];
+
+test.describe("mock-only checkout tax preflight (spec PPN)", () => {
+  test.describe.configure({ mode: "serial", timeout: 60_000 });
+
+  async function seedCartLine(): Promise<string> {
+    await storeContext.request.delete("/api/cart");
+    expect(
+      (
+        await storeContext.request.post("/api/cart/items", {
+          data: { variantId: FIXTURE_VARIANT_ID, branchId: homeBranchId, quantity: 1 },
+        })
+      ).ok()
+    ).toBe(true);
+    const cart = await (await storeContext.request.get("/api/cart")).json();
+    return cart.data.items[0].id as string;
+  }
+
+  /**
+   * Request yang bukan "penulisan bisnis": kontrol mock, autentikasi provider,
+   * lookup master pajak (read-only), dan probe stok terdokumentasi
+   * `POST /inventory/items/all-stocks/` yang dipakai halaman cart untuk
+   * memvalidasi ketersediaan (bukan pembuatan SO/invoice/payment/Midtrans).
+   */
+  function businessWrites(requests: MockRequestRecord[]): MockRequestRecord[] {
+    return requests.filter(
+      (entry) =>
+        !entry.path.startsWith("/__control/") &&
+        !(entry.path === "/login") &&
+        !(entry.method === "GET" && entry.path === "/taxes/") &&
+        !(entry.path === "/inventory/items/all-stocks/")
+    );
+  }
+
+  test("preview answers 503 CHECKOUT_TAX_UNAVAILABLE when the master rate differs and writes nothing", async () => {
+    const cartItemId = await seedCartLine();
+    const attemptsBefore = (
+      await pool.query<{ count: number }>(
+        "SELECT COUNT(*)::int AS count FROM checkout_attempt"
+      )
+    ).rows[0].count;
+    await mockControl("POST", "/__control/reset");
+    await mockControl("PUT", "/__control/taxes", { records: MISMATCHED_TAX_MASTER });
+    try {
+      const response = await storeContext.request.post(PREVIEW_PATH, {
+        data: {
+          phone: CONTACT_PHONE,
+          email: CONTACT_EMAIL,
+          pickupDate: nextOpenDate(),
+          pickupTime: PICKUP_TIME,
+          selectedItemIds: [cartItemId],
+          promoSelection: { kind: "none" },
+        },
+      });
+
+      expect(response.status()).toBe(503);
+      expect(response.headers()["cache-control"]).toBe("no-store");
+      const body = await response.json();
+      expect(body).toMatchObject({
+        success: false,
+        code: "CHECKOUT_TAX_UNAVAILABLE",
+        error: CHECKOUT_TAX_UNAVAILABLE_COPY,
+      });
+      expect(typeof body.requestId).toBe("string");
+      // Payload customer tidak boleh membawa detail internal master.
+      expect(JSON.stringify(body)).not.toContain("12.00");
+      expect(JSON.stringify(body)).not.toContain("-2");
+      expect(JSON.stringify(body)).not.toContain("PPN Pengeluaran");
+
+      // Hanya lookup master read-only; tidak ada penulisan bisnis/provider.
+      expect(businessWrites(await getMockRequests())).toEqual([]);
+
+      // Cart tidak berubah dan tidak ada attempt baru (tidak ada hold/order).
+      const cart = await (await storeContext.request.get("/api/cart")).json();
+      expect(cart.data.items).toHaveLength(1);
+      const attemptsAfter = (
+        await pool.query<{ count: number }>(
+          "SELECT COUNT(*)::int AS count FROM checkout_attempt"
+        )
+      ).rows[0].count;
+      expect(attemptsAfter).toBe(attemptsBefore);
+    } finally {
+      await mockControl("POST", "/__control/reset");
+    }
+  });
+
+  test("UI keeps the reviewed form and cart, shows the inline tax copy, and opens payment only after a successful retry", async () => {
+    await seedCartLine();
+    const location = await pool.query(
+      "SELECT jubelio_location_id FROM branch WHERE id=$1",
+      [homeBranchId]
+    );
+    await mockControl("POST", "/__control/reset");
+    // Halaman cart memvalidasi stok live sebelum navigasi; tanpa stok provider
+    // alur UI berhenti di dialog stok, bukan pada kasus pajak yang diuji.
+    await mockControl("POST", "/__control/stocks/ensure", {
+      locationId: location.rows[0].jubelio_location_id,
+      itemId: MOCK_ITEM_ID,
+      onHand: MOCK_STOCK_UNITS,
+      sellPrice: GOODS_AMOUNT,
+    });
+    await mockControl("PUT", "/__control/taxes", { records: MISMATCHED_TAX_MASTER });
+    const page = await storeContext.newPage();
+    try {
+      await page.goto("/cart");
+      await page.getByRole("checkbox").first().check();
+      await page.getByRole("button", { name: "Checkout" }).click();
+      await page.waitForURL("**/checkout");
+      await page.getByLabel("Tanggal Pickup *").fill(nextOpenDate());
+      await page.getByRole("combobox").click();
+      await page.getByRole("option", { name: PICKUP_TIME }).click();
+      await page.getByLabel("Nomor Telepon *").fill(CONTACT_PHONE);
+      await page.getByLabel("Email *").fill(CONTACT_EMAIL);
+      await page.getByRole("button", { name: "Lanjut" }).click();
+
+      const banner = page.getByTestId("checkout-tax-feedback");
+      await expect(banner).toBeVisible();
+      await expect(banner).toContainText(CHECKOUT_TAX_UNAVAILABLE_COPY);
+      await expect(banner).toHaveAttribute("role", "alert");
+      // Payment belum terbuka dan tidak ada penulisan bisnis.
+      await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toHaveCount(0);
+      expect(businessWrites(await getMockRequests())).toEqual([]);
+      // Form/cart dipertahankan.
+      const cart = await (await storeContext.request.get("/api/cart")).json();
+      expect(cart.data.items).toHaveLength(1);
+      await expect(page.getByLabel("Nomor Telepon *")).toHaveValue(CONTACT_PHONE);
+
+      // Konfigurasi master diperbaiki → satu aksi "Periksa ulang pesanan".
+      await mockControl("POST", "/__control/reset");
+      await banner.getByRole("button", { name: "Periksa ulang pesanan" }).click();
+      await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
+      await expect(page.getByTestId("checkout-tax-feedback")).toHaveCount(0);
+
+      // Retry tidak menggandakan submit: belum ada SO yang dibuat.
+      const salesOrderCreates = (await getMockRequests()).filter(
+        (entry) => entry.method === "POST" && entry.path === "/sales/orders/"
+      );
+      expect(salesOrderCreates).toHaveLength(0);
+    } finally {
+      await page.close();
+      await mockControl("POST", "/__control/reset");
+    }
+  });
 });

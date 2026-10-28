@@ -3,6 +3,11 @@ import {
   getSharedJubelioRequestScheduler,
   type JubelioRequestScheduler,
 } from "./jubelio-request-scheduler";
+import {
+  parseProviderTaxRatePercent,
+  parseValidatedProviderTax,
+  type ValidatedProviderTax,
+} from "@marketplace/db/src/provider-tax";
 import { createModuleLogger } from "./logger";
 
 /**
@@ -102,10 +107,31 @@ export type JubelioSalesOrderItemInput = {
  * provider payable (net goods + net shipping).
  */
 export type JubelioSalesExpectedEnvelope = {
-  providerContractVersion: 2;
+  /**
+   * 2 = payable provider tanpa pajak provider; 3 = PPN checkout ikut tercatat
+   * pada SO (`providerTax` + `tax_amount` per line) sehingga payable provider
+   * sama dengan total customer.
+   */
+  providerContractVersion: 2 | 3;
   originalShipmentCost: number;
   shippingCost: number;
   expectedProviderPayable: number;
+  /** Kontrak3 saja: identitas + rate master yang dibekukan di snapshot. */
+  providerTax?: ValidatedProviderTax;
+};
+
+/**
+ * Proyeksi minimal satu record master pajak (`GET /taxes/`) untuk writer
+ * provider3. Hanya identitas, rate kanonik, dan ketersediaan akun pajak
+ * keluaran: response master mentah (nama akun penuh, `tax_in`) tidak pernah
+ * diekspor ke service/log.
+ */
+export type JubelioTaxRecord = {
+  taxId: number;
+  /** Rate kanonik `0..100`, maksimal 6 digit pecahan. */
+  ratePercent: string;
+  /** `tax_out` master atau `null` bila record tidak memetakan akun keluaran. */
+  outputAccount: string | null;
 };
 
 export type JubelioSalesOrderCreateInput = {
@@ -137,8 +163,10 @@ export type JubelioSalesOrderCreateInput = {
   originalShipmentCost?: number;
   /** Contract v2 only: net customer shipping after subsidy (pickup: 0). */
   shippingCost?: number;
-  /** Contract v2 only: expected provider payable = net goods + net shipping. */
+  /** Contract v2/v3: expected provider payable (v3 termasuk PPN barang). */
   expectedProviderPayable?: number;
+  /** Contract v3 only: frozen tax identity/rate from the validated preflight. */
+  providerTax?: unknown;
 };
 
 export type JubelioSalesOrderItem = {
@@ -147,6 +175,9 @@ export type JubelioSalesOrderItem = {
   price: number;
   amount: number;
   unit: string;
+  /** GET tax identity/nominal; WAJIB ada saat memverifikasi kontrak3. */
+  taxId?: number | null;
+  taxAmount?: number | null;
 };
 
 /** One SO item line as needed for a full-payload edit (detail id REQUIRED). */
@@ -262,6 +293,9 @@ export type JubelioInvoiceItem = {
   price: number;
   amount: number;
   unit: string;
+  /** ADDITIVE (kontrak3): identitas/nominal pajak baris invoice. */
+  taxId?: number | null;
+  taxAmount?: number | null;
 };
 
 /**
@@ -520,6 +554,15 @@ const CONTRACT_MAX_ITEM_LINES = 50;
 /** Bounded cart (spec §4.3): quantity 1..99 per variant. */
 const CONTRACT_MAX_ITEM_QUANTITY = 99;
 
+/**
+ * Bounds of the read-only master tax scan. The documented pagination is
+ * `page`/`pageSize`; 50 pages x 100 records is a defensive ceiling, not a
+ * provider limit — a list that cannot be fully scanned is `null`/unavailable.
+ */
+const TAX_PAGE_SIZE = 100;
+const TAX_MAX_PAGES = 50;
+const TAX_NULL_ACCOUNT = new Set<unknown>([null, undefined, ""]);
+
 function isContractMoney(value: unknown): value is number {
   return (
     typeof value === "number" &&
@@ -552,15 +595,16 @@ function assertExpectedEnvelope(
         originalShipmentCost?: number;
         shippingCost?: number;
         expectedProviderPayable?: number;
+        providerTax?: unknown;
       }
     | null
     | undefined
 ): JubelioSalesExpectedEnvelope | null {
   if (expected === undefined || expected === null) return null;
   const version = expected.providerContractVersion;
-  if (version !== 2) {
+  if (version !== 2 && version !== 3) {
     throw new JubelioSalesGatewayError(
-      `Jubelio sales order provider contract version ${String(version)} is unsupported: only the unversioned legacy snapshot and contract version 2 are accepted`,
+      `Jubelio sales order provider contract version ${String(version)} is unsupported: only the unversioned legacy snapshot and contract versions 2 and 3 are accepted`,
       { code: "CONTRACT_VERSION_UNSUPPORTED", ambiguous: false, retryable: false }
     );
   }
@@ -571,21 +615,47 @@ function assertExpectedEnvelope(
     !isContractMoney(expectedProviderPayable)
   ) {
     throw new JubelioSalesGatewayError(
-      `Jubelio sales order contract v2 input is invalid: original shipping, net shipping and expected provider payable must be whole Rupiah integers from 0 to ${CONTRACT_MONEY_MAX}`,
+      `Jubelio sales order contract v${version} input is invalid: original shipping, net shipping and expected provider payable must be whole Rupiah integers from 0 to ${CONTRACT_MONEY_MAX}`,
       { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
     );
   }
   if (shippingCost > originalShipmentCost) {
     throw new JubelioSalesGatewayError(
-      `Jubelio sales order contract v2 input is invalid: net shipping ${shippingCost} cannot exceed the original shipping ${originalShipmentCost}`,
+      `Jubelio sales order contract v${version} input is invalid: net shipping ${shippingCost} cannot exceed the original shipping ${originalShipmentCost}`,
+      { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
+    );
+  }
+  if (version === 2) {
+    // Kontrak2 tidak pernah membawa konteks pajak: field itu tanda payload
+    // bercampur versi dan harus gagal sebelum POST.
+    if (expected.providerTax !== undefined) {
+      throw new JubelioSalesGatewayError(
+        "Jubelio sales order contract v2 input is invalid: a provider tax context belongs to contract version 3",
+        { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
+      );
+    }
+    return {
+      providerContractVersion: 2,
+      originalShipmentCost,
+      shippingCost,
+      expectedProviderPayable,
+    };
+  }
+  let providerTax: ValidatedProviderTax;
+  try {
+    providerTax = parseValidatedProviderTax(expected.providerTax);
+  } catch {
+    throw new JubelioSalesGatewayError(
+      "Jubelio sales order contract v3 input is invalid: a validated provider tax context is required",
       { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
     );
   }
   return {
-    providerContractVersion: 2,
+    providerContractVersion: 3,
     originalShipmentCost,
     shippingCost,
     expectedProviderPayable,
+    providerTax,
   };
 }
 
@@ -605,16 +675,18 @@ function resolveContractEnvelope(input: {
   originalShipmentCost?: number;
   shippingCost?: number;
   expectedProviderPayable?: number;
+  providerTax?: unknown;
 }): JubelioSalesExpectedEnvelope | null {
   const version = input.providerContractVersion;
   if (version === undefined) {
     if (
       input.originalShipmentCost !== undefined ||
       input.shippingCost !== undefined ||
-      input.expectedProviderPayable !== undefined
+      input.expectedProviderPayable !== undefined ||
+      input.providerTax !== undefined
     ) {
       throw new JubelioSalesGatewayError(
-        "Jubelio sales order input is invalid: shipping/payable money requires an explicit provider contract version",
+        "Jubelio sales order input is invalid: shipping/payable/tax money requires an explicit provider contract version",
         { code: "CONTRACT_VERSION_REQUIRED", ambiguous: false, retryable: false }
       );
     }
@@ -625,6 +697,7 @@ function resolveContractEnvelope(input: {
     originalShipmentCost: input.originalShipmentCost,
     shippingCost: input.shippingCost,
     expectedProviderPayable: input.expectedProviderPayable,
+    providerTax: input.providerTax,
   });
 }
 
@@ -698,7 +771,10 @@ function assertValidCreateInput(
       );
     }
     itemIds.add(item.itemId);
-    if (!Number.isInteger(item.taxId) || item.taxId < 1) {
+    // Tax ID adalah signed integer nonnol: tenant menyimpan PPN 11% sebagai -2,
+    // sementara id 0 tetap ditolak karena melanggar FK provider. Hanya id 0
+    // (bukan tanda) yang menjadi patokan validitas di sini.
+    if (!Number.isSafeInteger(item.taxId) || item.taxId === 0) {
       throw new JubelioSalesGatewayError(
         "Jubelio sales order input is invalid: tax id must reference a real tax record (a zero id fails the provider FK)",
         { ambiguous: false, retryable: false }
@@ -728,16 +804,27 @@ function assertValidCreateInput(
         { ambiguous: false, retryable: false }
       );
     }
-    if (!Number.isFinite(item.taxAmount) || item.taxAmount < 0) {
+    if (
+      !Number.isSafeInteger(item.taxAmount) ||
+      item.taxAmount < 0 ||
+      item.taxAmount > CONTRACT_MONEY_MAX
+    ) {
       throw new JubelioSalesGatewayError(
-        "Jubelio sales order input is invalid: item tax amount must be a finite nonnegative number",
+        `Jubelio sales order input is invalid: item tax amount must be a whole Rupiah amount from 0 to ${CONTRACT_MONEY_MAX}`,
         { ambiguous: false, retryable: false }
       );
     }
-    if (item.taxAmount !== 0) {
+    const taxContract = envelope?.providerContractVersion === 3;
+    if (!taxContract && item.taxAmount !== 0) {
       throw new JubelioSalesGatewayError(
-        "Jubelio sales order with a nonzero tax amount is rejected: the provider tax envelope is a valid No Tax record",
+        "Jubelio sales order with a nonzero tax amount is rejected outside contract v3: the legacy/v2 envelope records No Tax only",
         { ambiguous: false, retryable: false }
+      );
+    }
+    if (taxContract && envelope.providerTax && item.taxId !== envelope.providerTax.taxId) {
+      throw new JubelioSalesGatewayError(
+        "Jubelio sales order contract v3 input is invalid: every item tax id must equal the frozen provider tax id",
+        { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
       );
     }
     if (item.discAmount > 0) {
@@ -786,6 +873,7 @@ function assertContractCreateEnvelope(
   }
   let subTotal = 0;
   let totalDisc = 0;
+  let totalTax = 0;
   for (const item of input.items) {
     if (item.quantity > CONTRACT_MAX_ITEM_QUANTITY) {
       throw new JubelioSalesGatewayError(
@@ -810,25 +898,26 @@ function assertContractCreateEnvelope(
     }
     subTotal += gross;
     totalDisc += item.discAmount;
+    totalTax += item.taxAmount;
   }
   // Net goods = gross - whole-line discount; provider payable = net goods +
-  // net shipping. Tax stays locked at 0 by the item guard above.
-  if (!isContractMoney(subTotal) || !isContractMoney(totalDisc)) {
+  // PPN (kontrak3; 0 pada kontrak2) + net shipping.
+  if (!isContractMoney(subTotal) || !isContractMoney(totalDisc) || !isContractMoney(totalTax)) {
     throw new JubelioSalesGatewayError(
       `Jubelio sales order contract v2 input is invalid: sub total must stay within whole Rupiah 0..${CONTRACT_MONEY_MAX}`,
       { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
     );
   }
-  const payable = subTotal - totalDisc + envelope.shippingCost;
+  const payable = subTotal - totalDisc + totalTax + envelope.shippingCost;
   if (!isContractMoney(payable)) {
     throw new JubelioSalesGatewayError(
-      `Jubelio sales order contract v2 input is invalid: provider payable must stay within whole Rupiah 0..${CONTRACT_MONEY_MAX}`,
+      `Jubelio sales order contract v${envelope.providerContractVersion} input is invalid: provider payable must stay within whole Rupiah 0..${CONTRACT_MONEY_MAX}`,
       { code: "CONTRACT_ENVELOPE_INVALID", ambiguous: false, retryable: false }
     );
   }
   if (payable !== envelope.expectedProviderPayable) {
     throw new JubelioSalesGatewayError(
-      `Jubelio sales order contract v2 input is invalid: expected provider payable ${envelope.expectedProviderPayable} does not equal net goods ${subTotal - totalDisc} + net shipping ${envelope.shippingCost} (${payable})`,
+      `Jubelio sales order contract v${envelope.providerContractVersion} input is invalid: expected provider payable ${envelope.expectedProviderPayable} does not equal net goods ${subTotal - totalDisc} + provider tax ${totalTax} + net shipping ${envelope.shippingCost} (${payable})`,
       { code: "CONTRACT_PAYABLE_MISMATCH", ambiguous: false, retryable: false }
     );
   }
@@ -1061,6 +1150,7 @@ function assertEditableMoneyEnvelope(
       taxAmount: number;
       amount: number;
       itemId: number;
+      taxId: number;
     }>;
   },
   expected: JubelioSalesExpectedEnvelope | null = null
@@ -1070,10 +1160,16 @@ function assertEditableMoneyEnvelope(
   // (`expected` present). The legacy branch keeps its evidenced zero-discount
   // envelope unchanged.
   const versioned = expected !== null;
+  const taxContract = expected?.providerContractVersion === 3;
   for (const line of edit.items) {
     const gross = line.price * line.quantity;
-    if (line.taxAmount !== 0) {
+    if (!taxContract && line.taxAmount !== 0) {
       envelopeViolations.push(`item ${line.itemId} carries a nonzero tax amount`);
+    }
+    if (taxContract && expected?.providerTax && line.taxId !== expected.providerTax.taxId) {
+      envelopeViolations.push(
+        `item ${line.itemId} tax id ${line.taxId} does not equal the frozen provider tax id ${expected.providerTax.taxId}`
+      );
     }
     if (line.discAmount < 0 || line.discAmount > gross) {
       envelopeViolations.push(
@@ -1101,8 +1197,17 @@ function assertEditableMoneyEnvelope(
     (sum, line) => sum + line.discAmount,
     0
   );
-  if (edit.totalTax !== 0) {
+  const expectedLineTax = edit.items.reduce(
+    (sum, line) => sum + line.taxAmount,
+    0
+  );
+  if (!taxContract && edit.totalTax !== 0) {
     envelopeViolations.push("header carries a nonzero tax total");
+  }
+  if (taxContract && !moneyEqualsSafe(edit.totalTax, expectedLineTax)) {
+    envelopeViolations.push(
+      `total_tax ${edit.totalTax} does not equal the sum of line tax amounts (${expectedLineTax})`
+    );
   }
   if (versioned) {
     if (!moneyEqualsSafe(edit.totalDisc, expectedTotalDisc)) {
@@ -1169,6 +1274,35 @@ function assertEditableMoneyEnvelope(
  * comparison uses the exact same safe epsilon (serialization noise tolerated,
  * material changes never).
  */
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Bentuk minimum satu baris master pajak. Rate TIDAK dikanonikkan di sini:
+ * tenant menyimpan record rate negatif (PPH) dan nol (No Tax) yang sah, jadi
+ * hanya record yang benar-benar dicari yang wajib lolos rate kanonik di bawah.
+ */
+type TaxMasterRow = {
+  taxId: number;
+  rate: string;
+  outputAccount: string | null;
+};
+
+function readTaxMasterRow(raw: unknown): TaxMasterRow | null {
+  if (!isPlainRecord(raw)) return null;
+  const taxId = raw.tax_id;
+  if (typeof taxId !== "number" || !Number.isSafeInteger(taxId) || taxId === 0) {
+    return null;
+  }
+  if (typeof raw.rate !== "string") return null;
+  const taxOut = raw.tax_out;
+  if (!TAX_NULL_ACCOUNT.has(taxOut) && typeof taxOut !== "string") return null;
+  const outputAccount =
+    typeof taxOut === "string" && taxOut.trim().length > 0 ? taxOut.trim() : null;
+  return { taxId, rate: raw.rate, outputAccount };
+}
+
 export function moneyEqualsSafe(a: number, b: number): boolean {
   if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
   const scale = Math.max(1, Math.abs(a), Math.abs(b));
@@ -1188,6 +1322,14 @@ export type JubelioSalesGateway = {
     }
   ): Promise<JubelioSalesCreateResult>;
   getSalesOrder(salesOrderId: number): Promise<JubelioSalesOrderSnapshot>;
+  /**
+   * Read-only master pajak lookup for the provider3 tax preflight. Scans the
+   * documented paginated `GET /taxes/` pages and returns the SINGLE record with
+   * this id, or `null` when the id is absent, duplicated, malformed, or the
+   * list cannot be fully scanned. A `null` is never a rate-0 fallback. A
+   * failing GET throws a non-ambiguous (read) gateway error.
+   */
+  getTaxRecord(taxId: number): Promise<JubelioTaxRecord | null>;
   /**
    * Strict edit pre-read (ticket #03): parses every documented
    * `saveSalesOrderRequest` field plus the item detail ids and fee fields,
@@ -1671,6 +1813,8 @@ export function createJubelioSalesGateway(options: {
       const price = Number(row.price);
       const amount = Number(row.amount);
       const unit = typeof row.unit === "string" ? row.unit : "";
+      const taxId = optionalNumber(row, ["tax_id"]);
+      const taxAmount = optionalNumber(row, ["tax_amount"]);
       if (
         !Number.isInteger(itemId) ||
         !Number.isFinite(quantity) ||
@@ -1684,7 +1828,15 @@ export function createJubelioSalesGateway(options: {
           { httpStatus: 200, ambiguous: false, retryable: true }
         );
       }
-      items.push({ itemId, quantity, price, amount, unit });
+      items.push({
+      itemId,
+      quantity,
+      price,
+      amount,
+      unit,
+      ...(taxId === null ? {} : { taxId }),
+      ...(taxAmount === null ? {} : { taxAmount }),
+    });
     }
     // Contract v2 header shipping money is ADDITIVE: the keys are only returned
     // when the GET actually carried them, so the legacy response shape stays
@@ -1943,7 +2095,9 @@ export function createJubelioSalesGateway(options: {
         line.quantity !== requested.quantity ||
         !moneyEquals(line.price, requested.price) ||
         !moneyEquals(line.amount, requested.amount) ||
-        line.unit !== requested.unit
+        line.unit !== requested.unit ||
+        line.taxId !== requested.taxId ||
+        !moneyEquals(line.taxAmount, requested.taxAmount)
       ) {
         return "confirmed item lines differ from the requested edit";
       }
@@ -2018,6 +2172,24 @@ export function createJubelioSalesGateway(options: {
       }
       if (confirmed.amount !== requestedAmount) {
         return `confirmed item amount ${confirmed.amount} does not match requested amount ${requestedAmount} for item ${requested.itemId}`;
+      }
+      // Kontrak3: identitas/nominal pajak per baris ikut diverifikasi. Header
+      // total_tax yang benar tidak membuktikan alokasi per baris benar.
+      if (input.expectedEnvelope?.providerContractVersion === 3) {
+        if (
+          confirmed.taxId === undefined ||
+          confirmed.taxId === null ||
+          confirmed.taxId !== requested.taxId
+        ) {
+          return `confirmed item tax id ${String(confirmed.taxId)} does not match requested tax id ${requested.taxId} for item ${requested.itemId}`;
+        }
+        if (
+          confirmed.taxAmount === undefined ||
+          confirmed.taxAmount === null ||
+          !moneyEquals(confirmed.taxAmount, requested.taxAmount)
+        ) {
+          return `confirmed item tax amount ${String(confirmed.taxAmount)} does not match requested tax amount ${requested.taxAmount} for item ${requested.itemId}`;
+        }
       }
     }
     const requestedSubTotal = input.requested.items.reduce(
@@ -2127,12 +2299,16 @@ export function createJubelioSalesGateway(options: {
           { code: "INVOICE_VERIFY_FAILED", httpStatus: 200, ambiguous: false, retryable: false }
         );
       }
+      const taxId = optionalNumber(row, ["tax_id"]);
+      const taxAmount = optionalNumber(row, ["tax_amount"]);
       items.push({
         itemId,
         quantity,
         price,
         amount,
         unit: typeof row.unit === "string" ? row.unit : "",
+        ...(taxId === null ? {} : { taxId }),
+        ...(taxAmount === null ? {} : { taxAmount }),
       });
     }
     // ADDITIVE contract-v2 observation: only returned when the GET carried it,
@@ -2330,6 +2506,91 @@ export function createJubelioSalesGateway(options: {
 
     async getSalesOrder(salesOrderId) {
       return readSalesOrderSnapshot(salesOrderId, 5);
+    },
+
+    async getTaxRecord(taxId) {
+      // Invalid search ids are a caller bug, not a provider gap: fail closed
+      // before the network instead of scanning for a meaningless id.
+      if (!Number.isSafeInteger(taxId) || taxId === 0) {
+        throw new JubelioSalesGatewayError(
+          "Jubelio tax lookup is invalid: tax id must be a nonzero safe integer",
+          { code: "TAX_ID_INVALID", ambiguous: false, retryable: false }
+        );
+      }
+      let match: JubelioTaxRecord | null = null;
+      let scanned = 0;
+      let totalCount: number | null = null;
+      for (let page = 1; page <= TAX_MAX_PAGES; page += 1) {
+        // Reads may safely re-authenticate; a failure here is non-ambiguous.
+        let body: Record<string, unknown>;
+        try {
+          body = await readJson(
+            `/taxes/?page=${page}&pageSize=${TAX_PAGE_SIZE}`,
+            5
+          );
+        } catch (error) {
+          log.error(
+            `Jubelio GET /taxes/ (tax ${taxId}) gagal; master pajak tidak tersedia`,
+            safeDependencyErrorLog(error)
+          );
+          throw error;
+        }
+        const rows = Array.isArray(body.data) ? body.data : null;
+        const pageTotal = Number(body.totalCount);
+        if (rows === null || !Number.isInteger(pageTotal) || pageTotal < 0) {
+          log.error(
+            `Jubelio GET /taxes/ (tax ${taxId}) mengembalikan halaman malformed; master pajak dianggap tidak tersedia`
+          );
+          return null;
+        }
+        if (totalCount === null) totalCount = pageTotal;
+        scanned += rows.length;
+        for (const raw of rows) {
+          const record = readTaxMasterRow(raw);
+          if (!record) {
+            log.error(
+              `Jubelio GET /taxes/ (tax ${taxId}) memuat record malformed; master pajak dianggap tidak tersedia`
+            );
+            return null;
+          }
+          if (record.taxId !== taxId) continue;
+          // Duplicate identity is ambiguous: never pick the first/cheapest.
+          if (match !== null) {
+            log.error(
+              `Jubelio GET /taxes/: tax id ${taxId} muncul lebih dari sekali; master pajak tidak dapat dipakai`
+            );
+            return null;
+          }
+          let ratePercent: string;
+          try {
+            ratePercent = parseProviderTaxRatePercent(
+              record.rate,
+              "tax.rate"
+            ).ratePercent;
+          } catch {
+            log.error(
+              `Jubelio GET /taxes/: rate tax ${taxId} bukan desimal 0..100 yang didukung; master pajak tidak dapat dipakai`
+            );
+            return null;
+          }
+          match = {
+            taxId: record.taxId,
+            ratePercent,
+            outputAccount: record.outputAccount,
+          };
+        }
+        if (rows.length === 0 || scanned >= totalCount) break;
+        if (page === TAX_MAX_PAGES) {
+          log.error(
+            `Jubelio GET /taxes/ melebihi ${TAX_MAX_PAGES} halaman; master pajak tidak dapat dipakai`
+          );
+          return null;
+        }
+      }
+      log.info(
+        `Jubelio GET /taxes/: tax ${taxId} ${match ? "ditemukan" : "tidak ditemukan"} setelah ${scanned} record`
+      );
+      return match;
     },
 
     async getSalesOrderForEdit(salesOrderId, expected) {

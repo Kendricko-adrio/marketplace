@@ -1233,10 +1233,11 @@ function expectedEnvelopeFromExpectation(
 ): JubelioSalesExpectedEnvelope | null {
   if (expectation.providerContractVersion === 0) return null;
   return {
-    providerContractVersion: 2,
+    providerContractVersion: expectation.providerContractVersion,
     originalShipmentCost: expectation.originalShipmentCost,
     shippingCost: expectation.shippingCost,
     expectedProviderPayable: expectation.expectedProviderPayable,
+    ...(expectation.providerTax ? { providerTax: expectation.providerTax } : {}),
   };
 }
 
@@ -1364,14 +1365,16 @@ export function mirrorPreReadMismatch(input: {
       // serialization noise is tolerated, a MATERIAL amount change is not.
       !moneyEqualsSafe(
         remote.amount,
-        requested.price * requested.quantity - requested.discAmount
+        requested.price * requested.quantity -
+          requested.discAmount +
+          requested.taxAmount
       )
     ) {
       return "PRE_READ_ITEM_MISMATCH";
     }
   }
   const expectation = authority.expectation;
-  if (expectation.providerContractVersion === 2) {
+  if (expectation.providerContractVersion !== 0) {
     // Contract v2: the payable (net goods + net shipping) is the frozen
     // authority and the GET must still carry the stored shipping money. A
     // missing value is a mismatch, never zero. `sub_total` is the SOURCE gross
@@ -1385,6 +1388,15 @@ export function mirrorPreReadMismatch(input: {
       (sum, item) => sum + item.discAmount,
       0
     );
+    const taxTotal = request.items.reduce(
+      (sum, item) => sum + item.taxAmount,
+      0
+    );
+    const taxMismatch =
+      expectation.providerContractVersion === 3
+        ? !moneyEqualsSafe(snapshot.totalTax, taxTotal) ||
+          taxTotal !== (expectation.totalTax ?? 0)
+        : snapshot.totalTax !== 0;
     if (
       !moneyEqualsSafe(snapshot.subTotal, grossTotal) ||
       !moneyEqualsSafe(snapshot.totalDisc, discTotal) ||
@@ -1399,7 +1411,8 @@ export function mirrorPreReadMismatch(input: {
       !moneyEqualsSafe(
         snapshot.grandTotal,
         expectation.expectedProviderPayable
-      )
+      ) ||
+      taxMismatch
     ) {
       return "PRE_READ_MONEY_MISMATCH";
     }

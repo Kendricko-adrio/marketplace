@@ -580,6 +580,12 @@ function fakeProvider(spec: FakeProviderSpec): FakeProvider {
       }
       return paymentSnapshot(spec);
     },
+    async getTaxRecord() {
+      throw new JubelioSalesGatewayError("unexpected getTaxRecord in settlement test", {
+        ambiguous: false,
+        retryable: false,
+      });
+    },
   } as unknown as JubelioSalesGateway;
 
   return { gateway, invoicePosts, paymentPosts, createPosts, ledgerAtHook };

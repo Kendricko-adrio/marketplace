@@ -458,6 +458,9 @@ function controlledGateway(options: {
     async getPayment() {
       throw new Error("unexpected getPayment in mirror test");
     },
+    async getTaxRecord() {
+      throw new Error("unexpected getTaxRecord in mirror test");
+    },
     editCalls,
     getForEditCalls,
   } as ControlledGateway;

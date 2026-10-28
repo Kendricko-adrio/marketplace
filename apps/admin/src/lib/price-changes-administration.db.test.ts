@@ -239,7 +239,7 @@ async function countAudit(variantId: string, action: string): Promise<number> {
 }
 
 async function stage(
-  input: { sku: string; action: "set_price" | "restore_base"; targetUnitPrice?: string | null },
+  input: { sku: string; action: "set_price" | "restore_base"; targetUnitPrice?: string | null; discountPercent?: string | null },
   actor = ACTOR,
   requestKey = randomUUID()
 ) {
@@ -325,6 +325,20 @@ interface ImportLimitRow {
 }
 
 let importLimitsBefore: ImportLimitRow[] = [];
+
+/** Manual/bulk: percent masuk fingerprint dan targetnya dibekukan di stage. */
+async function insertManualRowRaw(input: {
+  sku: string;
+  target?: string | null;
+  percent?: string | null;
+}): Promise<ReturnType<typeof stage>> {
+  return stage({
+    sku: input.sku,
+    action: "set_price",
+    targetUnitPrice: input.target ?? undefined,
+    discountPercent: input.percent ?? undefined,
+  });
+}
 
 async function restoreImportLimits(): Promise<void> {
   await clearLimits();
@@ -466,6 +480,13 @@ describe.skipIf(!dbReady)("manual Markdown price changes (disposable DB)", () =>
     await restoreImportLimits();
     await setGate("0");
     await pool.end();
+  });
+
+  it("manual persen membekukan target persen saat stage tanpa revision", async () => {
+    const first = await insertManualRowRaw({ sku: SKU_A, percent: "15" });
+    expect(first.status).toBe(201);
+    expect(first.data.rows[0].targetUnitPrice).toBe("255000");
+    expect(await countRevisions(VARIANTS[0])).toBe(0);
   });
 
   it("stage → review → apply menulis revision, pointer, hasil, dan audit sekali", async () => {
@@ -1398,6 +1419,35 @@ describe.skipIf(!dbReady)("manual Markdown price changes (disposable DB)", () =>
     ).rejects.toMatchObject({ code: "DENIED" });
     const viewerRead = await getPriceChangeBatch(staged.data.id, VIEW_ACTOR);
     expect(viewerRead).toMatchObject({ appliedCount: 1, failedCount: 1 });
+  });
+
+  it("filter setup mencakup target aktif/nonaktif, tanpa target dan restore, dengan search serta pagination global", async () => {
+    const staged = await stageBatch([
+      { sku: SKU_A, action: "set_price", targetUnitPrice: "200000" },
+      { sku: SKU_B, action: "set_price", targetUnitPrice: "200000" },
+    ]);
+    await apply(staged.data.id);
+    await pool!.query("UPDATE product_variant SET price='150000' WHERE id=$1", [VARIANT_B]);
+    const configured = { search: "zz price product", markdownStatus: "configured", limit: 1 };
+    const first = await listPriceChangeCandidates(configured, ACTOR);
+    expect(first.pagination).toEqual({ page: 1, limit: 1, total: 2, totalPages: 2 });
+    expect(first.rows[0]).toMatchObject({ sku: SKU_A, markdownActive: true });
+    const second = await listPriceChangeCandidates({ ...configured, page: 2 }, ACTOR);
+    expect(second.rows.map((row) => row.sku)).toEqual([SKU_B]);
+    expect(second.rows[0]).toMatchObject({ storedTarget: "200000", markdownActive: false });
+    expect((await listPriceChangeCandidates({ ...configured, markdownStatus: "unconfigured" }, ACTOR)).pagination.total).toBe(0);
+    const missing = await listPriceChangeCandidates({ search: "ZZ-BULK", markdownStatus: "unconfigured", limit: 25, page: 2 }, ACTOR);
+    expect(missing.pagination).toEqual({ page: 2, limit: 25, total: 30, totalPages: 2 });
+    expect(missing.rows.map((row) => row.sku)).toEqual(["ZZ-BULK-26", "ZZ-BULK-27", "ZZ-BULK-28", "ZZ-BULK-29", "ZZ-BULK-30"]);
+    const restored = await stageBatch([{ sku: SKU_A, action: "restore_base" }]);
+    await apply(restored.data.id);
+    const afterRestore = await listPriceChangeCandidates({ search: "ZZ-PRICE", markdownStatus: "unconfigured" }, ACTOR);
+    expect(afterRestore.rows.map((row) => row.sku)).toEqual([SKU_A]);
+    expect(afterRestore.rows[0].storedTarget).toBeNull();
+    expect((await listPriceChangeCandidates(configured, ACTOR)).pagination.total).toBe(1);
+    for (const markdownStatus of ["configured", "unconfigured"]) {
+      await expect(listPriceChangeCandidates({ markdownStatus }, NO_GRANT_ACTOR)).rejects.toMatchObject({ code: "DENIED" });
+    }
   });
 
   it("target nonaktif: filter lintas halaman memakai source terbaru, count konsisten, dan query tervalidasi", async () => {

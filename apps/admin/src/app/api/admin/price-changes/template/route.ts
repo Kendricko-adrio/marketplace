@@ -12,8 +12,9 @@ import {
 // =========================================================
 // GET /api/admin/price-changes/template   [prices:view + products:view all_branches]
 // =========================================================
-// Blank versioned workbook: sheet `Harga`, A1 `markdown_v1`, row 2
-// `sku`/`action`/`new_price`, data from row 3. The domain layer enforces the
+// Versioned workbook with in-file examples: sheet `Harga`, A1 `markdown_v2`, row 2
+// `sku`/`action`/`new_price`/`input_type`, SKU column styled Text, data from row
+// 3 (two example rows that must be replaced/removed by the operator). The domain layer enforces the
 // current grants (a direct API call cannot bypass the UI), and the response is
 // no-store so a shared machine cannot serve a stale template.
 //

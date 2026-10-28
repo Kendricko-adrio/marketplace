@@ -118,8 +118,8 @@ function requireIsolatedMockRun(): void {
 
 // ---------------------------------------------------------------------------
 // Independent money (ticket 01 worked example — NOT implementation output):
-// goods 150.000, website PPN 11% = 16.500, customer total 166.500, the
-// provider ledger carries the goods value only (150.000).
+// goods 150.000, website PPN 11% = 16.500, customer total 166.500, dan
+// kontrak provider3 mencatat PPN yang sama pada SO/invoice/payment (166.500).
 // ---------------------------------------------------------------------------
 
 const GOODS_PRICE = 150_000;
@@ -128,7 +128,7 @@ const EXPECTED_PPN_RATE = 11;
 const EXPECTED_PPN_AMOUNT = 16_500;
 const EXPECTED_CUSTOMER_TOTAL = 166_500;
 const SNAP_GROSS_AMOUNT = `${EXPECTED_CUSTOMER_TOTAL}.00`;
-const PROVIDER_PAYABLE = 150_000;
+const PROVIDER_PAYABLE = 166_500;
 // Settlement contract of this run (playwright.mock.config.ts): account 2, type 0.
 const PROVIDER_PAYMENT_ACCOUNT_ID = 2;
 const PROVIDER_PAYMENT_TYPE = 0;
@@ -161,11 +161,11 @@ const DELIVERY_STREET = "Jl. Versioned Settlement Delivery E2E No. 1";
 
 // Independent delivery money (ticket 01 worked example, never recomputed):
 //   barang 150.000 + ongkir 30.000, PPN 11% atas net barang saja 16.500
-//   → pelanggan/Midtrans 196.500, provider (SO/invoice/payment) 180.000.
+//   → pelanggan/Midtrans 196.500 = provider (SO/invoice/payment) 196.500.
 const SHIPPING_RATE = 30_000;
 const DELIVERY_PPN_AMOUNT = 16_500;
 const DELIVERY_CUSTOMER_TOTAL = 196_500;
-const DELIVERY_PROVIDER_PAYABLE = 180_000;
+const DELIVERY_PROVIDER_PAYABLE = 196_500;
 const DELIVERY_SNAP_GROSS_AMOUNT = `${DELIVERY_CUSTOMER_TOTAL}.00`;
 
 // ---------------------------------------------------------------------------
@@ -617,7 +617,7 @@ test.afterAll(async () => {
 test.describe("public-HTTP pickup settlement (ticket 01, one tracer bullet)", () => {
   test.describe.configure({ mode: "serial", timeout: 120_000 });
 
-  test("gate1 pickup 166.500 settles once at the loopback provider: SO/invoice/payment 150.000 linked, due 0, account 2/type 0, no duplicate post on replay", async () => {
+  test("gate1 pickup 166.500 settles once at the loopback provider: SO/invoice/payment 166.500 linked, due 0, account 2/type 0, no duplicate post on replay", async () => {
     // Fresh loopback provider state + the fixture stock observation.
     expect((await mockControl("POST", "/__control/reset")).status).toBe("ok");
     expect(
@@ -772,7 +772,8 @@ test.describe("public-HTTP pickup settlement (ticket 01, one tracer bullet)", ()
       expect(soPosts[0].body).toMatchObject({
         sub_total: GOODS_PRICE,
         total_disc: 0,
-        total_tax: 0, // the website PPN never enters the provider ledger
+        // Kontrak provider3: PPN yang dibayar customer ikut tercatat pada SO.
+        total_tax: 16500,
         grand_total: PROVIDER_PAYABLE,
         location_id: homeLocationId,
         contact_id: PROVIDER_CONTACT_ID,
@@ -784,8 +785,9 @@ test.describe("public-HTTP pickup settlement (ticket 01, one tracer bullet)", ()
         qty_in_base: GOODS_QUANTITY,
         price: GOODS_PRICE,
         disc_amount: 0,
-        tax_amount: 0,
-        amount: GOODS_PRICE,
+        tax_id: -2,
+        tax_amount: 16500,
+        amount: PROVIDER_PAYABLE,
       });
 
       // === 4. Gate: paid? no. pickup code? never before settlement =========
@@ -848,7 +850,7 @@ test.describe("public-HTTP pickup settlement (ticket 01, one tracer bullet)", ()
       }).toEqual({
         pricingContractVersion: 1,
         pricingEngineVersion: 1,
-        providerContractVersion: 2,
+        providerContractVersion: 3,
       });
       expect(settled.pricingSnapshot).toMatchObject({
         sourceGoodsSubtotal: "150000",
@@ -861,7 +863,8 @@ test.describe("public-HTTP pickup settlement (ticket 01, one tracer bullet)", ()
         shippingBeforeSubsidy: "0",
         shippingCost: "0",
         total: "166500",
-        expectedProviderPayable: "150000",
+        expectedProviderPayable: "166500",
+        providerTax: { taxId: -2, ratePercent: "11" },
       });
 
       // === 8. Provider linkage: SO → invoice (due 0) → payment ==============
@@ -877,7 +880,7 @@ test.describe("public-HTTP pickup settlement (ticket 01, one tracer bullet)", ()
         salesorder_id: soId,
         sub_total: GOODS_PRICE,
         total_disc: 0,
-        total_tax: 0,
+        total_tax: 16500,
         grand_total: PROVIDER_PAYABLE,
         is_canceled: false,
         invoice_id: invoiceId,
@@ -894,7 +897,7 @@ test.describe("public-HTTP pickup settlement (ticket 01, one tracer bullet)", ()
         salesorder_id: soId,
         sub_total: String(GOODS_PRICE),
         total_disc: "0",
-        total_tax: "0",
+        total_tax: "16500",
         grand_total: String(PROVIDER_PAYABLE),
         payment_amount: PROVIDER_PAYABLE,
       });
@@ -904,8 +907,8 @@ test.describe("public-HTTP pickup settlement (ticket 01, one tracer bullet)", ()
         qty_in_base: GOODS_QUANTITY,
         price: GOODS_PRICE,
         disc_amount: 0,
-        tax_amount: 0,
-        amount: GOODS_PRICE,
+        tax_amount: 16500,
+        amount: PROVIDER_PAYABLE,
       });
       expect(
         Number(invoice.grand_total) - invoice.payment_amount,
@@ -931,9 +934,10 @@ test.describe("public-HTTP pickup settlement (ticket 01, one tracer bullet)", ()
         invoice_id: invoiceId,
         payment_amount: PROVIDER_PAYABLE,
       });
-      // The two ledgers stay DISTINCT by contract (never equalized).
+      // Kontrak provider3 menyatukan nominal: payment provider = total customer
+      // (PPN sudah dibayar customer, tidak ada tagihan kedua).
       expect(Number(payment.amount)).toBe(PROVIDER_PAYABLE);
-      expect(Number(payment.amount)).not.toBe(EXPECTED_CUSTOMER_TOTAL);
+      expect(Number(payment.amount)).toBe(EXPECTED_CUSTOMER_TOTAL);
 
       // === 9. Duplicate callback is idempotent: no second provider write ====
       const replay = await postSignedWebhook(orderId, SNAP_GROSS_AMOUNT);
@@ -1010,7 +1014,7 @@ test.describe("public-HTTP pickup settlement (ticket 01, one tracer bullet)", ()
 test.describe("public-HTTP delivery settlement (ticket 01, satu tracer bullet)", () => {
   test.describe.configure({ mode: "serial", timeout: 120_000 });
 
-  test("gate1 delivery 196.500 lunas tetap `processing` tanpa pickup code: SO/invoice/payment provider 180.000 tertaut (due 0, account 2/type 0), callback duplikat tidak menulis ulang", async () => {
+  test("gate1 delivery 196.500 lunas tetap `processing` tanpa pickup code: SO/invoice/payment provider 196.500 tertaut (due 0, account 2/type 0), callback duplikat tidak menulis ulang", async () => {
     // Boundary loopback yang bersih: rate normal 30.000 + stok fixture di
     // location milik origin delivery sintetis ini.
     expect((await mockControl("POST", "/__control/reset")).status).toBe("ok");
@@ -1218,7 +1222,8 @@ test.describe("public-HTTP delivery settlement (ticket 01, satu tracer bullet)",
       expect(soPosts[0].body).toMatchObject({
         sub_total: GOODS_PRICE,
         total_disc: 0,
-        total_tax: 0, // PPN website tidak pernah masuk ledger provider
+        // Kontrak provider3: PPN barang ikut tercatat pada SO.
+        total_tax: 16500,
         original_shipment_cost: SHIPPING_RATE,
         shipping_cost: SHIPPING_RATE,
         grand_total: DELIVERY_PROVIDER_PAYABLE,
@@ -1237,8 +1242,11 @@ test.describe("public-HTTP delivery settlement (ticket 01, satu tracer bullet)",
         qty_in_base: GOODS_QUANTITY,
         price: GOODS_PRICE,
         disc_amount: 0,
-        tax_amount: 0,
-        amount: GOODS_PRICE,
+        tax_id: -2,
+        tax_amount: 16500,
+        // Nominal baris provider = harga barang + PPN baris (ongkir bukan
+        // bagian pajak barang, dan header grand_total tetap 196500).
+        amount: GOODS_PRICE + DELIVERY_PPN_AMOUNT,
       });
 
       // === 4. Sebelum lunas: belum bayar, belum ada pickup code =============
@@ -1267,7 +1275,7 @@ test.describe("public-HTTP delivery settlement (ticket 01, satu tracer bullet)",
       }).toEqual({
         pricingContractVersion: 1,
         pricingEngineVersion: 1,
-        providerContractVersion: 2,
+        providerContractVersion: 3,
       });
       expect(pending.pricingSnapshot).toMatchObject({
         fulfillmentMethod: "delivery",
@@ -1282,7 +1290,8 @@ test.describe("public-HTTP delivery settlement (ticket 01, satu tracer bullet)",
         ppnRatePercent: `${EXPECTED_PPN_RATE}`,
         ppnAmount: "16500",
         total: "196500",
-        expectedProviderPayable: "180000",
+        expectedProviderPayable: "196500",
+        providerTax: { taxId: -2, ratePercent: "11" },
       });
 
       // Snapshot delivery: tujuan, origin sintetis, dan ongkir yang di-approve.
@@ -1409,7 +1418,7 @@ test.describe("public-HTTP delivery settlement (ticket 01, satu tracer bullet)",
         salesorder_id: soId,
         sub_total: GOODS_PRICE,
         total_disc: 0,
-        total_tax: 0,
+        total_tax: 16500,
         original_shipment_cost: SHIPPING_RATE,
         shipping_cost: SHIPPING_RATE,
         grand_total: DELIVERY_PROVIDER_PAYABLE,
@@ -1428,7 +1437,7 @@ test.describe("public-HTTP delivery settlement (ticket 01, satu tracer bullet)",
         salesorder_id: soId,
         sub_total: String(GOODS_PRICE),
         total_disc: "0",
-        total_tax: "0",
+        total_tax: "16500",
         grand_total: String(DELIVERY_PROVIDER_PAYABLE),
         payment_amount: DELIVERY_PROVIDER_PAYABLE,
       });
@@ -1438,8 +1447,9 @@ test.describe("public-HTTP delivery settlement (ticket 01, satu tracer bullet)",
         qty_in_base: GOODS_QUANTITY,
         price: GOODS_PRICE,
         disc_amount: 0,
-        tax_amount: 0,
-        amount: GOODS_PRICE,
+        tax_amount: 16500,
+        // Nominal baris = harga barang + PPN baris; ongkir bukan pajak barang.
+        amount: GOODS_PRICE + DELIVERY_PPN_AMOUNT,
       });
       expect(
         Number(invoice.grand_total) - invoice.payment_amount,
@@ -1468,9 +1478,10 @@ test.describe("public-HTTP delivery settlement (ticket 01, satu tracer bullet)",
         grand_total: DELIVERY_PROVIDER_PAYABLE,
         due: 0,
       });
-      // Dua ledger tetap BERBEDA menurut kontrak (tidak pernah disamakan).
+      // Kontrak provider3: payment provider = total customer (PPN sudah
+      // dibayar customer, tanpa tagihan kedua).
       expect(Number(payment.amount)).toBe(DELIVERY_PROVIDER_PAYABLE);
-      expect(Number(payment.amount)).not.toBe(DELIVERY_CUSTOMER_TOTAL);
+      expect(Number(payment.amount)).toBe(DELIVERY_CUSTOMER_TOTAL);
 
       // === 9. Callback duplikat idempoten: nol tulis provider kedua ==========
       const replay = await postSignedWebhook(

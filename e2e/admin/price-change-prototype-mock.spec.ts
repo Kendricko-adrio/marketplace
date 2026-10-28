@@ -163,9 +163,9 @@ test("UX Harga memisahkan langkah import, memakai tabs konsisten, dan menjaga fi
     await expect(page.getByRole("form", { name: "2. Unggah untuk review", exact: true })).toBeVisible();
     await expect(page.getByRole("region", { name: "3. Review & terapkan", exact: true })).toBeVisible();
     await expect(page.getByText("Upload belum mengubah harga.", { exact: true })).toBeVisible();
-    await expect(page.getByText("markdown_v1", { exact: true })).not.toBeVisible();
+    await expect(page.getByText("markdown_v2", { exact: true })).not.toBeVisible();
     await page.getByText("Format file", { exact: true }).click();
-    await expect(page.getByText("markdown_v1", { exact: true })).toBeVisible();
+    await expect(page.getByText("markdown_v2", { exact: true })).toBeVisible();
     await page.getByText("Format file", { exact: true }).click();
     await page.getByTestId("excel-reason").fill("Catatan tetap tersimpan");
     await page.getByTestId("excel-file").setInputFiles({
@@ -237,6 +237,55 @@ test("harga coret langsung memuat tabel terpadu, target tersimpan, dan target no
     ).status(),
   ).toBe(400);
   await page.close();
+});
+
+test("filter harga coret menggabungkan search, setup aktif/nonaktif, pagination, dan pilihan lintas filter", async () => {
+  const page = await context.newPage();
+  try {
+    await page.goto(`${ADMIN_URL}/admin/products/harga`);
+    const table = page.getByRole("table", { name: "Harga coret SKU", exact: true });
+    const filter = page.getByRole("combobox", { name: "Status harga coret", exact: true });
+    await expect(filter).toHaveText("Semua");
+    await page.getByTestId("bulk-search").fill("e2e parity");
+    await page.getByTestId("bulk-search").press("Enter");
+    await expect(table).toHaveAttribute("aria-busy", "false");
+    await page.getByRole("checkbox", { name: `Pilih SKU ${skus[1]}` }).check();
+    await page.getByTestId("bulk-next-page").click();
+    await expect(table.getByRole("cell", { name: skus[29], exact: true })).toBeVisible();
+    await filter.click();
+    await page.getByRole("option", { name: "Sudah disetup", exact: true }).click();
+    await expect(table.getByRole("row")).toHaveCount(3);
+    await expect(table.getByRole("cell", { name: skus[0], exact: true })).toBeVisible();
+    await expect(table.getByRole("cell", { name: skus[29], exact: true })).toBeVisible();
+    await expect(table).toContainText("Target nonaktif");
+    await expect(page.getByText("Halaman 1 dari 1 · 2 SKU", { exact: true })).toBeVisible();
+    await expect(page.getByTestId("bulk-selection-count")).toHaveText("Terpilih: 1 SKU");
+    await filter.click();
+    await page.getByRole("option", { name: "Belum disetup", exact: true }).click();
+    await expect(page.getByText("Halaman 1 dari 2 · 28 SKU", { exact: true })).toBeVisible();
+    await expect(table.getByRole("cell", { name: skus[0], exact: true })).toHaveCount(0);
+    await expect(table.getByRole("cell", { name: skus[29], exact: true })).toHaveCount(0);
+    await expect(page.getByRole("checkbox", { name: `Pilih SKU ${skus[1]}` })).toBeChecked();
+    await page.getByTestId("bulk-next-page").click();
+    await expect(page.getByText("Halaman 2 dari 2 · 28 SKU", { exact: true })).toBeVisible();
+    await expect(table.getByRole("row")).toHaveCount(4);
+    await page.getByTestId("bulk-search").fill(skus[0]);
+    await page.getByTestId("bulk-search").press("Enter");
+    await expect(table).toContainText("Tidak ada SKU yang cocok dengan pencarian dan filter.");
+    await filter.click();
+    await page.getByRole("option", { name: "Semua", exact: true }).click();
+    await expect(table.getByRole("cell", { name: skus[0], exact: true })).toBeVisible();
+    // Keyboard selection and focus use the same shared Select as daftar promo.
+    await filter.focus();
+    await page.keyboard.press("Space");
+    await page.keyboard.press("End");
+    await page.keyboard.press("Enter");
+    await expect(filter).toHaveText("Belum disetup");
+    await expect(filter).toBeFocused();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(filter).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  } finally { await page.close(); }
 });
 
 test("aksi dari selection membuka dialog, review kenaikan jujur, hasil dapat dibuka ulang, dan restore per baris", async () => {

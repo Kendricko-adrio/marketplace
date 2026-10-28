@@ -60,6 +60,21 @@ Ekspresi SQL yang setara: `apps/store/src/lib/variant-price-projection.ts`
    apply hilang, batch dan request key tetap tersedia untuk retry tanpa revision
    ganda; perubahan baru ditahan selama batch yang pernah di-apply masih pending.
 
+Filter **Status harga coret** di dekat pencarian menyediakan:
+
+- **Semua** (default): seluruh SKU yang cocok dengan pencarian.
+- **Sudah disetup** (`markdownStatus=configured`): SKU dengan target harga coret
+  tersimpan saat ini, baik aktif maupun nonaktif.
+- **Belum disetup** (`markdownStatus=unconfigured`): SKU tanpa target saat ini,
+  termasuk SKU yang targetnya sudah di-restore; bukan berarti tidak pernah
+  memiliki riwayat perubahan harga.
+
+Filter digabung dengan pencarian SKU/nama pada backend, sebelum pagination dan
+count. Mengganti filter kembali ke halaman pertama tanpa menghapus pilihan SKU.
+Contoh: source Rp75.000 dan target Rp80.000 tetap masuk **Sudah disetup** meski
+harga coret tidak aktif. Hasil kosong menampilkan “Tidak ada SKU yang cocok dengan
+pencarian dan filter.” Reload halaman mengembalikan filter ke **Semua**.
+
 Bagian **Target nonaktif (base ≤ target)** di bawah tabel menampilkan jumlah dan
 SKU lintas katalog melalui query `markdownStatus=inactive`, dengan pagination
 tersendiri; bukan hanya hasil dari halaman tabel utama. Contoh source Rp150.000
@@ -102,7 +117,8 @@ selection sebelum dialog restore berikutnya.
   valid"), tidak bisa dicentang, dan tetap dihitung pada total supaya daftar dan
   pagination konsisten.
 - Seleksi disimpan per variant di memori halaman, sehingga bertahan saat
-  berpindah halaman atau mengganti kata kunci. Checkbox header hanya mencentang
+  berpindah halaman, mengganti kata kunci, atau mengganti status harga coret.
+  Checkbox header hanya mencentang
   baris **halaman yang sedang tampil**; tidak ada aksi "pilih seluruh hasil
   filter". Hanya SKU yang dicentang yang dikirim ke server.
 
@@ -221,22 +237,59 @@ workbook), dan `apps/admin/src/lib/price-changes-administration.ts`
 ### 4.1 Format template
 
 - Satu workbook `.xlsx` dengan **satu** sheet bernama `Harga`.
-- `A1` literal `markdown_v1`. Template, export, laporan, dan subset gagal
-  yang baru selalu memakai label ini. Marker lama tetap diterima sebagai alias;
-  identitas `templateVersion` internal batch tetap stabil agar histori, receipt,
-  dan CHECK database existing tidak memerlukan migrasi. Label lama tidak
-  ditampilkan pada petunjuk UI atau ditulis sebagai marker workbook baru.
-- Header row 2: `sku`, `action`, `new_price` (urutan ini), lalu hanya kolom
+- `A1` literal **`markdown_v2`** pada template, export, laporan, dan subset gagal
+  baru. Reader tetap menerima `markdown_v1` dan alias `OKCIR_MARKDOWN_V1` dengan
+  tiga kolom input lama sebagai nominal. Identitas `templateVersion` internal
+  batch tetap `OKCIR_MARKDOWN_V1`; tidak ada perubahan schema/CHECK database.
+- Header row 2 v2: `sku`, `action`, `new_price`, `input_type` (urutan ini), lalu hanya kolom
   referensi resmi `row_number`, `product_name`, `variant`, `source_price`,
   `effective_price`, `origin_row`, `status`, `error_reason`. Header asing/duplikat/hilang/bergeser
   = fatal; kolom referensi **tidak** otoritatif.
 - Data mulai row 3. `sku` harus sel text persis (case-sensitive, spasi tidak
-  dinormalisasi); `action` literal `set_price`/`restore_base`; `new_price` angka
-  integer Rupiah. `set_price` wajib target > 0; `restore_base` wajib harga
-  kosong. Harga kosong pada `set_price` **bukan** restore.
-- Template kosong, export SKU, laporan, dan subset gagal memakai writer yang
-  sama: semua text ditulis sebagai inline string, jadi nilai berawalan `=`,
-  `+`, `-`, `@` tetap literal dan tidak pernah menjadi formula.
+  dinormalisasi); seluruh kolom SKU otomatis berformat **Text**, termasuk baris
+  baru. Paste yang menimpa format tetap dapat menghasilkan sel numerik dan ditolak;
+  format tidak dapat mengembalikan nol yang sudah hilang di sumber sebelumnya.
+- `action=set_price` wajib `input_type=price` atau `percent`. `new_price` berisi
+  integer Rupiah >0 untuk `price`, atau angka diskon persen >0 dan <100 dengan
+  maksimum enam digit desimal untuk `percent`. `restore_base` wajib mengosongkan
+  **keduanya** (`new_price` dan `input_type`). Nilai kosong bukan restore otomatis.
+- Template berisi dua contoh dummy pada row 3–4; export/report tidak menambah
+  contoh. Semua text ditulis sebagai inline string sehingga nilai berawalan
+  `=`, `+`, `-`, `@` tetap literal dan tidak pernah menjadi formula.
+
+#### Contoh nominal dan persen
+
+| sku | action | new_price | input_type |
+|---|---|---:|---|
+| `CONTOH-GANTI-SKU-HARGA` | `set_price` | 150000 | `price` |
+| `CONTOH-GANTI-SKU-PERSEN` | `set_price` | 10 | `percent` |
+
+Ganti SKU contoh dengan SKU produk atau hapus baris contoh sebelum upload.
+Kedua identifier persis tersebut dilindungi: jika tertinggal, baris final gagal
+`EXAMPLE_ROW_NOT_REPLACED`, bahkan bila ada produk dengan SKU yang sama. Baris
+valid lain tetap dapat diterapkan. Tidak ada pengecualian prefix `CONTOH-` umum.
+
+Input `10` berarti **10% diskon dari source**, bukan dari harga aktif/override.
+Contoh source Rp200.000 dan harga aktif Rp170.000 menghasilkan target Rp180.000.
+Kolom nilai memakai angka biasa; jangan memakai format Percentage Excel yang
+menyimpan `10%` sebagai `0.1` (nilai tersebut berarti diskon 0,1%, bukan 10%).
+Formula dan teks nominal/persen tidak diterima sebagai nilai numerik.
+
+Target dihitung saat staging memakai `computePercentTarget`, pembulatan half-up
+ke Rupiah (source Rp100.001, diskon 15 → Rp85.001), lalu **dibekukan**. Apply
+menggunakan target itu dengan guard source terbaru, bukan menghitung ulang persen.
+Target yang nol, di luar rentang atau tidak di bawah source tetap tidak boleh
+menjadi perubahan harga. SKU unknown/kegagalan kalkulasi persen menjadi error
+baris workbook tanpa membatalkan staging baris valid lain.
+
+Review menampilkan **Input** (`10% dari source` atau nominal) dan **Target**
+Rupiah. Upload belum mengubah harga. Laporan/subset gagal menyimpan mode dan
+nilai input asli; koreksi tertaut menjadi batch baru dan menghitung persen dari
+source saat staging koreksi. Baris sukses batch asal tidak diputar ulang.
+Laporan batch lama tanpa metadata mode memakai fallback nominal, bukan menebak
+persen dari selisih harga. Tipe kosong/asing pada v2 menghasilkan
+`INPUT_TYPE_INVALID`; tipe pada restore `INPUT_TYPE_NOT_ALLOWED`; persen tidak
+sah `PERCENT_INVALID`. Struktur v1/v2 tidak boleh dicampur.
 
 ### 4.2 Parser bounded dan aman
 

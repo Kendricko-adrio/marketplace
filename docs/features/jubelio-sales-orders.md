@@ -515,3 +515,36 @@ alokasi diskon, `checkout_request`, serta menautkan ledger SO dan Redemption.
   menyelesaikan promotion lokal yang tertunda, dan meng-*abort* reservation
   kedaluwarsa yang SO-nya belum pernah dikirim. Hasil possibly-sent hanya
   GET/review.
+
+## Kontrak provider3 — PPN pada SO, invoice, dan payment
+
+Writer order baru mencatat PPN yang sudah dibayar customer sebagai pajak barang
+pada Sales Order. Kontraknya (spec
+[PPN checkout](../../.scratch/jubelio-sales-api-switching/plan/jubelio-sales-order-tax-spec.md)):
+
+- `items[].tax_id` = `providerTax.taxId` dari snapshot tervalidasi (tenant riset:
+  `-2`); `items[].tax_amount` = `providerTaxAmount` whole-line; header
+  `total_tax` = jumlah line tax = `ppnAmount`; `grand_total` =
+  `expectedProviderPayable` = net barang + PPN + net ongkir. `is_tax_included`
+  tetap `false`, `shipping_cost_discount` tetap tidak dikirim.
+- Tax ID **signed**: `0` tetap ditolak (FK provider), sedangkan ID negatif
+  adalah data master yang sah. Guard `tax_amount = 0` hanya berlaku untuk
+  intent unversioned dan provider2.
+- Pembuatan SO tetap exactly once; verifikasi `GET /sales/orders/{id}` untuk
+  provider3 juga memeriksa **tax id dan nominal per baris**, bukan hanya header.
+- Invoice tetap dikonversi `{ salesorder_id }` tanpa mengirim ulang pajak;
+  verifikasi invoice memeriksa `total_tax`, pajak per baris, dan
+  `payment_amount`/`due`. Payment tetap memakai `amount` payable tersimpan
+  (kini termasuk PPN) dan association `payment_amount`.
+- Mirror status channel tetap version-aware: full-payload edit hanya mengubah
+  marker; tax id, nominal per baris/header, detail id, diskon, ongkir, dan link
+  invoice dipertahankan. Pre-read yang menemukan drift pajak menahan POST dan
+  mencatat investigation case.
+- Replay/recovery order lama membaca snapshot tersimpan dan **tidak** membaca
+  ulang config/master, sehingga outage pajak atau perubahan key tidak
+  menggagalkan transaksi yang sedang dilanjutkan. Perubahan config hanya berlaku
+  untuk checkout baru.
+- Konfigurasi: `jubelio.salesTaxId` di `system_config` (tanpa menu admin) +
+  `tax.ppnRatePercent`. Keduanya diverifikasi ke `GET /taxes/` setiap checkout
+  baru; kegagalan = `503 CHECKOUT_TAX_UNAVAILABLE` dengan copy customer, tanpa
+  SO/invoice/payment/Midtrans, reservation, atau perubahan cart.

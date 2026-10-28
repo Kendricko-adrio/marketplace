@@ -758,7 +758,7 @@ describe("buildSalesOrderPayload provider contract v2 guards (before any request
         expectedProviderPayable: 180_001,
       })
     ).toThrow(
-      /expected provider payable 180001 does not equal net goods 150000 \+ net shipping 30000 \(180000\)/
+      /expected provider payable 180001 does not equal net goods 150000 \+ provider tax 0 \+ net shipping 30000 \(180000\)/
     );
   });
 
@@ -998,6 +998,10 @@ describe("Jubelio sales gateway createSalesOrder", () => {
             price: 1_300_000,
             amount: 1_300_000,
             unit: "Buah",
+            // GET memuat identitas/nominal pajak per baris; kontrak3
+            // memverifikasi keduanya, kontrak2 tetap mengabaikan (harus 0).
+            taxId: 1,
+            taxAmount: 0,
           },
         ],
       },
@@ -3153,7 +3157,7 @@ describe("provider contract version: only an absent version is legacy", () => {
 
 describe("edit expected envelope is version/bounds validated before payload or HTTP", () => {
   const unsupportedVersions: Array<[string, unknown]> = [
-    ["an unknown explicit version", 3],
+    ["an unknown explicit version", 4],
     ["an explicit null version", null],
   ];
 
@@ -3683,5 +3687,306 @@ describe("Jubelio sales gateway log privacy and pre-send observability", () => {
     } finally {
       restore();
     }
+  });
+});
+
+// =========================================================
+// Master pajak — GET /taxes/ berpagination (spec PPN §5.1)
+// =========================================================
+// Lookup ini adalah satu-satunya sumber identitas/rate master untuk writer
+// provider3. Duplicate, record malformed, dan daftar yang tidak selesai
+// dipindai berarti `null` (unavailable) — bukan rate 0 dan bukan record
+// pertama yang kebetulan cocok.
+
+describe("Jubelio sales gateway getTaxRecord", () => {
+  const taxPage = (input: { data: unknown[]; totalCount: number }) =>
+    new Response(JSON.stringify(input), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  it("memindai halaman dengan parameter dokumentasi sampai record cocok ditemukan", async () => {
+    const { fetchImpl, requests } = stubFetch((request) => {
+      if (request.path === "/login") return new Response(JSON.stringify({ token: "tax-token" }), { status: 200 });
+      if (request.path === "/taxes/") {
+        return request.query === "?page=1&pageSize=100"
+          ? taxPage({
+              data: [{ tax_id: 1, tax_name: "No Tax", rate: "0.00", tax_in: null, tax_out: null }],
+              totalCount: 2,
+            })
+          : taxPage({
+              data: [{ tax_id: -2, tax_name: "PPN 11%", rate: "11.00", tax_in: "1-1303 PPN Masukan", tax_out: "2-2103 PPN Pengeluaran" }],
+              totalCount: 2,
+            });
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(gateway.getTaxRecord(-2)).resolves.toEqual({
+      taxId: -2,
+      ratePercent: "11",
+      outputAccount: "2-2103 PPN Pengeluaran",
+    });
+    expect(
+      requests.filter((request) => request.path === "/taxes/").map((request) => request.query)
+    ).toEqual(["?page=1&pageSize=100", "?page=2&pageSize=100"]);
+  });
+
+  it("menerima record tanpa akun pajak keluaran sebagai outputAccount null", async () => {
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return new Response(JSON.stringify({ token: "tax-token" }), { status: 200 });
+      return taxPage({ data: [{ tax_id: 1, rate: "0.00", tax_out: null }], totalCount: 1 });
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(gateway.getTaxRecord(1)).resolves.toEqual({
+      taxId: 1,
+      ratePercent: "0",
+      outputAccount: null,
+    });
+  });
+
+  it("mengembalikan null bila tidak ada record yang cocok setelah semua halaman selesai", async () => {
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return new Response(JSON.stringify({ token: "tax-token" }), { status: 200 });
+      return taxPage({ data: [{ tax_id: 1, rate: "0.00", tax_out: null }], totalCount: 1 });
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(gateway.getTaxRecord(-2)).resolves.toBeNull();
+  });
+
+  it("mengembalikan null bila tax id yang dicari muncul lebih dari satu kali", async () => {
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return new Response(JSON.stringify({ token: "tax-token" }), { status: 200 });
+      return request.query === "?page=1&pageSize=100"
+        ? taxPage({ data: [{ tax_id: -2, rate: "11.00", tax_out: "2-2103 PPN Pengeluaran" }], totalCount: 2 })
+        : taxPage({ data: [{ tax_id: -2, rate: "11.00", tax_out: "2-2103 PPN Pengeluaran" }], totalCount: 2 });
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(gateway.getTaxRecord(-2)).resolves.toBeNull();
+  });
+
+  it("mengembalikan null bila rate/tax id record yang cocok malformed", async () => {
+    for (const record of [
+      { tax_id: -2, rate: "11,00", tax_out: "2-2103 PPN Pengeluaran" },
+      { tax_id: -2, rate: "-2.00", tax_out: "2-2197 Hutang PPH 23" },
+      { tax_id: -2, rate: 11, tax_out: "2-2103 PPN Pengeluaran" },
+      { tax_id: "-2", rate: "11.00", tax_out: "2-2103 PPN Pengeluaran" },
+      { tax_id: -2, rate: "11.00", tax_out: 2201 },
+    ]) {
+      const { fetchImpl } = stubFetch((request) => {
+        if (request.path === "/login") return new Response(JSON.stringify({ token: "tax-token" }), { status: 200 });
+        return taxPage({ data: [record], totalCount: 1 });
+      });
+      const gateway = makeGateway({ fetchImpl });
+      await expect(gateway.getTaxRecord(-2)).resolves.toBeNull();
+    }
+  });
+
+  it("melempar error non-ambiguous saat GET master pajak gagal", async () => {
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return new Response(JSON.stringify({ token: "tax-token" }), { status: 200 });
+      return new Response(JSON.stringify({ message: "boom" }), { status: 500 });
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(gateway.getTaxRecord(-2)).rejects.toMatchObject({
+      options: { ambiguous: false, retryable: true },
+    });
+  });
+});
+
+// =========================================================
+// Kontrak provider3 — PPN pada SO create dan verifikasi GET
+// =========================================================
+// Spec PPN §5.2/§5.4: tax id signed dari snapshot, pajak per line dijumlahkan
+// menjadi total_tax, payable provider = net barang + PPN + net ongkir, dan GET
+// per baris wajib membuktikan identitas/nominal pajak. Expected values literal
+// dari spec (barang100000, PPN11000, total111000).
+describe("buildSalesOrderPayload provider contract v3", () => {
+  const v3Item = {
+    itemId: 101187,
+    quantity: 1,
+    price: 100_000,
+    discAmount: 0,
+    taxAmount: 11_000,
+    unit: "Buah",
+    taxId: -2,
+  };
+  const v3Input = {
+    providerContractVersion: 3,
+    contactId: -1,
+    customerName: "Pelanggan Umum",
+    locationId: 15,
+    note: "OKCIR_SO_CREATE:order-v3:op-1",
+    refNo: "order-v3",
+    originalShipmentCost: 0,
+    shippingCost: 0,
+    expectedProviderPayable: 111_000,
+    providerTax: { taxId: -2, ratePercent: "11" },
+    items: [v3Item],
+  };
+
+  it("menulis PPN per line, total_tax11000, dan grand_total111000", () => {
+    const payload = buildSalesOrderPayload(v3Input);
+    expect(payload).toMatchObject({
+      is_tax_included: false,
+      sub_total: 100_000,
+      total_disc: 0,
+      total_tax: 11_000,
+      grand_total: 111_000,
+    });
+    expect(payload.items).toEqual([
+      expect.objectContaining({
+        item_id: 101187,
+        price: 100_000,
+        tax_amount: 11_000,
+        tax_id: -2,
+        amount: 111_000,
+      }),
+    ]);
+  });
+
+  it("menolak pajak nonnol tanpa konteks kontrak v3", () => {
+    expect(() =>
+      buildSalesOrderPayload({
+        ...v2DeliveryCreateInput,
+        items: [{ ...v2ItemInput, taxAmount: 11_000, taxId: -2 }],
+      })
+    ).toThrow(/nonzero tax amount is rejected outside contract v3/);
+  });
+
+  it("menolak tax id yang berbeda dari tax id snapshot", () => {
+    expect(() =>
+      buildSalesOrderPayload({
+        ...v3Input,
+        items: [{ ...v3Item, taxId: 1 }],
+      })
+    ).toThrow(/every item tax id must equal the frozen provider tax id/);
+  });
+
+  it("menolak kontrak v3 tanpa konteks pajak tervalidasi", () => {
+    expect(() =>
+      buildSalesOrderPayload({ ...v3Input, providerTax: undefined })
+    ).toThrow(/a validated provider tax context is required/);
+  });
+
+  it("menolak payable yang mengabaikan PPN", () => {
+    expect(() =>
+      buildSalesOrderPayload({ ...v3Input, expectedProviderPayable: 100_000 })
+    ).toThrow(/provider tax 11000 \+ net shipping 0 \(111000\)/);
+  });
+});
+
+describe("Jubelio sales gateway createSalesOrder provider3 verification", () => {
+  const createInput = {
+    providerContractVersion: 3 as const,
+    contactId: -1,
+    customerName: "Pelanggan Umum",
+    locationId: 15,
+    note: "OKCIR_SO_CREATE:order-v3:op-1",
+    refNo: "order-v3",
+    originalShipmentCost: 0,
+    shippingCost: 0,
+    expectedProviderPayable: 111_000,
+    providerTax: { taxId: -2, ratePercent: "11" },
+    items: [
+      {
+        itemId: 101187,
+        quantity: 1,
+        price: 100_000,
+        discAmount: 0,
+        taxAmount: 11_000,
+        unit: "Buah",
+        taxId: -2,
+      },
+    ],
+  };
+
+  function provider3Get(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      salesorder_id: 68_500,
+      salesorder_no: "SO-000068500",
+      contact_id: -1,
+      customer_name: "Pelanggan Umum",
+      transaction_date: "2026-10-26T10:00:00.000Z",
+      is_tax_included: false,
+      location_id: 15,
+      source: 1,
+      note: "OKCIR_SO_CREATE:order-v3:op-1",
+      ref_no: "order-v3",
+      is_canceled: false,
+      invoice_id: null,
+      sub_total: 100_000,
+      total_disc: 0,
+      total_tax: 11_000,
+      grand_total: 111_000,
+      original_shipment_cost: 0,
+      shipping_cost: 0,
+      items: [
+        {
+          salesorder_detail_id: 0,
+          item_id: 101187,
+          qty_in_base: 1,
+          price: 100_000,
+          disc: 0,
+          disc_amount: 0,
+          tax_amount: 11_000,
+          amount: 111_000,
+          unit: "Buah",
+          tax_id: -2,
+          location_id: 15,
+        },
+      ],
+      ...overrides,
+    };
+  }
+
+  it("mengonfirmasi SO provider3 ketika GET memuat tax id/nominal yang sama", async () => {
+    const { fetchImpl, requests } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/orders/" && request.method === "POST") {
+        return Response.json({ id: 68_500 });
+      }
+      if (request.path === "/sales/orders/68500" && request.method === "GET") {
+        return Response.json(provider3Get());
+      }
+      throw new Error(`Unexpected request: ${request.method} ${request.path}`);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    const result = await gateway.createSalesOrder(createInput);
+
+    expect(result.order.totalTax).toBe(11_000);
+    expect(result.order.grandTotal).toBe(111_000);
+    const posts = requests.filter(
+      (request) => request.method === "POST" && request.path === "/sales/orders/"
+    );
+    expect(posts).toHaveLength(1);
+    expect(posts[0].body).toMatchObject({
+      total_tax: 11_000,
+      grand_total: 111_000,
+      items: [expect.objectContaining({ tax_id: -2, tax_amount: 11_000 })],
+    });
+  });
+
+  it("menahan hasil bila GET memuat pajak per baris yang berbeda walau header sama", async () => {
+    const { fetchImpl } = stubFetch((request) => {
+      if (request.path === "/login") return Response.json({ token: "mock-token" });
+      if (request.path === "/sales/orders/" && request.method === "POST") {
+        return Response.json({ id: 68_500 });
+      }
+      const get = provider3Get();
+      (get.items as Record<string, unknown>[])[0].tax_amount = 10_999;
+      return Response.json(get);
+    });
+    const gateway = makeGateway({ fetchImpl });
+
+    await expect(gateway.createSalesOrder(createInput)).rejects.toMatchObject({
+      message: expect.stringContaining("tax amount"),
+    });
   });
 });

@@ -196,3 +196,54 @@ SELECT COUNT(*) FROM branch_stock WHERE pending_remote_stock < 0 OR reserved_sto
 -- thumbnail + gallery terisi
 SELECT name, thumbnail IS NOT NULL, jsonb_array_length(images) FROM product WHERE jubelio_item_group_id IS NOT NULL LIMIT 5;
 ```
+
+## E. Aktivasi PPN provider (kontrak provider3)
+
+Writer order baru mencatat PPN checkout pada Sales Order (spec
+[PPN checkout](../../.scratch/jubelio-sales-api-switching/plan/jubelio-sales-order-tax-spec.md)).
+Aktivasi bersifat **operasional dan tidak otomatis** — tidak ada startup yang
+menulis config, tidak ada menu admin, dan seeder penuh tidak boleh dijalankan
+pada database operational.
+
+Prasyarat sebelum writer baru dipakai:
+
+1. **Reader sebelum writer.** Deploy binary yang sudah memahami snapshot
+   provider3 (`decodePricingSnapshot`, `readOrderPricing`, invoice/payment,
+   mirror) dan constraint `orders_pricing_versions_valid` versi 3. Jangan pernah
+   rollback ke binary yang tidak memahami provider3 selama record3 masih ada:
+   tahan checkout baru lebih aman daripada membaca record3 sebagai provider2.
+2. **Verifikasi tenant lewat GET**, bukan menyalin ID: `GET /taxes/?page=1&pageSize=100`
+   dengan credentials tenant tersebut. Pastikan tepat satu record dengan rate
+   yang sama dengan kebijakan PPN website, `tax_out` (akun pajak keluaran) terisi,
+   dan catat `tax_id`-nya (tenant riset: `-2` = PPN 11%, `tax_out: 2-2103 PPN
+   Pengeluaran`). Rate PPh/No Tax bukan kandidat.
+3. **Isi config eksplisit** di `system_config` target (contoh UPSERT yang hanya
+   menyentuh satu key, jalankan setelah backup dan review):
+   ```sql
+   INSERT INTO system_config (key, value, type, description)
+   VALUES ('jubelio.salesTaxId', '-2', 'number',
+     'Tax ID master Jubelio untuk PPN barang pada SO/invoice/payment (diverifikasi GET /taxes/).')
+   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, type = EXCLUDED.type,
+     description = EXCLUDED.description, updated_at = now();
+   ```
+   Pastikan `tax.ppnRatePercent` sudah bernilai rate kebijakan saat ini. Kedua
+   key dibaca **uncached** setiap checkout baru; perubahan langsung berlaku pada
+   checkout berikutnya dan tidak mengubah order yang sedang berjalan.
+4. **Drain/check attempt in-flight.** Attempt dan order lama memakai snapshot
+   tersimpan; replay/recovery tidak membaca config/master, jadi transaksi yang
+   sedang berjalan tetap selesai dengan angka semula. Tetap periksa
+   `checkout_attempt` yang belum final sebelum cutover agar tidak ada campuran
+   yang membingungkan operasi.
+5. **Uji di staging** dengan `GET /taxes/` tenant staging + satu checkout kecil
+   (bukan provider write tambahan tanpa izin terpisah). Kegagalan preflight
+   menghasilkan `503 CHECKOUT_TAX_UNAVAILABLE` dan tidak membuat SO/invoice/
+   payment/Midtrans.
+6. **Batas yang belum tertutup**: variasi provider multi-line/diskon/ongkir/
+   mirror ber-tax baru dibuktikan lewat HTTP mock aplikasi. Bila provider
+   ternyata menghitung ulang berbeda, hentikan writer baru dan kembali ke
+   keputusan/spec — jangan mengubah pajak customer diam-diam.
+
+Rollback: kembalikan config ke nilai tenant yang benar atau tahan checkout baru;
+jangan menghapus baris `system_config` secara buta dan jangan menjalankan
+`db:migrate` pada dev (gunakan `db:push`). Constraint versi dihasilkan oleh
+`npm run db:generate` (`packages/db/drizzle/`), bukan ditulis tangan.

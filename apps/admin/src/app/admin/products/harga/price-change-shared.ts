@@ -32,6 +32,9 @@ export type Preview = {
   /** Workbook-only raw action/target text (kept for review and the report). */
   inputActionRaw?: string | null;
   inputTargetRaw?: string | null;
+  inputType?: "price" | "percent" | null;
+  inputTypeRaw?: string | null;
+  inputValueRaw?: string | null;
   errorReason?: string | null;
   sourceUnitPrice: string | null;
   storedTargetBefore: string | null;

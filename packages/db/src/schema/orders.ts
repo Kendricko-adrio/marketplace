@@ -15,6 +15,7 @@ import { relations, sql } from "drizzle-orm";
 import { clients, users } from "./auth";
 import { productVariants } from "./products";
 import { branches } from "./branches";
+import type { ValidatedProviderTax } from "../provider-tax";
 
 // =========================================================
 // Ticket 04 — the immutable delivery snapshot payload (JSONB).
@@ -99,7 +100,7 @@ export interface DeliverySnapshotPayload {
 // Semua nominal adalah Rupiah utuh exact (decimal string), versi kontrak baru
 // pricing1/engine1/provider2. Baris legacy tidak punya payload ini.
 // =========================================================
-export interface PricingSnapshotLinePayload {
+export interface PricingSnapshotLinePayloadV2 {
   variantId: string;
   quantity: number;
   /** Harga source (Base Price) per unit. */
@@ -113,7 +114,24 @@ export interface PricingSnapshotLinePayload {
   markdownRevisionId: string | null;
 }
 
-export interface PricingSnapshotPayloadV1 {
+/**
+ * Baris provider3 menambahkan PPN yang dialokasikan ke whole line ini. Field
+ * WAJIB (bukan optional): snapshot provider3 yang kehilangan nominal pajak
+ * harus gagal decode, bukan diam-diam menjadi pajak 0.
+ */
+export interface PricingSnapshotLinePayloadV3 extends PricingSnapshotLinePayloadV2 {
+  providerTaxAmount: string;
+}
+
+export type PricingSnapshotLinePayload =
+  | PricingSnapshotLinePayloadV2
+  | PricingSnapshotLinePayloadV3;
+
+/**
+ * Snapshot kontrak provider2: payable provider = net barang + net ongkir,
+ * pajak provider 0. Baris lama tetap dibaca dengan cabang ini.
+ */
+export interface PricingSnapshotPayloadProviderV2 {
   pricingContractVersion: 1;
   pricingEngineVersion: 1;
   providerContractVersion: 2;
@@ -138,8 +156,30 @@ export interface PricingSnapshotPayloadV1 {
   expectedProviderPayable: string;
   providerQuotedShippingCost: string | null;
   providerBilledShippingCost: string | null;
-  lines: PricingSnapshotLinePayload[];
+  lines: PricingSnapshotLinePayloadV2[];
 }
+
+/**
+ * Snapshot kontrak provider3 (PPN dicatat pada SO/invoice/payment):
+ * payable provider = net barang + PPN barang + net ongkir, dan `providerTax`
+ * menyimpan identitas/rate master yang membeku. Seluruh nominal pajak per
+ * baris wajib berjumlah tepat `ppnAmount`.
+ */
+export interface PricingSnapshotPayloadProviderV3
+  extends Omit<PricingSnapshotPayloadProviderV2, "providerContractVersion" | "lines"> {
+  providerContractVersion: 3;
+  /** Identitas + rate master yang dibekukan bersama snapshot. */
+  providerTax: ValidatedProviderTax;
+  lines: PricingSnapshotLinePayloadV3[];
+}
+
+/**
+ * Payload `pricing_snapshot` untuk pricingContractVersion 1: discriminated
+ * union provider2/provider3. Pembaca WAJIB memakai `decodePricingSnapshot`.
+ */
+export type PricingSnapshotPayloadV1 =
+  | PricingSnapshotPayloadProviderV2
+  | PricingSnapshotPayloadProviderV3;
 
 // Addresses table (belongs to store clients).
 // Ticket 02 (Jubelio Shipment): the origin/destination region chain is stored
@@ -372,7 +412,8 @@ export const orders = pgTable("orders", {
     sql`${t.pickupVerificationAttempts} >= 0`
   ),
   // Ticket 01 — hanya kombinasi versi yang sah yang boleh tersimpan: baris
-  // legacy 0/0/0 dan baris kontrak baru pricing1/engine1/provider2. Kombinasi
+  // legacy 0/0/0, kontrak baru pricing1/engine1/provider2 (tanpa pajak
+  // provider), dan pricing1/engine1/provider3 (PPN dicatat pada SO). Kombinasi
   // silang (mis. pricing0 dengan engine1) ditolak agar reader yang fail-closed
   // tidak pernah menemukan baris yang mustahil.
   pricingVersionsCheck: check(
@@ -382,7 +423,10 @@ export const orders = pgTable("orders", {
           and ${t.providerContractVersion} = 0)
         or (${t.pricingContractVersion} = 1
           and ${t.pricingEngineVersion} = 1
-          and ${t.providerContractVersion} = 2)`
+          and ${t.providerContractVersion} = 2)
+        or (${t.pricingContractVersion} = 1
+          and ${t.pricingEngineVersion} = 1
+          and ${t.providerContractVersion} = 3)`
   ),
   pricingCurrencyCheck: check(
     "orders_pricing_currency_valid",

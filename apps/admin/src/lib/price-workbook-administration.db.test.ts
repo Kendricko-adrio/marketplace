@@ -469,6 +469,113 @@ describe.skipIf(!dbReady)("workbook price import (disposable DB)", () => {
     await pool.end();
   });
 
+  it("stage/apply/report v2 mempertahankan persen dari source dan gagal parsial", async () => {
+    const prior = await stageWorkbook([dataRow(3, SKU_A, "set_price", 200000)]);
+    await applyUntilFinal(prior.data.id);
+    const file = buildWorkbookFixture([
+      { row: 1, cells: { A: { kind: "text", value: "markdown_v2" } } },
+      { row: 2, cells: { ...HEADER_ROW.cells, D: { kind: "text", value: "input_type" } } },
+      { ...dataRow(3, SKU_A, "set_price", 10), cells: { ...dataRow(3, SKU_A, "set_price", 10).cells, D: { kind: "text", value: "percent" } } },
+      { ...dataRow(4, SKU_B, "set_price", 150000), cells: { ...dataRow(4, SKU_B, "set_price", 150000).cells, D: { kind: "text", value: "price" } } },
+      { ...dataRow(5, SKU_UNKNOWN, "set_price", 10), cells: { ...dataRow(5, SKU_UNKNOWN, "set_price", 10).cells, D: { kind: "text", value: "percent" } } },
+      { ...dataRow(6, "CONTOH-GANTI-SKU-HARGA", "set_price", 150000), cells: { ...dataRow(6, "CONTOH-GANTI-SKU-HARGA", "set_price", 150000).cells, D: { kind: "text", value: "price" } } },
+    ]);
+    const requestKey = randomUUID();
+    const staged = await stageWorkbookPriceChange({ requestKey, file }, ACTOR);
+    expect(staged.data).toMatchObject({ rowCount: 4, pendingCount: 2, failedCount: 2 });
+    expect(staged.data.rows).toMatchObject([
+      { targetUnitPrice: "270000", preview: { inputType: "percent", inputValueRaw: "10", effectiveUnitPriceBefore: "200000" } },
+      { targetUnitPrice: "150000", preview: { inputType: "price", inputValueRaw: "150000" } },
+      { state: "failed", resultCode: "VARIANT_NOT_FOUND" },
+      { state: "failed", resultCode: "EXAMPLE_ROW_NOT_REPLACED" },
+    ]);
+    expect((await stageWorkbookPriceChange({ requestKey, file }, ACTOR)).data.id).toBe(staged.data.id);
+    const applied = await applyUntilFinal(staged.data.id);
+    expect(applied.data).toMatchObject({ appliedCount: 2, failedCount: 2, pendingCount: 0 });
+    const report = await getPriceChangeReport(staged.data.id, "all", ACTOR);
+    const parsed = parsePriceWorkbook(report!.bytes, LIMITS);
+    expect(parsed.rows[0]).toMatchObject({ inputType: "percent", discountPercent: "10", targetRaw: "10" });
+    expect(parsed.rows[1]).toMatchObject({ inputType: "price", targetUnitPrice: "150000" });
+    const failed = parsePriceWorkbook((await getPriceChangeReport(staged.data.id, "failed", ACTOR))!.bytes, LIMITS);
+    expect(failed.rows).toMatchObject([
+      { inputSku: SKU_UNKNOWN, inputType: "percent", targetRaw: "10", originRow: 5 },
+      { error: "EXAMPLE_ROW_NOT_REPLACED", originRow: null },
+    ]);
+  });
+
+  it("membekukan pembulatan persen dan retry memakai source terbaru tanpa replay sukses", async () => {
+    await pool!.query("UPDATE product_variant SET price='100001' WHERE id=$1", [VARIANTS[0]]);
+    const v2 = (rows: SheetRow[]) => buildWorkbookFixture([
+      { row: 1, cells: { A: { kind: "text", value: "markdown_v2" } } },
+      { row: 2, cells: { ...HEADER_ROW.cells, D: { kind: "text", value: "input_type" }, E: { kind: "text", value: "origin_row" } } },
+      ...rows,
+    ]);
+    const percent = (row: number, sku: string, value: number): SheetRow => ({
+      row, cells: { ...dataRow(row, sku, "set_price", value).cells, D: { kind: "text", value: "percent" } },
+    });
+    const requestKey = randomUUID();
+    const file = v2([percent(3, SKU_A, 15), percent(4, SKU_B, 10)]);
+    const staged = await stageWorkbookPriceChange({ requestKey, file }, ACTOR);
+    expect(staged.data.rows.map(row => row.targetUnitPrice)).toEqual(["85001", "270000"]);
+    // Source berubah setelah review, bukan menghitung ulang target menjadi 45001.
+    await pool!.query("UPDATE product_variant SET price='50000' WHERE id=$1", [VARIANTS[0]]);
+    const applied = await applyUntilFinal(staged.data.id);
+    expect(applied.data.rows[0]).toMatchObject({ targetUnitPrice: "85001", state: "failed", resultCode: "TARGET_NOT_BELOW_SOURCE" });
+    expect(applied.data.rows[1].state).toBe("applied");
+    const subset = parsePriceWorkbook((await getPriceChangeReport(staged.data.id, "failed", ACTOR))!.bytes, LIMITS);
+    expect(subset.rows).toMatchObject([{ inputType: "percent", targetRaw: "15", originRow: 3 }]);
+    const correction = percent(3, SKU_A, 15);
+    correction.cells.E = { kind: "number", value: 3 };
+    const retry = await stageWorkbookPriceChange({ requestKey: randomUUID(), file: v2([correction]), parentBatchId: staged.data.id }, ACTOR);
+    expect(retry.data).toMatchObject({ rowCount: 1, parentBatchId: staged.data.id });
+    expect(retry.data.rows[0].targetUnitPrice).toBe("42500");
+    expect((await applyUntilFinal(retry.data.id)).data.appliedCount).toBe(1);
+    expect((await getPriceChangeBatch(staged.data.id, ACTOR))!.appliedCount).toBe(1);
+    // Nilai persis sama tetapi mode berbeda tidak boleh dianggap replay request.
+    const changed = dataRow(3, SKU_A, "set_price", 15);
+    changed.cells.D = { kind: "text", value: "price" };
+    await expectPriceChangeError(() => stageWorkbookPriceChange({ requestKey, file: v2([changed, percent(4, SKU_B, 10)]) }, ACTOR), { status: 409, code: "REQUEST_KEY_CONFLICT" });
+  });
+
+  it("laporan mempertahankan tipe invalid dan SKU contoh nyata tetap tidak dapat di-apply", async () => {
+    await pool!.query("UPDATE product_variant SET sku='CONTOH-GANTI-SKU-HARGA' WHERE id=$1", [VARIANTS[2]]);
+    try {
+      const file = buildWorkbookFixture([
+        { row: 1, cells: { A: { kind: "text", value: "markdown_v2" } } },
+        { row: 2, cells: { ...HEADER_ROW.cells, D: { kind: "text", value: "input_type" } } },
+        dataRow(3, SKU_A, "set_price", 100000),
+        { row: 4, cells: { ...dataRow(4, SKU_B, "set_price", 100000).cells, D: { kind: "text", value: "wrong-mode" } } },
+        { row: 5, cells: { ...dataRow(5, "CONTOH-GANTI-SKU-HARGA", "set_price", 100000).cells, D: { kind: "text", value: "price" } } },
+      ]);
+      const staged = await stageWorkbookPriceChange({ requestKey: randomUUID(), file }, ACTOR);
+      expect(staged.data).toMatchObject({ failedCount: 3, pendingCount: 0 });
+      expect((await applyUntilFinal(staged.data.id)).data.appliedCount).toBe(0);
+      const report = parsePriceWorkbook((await getPriceChangeReport(staged.data.id, "all", ACTOR))!.bytes, LIMITS);
+      expect(report.rows).toMatchObject([
+        { inputTypeRaw: null, error: "INPUT_TYPE_INVALID" },
+        { inputTypeRaw: "wrong-mode", error: "INPUT_TYPE_INVALID" },
+        { error: "EXAMPLE_ROW_NOT_REPLACED" },
+      ]);
+      expect(await countRevisions()).toBe(0);
+    } finally {
+      await pool!.query("UPDATE product_variant SET sku=$1 WHERE id=$2", [SKU_RESTORE, VARIANTS[2]]);
+    }
+  });
+
+  it("kegagalan kalkulasi satu baris persen tidak membatalkan workbook", async () => {
+    await pool!.query("UPDATE product_variant SET price='1' WHERE id=$1", [VARIANTS[0]]);
+    const file = buildWorkbookFixture([
+      { row: 1, cells: { A: { kind: "text", value: "markdown_v2" } } },
+      { row: 2, cells: { ...HEADER_ROW.cells, D: { kind: "text", value: "input_type" } } },
+      { row: 3, cells: { ...dataRow(3, SKU_A, "set_price", 99).cells, D: { kind: "text", value: "percent" } } },
+      { row: 4, cells: { ...dataRow(4, SKU_B, "set_price", 10).cells, D: { kind: "text", value: "percent" } } },
+    ]);
+    const staged = await stageWorkbookPriceChange({ requestKey: randomUUID(), file }, ACTOR);
+    expect(staged.data).toMatchObject({ failedCount: 1, pendingCount: 1 });
+    expect(staged.data.rows[0]).toMatchObject({ state: "failed", targetUnitPrice: null });
+    expect(staged.data.rows[1].targetUnitPrice).toBe("270000");
+  });
+
   it("stages a workbook: valid rows pending, parse errors final failed, no live price yet", async () => {
     const before = await countRevisions();
     const staged = await stageWorkbook([
@@ -884,7 +991,7 @@ describe.skipIf(!dbReady)("workbook price import (disposable DB)", () => {
 
     // viewer: downloads allowed, upload denied
     const template = await getPriceChangeTemplate(VIEW_ACTOR);
-    expect(parsePriceWorkbook(template, LIMITS).rows).toHaveLength(0);
+    expect(parsePriceWorkbook(template, LIMITS).rows).toHaveLength(2);
     expect(
       await exportPriceChangeWorkbook(
         { variantIds: [VARIANT_BY_SKU.get(SKU_A)!] },

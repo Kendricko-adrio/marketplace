@@ -102,6 +102,11 @@ Status per fitur (lifecycle sama dengan plan):
 Ticket mewarisi Rancangan teknis/Rancangan UX di atas; subagent lane opsional dan
 butuh izin user terpisah; jangan memberi satu checkout ke dua writer.>
 
+Setiap implementation ticket dibuat dari [`ticket.md`](ticket.md) dan wajib memuat
+irisan blueprint (tabel file, kontrak export, seam test), seam + test RED pertama,
+serta batas keputusan untuk slice-nya. Deviasi dicatat di `Deviation log` pada
+`## Answer` ticket, bukan dibiarkan implisit.
+
 ## Deviation log
 
 | Ticket / slice | Rencana (path/kontrak) | Aktual | Alasan | Dampak |

@@ -11,6 +11,7 @@ import { seedCleanupEntries } from "./seed-cleanup";
 import { resolveSeedPlan } from "./seed-mode";
 import {
   discountContractSystemConfigSeedRows,
+  jubelioSalesTaxSystemConfigSeedRows,
   discountImportSystemConfigSeedRows,
   shipmentSystemConfigSeedRows,
 } from "./seed-system-config";
@@ -2315,6 +2316,7 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
       ...shipmentSystemConfigSeedRows,
       ...discountImportSystemConfigSeedRows,
       ...discountContractSystemConfigSeedRows,
+      ...jubelioSalesTaxSystemConfigSeedRows,
       {
         key: "tax.ppnRatePercent",
         value: "11",

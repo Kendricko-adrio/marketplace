@@ -93,7 +93,7 @@ describe("provider location identity", () => {
     );
   });
 
-  it.each(["itemId", "taxId", "quantity"] as const)(
+  it.each(["itemId", "quantity"] as const)(
     "does not permit a negative %s when location is negative",
     (field) => {
       const payload = signedLocationPayload(-1);
@@ -103,6 +103,24 @@ describe("provider location identity", () => {
       );
     }
   );
+
+  // Spec PPN §5.1: syarat tax ID positif dilepas. Tenant menyimpan PPN 11%
+  // sebagai -2, jadi tanda negatif adalah identitas master yang sah.
+  it("accepts a negative master tax id (-2) without remapping identity", () => {
+    const payload = signedLocationPayload(-1);
+    payload.create.items = payload.create.items.map((line) => ({ ...line, taxId: -2 }));
+    expect(readJubelioSalesOrderExpectation(payload)).toMatchObject({
+      lines: [{ taxId: -2 }],
+    });
+  });
+
+  it("still rejects tax id 0 because it cannot reference a master record", () => {
+    const payload = signedLocationPayload(-1);
+    payload.create.items = payload.create.items.map((line) => ({ ...line, taxId: 0 }));
+    expect(() => readJubelioSalesOrderExpectation(payload)).toThrow(
+      expect.objectContaining({ code: "SALES_CONTRACT_SHAPE_INVALID" })
+    );
+  });
 
   it("accepts negative location in paired immutable settlement records", () => {
     expect(readSettlementAuthorityRecord({

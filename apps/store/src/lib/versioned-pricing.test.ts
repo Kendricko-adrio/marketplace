@@ -6,7 +6,8 @@ import {
   decodePricingSnapshot,
   readOrderPricing,
 } from "./versioned-pricing";
-import type { PricingLineInput } from "./versioned-pricing";
+import type { PricingLineInput, PricingSnapshot } from "./versioned-pricing";
+import { evaluatePricing } from "@marketplace/db/src/discount-pricing";
 
 // Seam L — the public pricing contract (spec §4.2/§4.3/§8.3).
 // Expected values are independent literals from the approved spec §4.4 and the
@@ -89,6 +90,14 @@ function line(overrides: Partial<PricingLineInput> = {}): PricingLineInput {
     effectiveUnitPrice: "150000",
     ...overrides,
   };
+}
+
+/** Narrowing eksplisit ke kontrak provider3 untuk test; bukan cast buta. */
+function requireProvider3(snapshot: PricingSnapshot) {
+  if (snapshot.providerContractVersion !== 3) {
+    throw new Error("expected a provider3 snapshot");
+  }
+  return snapshot;
 }
 
 function expectRejection(run: () => unknown, code: string): void {
@@ -514,7 +523,7 @@ describe("decodePricingSnapshot — snapshot pricing1 fail closed", () => {
     { label: "version sebagai string", payload: { ...VALID_SNAPSHOT_V1, pricingContractVersion: "1" } },
     { label: "engine version 2", payload: { ...VALID_SNAPSHOT_V1, pricingEngineVersion: 2 } },
     { label: "provider version 1", payload: { ...VALID_SNAPSHOT_V1, providerContractVersion: 1 } },
-    { label: "provider version 3", payload: { ...VALID_SNAPSHOT_V1, providerContractVersion: 3 } },
+    { label: "provider version 4", payload: { ...VALID_SNAPSHOT_V1, providerContractVersion: 4 } },
   ])("menolak versi tidak dikenal: $label", ({ payload }) => {
     expectRejection(() => decodePricingSnapshot(payload), "PRICING_UNSUPPORTED_VERSION");
   });
@@ -780,6 +789,291 @@ describe("readOrderPricing — dispatch versi eksplisit", () => {
           pricingEngineVersion: 1,
           providerContractVersion: 2,
         }),
+      "PRICING_UNSUPPORTED_VERSION"
+    );
+  });
+});
+
+// =========================================================
+// Kontrak provider3 — PPN checkout dicatat pada SO/invoice/payment
+// =========================================================
+// Expected values adalah literal dari spec PPN §5.3 dan §8 (pickup100000,
+// qty2, diskon, delivery+ongkir, subsidi ongkir, dua baris rounding, net0).
+// Payable provider kontrak3 = net barang + PPN barang + net ongkir, sementara
+// total customer tidak ditambah pajak kedua.
+describe("buildPricingSnapshot — kontrak provider3", () => {
+  const ppn11 = { taxId: -2, ratePercent: "11" };
+
+  it("pickup barang100000: pajak11000, line111000, provider = customer 111000", () => {
+    const snapshot = buildPricingSnapshot({
+      fulfillmentMethod: "pickup",
+      ppnRatePercent: "11",
+      lines: [line({ sourceUnitPrice: "100000", effectiveUnitPrice: "100000" })],
+      providerTax: ppn11,
+    });
+
+    expect(snapshot.providerContractVersion).toBe(3);
+    expect(requireProvider3(snapshot).providerTax).toEqual({ taxId: -2, ratePercent: "11" });
+    expect(snapshot.ppnAmount).toBe("11000");
+    expect(snapshot.total).toBe("111000");
+    expect(snapshot.expectedProviderPayable).toBe("111000");
+    expect(snapshot.lines).toEqual([
+      expect.objectContaining({ netLineAmount: "100000", providerTaxAmount: "11000" }),
+    ]);
+  });
+
+  it("qty2 × 100000: pajak whole-line22000, line222000", () => {
+    const snapshot = buildPricingSnapshot({
+      fulfillmentMethod: "pickup",
+      ppnRatePercent: "11",
+      lines: [line({ quantity: 2, sourceUnitPrice: "100000", effectiveUnitPrice: "100000" })],
+      providerTax: ppn11,
+    });
+
+    expect(snapshot.ppnAmount).toBe("22000");
+    expect(snapshot.expectedProviderPayable).toBe("222000");
+    expect(requireProvider3(snapshot).lines[0].providerTaxAmount).toBe("22000");
+    expect(snapshot.lines[0].netLineAmount).toBe("200000");
+  });
+
+  it("barang130000 (setelah Coupon20000): pajak14300, total144300", () => {
+    const snapshot = buildPricingSnapshot({
+      fulfillmentMethod: "pickup",
+      ppnRatePercent: "11",
+      lines: [line({ sourceUnitPrice: "130000", effectiveUnitPrice: "130000" })],
+      providerTax: ppn11,
+    });
+
+    expect(snapshot.ppnAmount).toBe("14300");
+    expect(snapshot.expectedProviderPayable).toBe("144300");
+    expect(snapshot.total).toBe("144300");
+  });
+
+  it("delivery barang150000 + ongkir30000: pajak16500, provider = customer196500", () => {
+    const snapshot = buildPricingSnapshot({
+      fulfillmentMethod: "delivery",
+      ppnRatePercent: "11",
+      shippingBeforeSubsidy: "30000",
+      lines: [line()],
+      providerTax: ppn11,
+    });
+
+    expect(snapshot.ppnAmount).toBe("16500");
+    expect(snapshot.shippingCost).toBe("30000");
+    expect(snapshot.expectedProviderPayable).toBe("196500");
+    expect(snapshot.total).toBe("196500");
+  });
+
+  it("delivery dengan subsidi ongkir20000: net ongkir10000, pajak tetap16500, total176500", () => {
+    const snapshot = buildPricingSnapshot({
+      fulfillmentMethod: "delivery",
+      ppnRatePercent: "11",
+      shippingBeforeSubsidy: "30000",
+      lines: [line()],
+      providerTax: ppn11,
+    });
+    expect(snapshot.total).toBe("196500");
+
+    const subsidised = evaluatePricing({
+      fulfillmentMethod: "delivery",
+      ppnRatePercent: "11",
+      shippingBeforeSubsidy: "30000",
+      lines: [line()],
+      providerTax: ppn11,
+      benefit: { kind: "shipping", paramsVersion: 1, capAmount: "20000" },
+    });
+
+    expect(subsidised.shippingBeforeSubsidy).toBe("30000");
+    expect(subsidised.shippingSubsidy).toBe("20000");
+    expect(subsidised.shippingCost).toBe("10000");
+    expect(subsidised.ppnAmount).toBe("16500");
+    expect(subsidised.expectedProviderPayable).toBe("176500");
+    expect(subsidised.total).toBe("176500");
+    expect(subsidised.providerContractVersion).toBe(3);
+  });
+
+  it("dua variant net100001: pajak order22001, alokasi11001/11000, total222003", () => {
+    const snapshot = buildPricingSnapshot({
+      fulfillmentMethod: "pickup",
+      ppnRatePercent: "11",
+      lines: [
+        line({ variantId: "v-a", sourceUnitPrice: "100001", effectiveUnitPrice: "100001" }),
+        line({ variantId: "v-b", sourceUnitPrice: "100001", effectiveUnitPrice: "100001" }),
+      ],
+      providerTax: ppn11,
+    });
+
+    expect(snapshot.ppnAmount).toBe("22001");
+    expect(snapshot.expectedProviderPayable).toBe("222003");
+    expect(requireProvider3(snapshot).lines.map((entry) => entry.providerTaxAmount)).toEqual([
+      "11001",
+      "11000",
+    ]);
+  });
+
+  it("net barang0 dengan ongkir10000: pajak0, payable10000", () => {
+    const snapshot = buildPricingSnapshot({
+      fulfillmentMethod: "delivery",
+      ppnRatePercent: "11",
+      shippingBeforeSubsidy: "10000",
+      lines: [
+        line({
+          sourceUnitPrice: "100000",
+          effectiveUnitPrice: "100000",
+          quantity: 1,
+          variantId: "v-free",
+        }),
+      ],
+      providerTax: ppn11,
+    });
+    expect(snapshot.shippingCost).toBe("10000");
+
+    const free = evaluatePricing({
+      fulfillmentMethod: "delivery",
+      ppnRatePercent: "11",
+      shippingBeforeSubsidy: "10000",
+      lines: [
+        line({ variantId: "v-free", sourceUnitPrice: "100000", effectiveUnitPrice: "100000" }),
+      ],
+      providerTax: ppn11,
+      benefit: { kind: "fixed_goods", paramsVersion: 1, fixedAmount: "100000" },
+    });
+    expect(free.netGoods).toBe("0");
+    expect(free.ppnAmount).toBe("0");
+    expect(requireProvider3(free).lines[0].providerTaxAmount).toBe("0");
+    expect(free.expectedProviderPayable).toBe("10000");
+    expect(free.total).toBe("10000");
+  });
+
+  it("menolak tax context dengan rate berbeda dari rate website", () => {
+    expectRejection(
+      () =>
+        buildPricingSnapshot({
+          fulfillmentMethod: "pickup",
+          ppnRatePercent: "11",
+          lines: [line({ sourceUnitPrice: "100000", effectiveUnitPrice: "100000" })],
+          providerTax: { taxId: -2, ratePercent: "12" },
+        }),
+      "PRICING_INPUT_INVALID"
+    );
+  });
+
+  it("menolak tax id0 pada konteks tervalidasi", () => {
+    expectRejection(
+      () =>
+        buildPricingSnapshot({
+          fulfillmentMethod: "pickup",
+          ppnRatePercent: "11",
+          lines: [line()],
+          providerTax: { taxId: 0, ratePercent: "11" },
+        }),
+      "PRICING_INPUT_INVALID"
+    );
+  });
+
+  it("tanpa konteks tetap membangun provider2 (kompatibilitas record lama)", () => {
+    const snapshot = buildPricingSnapshot({
+      fulfillmentMethod: "pickup",
+      ppnRatePercent: "11",
+      lines: [line({ sourceUnitPrice: "100000", effectiveUnitPrice: "100000" })],
+    });
+    expect(snapshot.providerContractVersion).toBe(2);
+    expect(snapshot.expectedProviderPayable).toBe("100000");
+    expect(snapshot).not.toHaveProperty("providerTax");
+  });
+});
+
+describe("decodePricingSnapshot — integritas pajak provider3", () => {
+  const ppn11 = { taxId: -2, ratePercent: "11" };
+  const provider3 = () =>
+    buildPricingSnapshot({
+      fulfillmentMethod: "pickup",
+      ppnRatePercent: "11",
+      lines: [
+        line({ variantId: "v-a", sourceUnitPrice: "100001", effectiveUnitPrice: "100001" }),
+        line({ variantId: "v-b", sourceUnitPrice: "100001", effectiveUnitPrice: "100001" }),
+      ],
+      providerTax: ppn11,
+    });
+
+  it("menerima payload provider3 yang konsisten", () => {
+    const decoded = decodePricingSnapshot(JSON.parse(JSON.stringify(provider3())));
+    expect(decoded.providerContractVersion).toBe(3);
+    expect(decoded.ppnAmount).toBe("22001");
+    expect(requireProvider3(decoded).lines.map((entry) => entry.providerTaxAmount)).toEqual([
+      "11001",
+      "11000",
+    ]);
+  });
+
+  it("menolak provider3 tanpa providerTax atau tanpa nominal pajak per baris", () => {
+    const withoutTax = JSON.parse(JSON.stringify(provider3()));
+    delete withoutTax.providerTax;
+    expectRejection(() => decodePricingSnapshot(withoutTax), "PRICING_SNAPSHOT_CORRUPT");
+
+    const withoutLineTax = JSON.parse(JSON.stringify(provider3()));
+    delete withoutLineTax.lines[0].providerTaxAmount;
+    expectRejection(() => decodePricingSnapshot(withoutLineTax), "PRICING_SNAPSHOT_CORRUPT");
+  });
+
+  it("menolak alokasi pajak yang tidak dapat direproduksi persis", () => {
+    const tampered = JSON.parse(JSON.stringify(provider3()));
+    tampered.lines[0].providerTaxAmount = "11000";
+    tampered.lines[1].providerTaxAmount = "11001";
+    expectRejection(() => decodePricingSnapshot(tampered), "PRICING_SNAPSHOT_CORRUPT");
+  });
+
+  it("menolak field pajak provider pada snapshot provider2", () => {
+    const provider2 = buildPricingSnapshot({
+      fulfillmentMethod: "pickup",
+      ppnRatePercent: "11",
+      lines: [line({ sourceUnitPrice: "100000", effectiveUnitPrice: "100000" })],
+    });
+    expectRejection(
+      () => decodePricingSnapshot({ ...provider2, providerTax: ppn11 }),
+      "PRICING_SNAPSHOT_CORRUPT"
+    );
+  });
+
+  it("menolak expectedProviderPayable provider3 yang masih memakai payable provider2", () => {
+    const mismatch = JSON.parse(JSON.stringify(provider3()));
+    mismatch.expectedProviderPayable = "200002";
+    expectRejection(() => decodePricingSnapshot(mismatch), "PRICING_SNAPSHOT_CORRUPT");
+  });
+});
+
+describe("readOrderPricing — kolom relasional provider3", () => {
+  it("membaca baris provider3 dan menolak kolom relasional yang masih provider2", () => {
+    const snapshot = buildPricingSnapshot({
+      fulfillmentMethod: "pickup",
+      ppnRatePercent: "11",
+      lines: [line({ sourceUnitPrice: "100000", effectiveUnitPrice: "100000" })],
+      providerTax: { taxId: -2, ratePercent: "11" },
+    });
+    const row = {
+      pricingContractVersion: 1,
+      pricingEngineVersion: 1,
+      providerContractVersion: 3,
+      pricingSnapshot: snapshot,
+      subtotal: "100000",
+      discount: "0",
+      shippingCost: "0",
+      serviceFee: "0",
+      ppnRate: "11",
+      ppnAmount: "11000",
+      total: "111000",
+    };
+    const decoded = readOrderPricing(row);
+    if (decoded.pricingContractVersion !== 1) {
+      throw new Error("expected a versioned pricing snapshot, not the legacy decoder");
+    }
+    expect(requireProvider3(decoded).providerContractVersion).toBe(3);
+    expectRejection(
+      () => readOrderPricing({ ...row, providerContractVersion: 2 }),
+      "PRICING_UNSUPPORTED_VERSION"
+    );
+    expectRejection(
+      () => readOrderPricing({ ...row, providerContractVersion: 9 }),
       "PRICING_UNSUPPORTED_VERSION"
     );
   });

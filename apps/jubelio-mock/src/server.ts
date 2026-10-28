@@ -112,6 +112,45 @@ type MockContact = {
   primary_contact: string;
 };
 
+/**
+ * Master pajak (`GET /taxes/`). Default meniru tenant yang sudah diteliti:
+ * PPN 11% = `tax_id -2` (tax_out terisi), PPN 10% = `-1`, No Tax = `1`
+ * (`rate 0.00`, tanpa akun). Override lewat PUT /__control/taxes untuk skenario
+ * E2E (tidak ditemukan, duplikat, rate mismatch, record malformed).
+ */
+type MockTaxRecord = {
+  tax_id: number;
+  tax_name: string;
+  rate: string;
+  tax_in: string | null;
+  tax_out: string | null;
+};
+
+const defaultTaxRecords: MockTaxRecord[] = [
+  {
+    tax_id: -2,
+    tax_name: "PPN 11%",
+    rate: "11.00",
+    tax_in: "1-1303 PPN Masukan",
+    tax_out: "2-2103 PPN Pengeluaran",
+  },
+  {
+    tax_id: -1,
+    tax_name: "PPN 10%",
+    rate: "10.00",
+    tax_in: "1-1303 PPN Masukan",
+    tax_out: "2-2103 PPN Pengeluaran",
+  },
+  {
+    tax_id: 1,
+    tax_name: "No Tax",
+    rate: "0.00",
+    tax_in: null,
+    tax_out: null,
+  },
+];
+let taxRecords: MockTaxRecord[] = [...defaultTaxRecords];
+
 const stocks = new Map<string, MockStock>();
 const adjustments = new Map<number, Adjustment>();
 const midtransStatuses = new Map<
@@ -202,6 +241,7 @@ export function resetMockState(): void {
   invoices.clear();
   payments.clear();
   midtransStatuses.clear();
+  taxRecords = [...defaultTaxRecords];
   requests.length = 0;
   contacts.length = 0;
   contacts.push(genericCustomer);
@@ -325,6 +365,14 @@ export const jubelioMockServer = createServer(async (request, response) => {
       });
     }
     return json(response, 200, { status: "ok" });
+  }
+
+  // Master pajak override untuk skenario E2E (read-only provider contract).
+  if (method === "PUT" && url.pathname === "/__control/taxes") {
+    const raw = (body as { records?: unknown }).records;
+    if (!Array.isArray(raw)) return badRequest(response, "records array is required");
+    taxRecords = raw as MockTaxRecord[];
+    return json(response, 200, { status: "ok", count: taxRecords.length });
   }
 
   if (method === "PUT" && url.pathname === "/__control/shipment") {
@@ -638,7 +686,12 @@ export const jubelioMockServer = createServer(async (request, response) => {
         qty_in_base: item.qty_in_base,
         price: item.price,
         unit: item.unit,
+        // Contract-faithful GET: identitas/nominal pajak dan diskon per baris
+        // ikut dikembalikan (dipakai verifikasi create kontrak3 dan pre-read
+        // edit), bukan hanya header.
         tax_id: item.tax_id,
+        tax_amount: item.tax_amount,
+        disc_amount: item.disc_amount,
         amount: item.amount,
         location_id: item.location_id,
       })),
@@ -1019,6 +1072,20 @@ export const jubelioMockServer = createServer(async (request, response) => {
       adjm_acct_id: 72,
       adjp_account_name: "7-7004 - Penyesuaian Persediaan Barang",
       adjm_account_name: "8-8004 - Penyesuaian Persediaan Barang",
+    });
+  }
+
+  // Documented paginated master pajak: GET /taxes/?page=N&pageSize=M
+  if (method === "GET" && url.pathname === "/taxes/") {
+    const page = Math.max(1, Number(url.searchParams.get("page") || "1") || 1);
+    const pageSize = Math.max(
+      1,
+      Number(url.searchParams.get("pageSize") || "100") || 100,
+    );
+    const start = (page - 1) * pageSize;
+    return json(response, 200, {
+      data: taxRecords.slice(start, start + pageSize),
+      totalCount: taxRecords.length,
     });
   }
 

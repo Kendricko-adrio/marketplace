@@ -72,6 +72,20 @@ const PRICING_SNAPSHOT_V1 = {
   ],
 };
 
+// Snapshot literal provider3 (spec PPN §5.2/§5.3): fixture yang sama dengan
+// provider2, tetapi PPN barang 16500 ikut menjadi payable provider 196500 dan
+// setiap line membawa alokasi pajaknya sendiri.
+const PRICING_SNAPSHOT_PROVIDER3 = {
+  ...PRICING_SNAPSHOT_V1,
+  providerContractVersion: 3,
+  expectedProviderPayable: "196500",
+  providerTax: { taxId: -2, ratePercent: "11" },
+  lines: PRICING_SNAPSHOT_V1.lines.map((line) => ({
+    ...line,
+    providerTaxAmount: "16500",
+  })),
+};
+
 const PRICING_ORDER_VALUES = [
   orderId, // 0 id
   clientId, // 1 user_id
@@ -221,6 +235,42 @@ describe("pricing snapshot money/version constraints (SQL)", () => {
       expect(row.provider_contract_version).toBe(2);
       expect(row.payable).toBe("180000.00");
       expect(row.snapshot_total).toBe("196500");
+    }
+  );
+
+  it.skipIf(!reachable)(
+    "menerima order kontrak provider3 dengan PPN pada payable provider",
+    async () => {
+      const values = [...PRICING_ORDER_VALUES];
+      values[20] = "196500.00"; // expected_provider_payable = net barang + PPN + net ongkir
+      values[25] = 3; // provider_contract_version
+      values[26] = JSON.stringify(PRICING_SNAPSHOT_PROVIDER3);
+      await pool.query(insertPricingOrderSql, values);
+      const row = (
+        await pool.query(
+          "SELECT provider_contract_version, expected_provider_payable::text AS payable, pricing_snapshot->>'total' AS snapshot_total, pricing_snapshot->'providerTax'->>'taxId' AS tax_id FROM orders WHERE id = $1",
+          [orderId]
+        )
+      ).rows[0];
+
+      expect(row.provider_contract_version).toBe(3);
+      expect(row.payable).toBe("196500.00");
+      expect(row.snapshot_total).toBe("196500");
+      expect(row.tax_id).toBe("-2");
+    }
+  );
+
+  it.skipIf(!reachable)(
+    "menolak kombinasi versi provider yang tidak dikenal",
+    async () => {
+      for (const providerVersion of [1, 4]) {
+        const values = [...PRICING_ORDER_VALUES];
+        values[25] = providerVersion;
+        await expectSqlRejected(
+          () => pool.query(insertPricingOrderSql, values),
+          "23514"
+        );
+      }
     }
   );
 
@@ -432,16 +482,20 @@ describe("pricing v1 header invariants (SQL review)", () => {
     );
   });
 
-  it.skipIf(!reachable)("menolak kombinasi versi kontrak baru selain 1/1/2", async () => {
-    await expectSqlRejected(
-      () => pool.query(insertPricingOrderSql, pricingOrderValuesWith([[24, 2]])),
-      "23514"
-    );
-    await expectSqlRejected(
-      () => pool.query(insertPricingOrderSql, pricingOrderValuesWith([[25, 3]])),
-      "23514"
-    );
-  });
+  it.skipIf(!reachable)(
+    "menolak kombinasi versi kontrak baru selain 1/1/2 dan 1/1/3",
+    async () => {
+      await expectSqlRejected(
+        () => pool.query(insertPricingOrderSql, pricingOrderValuesWith([[24, 2]])),
+        "23514"
+      );
+      // Provider3 kini kombinasi SAH (PPN provider); versi 4 tetap unknown.
+      await expectSqlRejected(
+        () => pool.query(insertPricingOrderSql, pricingOrderValuesWith([[25, 4]])),
+        "23514"
+      );
+    }
+  );
 
   it.skipIf(!reachable)("menolak service fee nonzero pada kontrak baru", async () => {
     await expectSqlRejected(

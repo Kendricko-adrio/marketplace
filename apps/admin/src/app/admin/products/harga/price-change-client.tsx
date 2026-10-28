@@ -20,6 +20,14 @@ import {
 } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
@@ -54,7 +62,7 @@ function useCandidates(
   search: string,
   page: number,
   revision: number,
-  inactive = false,
+  markdownStatus = "all",
 ) {
   const [data, setData] = useState<CandidatePage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +76,7 @@ function useCandidates(
       page: String(page),
       limit: String(PAGE_SIZE),
     });
-    if (inactive) params.set("markdownStatus", "inactive");
+    if (markdownStatus !== "all") params.set("markdownStatus", markdownStatus);
     void (async () => {
       try {
         const response = await fetch(
@@ -93,7 +101,7 @@ function useCandidates(
     return () => {
       ignore = true;
     };
-  }, [search, page, revision, inactive]);
+  }, [search, page, revision, markdownStatus]);
   return { data, error, loading };
 }
 
@@ -151,11 +159,12 @@ export function PriceChangeClient() {
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [markdownStatus, setMarkdownStatus] = useState("all");
   const [inactivePage, setInactivePage] = useState(1);
   const [revision, setRevision] = useState(0);
   const [selected, setSelected] = useState<Map<string, Candidate>>(new Map());
-  const candidates = useCandidates(search, page, revision);
-  const inactive = useCandidates("", inactivePage, revision, true);
+  const candidates = useCandidates(search, page, revision, markdownStatus);
+  const inactive = useCandidates("", inactivePage, revision, "inactive");
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
   const [dialog, setDialog] = useState<PriceDialogKind | null>(null);
   const [targets, setTargets] = useState<Candidate[]>([]);
@@ -495,7 +504,7 @@ export function PriceChangeClient() {
             <CardDescription>Periksa perubahan sebelum menerapkan harga baru.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-end gap-3">
               <form
                 onSubmit={searchSkus}
                 className="flex min-w-0 flex-1 basis-full gap-2 sm:max-w-md sm:basis-auto"
@@ -517,6 +526,25 @@ export function PriceChangeClient() {
                   <span className="hidden sm:inline">Cari SKU</span>
                 </Button>
               </form>
+              <div className="flex w-full flex-col gap-1.5 sm:w-48">
+                <Label htmlFor="markdown-status">Status harga coret</Label>
+                <Select
+                  value={markdownStatus}
+                  onValueChange={(value) => {
+                    setMarkdownStatus(value);
+                    setPage(1);
+                  }}
+                >
+                  <SelectTrigger id="markdown-status">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua</SelectItem>
+                    <SelectItem value="configured">Sudah disetup</SelectItem>
+                    <SelectItem value="unconfigured">Belum disetup</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <Badge variant="secondary" data-testid="bulk-selection-count">
                 Terpilih: {selected.size} SKU
               </Badge>
@@ -801,7 +829,7 @@ export function PriceChangeClient() {
                           >
                             {candidates.loading
                               ? "Memuat SKU…"
-                              : "Tidak ada SKU yang cocok dengan pencarian."}
+                              : "Tidak ada SKU yang cocok dengan pencarian dan filter."}
                           </TableCell>
                         </TableRow>
                       )}

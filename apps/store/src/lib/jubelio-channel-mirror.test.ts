@@ -491,7 +491,8 @@ describe("mirrorPreReadMismatch contract-v2 envelope (ticket 01, pure unit)", ()
   });
 
   it("fail-closes on an unknown stored provider contract version instead of falling back to legacy rules", () => {
-    for (const version of [1, 3, null]) {
+    // Versi 3 kini kontrak sah (PPN provider); versi 4 tetap unknown.
+    for (const version of [1, 4, null]) {
       expect(
         mirrorPreReadMismatch({
           snapshot: v2Snapshot(),
@@ -595,5 +596,129 @@ describe("isChannelTargetRegression (ticket #06: no backward overwrite of a conf
     expect(isChannelTargetRegression("Gagal Bayar", "Selesai")).toBe(false);
     expect(isChannelTargetRegression("Gagal Bayar", "Siap Proses")).toBe(false);
     expect(isChannelTargetRegression("Belum Bayar", "Selesai")).toBe(false);
+  });
+});
+
+// =========================================================
+// Kontrak provider3 — mirror full-payload mempertahankan PPN
+// =========================================================
+// Spec PPN §5.4: edit marker hanya mengubah channel status; tax id, nominal
+// per line, dan header total_tax wajib tetap sama dengan snapshot tersimpan.
+// Expected values literal dari spec: barang100000 + PPN11000 = payable111000.
+describe("mirrorPreReadMismatch contract-v3 provider tax (pure unit)", () => {
+  const TAX_GOODS = 100_000;
+  const TAX_AMOUNT = 11_000;
+  const TAX_PAYABLE = 111_000;
+  const TAX_ID = -2;
+  const TAX_NOTE = "OKCIR_SO_CREATE:v3-order-1:v3-op-1";
+
+  function taxStoredCreate(overrides: Record<string, unknown> = {}): JubelioSalesOrderEditRequest {
+    return v2StoredCreate({
+      note: TAX_NOTE,
+      providerContractVersion: 3,
+      originalShipmentCost: 0,
+      shippingCost: 0,
+      expectedProviderPayable: TAX_PAYABLE,
+      providerTax: { taxId: TAX_ID, ratePercent: "11" },
+      items: [
+        {
+          itemId: V2_ITEM_ID,
+          quantity: 1,
+          price: TAX_GOODS,
+          discAmount: 0,
+          taxAmount: TAX_AMOUNT,
+          unit: "Buah",
+          taxId: TAX_ID,
+        },
+      ],
+      ...overrides,
+    });
+  }
+
+  function taxSnapshot(
+    overrides: Partial<JubelioSalesOrderEditSnapshot> = {}
+  ): JubelioSalesOrderEditSnapshot {
+    const snapshot = v2Snapshot({
+      note: TAX_NOTE,
+      subTotal: TAX_GOODS,
+      totalDisc: 0,
+      totalTax: TAX_AMOUNT,
+      grandTotal: TAX_PAYABLE,
+      originalShipmentCost: 0,
+      shippingCost: 0,
+      ...overrides,
+    });
+    snapshot.items = [
+      {
+        salesorderDetailId: 74_728,
+        itemId: V2_ITEM_ID,
+        quantity: 1,
+        price: TAX_GOODS,
+        disc: 0,
+        discAmount: 0,
+        taxAmount: TAX_AMOUNT,
+        amount: TAX_PAYABLE,
+        unit: "Buah",
+        taxId: TAX_ID,
+        locationId: 7,
+      },
+    ];
+    return snapshot;
+  }
+
+  it("menerima marker edit ketika tax id/nominal per line dan header sama", () => {
+    expect(
+      mirrorPreReadMismatch({
+        snapshot: taxSnapshot(),
+        create: confirmedCreate(taxStoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBeNull();
+  });
+
+  it("menahan edit ketika nominal pajak per line provider berbeda", () => {
+    const snapshot = taxSnapshot();
+    snapshot.items[0].taxAmount = TAX_AMOUNT - 1;
+    snapshot.items[0].amount = TAX_GOODS + TAX_AMOUNT - 1;
+    expect(
+      mirrorPreReadMismatch({
+        snapshot,
+        create: confirmedCreate(taxStoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("PRE_READ_ITEM_MISMATCH");
+  });
+
+  it("menahan edit ketika tax id provider tidak lagi sama dengan snapshot", () => {
+    const snapshot = taxSnapshot();
+    snapshot.items[0].taxId = 1;
+    expect(
+      mirrorPreReadMismatch({
+        snapshot,
+        create: confirmedCreate(taxStoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("PRE_READ_ITEM_MISMATCH");
+  });
+
+  it("menahan edit ketika header total_tax dipindahkan walau baris tetap", () => {
+    const snapshot = taxSnapshot({ totalTax: 0, grandTotal: TAX_GOODS });
+    expect(
+      mirrorPreReadMismatch({
+        snapshot,
+        create: confirmedCreate(taxStoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("PRE_READ_MONEY_MISMATCH");
+  });
+
+  it("fail-closed ketika intent provider3 kehilangan konteks pajak tervalidasi", () => {
+    expect(
+      mirrorPreReadMismatch({
+        snapshot: taxSnapshot(),
+        create: confirmedCreate(taxStoredCreate({ providerTax: undefined })),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE");
   });
 });

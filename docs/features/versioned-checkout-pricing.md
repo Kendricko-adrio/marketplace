@@ -437,3 +437,56 @@ tersedia, dari snapshot itu — bukan hasil hitung ulang master terbaru. Karena
 itu order gagal yang lama tidak lagi dibuat untuk checkout baru; kegagalan
 tercatat sebagai attempt `rejected`/`manual_review`. Lihat
 [jubelio-sales-orders.md](jubelio-sales-orders.md#checkout-attempt-sebelum-order-plan-checkout-attempt-before-order).
+
+## 12. Kontrak provider3 — PPN checkout dicatat pada SO/invoice/payment
+
+Sejak ticket
+[PPN checkout](../../.scratch/jubelio-sales-api-switching/plan/jubelio-sales-order-tax-spec.md)
+disetujui, writer order baru memakai **pricing1 / engine1 / provider3**. Formula
+customer tidak berubah; yang berubah hanya representasi provider, sehingga
+customer tidak ditagih PPN kedua.
+
+| Aspek | provider2 | provider3 |
+|---|---|---|
+| `expectedProviderPayable` | net barang + net ongkir | net barang + **PPN barang** + net ongkir |
+| Snapshot pajak | tidak ada | `providerTax = { taxId, ratePercent }` (immutable) |
+| Pajak per baris | tidak ada | `providerTaxAmount` (Rupiah utuh, WAJIB) |
+| `total` customer | net barang + PPN + net ongkir | sama (tidak ada tambahan) |
+
+Aturan yang dijaga kode:
+
+- **Tax ID signed**: `parseValidatedProviderTax`
+  (`packages/db/src/provider-tax.ts`) menerima safe integer nonnol; tenant riset
+  memakai `-2` (PPN 11%). ID `0`, pecahan, overflow, string, dan field asing
+  ditolak. `JUBELIO_ITEM_TAX_ID` bukan otoritas provider3.
+- **Rate exact**: `providerTax.ratePercent` wajib sama secara exact (integer
+  terskala, bukan float) dengan `ppnRatePercent`; `"11"` setara `"11.00"`,
+  `11` vs `12` ditolak.
+- **Alokasi whole-line**: `allocateProviderTax` menghitung pajak exact tiap
+  baris, mengambil floor, lalu membagikan sisa menuju `ppnAmount` menurut
+  remainder terbesar dengan tie-break `variantId` ascending ordinal. Baris net 0
+  selalu 0. Total `Σ providerTaxAmount === ppnAmount`, bukan ceil per baris.
+- **Benefit dihitung ulang**: `evaluatePricing` meneruskan konteks pajak dan
+  merealokasi setelah Markdown/Coupon/subsidi ongkir final; `offer-pricing.ts`
+  tidak boleh menjatuhkan snapshot ke provider2.
+- **Decoder fail closed**: `decodePricingSnapshot` menolak provider3 tanpa
+  `providerTax`/`providerTaxAmount`, alokasi yang tidak dapat direproduksi,
+  `expectedProviderPayable` yang masih memakai formula provider2, dan kombinasi
+  field campuran versi. `readOrderPricing` juga menolak kolom relasional provider
+  yang tidak sama dengan versi snapshot.
+- **Review fingerprint**: `CheckoutReviewPricing.providerTax` ikut ditandatangani,
+  sehingga perubahan tax id/rate menggugurkan approval lama walaupun total
+  kebetulan sama.
+- **Konfigurasi**: `jubelio.salesTaxId` (system_config, `type:number`) dibaca
+  **uncached** bersama `tax.ppnRatePercent` oleh
+  `apps/store/src/features/checkout/jubelio-tax-config-repository.ts`; keduanya
+  diverifikasi ke master `GET /taxes/` oleh
+  `prepare-checkout-tax-service.ts`. Key hilang/invalid, master tidak ditemukan
+  atau duplikat, rate berbeda, dan mapping pajak keluaran yang tidak ada =
+  `503 CHECKOUT_TAX_UNAVAILABLE` sebelum pembayaran.
+
+Fixture contoh (rate 11%, literal test): pickup barang 100000 → PPN 11000, line
+111000, provider = customer 111000; qty2 × 100000 → 22000/222000; Coupon 20000
+pada 150000 → 14300/144300; delivery 150000 + ongkir 30000 → 16500/196500;
+subsidi ongkir 20000 → net ongkir 10000, tetap 176500; dua baris 100001 → order
+22001 dengan alokasi 11001/11000.

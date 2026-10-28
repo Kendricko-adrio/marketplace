@@ -1275,3 +1275,151 @@ describe("Jubelio payment seam (single-payment candidate)", () => {
     expect(retry.status).toBe(409);
   });
 });
+
+// =========================================================
+// Master pajak — GET /taxes/ berpagination
+// =========================================================
+// Fixture default meniru tenant yang diteliti (PPN 11% = -2). Route ini
+// read-only: hanya GET, tidak ada POST master dari aplikasi.
+describe("master pajak /taxes/", () => {
+  async function getTaxes(query = ""): Promise<Response> {
+    return fetch(`${baseUrl}/taxes/${query}`, {
+      headers: { authorization: "mock-token" },
+    });
+  }
+
+  it("mengembalikan record PPN 11% tenant dengan tax_id negatif dan tax_out terisi", async () => {
+    resetMockState();
+    const body = (await (await getTaxes("?page=1&pageSize=100")).json()) as {
+      data: Array<{ tax_id: number; rate: string; tax_out: string | null }>;
+      totalCount: number;
+    };
+
+    expect(body.totalCount).toBe(3);
+    expect(body.data).toEqual(
+      expect.arrayContaining([
+        { tax_id: -2, tax_name: "PPN 11%", rate: "11.00", tax_in: "1-1303 PPN Masukan", tax_out: "2-2103 PPN Pengeluaran" },
+        { tax_id: 1, tax_name: "No Tax", rate: "0.00", tax_in: null, tax_out: null },
+      ]),
+    );
+  });
+
+  it("mempagination sesuai page/pageSize dokumentasi", async () => {
+    resetMockState();
+    const first = (await (await getTaxes("?page=1&pageSize=1")).json()) as {
+      data: Array<{ tax_id: number }>;
+      totalCount: number;
+    };
+    const second = (await (await getTaxes("?page=2&pageSize=1")).json()) as {
+      data: Array<{ tax_id: number }>;
+      totalCount: number;
+    };
+
+    expect(first.totalCount).toBe(3);
+    expect(first.data.map((row) => row.tax_id)).toEqual([-2]);
+    expect(second.data.map((row) => row.tax_id)).toEqual([-1]);
+  });
+
+  it("menolak GET tanpa token dan tidak menyediakan POST master pajak", async () => {
+    resetMockState();
+    const unauthorized = await fetch(`${baseUrl}/taxes/`);
+    expect(unauthorized.status).toBe(401);
+
+    const post = await fetch(`${baseUrl}/taxes/`, {
+      method: "POST",
+      headers: { authorization: "mock-token", "content-type": "application/json" },
+      body: JSON.stringify({ tax_id: -2 }),
+    });
+    expect(post.status).toBe(404);
+  });
+
+  it("mengizinkan override master lewat kontrol lokal untuk skenario E2E", async () => {
+    resetMockState();
+    const configured = await fetch(`${baseUrl}/__control/taxes`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        records: [{ tax_id: -2, tax_name: "PPN 12%", rate: "12.00", tax_in: null, tax_out: null }],
+      }),
+    });
+    expect(configured.status).toBe(200);
+
+    const body = (await (await getTaxes("?page=1&pageSize=100")).json()) as {
+      data: Array<{ tax_id: number; rate: string; tax_out: string | null }>;
+      totalCount: number;
+    };
+    expect(body.totalCount).toBe(1);
+    expect(body.data[0]).toMatchObject({ tax_id: -2, rate: "12.00", tax_out: null });
+
+    resetMockState();
+    const restored = (await (await getTaxes("?page=1&pageSize=100")).json()) as {
+      totalCount: number;
+    };
+    expect(restored.totalCount).toBe(3);
+  });
+});
+
+describe("sales order GET memuat pajak per baris (kontrak provider3)", () => {
+  it("mengembalikan tax_id/tax_amount/disc_amount pada setiap line", async () => {
+    resetMockState();
+    await ensureStock(5);
+    const created = await fetch(`${baseUrl}/sales/orders/`, {
+      method: "POST",
+      headers: { authorization: "mock-token", "content-type": "application/json" },
+      body: JSON.stringify({
+        salesorder_id: 0,
+        salesorder_no: "[auto]",
+        contact_id: -1,
+        customer_name: "Pelanggan Umum",
+        transaction_date: "2026-10-26T10:00:00.000Z",
+        location_id: 61,
+        source: 1,
+        sub_total: 100000,
+        total_disc: 0,
+        total_tax: 11000,
+        grand_total: 111000,
+        add_fee: 0,
+        add_disc: 0,
+        service_fee: 0,
+        note: "OKCIR_SO_CREATE:tax-mock:1",
+        ref_no: "tax-mock",
+        items: [
+          {
+            salesorder_detail_id: 0,
+            item_id: 10384,
+            qty_in_base: 1,
+            price: 100000,
+            disc: 0,
+            disc_amount: 0,
+            tax_amount: 11000,
+            amount: 111000,
+            unit: "Buah",
+            tax_id: -2,
+            location_id: 61,
+          },
+        ],
+      }),
+    });
+    expect(created.status).toBe(200);
+    const { id } = (await created.json()) as { id: number };
+
+    const detail = (await (
+      await fetch(`${baseUrl}/sales/orders/${id}`, {
+        headers: { authorization: "mock-token" },
+      })
+    ).json()) as {
+      total_tax: number;
+      grand_total: number;
+      items: Array<{ tax_id: number; tax_amount: number; disc_amount: number; amount: number }>;
+    };
+
+    expect(detail.total_tax).toBe(11000);
+    expect(detail.grand_total).toBe(111000);
+    expect(detail.items[0]).toMatchObject({
+      tax_id: -2,
+      tax_amount: 11000,
+      disc_amount: 0,
+      amount: 111000,
+    });
+  });
+});

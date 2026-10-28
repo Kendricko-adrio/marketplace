@@ -711,9 +711,12 @@ async function loadSettlementAuthority(
       createPayload: createOp.payload,
       orderRow: row,
     });
-    return authority.providerContractVersion === 2
-      ? { kind: "v2", expectation: authority }
-      : { kind: "legacy" };
+    // Kontrak2 dan kontrak3 sama-sama memakai authority envelope tersimpan;
+    // hanya intent unversioned yang jatuh ke branch legacy (tanpa downgrade
+    // diam-diam untuk record provider3).
+    return authority.providerContractVersion === 0
+      ? { kind: "legacy" }
+      : { kind: "v2", expectation: authority };
   } catch (error) {
     const message =
       error instanceof JubelioSalesContractError
@@ -1054,7 +1057,14 @@ async function verifyInvoiceAgainstOrder(input: {
     subTotal: number;
     totalDisc: number;
     totalTax: number;
-    items: { itemId: number; quantity: number; price: number; amount: number }[];
+    items: {
+      itemId: number;
+      quantity: number;
+      price: number;
+      amount: number;
+      taxId?: number | null;
+      taxAmount?: number | null;
+    }[];
   };
   /** Branch legacy: pre-PPN local subtotal (aturan lama, tidak diubah). */
   expectedSubtotal: number;
@@ -1101,16 +1111,24 @@ async function verifyInvoiceAgainstOrder(input: {
   const invoiceLines = [...invoice.items].sort((a, b) => a.itemId - b.itemId);
   if (expectedLines.length !== invoiceLines.length || invoiceLines.some((line, index) => {
     const expectedLine = expectedLines[index];
-    // Whole-line Markdown is a DISCOUNT on the invoice line, so amount is
-    // gross - disc (tax stays 0). A lowered unit price or a raised grand total
-    // is a mismatch, never a discount.
+    // Whole-line Markdown is a DISCOUNT on the invoice line; kontrak3
+    // menambahkan PPN baris (tax stays 0 pada kontrak2/legacy). Harga unit yang
+    // diturunkan atau grand total yang naik tetap mismatch, bukan diskon.
     const expectedAmount =
-      expectedLine.price * expectedLine.quantity - (expectedLine.discAmount ?? 0);
+      expectedLine.price * expectedLine.quantity -
+      (expectedLine.discAmount ?? 0) +
+      (expectedLine.taxAmount ?? 0);
+    const taxMismatch =
+      expectedLine.taxAmount !== undefined &&
+      expectedLine.taxAmount !== 0 &&
+      (!moneyEquals(line.taxAmount ?? Number.NaN, expectedLine.taxAmount) ||
+        line.taxId !== expectedLine.taxId);
     return (
       line.itemId !== expectedLine.itemId ||
       line.quantity !== expectedLine.quantity ||
       !moneyEquals(line.price, expectedLine.price) ||
-      !moneyEquals(line.amount, expectedAmount)
+      !moneyEquals(line.amount, expectedAmount) ||
+      taxMismatch
     );
   })) {
     return { ok: false, message: `Invoice item lines differ from the Sales Order request (invoice ${invoiceLines.map((line) => `${line.itemId}/${line.quantity}/${line.price}/${line.amount}`).join(",")}; expected ${expectedLines.map((line) => `${line.itemId}/${line.quantity}/${line.price}/${line.price * line.quantity - (line.discAmount ?? 0)}`).join(",")})` };
@@ -1142,6 +1160,27 @@ async function verifyInvoiceAgainstOrder(input: {
         ok: false,
         message: `Invoice grand total ${invoice.grandTotal} does not match the stored expected provider payable ${expected.expectedProviderPayable}`,
       };
+    }
+    if (expected.providerContractVersion === 3) {
+      // Kontrak3: pajak header dan pajak tiap baris invoice ikut diverifikasi;
+      // header yang benar tidak membuktikan alokasi per line.
+      const expectedTax = expected.totalTax ?? 0;
+      if (!moneyEquals(invoice.totalTax, expectedTax)) {
+        return {
+          ok: false,
+          message: `Invoice total tax ${invoice.totalTax} does not match the stored provider tax ${expectedTax}`,
+        };
+      }
+      const invoiceTaxLines = invoiceLines.reduce(
+        (sum, line) => sum + (line.taxAmount ?? 0),
+        0
+      );
+      if (!moneyEquals(invoiceTaxLines, expectedTax)) {
+        return {
+          ok: false,
+          message: `Invoice line tax ${invoiceTaxLines} does not match the stored provider tax ${expectedTax}`,
+        };
+      }
     }
     return { ok: true };
   }

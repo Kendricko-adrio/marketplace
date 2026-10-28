@@ -55,3 +55,19 @@ export const discountImportSystemConfigSeedRows = [
       "Batas ukuran workbook harga setelah diekspansi (byte) untuk import Markdown. Dibaca ulang setiap request; nilai invalid menolak operasi baru.",
   },
 ];
+
+// Identitas pajak provider untuk writer Sales kontrak3 (spec PPN §5.1).
+// Nilai -2 adalah record PPN 11% pada tenant yang sudah diteliti (`GET /taxes/`
+// mengembalikan tax_id -2 / rate 11.00 / tax_out 2-2103). Ini HANYA default
+// database lokal/demo: aktivasi staging/production wajib memverifikasi tenant
+// sendiri lewat GET master, bukan menyalin ID ini. Dibaca ulang setiap request
+// dan fail closed bila hilang/invalid.
+export const jubelioSalesTaxSystemConfigSeedRows = [
+  {
+    key: "jubelio.salesTaxId",
+    value: "-2",
+    type: "number",
+    description:
+      "Tax ID master Jubelio untuk PPN barang pada SO/invoice/payment (tenant seed: -2 = PPN 11%). Tanpa menu admin; diverifikasi GET /taxes/ setiap checkout baru dan blokir bila rate tidak sama dengan tax.ppnRatePercent.",
+  },
+];

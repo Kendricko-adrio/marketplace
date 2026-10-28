@@ -20,11 +20,17 @@ import {
   buildPricingSnapshot,
   decodePricingSnapshot,
   MAX_MONEY_RUPIAH,
+  PROVIDER_TAX_CONTRACT_VERSION,
   PricingContractError,
   type BuildPricingSnapshotInput,
   type PricingSnapshot,
   type PricingSnapshotLine,
 } from "./versioned-pricing";
+import type {
+  PricingSnapshotLinePayloadV2,
+  PricingSnapshotLinePayloadV3,
+} from "./schema/orders";
+import { allocateProviderTax } from "./provider-tax";
 
 const RATE_SCALE_DIGITS = 6;
 const RATE_SCALE = BigInt(10) ** BigInt(RATE_SCALE_DIGITS);
@@ -101,6 +107,9 @@ export function evaluatePricing(input: EvaluatePricingInput): PricingSnapshot {
     lines: input.lines,
     shippingBeforeSubsidy: input.shippingBeforeSubsidy,
     providerQuotedShippingCost: input.providerQuotedShippingCost,
+    // Tax context WAJIB diteruskan: benefit yang berubah tidak boleh menjatuhkan
+    // snapshot kembali ke provider2 (PPN hilang dari payable provider).
+    providerTax: input.providerTax,
   });
 
   const subtotal = BigInt(baseline.subtotal);
@@ -134,12 +143,23 @@ export function evaluatePricing(input: EvaluatePricingInput): PricingSnapshot {
   const merchantFunding = shippingSubsidy;
   const serviceFee = ZERO;
   const total = boundMoney(netGoods + ppnAmount + shippingCost + serviceFee, "total");
-  const expectedProviderPayable = boundMoney(netGoods + shippingCost, "expectedProviderPayable");
-
-  return decodePricingSnapshot({
+  // Kontrak provider3: benefit yang berubah mengalokasikan ulang PPN pada net
+  // line FINAL, dan payable provider tetap net barang + PPN + net ongkir.
+  // Kontrak provider2 dipertahankan apa adanya untuk record lama.
+  const taxBaseline =
+    baseline.providerContractVersion === PROVIDER_TAX_CONTRACT_VERSION
+      ? baseline
+      : null;
+  const expectedProviderPayable = boundMoney(
+    netGoods + (taxBaseline ? ppnAmount : ZERO) + shippingCost,
+    "expectedProviderPayable"
+  );
+  const pricedLines = taxBaseline
+    ? withProviderTaxAmounts(lines, baseline.ppnRatePercent, ppnAmount)
+    : lines;
+  const payloadBase = {
     pricingContractVersion: baseline.pricingContractVersion,
     pricingEngineVersion: baseline.pricingEngineVersion,
-    providerContractVersion: baseline.providerContractVersion,
     currency: baseline.currency,
     fulfillmentMethod: baseline.fulfillmentMethod,
     sourceGoodsSubtotal: baseline.sourceGoodsSubtotal,
@@ -159,8 +179,54 @@ export function evaluatePricing(input: EvaluatePricingInput): PricingSnapshot {
     expectedProviderPayable: expectedProviderPayable.toString(),
     providerQuotedShippingCost: baseline.providerQuotedShippingCost,
     providerBilledShippingCost: baseline.providerBilledShippingCost,
-    lines,
-  } satisfies PricingSnapshot);
+  };
+
+  // Payload dibentuk per versi: snapshot provider2 tidak boleh membawa field
+  // pajak provider3 dan sebaliknya, jadi decoder tidak perlu menebak.
+  return decodePricingSnapshot(
+    taxBaseline
+      ? {
+          ...payloadBase,
+          providerContractVersion: 3 as const,
+          providerTax: taxBaseline.providerTax,
+          lines: pricedLines as PricingSnapshotLinePayloadV3[],
+        }
+      : {
+          ...payloadBase,
+          providerContractVersion: 2 as const,
+          lines: pricedLines as PricingSnapshotLinePayloadV2[],
+        }
+  );
+}
+
+/** Realokasi PPN provider3 setelah benefit final; total selalu = ppnAmount. */
+function withProviderTaxAmounts(
+  lines: readonly PricingSnapshotLine[],
+  ppnRatePercent: string,
+  ppnAmount: bigint
+): PricingSnapshotLine[] {
+  try {
+    const allocation = allocateProviderTax({
+      lines: lines.map((line) => ({ variantId: line.variantId, netLineAmount: line.netLineAmount })),
+      ppnRatePercent,
+      ppnAmount: ppnAmount.toString(),
+    });
+    const byVariant = new Map(
+      allocation.map((entry) => [entry.variantId, entry.providerTaxAmount] as const)
+    );
+    return lines.map((line) => {
+      const providerTaxAmount = byVariant.get(line.variantId);
+      if (providerTaxAmount === undefined) {
+        throw inputInvalid("provider tax allocation is missing a whole line");
+      }
+      return { ...line, providerTaxAmount };
+    });
+  } catch (error) {
+    if (error instanceof PricingContractError) throw error;
+    throw inputInvalid(
+      error instanceof Error ? error.message : "provider tax allocation failed"
+    );
+  }
 }
 
 /** Alokasi goods diskon proporsional effective whole-line, floor + sisa largest remainder. */

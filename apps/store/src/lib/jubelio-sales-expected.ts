@@ -1,5 +1,9 @@
 import type { PricingSnapshotPayloadV1 } from "@marketplace/db/src/schema";
 import {
+  parseValidatedProviderTax,
+  type ValidatedProviderTax,
+} from "@marketplace/db/src/provider-tax";
+import {
   readOrderPricing,
   type PersistedOrderPricingRow,
 } from "./versioned-pricing";
@@ -25,6 +29,9 @@ import {
  * - `providerContractVersion: 2` = kontrak provider baru: envelope shipping +
  *   payable wajib lolos bound Rupiah utuh/identity/tax/unit, dan baris order
  *   wajib persis `1/1/2` dengan snapshot yang nilainya sama.
+ * - `providerContractVersion: 3` = kontrak PPN provider: envelope yang sama
+ *   ditambah `providerTax` tervalidasi dan pajak per baris; payable provider =
+ *   net barang + PPN + net ongkir, dan baris order wajib `1/1/3`.
  * - Nilai eksplisit lain (termasuk `null`) = versi unknown → fail closed;
  *   tidak pernah dianggap legacy atau ditebak sebagai versi 2.
  *
@@ -33,8 +40,10 @@ import {
  * dipakai sebagai expected provider.
  */
 
-/** Versi kontrak provider Sales yang didukung decoder ini (spec §8.3/§10.1). */
+/** Versi kontrak provider Sales tanpa pajak provider (spec §8.3/§10.1). */
 export const SALES_PROVIDER_CONTRACT_VERSION = 2;
+/** Versi kontrak provider yang mencatat PPN checkout pada SO (spec PPN §5.2). */
+export const SALES_PROVIDER_TAX_CONTRACT_VERSION = 3;
 /** Bound uang website (spec §4.3): 0..9999999999999 Rupiah utuh. */
 export const SALES_MAX_MONEY = 9_999_999_999_999;
 /** Bound cart (spec §4.3): maksimal 50 baris, quantity 1..99 per baris. */
@@ -104,6 +113,14 @@ function requirePositiveInteger(value: unknown, field: string): number {
   return value;
 }
 
+/** Tax ID provider adalah signed safe integer nonnol (PPN 11% tenant = -2). */
+function requireTaxId(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value === 0) {
+    shapeInvalid(`${field} must be a nonzero safe integer tax id`);
+  }
+  return value;
+}
+
 export type JubelioSalesExpectedLine = {
   itemId: number;
   quantity: number;
@@ -119,7 +136,7 @@ export type LegacySalesOrderExpectation = { providerContractVersion: 0 };
 
 /** Intent kontrak v2: envelope shipping + payable yang dibekukan. */
 export type VersionedSalesOrderExpectation = {
-  providerContractVersion: 2;
+  providerContractVersion: 2 | 3;
   contactId: number;
   customerName: string;
   locationId: number;
@@ -130,6 +147,10 @@ export type VersionedSalesOrderExpectation = {
   netGoods: number;
   expectedProviderPayable: number;
   lines: readonly JubelioSalesExpectedLine[];
+  /** Kontrak3: identitas/rate pajak yang dibekukan (v2 tidak punya). */
+  providerTax?: ValidatedProviderTax;
+  /** Kontrak3: jumlah pajak per line (0 pada kontrak2). */
+  totalTax?: number;
 };
 
 export type JubelioSalesOrderExpectation =
@@ -174,9 +195,27 @@ export function readJubelioSalesOrderExpectation(
     }
     return { providerContractVersion: 0 };
   }
-  if (version !== SALES_PROVIDER_CONTRACT_VERSION) {
+  if (
+    version !== SALES_PROVIDER_CONTRACT_VERSION &&
+    version !== SALES_PROVIDER_TAX_CONTRACT_VERSION
+  ) {
     unsupportedVersion(
-      `persisted provider contract version ${String(version)} is unsupported: only the unversioned legacy intent and contract version ${SALES_PROVIDER_CONTRACT_VERSION} are accepted`
+      `persisted provider contract version ${String(version)} is unsupported: only the unversioned legacy intent and contract versions ${SALES_PROVIDER_CONTRACT_VERSION}/${SALES_PROVIDER_TAX_CONTRACT_VERSION} are accepted`
+    );
+  }
+  const taxContract = version === SALES_PROVIDER_TAX_CONTRACT_VERSION;
+  let providerTax: ValidatedProviderTax | undefined;
+  if (taxContract) {
+    try {
+      providerTax = parseValidatedProviderTax(create.providerTax);
+    } catch {
+      shapeInvalid(
+        "contract v3 create intent requires a validated provider tax context"
+      );
+    }
+  } else if (create.providerTax !== undefined) {
+    shapeInvalid(
+      "contract v2 create intent must not carry a provider tax context"
     );
   }
 
@@ -231,6 +270,7 @@ export function readJubelioSalesOrderExpectation(
   const lines: JubelioSalesExpectedLine[] = [];
   const seenItemIds = new Set<number>();
   let netGoods = 0;
+  let totalTax = 0;
   rawItems.forEach((rawItem, index) => {
     const field = `sales create intent items[${index}]`;
     if (!isPlainObject(rawItem)) {
@@ -259,14 +299,22 @@ export function readJubelioSalesOrderExpectation(
     );
     const taxAmount = requireWholeRupiah(rawItem.taxAmount, `${field}.taxAmount`);
     const unit = requireNonEmptyString(rawItem.unit, `${field}.unit`);
-    const taxId = requirePositiveInteger(rawItem.taxId, `${field}.taxId`);
-    // Provider tax stays 0 (valid No Tax record). The item discount is the
-    // whole-line Markdown (+ any goods Offer allocation, added by later
-    // slices) — a line discount, never a lowered source price.
-    if (taxAmount !== 0) {
+    const taxId = requireTaxId(rawItem.taxId, `${field}.taxId`);
+    // Kontrak2/legacy tetap No Tax. Kontrak3 mencatat PPN per whole line dan
+    // setiap baris wajib memakai tax id yang sama dengan snapshot pajak.
+    if (!taxContract && taxAmount !== 0) {
       shapeInvalid(
-        `${field}.taxAmount must be 0: the provider tax envelope is a valid No Tax record`
+        `${field}.taxAmount must be 0: only contract v3 records provider tax`
       );
+    }
+    if (taxContract && providerTax && taxId !== providerTax.taxId) {
+      shapeInvalid(
+        `${field}.taxId must equal the frozen provider tax id on contract v3`
+      );
+    }
+    totalTax += taxAmount;
+    if (totalTax > SALES_MAX_MONEY) {
+      shapeInvalid("sales create intent total tax is outside the supported range");
     }
     const gross = price * quantity;
     if (!Number.isSafeInteger(gross) || gross > SALES_MAX_MONEY) {
@@ -290,15 +338,17 @@ export function readJubelioSalesOrderExpectation(
     });
   });
 
-  if (netGoods + shippingCost !== expectedProviderPayable) {
+  if (netGoods + totalTax + shippingCost !== expectedProviderPayable) {
     throw new JubelioSalesContractError(
       "SALES_CONTRACT_PAYABLE_MISMATCH",
-      `sales create intent expected provider payable ${expectedProviderPayable} does not equal net goods ${netGoods} + net shipping ${shippingCost}`
+      `sales create intent expected provider payable ${expectedProviderPayable} does not equal net goods ${netGoods} + provider tax ${totalTax} + net shipping ${shippingCost}`
     );
   }
 
   return {
-    providerContractVersion: 2,
+    providerContractVersion: taxContract
+      ? SALES_PROVIDER_TAX_CONTRACT_VERSION
+      : SALES_PROVIDER_CONTRACT_VERSION,
     contactId,
     customerName,
     locationId,
@@ -308,6 +358,8 @@ export function readJubelioSalesOrderExpectation(
     netGoods,
     expectedProviderPayable,
     lines,
+    ...(providerTax ? { providerTax } : {}),
+    ...(taxContract ? { totalTax } : {}),
   };
 }
 
@@ -337,9 +389,13 @@ export function readSettlementAuthorityRecord(input: {
     return intent;
   }
 
-  if (pricingVersion !== 1 || engineVersion !== 1 || providerVersion !== 2) {
+  if (
+    pricingVersion !== 1 ||
+    engineVersion !== 1 ||
+    providerVersion !== intent.providerContractVersion
+  ) {
     unsupportedVersion(
-      `order row pricing versions (${pricingVersion}/${engineVersion}/${providerVersion}) are unknown or inconsistent with a contract v2 create intent`
+      `order row pricing versions (${pricingVersion}/${engineVersion}/${providerVersion}) are unknown or inconsistent with a contract v${intent.providerContractVersion} create intent`
     );
   }
 
@@ -428,6 +484,41 @@ export function assertOrderSnapshotAgreesWithIntent(
     mismatches.push(
       `expected provider payable ${snapshot.expectedProviderPayable} vs intent ${intent.expectedProviderPayable}`
     );
+  }
+  if (intent.providerContractVersion === SALES_PROVIDER_TAX_CONTRACT_VERSION) {
+    // Kontrak3: identitas/rate pajak dan nominal per baris kedua record wajib
+    // sama. Header total yang benar tidak membuktikan alokasi per line.
+    if (snapshot.providerContractVersion !== SALES_PROVIDER_TAX_CONTRACT_VERSION) {
+      mismatches.push(
+        `order snapshot provider version ${snapshot.providerContractVersion} vs intent ${SALES_PROVIDER_TAX_CONTRACT_VERSION}`
+      );
+    } else {
+      if (
+        !intent.providerTax ||
+        snapshot.providerTax.taxId !== intent.providerTax.taxId ||
+        snapshot.providerTax.ratePercent !== intent.providerTax.ratePercent
+      ) {
+        mismatches.push(
+          "order snapshot provider tax identity/rate disagrees with the stored create intent"
+        );
+      }
+      const snapshotTax = BigInt(snapshot.ppnAmount);
+      const intentTax = BigInt(intent.totalTax ?? 0);
+      if (snapshotTax !== intentTax) {
+        mismatches.push(
+          `order snapshot PPN ${snapshot.ppnAmount} vs intent ${intentTax.toString()}`
+        );
+      }
+      const lineTaxTotal = snapshot.lines.reduce(
+        (sum, line) => sum + BigInt(line.providerTaxAmount),
+        BigInt(0)
+      );
+      if (lineTaxTotal !== intentTax) {
+        mismatches.push(
+          `order snapshot line tax ${lineTaxTotal.toString()} vs intent ${intentTax.toString()}`
+        );
+      }
+    }
   }
   if (mismatches.length > 0) {
     recordDrift(

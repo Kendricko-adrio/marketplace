@@ -552,3 +552,48 @@ describe("evaluatePricing — shipping Offer dengan Markdown qty>1", () => {
     expect(result.expectedProviderPayable).toBe("190000");
   });
 });
+
+// =========================================================
+// Provider3 — tax context bertahan dan pajak dialokasikan ulang
+// =========================================================
+// Expected literal dari spec PPN §5.3/§8: benefit goods yang berubah mengubah
+// net line, jadi PPN provider WAJIB dialokasikan ulang pada net final, tetap
+// berjumlah tepat ppnAmount order, dan payable provider = net barang + PPN.
+describe("evaluatePricing — kontrak provider3", () => {
+  const ppn11 = { taxId: -2, ratePercent: "11" };
+
+  it("Coupon fixed 50001 pada dua baris 100000: PPN16500, alokasi8250/8250, payable166499", () => {
+    const snapshot = evaluatePricing({
+      fulfillmentMethod: "pickup",
+      ppnRatePercent: "11",
+      providerTax: ppn11,
+      lines: [
+        { variantId: "a", quantity: 1, sourceUnitPrice: "100000", effectiveUnitPrice: "100000" },
+        { variantId: "b", quantity: 1, sourceUnitPrice: "100000", effectiveUnitPrice: "100000" },
+      ],
+      benefit: fixedGoods("50001"),
+    });
+
+    expect(snapshot.providerContractVersion).toBe(3);
+    expect(snapshot.providerTax).toEqual({ taxId: -2, ratePercent: "11" });
+    expect(snapshot.goodsDiscount).toBe("50001");
+    expect(snapshot.netGoods).toBe("149999");
+    expect(snapshot.ppnAmount).toBe("16500");
+    expect(snapshot.lines.map((line) => line.netLineAmount)).toEqual(["74999", "75000"]);
+    expect(snapshot.lines.map((line) => line.providerTaxAmount)).toEqual(["8250", "8250"]);
+    expect(snapshot.expectedProviderPayable).toBe("166499");
+    expect(snapshot.total).toBe("166499");
+  });
+
+  it("tanpa providerTax, evaluator tetap menghasilkan snapshot provider2", () => {
+    const snapshot = evaluatePricing({
+      fulfillmentMethod: "pickup",
+      ppnRatePercent: "11",
+      lines: [{ variantId: "a", quantity: 1, sourceUnitPrice: "100000", effectiveUnitPrice: "100000" }],
+      benefit: fixedGoods("10000"),
+    });
+    expect(snapshot.providerContractVersion).toBe(2);
+    expect(snapshot.expectedProviderPayable).toBe("90000");
+    expect(snapshot).not.toHaveProperty("providerTax");
+  });
+});

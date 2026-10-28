@@ -74,6 +74,7 @@ ADRs dan referensi arsitektur permanen tetap berada di `docs/`.
 | Internal architecture | `docs/architecture/README.md` |
 | Testing | `docs/testing/README.md` |
 | Agent tooling (MCP servers, Context7) | `docs/agents/mcp-tooling.md` |
+| Domain docs (glossary, ADR, cara mengonsumsinya) | [`docs/agents/domain.md`](agents/domain.md) |
 | Home delivery lifecycle | [`docs/features/home-delivery.md`](features/home-delivery.md) |
 | Delivery follow-up | [`docs/features/delivery-follow-up.md`](features/delivery-follow-up.md) |
 | Delivery handoff and tracking | [`docs/features/delivery-tracking.md`](features/delivery-tracking.md) |

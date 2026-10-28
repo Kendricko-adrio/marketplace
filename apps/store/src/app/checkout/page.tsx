@@ -32,6 +32,7 @@ import { useSession } from "@/lib/auth-client";
 import { useCart } from "@/providers/cart-provider";
 import DeliveryQuotePanel, { type DeliveryAddressPreview } from "@/components/checkout/DeliveryQuotePanel";
 import { CheckoutAttemptFeedback } from "@/components/checkout/CheckoutAttemptFeedback";
+import { CheckoutTaxFeedback } from "@/components/checkout/CheckoutTaxFeedback";
 import type { CheckoutAttemptResult } from "@/features/checkout/checkout-attempt";
 import { PromoSelector, type AvailableOffer, type PromoInvalidation } from "@/components/checkout/PromoSelector";
 import { PromoSelectionDialog } from "@/components/checkout/PromoSelectionDialog";
@@ -190,6 +191,7 @@ export default function CheckoutPage() {
   const [loading, setLoading] = useState(true);
   const [step, setStep] = useState<1 | 2>(1);
   const [submitting, setSubmitting] = useState(false);
+  const [stockAdjustmentMessage, setStockAdjustmentMessage] = useState<string | null>(null);
 
   // Selected item IDs — passed from the cart page via sessionStorage.
   // The cart page enforces single-branch selection before navigating here.
@@ -268,6 +270,8 @@ export default function CheckoutPage() {
   const [reviewing, setReviewing] = useState(false);
   const [pendingRequest, setPendingRequest] = useState<PendingCheckout | null>(null);
   const [attemptFeedback, setAttemptFeedback] = useState<CheckoutAttemptResult | null>(null);
+  // Preflight pajak BUKAN attempt durable: pesan/copy saja, tanpa state order.
+  const [taxFeedback, setTaxFeedback] = useState<string | null>(null);
   const requestInFlight = useRef(false);
   const requestStorageKey = session?.user.id ? `checkoutRequest:${session.user.id}` : null;
 
@@ -973,12 +977,23 @@ export default function CheckoutPage() {
         });
         const result = await response.json();
         if (!result.success) {
+          if (result.code === "CHECKOUT_TAX_UNAVAILABLE") {
+            // Konfigurasi/master pajak belum sah: payment tidak dibuka, form dan
+            // pilihan promo tetap; customer hanya dapat memeriksa ulang.
+            setTaxFeedback(
+              result.error ||
+                "Checkout belum dapat diproses karena konfigurasi pajak belum sesuai. Silakan coba lagi nanti."
+            );
+            setConfirmed(false);
+            return;
+          }
           toast.error(result.error || "Review checkout belum tersedia.");
           if (typeof result.code === "string" && result.code.startsWith("PROMO_")) {
             void loadPromos();
           }
           return;
         }
+        setTaxFeedback(null);
         const data = result.data as CheckoutPreviewData;
         if (data.deliveryService) setDeliveryService(data.deliveryService);
         // Review awal memakai pilihan request yang sudah divalidasi server;
@@ -1015,6 +1030,14 @@ export default function CheckoutPage() {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(record.body),
       });
       const result = await response.json();
+      if (!result.success && result.code === "CHECKOUT_TAX_UNAVAILABLE") {
+        setTaxFeedback(
+          result.error ||
+            "Checkout belum dapat diproses karena konfigurasi pajak belum sesuai. Silakan coba lagi nanti."
+        );
+        setConfirmed(false);
+        return;
+      }
       // Version-2 attempt contract: only a PROMOTED attempt may redirect. A
       // rejected/unknown attempt keeps the reviewed form on screen.
       const attempt: CheckoutAttemptResult | undefined = result.data?.version === 2 ? result.data : undefined;
@@ -1044,6 +1067,14 @@ export default function CheckoutPage() {
         refreshCart();
         if (result.data.paymentAvailable && result.data.redirectUrl) window.location.href = result.data.redirectUrl;
         else router.push(`/account/orders/${result.data.orderId}`);
+        return;
+      }
+      if (!result.success && handleStockAdjustment(result)) {
+        // Shortage adalah penolakan definitif sebelum order/attempt dibuat.
+        // Quantity baru memerlukan review dan request key baru, bukan recovery.
+        clearPendingRequest();
+        setReview(null);
+        setAttemptFeedback(null);
         return;
       }
       if (result.code === "CHECKOUT_REVIEW_REQUIRED" || result.code === "DELIVERY_REPRICE_REQUIRED") {
@@ -1690,6 +1721,14 @@ export default function CheckoutPage() {
                   )}
                 </section>
 
+                {taxFeedback ? (
+                  <CheckoutTaxFeedback
+                    message={taxFeedback}
+                    busy={reviewing || submitting}
+                    onReviewAgain={() => { setTaxFeedback(null); void goToPayment(); }}
+                  />
+                ) : null}
+
                 <div className="mt-6 flex justify-end">
                   <Button
                     onClick={() => void handleNextFromFulfillment()}
@@ -1962,6 +2001,14 @@ export default function CheckoutPage() {
                       : "Saya telah memeriksa pesanan dan menyetujui syarat & ketentuan. Saya akan mengambil pesanan di cabang terpilih sesuai estimasi waktu yang saya tentukan, dan saya bersedia menyebutkan email serta nomor telepon saya saat pengambilan pesanan di toko."}
                   </span>
                 </label>
+
+                {taxFeedback ? (
+                  <CheckoutTaxFeedback
+                    message={taxFeedback}
+                    busy={reviewing || submitting}
+                    onReviewAgain={() => { setTaxFeedback(null); void goToPayment(); }}
+                  />
+                ) : null}
 
                 {attemptFeedback ? (
                   <CheckoutAttemptFeedback

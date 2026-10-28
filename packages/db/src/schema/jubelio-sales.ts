@@ -12,6 +12,7 @@ import {
 import { relations, sql } from "drizzle-orm";
 import { orders } from "./orders";
 import { checkoutAttempts } from "./checkout";
+import type { ValidatedProviderTax } from "../provider-tax";
 
 /**
  * Durable Jubelio sales-order operation ledger (plan:
@@ -48,16 +49,19 @@ import { checkoutAttempts } from "./checkout";
  *
  * - absent — legacy/unversioned snapshot: the evidenced zero-disc/zero-tax
  *   envelope without shipping fields, read by the explicit legacy decoder and
- *   never assumed to be version 2.
+ *   never assumed to be version 2 or 3.
  * - `2` — contract v2 (spec §8.3/§10.1): frozen original/net shipping plus the
  *   expected provider payable, so the provider request and its independent GET
- *   verification are derived from the stored snapshot.
+ *   verification are derived from the stored snapshot. Provider tax is 0.
+ * - `3` — contract v3 (spec PPN §5.2): everything v2 freezes, plus the immutable
+ *   provider tax context (`providerTax`) and the PPN allocated to every line.
+ *   Provider payable = net goods + PPN + net shipping.
  *
  * Any other explicit version is unknown and must be rejected (fail closed) by
  * the decoder/builder; this type is compile-time only, the runtime guard lives
  * in the gateway (`apps/store/src/lib/jubelio-sales-client.ts`).
  */
-export type JubelioSalesProviderContractVersion = 2;
+export type JubelioSalesProviderContractVersion = 2 | 3;
 
 /** Fields shared by every persisted create-request snapshot. */
 export type JubelioSalesOrderCreateRequestFields = {
@@ -98,16 +102,34 @@ export type JubelioSalesOrderCreateRequestLegacy =
  */
 export type JubelioSalesOrderCreateRequestV2 =
   JubelioSalesOrderCreateRequestFields & {
-    providerContractVersion: JubelioSalesProviderContractVersion;
+    providerContractVersion: 2;
     originalShipmentCost: number;
     shippingCost: number;
     expectedProviderPayable: number;
   };
 
+/**
+ * Contract-v3 create intent: the frozen money snapshot PLUS the immutable
+ * provider tax context. `items[].taxAmount` carries the PPN allocated to that
+ * whole line and `items[].taxId` must equal `providerTax.taxId`; the gateway
+ * re-verifies both before the POST (the persisted payload is `jsonb`, so its
+ * TypeScript type is never trusted at runtime).
+ */
+export type JubelioSalesOrderCreateRequestV3 =
+  JubelioSalesOrderCreateRequestFields & {
+    providerContractVersion: 3;
+    originalShipmentCost: number;
+    shippingCost: number;
+    expectedProviderPayable: number;
+    /** Identitas + rate master yang diverifikasi sebelum pembekuan attempt. */
+    providerTax: ValidatedProviderTax;
+  };
+
 /** Request snapshot of `POST /sales/orders/`. */
 export type JubelioSalesOrderCreateRequest =
   | JubelioSalesOrderCreateRequestLegacy
-  | JubelioSalesOrderCreateRequestV2;
+  | JubelioSalesOrderCreateRequestV2
+  | JubelioSalesOrderCreateRequestV3;
 
 /** Request snapshot of `POST /sales/orders/cancel/` with `{ids: [...]}`. */
 export type JubelioSalesOrderCancelRequest = {

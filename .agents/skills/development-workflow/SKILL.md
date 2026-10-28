@@ -57,10 +57,31 @@ Required when the change affects UI; otherwise write `N/A — <reason>`.
 - [ ] (UI) Target viewport, responsive, keyboard/focus, contrast
 - [ ] (UI) Requested prototype recorded as the binding reference
 
+### Slice blueprint (per implementation ticket)
+
+The plan/spec blueprint is the source; the **ticket carries the slice it needs**, because an
+implementation session often reads the ticket and nothing else. Required when the ticket
+changes code, otherwise `N/A — <reason>`. Source template:
+[`.scratch/templates/ticket.md`](../../../.scratch/templates/ticket.md).
+
+- Slice file table (path, action, responsibility, layer, test seam) plus the exported-contract
+  delta, copied from the approved blueprint rather than designed again in the ticket.
+- One public seam, the first RED test path, and prior art.
+- Decision boundaries that must not be reopened, each linked to its authority (wayfinder
+  decision, owner correction, spec section).
+- Every acceptance criterion names the observation that proves it false at the implementer's
+  starting commit.
+- A one-line demo path. No demo path means the slice is horizontal and must be recut.
+
+This deliberately deviates from the upstream `to-spec`/`to-tickets` templates, which forbid file
+paths. Their rule prevents long-term staleness; a ticket is consumed within days, and without
+paths the implementer invents modules and names that contradict the repo's layer conventions.
+Record the deviation as a repo decision, not as a reading of upstream.
+
 ## 3. Slice only when useful
 
 - If the build spans sessions or the user requests a multi-ticket breakdown, propose tracer-bullet tickets: each delivers a narrow, independently testable end-to-end behavior (rather than a whole database/API/UI layer), with acceptance criteria and real blockers. Show the numbered breakdown and dependencies to the user; get separate approval before publishing/queueing tickets. Small work goes straight from approved conversational scope or spec to implementation.
-- Tickets convey *what* must work and inherit the approved technical/UX blueprint; they are not an invitation to redesign product behavior. A ticket may refine a file name or placement only while the approved layer convention and exported contracts stay intact, and the deviation is written to the plan's deviation log and reported to the owner. A new module, a new behavior, or a state/label outside the approved blueprint still needs an owner decision. Carry the approved spec, blueprint, testing seams, exclusions, and source-of-truth research in the handoff. **A session may cover one or several approved tickets according to the user's requested scope.** Even in a multi-ticket session, implement, test, review, and record the outcome of each verifiable slice before moving to the next; respect dependencies and do not mark blocked or unverified tickets Done. A new product decision still requires owner approval, not an agent-selected default. No second product plan is required.
+- Tickets convey *what* must work and inherit the approved technical/UX blueprint; they are not an invitation to redesign product behavior. A ticket may refine a file name or placement only while the approved layer convention and exported contracts stay intact, and the deviation is written to the plan's deviation log and reported to the owner. A new module, a new behavior, or a state/label outside the approved blueprint still needs an owner decision. Every ticket also carries its own **slice blueprint** (§2) and records a `Deviation log` in its `## Answer`; a planned file or contract that changed without an entry there is a review finding. Carry the approved spec, blueprint, testing seams, exclusions, and source-of-truth research in the handoff. **A session may cover one or several approved tickets according to the user's requested scope.** Even in a multi-ticket session, implement, test, review, and record the outcome of each verifiable slice before moving to the next; respect dependencies and do not mark blocked or unverified tickets Done. A new product decision still requires owner approval, not an agent-selected default. No second product plan is required.
 
 ## 4. Implement, review, and close
 

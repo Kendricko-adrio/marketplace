@@ -33,6 +33,11 @@ import {
 import { pickupDateToInstant, validatePickupSlot } from "@/lib/pickup-validation";
 import { createPayment, getMockPaymentResult } from "@/lib/midtrans";
 import { getConfigNumber, getConfigString, getPpnRatePercent, getDiscountsContractVersion } from "@/lib/config";
+import {
+  CheckoutTaxUnavailableError,
+  prepareCheckoutTax,
+} from "@/features/checkout/prepare-checkout-tax-service";
+import type { ValidatedProviderTax } from "@marketplace/db/src/provider-tax";
 import { buildPricingSnapshot, PricingContractError, type PricingSnapshot } from "@/lib/versioned-pricing";
 import { evaluatePricing } from "@marketplace/db/src/discount-pricing";
 import {
@@ -58,8 +63,8 @@ import { buildPaymentItemDetails } from "@/lib/payment-item-details";
 import { createModuleLogger, getRequestId, withRequestContext } from "@/lib/logger";
 import { claimAndFailOrder } from "@/lib/order-finalize";
 import { initializeReservedOrderPayment } from "@/lib/payment-initialization";
-import { verifyCheckoutStock } from "@marketplace/db/src/checkout-live-stock";
-import { persistCheckoutStockAdjustments, checkoutStockAdjustmentMessage } from "@/lib/checkout-stock-adjustment";
+import { verifyAndAdjustCheckoutStock } from "@/features/checkout/verify-checkout-stock-service";
+import { checkoutStockAdjustmentMessage } from "@/lib/checkout-stock-adjustment";
 import {
   DeliveryQuoteDataError,
   loadQuoteOriginBranch,
@@ -548,13 +553,41 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
       }
     }
 
-    const ppnRatePercent = await getPpnRatePercent();
+    // ===== Preflight pajak untuk writer baru (gate1) =====================
+    // Replay di atas SUDAH menjawab attempt tersimpan tanpa membaca config/
+    // master ini, sehingga order lama tetap dapat dilanjutkan saat pajak outage.
+    // Untuk attempt baru, kegagalan apa pun diblokir sebelum hold/SO/Midtrans.
+    let providerTax: ValidatedProviderTax | null = null;
+    if (contractVersion === 1) {
+      try {
+        providerTax = await prepareCheckoutTax();
+      } catch (error) {
+        if (error instanceof CheckoutTaxUnavailableError) {
+          log.error(
+            `checkout rejected — pajak belum tersedia (reason ${error.reason})`,
+            new RouteLogError("checkout tax preflight unavailable")
+          );
+          return NextResponse.json(
+            {
+              success: false,
+              code: "CHECKOUT_TAX_UNAVAILABLE",
+              error: "Checkout belum dapat diproses karena konfigurasi pajak belum sesuai. Silakan coba lagi nanti.",
+              requestId: getRequestId(),
+            },
+            { status: 503, headers: { "Cache-Control": "no-store" } }
+          );
+        }
+        throw error;
+      }
+    }
+    const ppnRatePercent = providerTax?.ratePercent ?? (await getPpnRatePercent());
     // Validate source/quantity/aggregate bounds exactly BEFORE live stock or
     // shipping HTTP. This preliminary snapshot is replaced by the fresh quote
     // snapshot below for delivery; neither path trusts browser money.
     let pricingSnapshot: PricingSnapshot | null = contractVersion === 1
       ? buildPricingSnapshot({
           fulfillmentMethod: isDelivery ? "delivery" : "pickup", ppnRatePercent,
+          providerTax: providerTax ?? undefined,
           lines: selectedItems.map((item) => ({
             variantId: item.variantId, quantity: item.quantity,
             sourceUnitPrice: item.variantPrice, effectiveUnitPrice: effectiveOf(item),
@@ -655,7 +688,8 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
     // provider before creating an SO. A stale/zero local cache is advisory:
     // the provider is the stock source of truth. The atomic hold below still
     // protects against concurrent checkouts on this site.
-    const stockCheck = await verifyCheckoutStock(db, selectedItems.map((item) => ({
+    const stockCheck = await verifyAndAdjustCheckoutStock(db, cart.id, selectedItems.map((item) => ({
+      cartItemId: item.cartItemId,
       branchId,
       variantId: item.variantId,
       itemId: item.jubelioItemId!,
@@ -673,12 +707,18 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
           `checkout rejected — Jubelio stock insufficient (product ${stockCheck.productName}, branch ${branchId})`
         );
       }
+      if (stockCheck.reason === "insufficient") {
+        return NextResponse.json({
+          success: false,
+          code: "CHECKOUT_STOCK_ADJUSTED",
+          adjustments: stockCheck.adjustments,
+          error: checkoutStockAdjustmentMessage(stockCheck.adjustments),
+        }, { status: 409 });
+      }
       return NextResponse.json({
         success: false,
-        error: stockCheck.reason === "insufficient"
-          ? `Stok ${stockCheck.productName} di cabang ini tidak mencukupi. Silakan kurangi jumlah atau pilih barang lain.`
-          : "Stok Jubelio belum dapat diverifikasi. Silakan coba beberapa saat lagi.",
-      }, { status: stockCheck.reason === "insufficient" ? 409 : 503 });
+        error: "Stok Jubelio belum dapat diverifikasi. Silakan coba beberapa saat lagi.",
+      }, { status: 503 });
     }
     log.info(`Jubelio stock verified before Sales Order (${selectedItems.length} item)`);
 
@@ -753,6 +793,7 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
         // provider disimpan apa adanya; booking memakai nilai ORIGINAL ini,
         // bukan net customer. Tidak ada shipping0 palsu saat quote gagal.
         const deliveryBaseline = contractVersion === 1 ? buildPricingSnapshot({
+          providerTax: providerTax ?? undefined,
           fulfillmentMethod: "delivery",
           ppnRatePercent,
           lines: selectedItems.map((item) => ({
@@ -994,48 +1035,71 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
       `creating order: order ${orderId}, total ${pricing.total}, ppn ${pricing.ppnAmount} @ ${pricing.ppnRatePercent}%, ttl ${ttlMinutes} menit`
     );
 
-    const createRequest: JubelioSalesOrderCreateRequest = {
-      ...(pricingSnapshot ? {
-        providerContractVersion: 2 as const,
-        originalShipmentCost: Number(pricingSnapshot.shippingBeforeSubsidy),
-        shippingCost: Number(pricingSnapshot.shippingCost),
-        expectedProviderPayable: Number(pricingSnapshot.expectedProviderPayable),
-      } : {}),
+    // Kontrak provider3: PPN customer dicatat pada SO (tanpa tagihan kedua).
+    // Pajak dibekukan dari snapshot attempt; tidak ada pembacaan config/master
+    // di sini, sehingga replay/recovery memakai angka yang sama.
+    const taxContractSnapshot =
+      pricingSnapshot && pricingSnapshot.providerContractVersion === 3
+        ? pricingSnapshot
+        : null;
+    const legacyProviderTaxId = Number(process.env.JUBELIO_ITEM_TAX_ID) || 1;
+    const createRequestBase = {
       // The verified generic Jubelio customer contact.
       contactId: -1,
       customerName: session.user.name || "Customer",
       locationId: branch[0].jubelioLocationId!,
       note: createReference,
       refNo: orderId,
-      channelStatus: "Belum Bayar",
-      items: selectedItems.map((item) => ({
-        itemId: item.jubelioItemId!,
-        quantity: item.quantity,
+      channelStatus: "Belum Bayar" as const,
+      items: selectedItems.map((item) => {
         // Provider price stays the SOURCE unit; the whole-line Markdown is a
         // line discount, never a lowered source price or a raised payment.
-        price: Number(item.variantPrice),
-        discAmount: pricingSnapshot
-          ? (() => {
-              // Provider line discount = Markdown whole-line + Coupon allocation
+        const line = pricingSnapshot?.lines.find(
+          (row) => row.variantId === item.variantId
+        );
+        const providerTaxAmount =
+          taxContractSnapshot && line && "providerTaxAmount" in line
+            ? Number(line.providerTaxAmount)
+            : 0;
+        return {
+          itemId: item.jubelioItemId!,
+          quantity: item.quantity,
+          price: Number(item.variantPrice),
+          discAmount: pricingSnapshot && line
+            ? // Provider line discount = Markdown whole-line + Coupon allocation
               // (whole-line, NEVER multiplied by quantity again). The snapshot's
               // source/net line amounts are the independent authority.
-              const line = pricingSnapshot.lines.find(
-                (row) => row.variantId === item.variantId
-              );
-              if (!line) return 0;
-              return (
-                Math.round(Number(line.sourceLineAmount)) -
-                Math.round(Number(line.netLineAmount))
-              );
-            })()
-          : 0,
-        taxAmount: 0,
-        unit: process.env.JUBELIO_ITEM_UNIT?.trim() || "Buah",
-        // The provider FK-rejects tax_id 0; the account's "No Tax" record id
-        // (sandbox 2026-09-24: 1, rate 0.00) is the safe default.
-        taxId: Number(process.env.JUBELIO_ITEM_TAX_ID) || 1,
-      })),
+              Math.round(Number(line.sourceLineAmount)) -
+              Math.round(Number(line.netLineAmount))
+            : 0,
+          taxAmount: providerTaxAmount,
+          unit: process.env.JUBELIO_ITEM_UNIT?.trim() || "Buah",
+          // Provider3 memakai tax id tervalidasi dari master; cabang lama tetap
+          // memakai record No Tax (provider FK menolak tax_id 0).
+          taxId: taxContractSnapshot
+            ? taxContractSnapshot.providerTax.taxId
+            : legacyProviderTaxId,
+        };
+      }),
     };
+    const createRequest: JubelioSalesOrderCreateRequest = !pricingSnapshot
+      ? createRequestBase
+      : taxContractSnapshot
+        ? {
+            ...createRequestBase,
+            providerContractVersion: 3,
+            originalShipmentCost: Number(taxContractSnapshot.shippingBeforeSubsidy),
+            shippingCost: Number(taxContractSnapshot.shippingCost),
+            expectedProviderPayable: Number(taxContractSnapshot.expectedProviderPayable),
+            providerTax: taxContractSnapshot.providerTax,
+          }
+        : {
+            ...createRequestBase,
+            providerContractVersion: 2,
+            originalShipmentCost: Number(pricingSnapshot.shippingBeforeSubsidy),
+            shippingCost: Number(pricingSnapshot.shippingCost),
+            expectedProviderPayable: Number(pricingSnapshot.expectedProviderPayable),
+          };
 
     // ===== New checkout lifecycle: reserve → SO → payment → promotion =====
     // No order exists until the Sales Order and the payment session are ready.

@@ -54,8 +54,20 @@ function actionLabel(action: BatchRow["action"]): string {
 }
 
 function rowReason(row: BatchRow): string {
-  if (row.resultCode) return row.resultCode;
-  return row.preview.errorReason ?? "—";
+  const code = row.resultCode ?? row.preview.errorReason;
+  if (code === "EXAMPLE_ROW_NOT_REPLACED") return "Ganti SKU contoh dengan SKU produk atau hapus baris contoh, lalu unggah kembali.";
+  if (code === "INPUT_TYPE_INVALID") return "Gunakan input_type price atau percent untuk set_price.";
+  if (code === "PERCENT_INVALID") return "Isi diskon persen yang menghasilkan harga lebih dari Rp0 dan di bawah harga source.";
+  if (code === "INPUT_TYPE_NOT_ALLOWED" || code === "PRICE_NOT_ALLOWED") return "Kosongkan new_price dan input_type untuk restore_base.";
+  return code ?? "—";
+}
+
+function inputLabel(row: BatchRow): string {
+  const raw = row.preview.inputValueRaw ?? row.preview.inputTargetRaw;
+  if (row.action === "restore_base" && !raw && !row.preview.inputTypeRaw) return "—";
+  if (row.preview.inputType === "percent") return `${raw ?? "—"}% dari source`;
+  if ((row.preview.inputType === "price" || row.preview.inputType === undefined) && raw && /^\d+$/.test(raw)) return rupiah(raw);
+  return raw ?? (row.targetUnitPrice !== null ? rupiah(row.targetUnitPrice) : "—");
 }
 
 function targetLabel(row: BatchRow): string {
@@ -223,6 +235,7 @@ export function PriceChangeExcelClient({ onBatchChange, onApplied }: { onBatchCh
           <section aria-labelledby="price-template-step" className="min-w-0 space-y-4 rounded-lg border bg-muted/30 p-5">
             <h3 id="price-template-step" className="font-semibold">1. Siapkan file</h3>
             <p className="text-sm text-muted-foreground">Gunakan template untuk mengisi SKU dan harga baru.</p>
+            <p className="text-sm text-muted-foreground">Template berisi 2 baris contoh. Ganti SKU contoh atau hapus barisnya sebelum upload.</p>
             <Button data-testid="excel-template" type="button" variant="outline" size="sm"
               onClick={() => window.location.assign("/api/admin/price-changes/template")}>
               <Download className="h-4 w-4" />Unduh template
@@ -230,9 +243,13 @@ export function PriceChangeExcelClient({ onBatchChange, onApplied }: { onBatchCh
             <details className="text-sm">
               <summary className="cursor-pointer font-medium">Format file</summary>
               <div className="mt-3 space-y-2 break-words text-xs text-muted-foreground">
-                <p>Sheet <span className="font-mono">Harga</span>, versi <span className="font-mono">markdown_v1</span>.</p>
-                <p>Kolom <span className="font-mono">sku</span>, <span className="font-mono">action</span>, dan <span className="font-mono">new_price</span>. Gunakan template tanpa mengganti struktur kolom.</p>
-                <p>Baris gagal dapat dikoreksi melalui file baru yang tertaut ke hasil import asal.</p>
+                <p>Sheet <span className="font-mono">Harga</span>, versi <span className="font-mono">markdown_v2</span>. File versi lama tetap dapat diunggah.</p>
+                <p>Kolom: <span className="font-mono">sku</span>, <span className="font-mono">action</span>, <span className="font-mono">new_price</span>, <span className="font-mono">input_type</span>. Jangan mengganti struktur kolom.</p>
+                <p><strong className="font-mono text-foreground">set_price:</strong> tetapkan harga baru. <span className="font-mono">input_type price</span> untuk nominal Rupiah, atau <span className="font-mono">percent</span> untuk diskon dari harga source.</p>
+                <p>Contoh: source Rp200.000, <span className="font-mono">new_price 10</span>, <span className="font-mono">input_type percent</span> → target Rp180.000.</p>
+                <p><strong className="font-mono text-foreground">restore_base:</strong> kembali mengikuti harga source. Kosongkan <span className="font-mono">new_price</span> dan <span className="font-mono">input_type</span>.</p>
+                <p>SKU harus Text. Isi persen sebagai angka biasa: 10 untuk 10%, bukan sel berformat Percentage atau formula.</p>
+                <p>Baris gagal dapat diperbaiki melalui subset gagal yang tertaut ke batch asal.</p>
               </div>
             </details>
           </section>
@@ -373,6 +390,7 @@ export function PriceChangeExcelClient({ onBatchChange, onApplied }: { onBatchCh
                     <TableHead>Baris</TableHead>
                     <TableHead>SKU</TableHead>
                     <TableHead>Aksi</TableHead>
+                    <TableHead>Input</TableHead>
                     <TableHead>Target</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Alasan</TableHead>
@@ -391,6 +409,7 @@ export function PriceChangeExcelClient({ onBatchChange, onApplied }: { onBatchCh
                           ? ` (${row.preview.inputActionRaw})`
                           : ""}
                       </TableCell>
+                      <TableCell className="text-xs tabular-nums">{inputLabel(row)}</TableCell>
                       <TableCell className="tabular-nums">{targetLabel(row)}</TableCell>
                       <TableCell>
                         <Badge

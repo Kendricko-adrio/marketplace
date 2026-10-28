@@ -15,8 +15,10 @@ import {
 // =========================================================
 // SKU picker for the bulk price UI: search is a case-insensitive match on SKU
 // and product name, ordered `sku asc` so pagination is stable, default 25 per
-// page (max 100). Optional markdownStatus=inactive filters stored targets whose
-// valid current source is <= target; rows/count share this global predicate.
+// page (max 100). Optional markdownStatus=configured/unconfigured filters by
+// current stored target presence (including inactive targets and excluding
+// restored targets). markdownStatus=inactive filters targets whose valid current
+// source is <= target. Rows/count share the same global status/search predicate.
 // Without that filter, rows whose source price is invalid are returned with
 // `basePrice`/`effectiveUnitPrice` null and still counted, so the list and total
 // never disagree. No-store: prices are mutable data.

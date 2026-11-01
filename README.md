@@ -31,6 +31,10 @@ shared packages, managed with npm workspaces.
 6. `npm run dev:store` — storefront on http://localhost:3000
 7. `npm run dev:admin` — admin on http://localhost:3001
 
+Commands development mendukung Windows dan Linux dengan **Node.js 24 LTS + npm**,
+tanpa Bash/WSL atau konfigurasi `script-shell` khusus. Jalankan
+`npm run dev:all` untuk store, admin, dan Jubelio mock sekaligus.
+
 Setiap script dev juga menyalin output prosesnya ke `logs/<app>.log` (ditimpa
 setiap run, di-ignore git). Lihat
 [`docs/features/logging.md`](docs/features/logging.md#capture-log-development-logs).

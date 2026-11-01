@@ -1,5 +1,7 @@
 # Testing
 
+Panduan manual: [Skenario positif transaksi client → admin: pickup dan delivery](skenario-positif-transaksi-manual.md), termasuk checklist field nominal dan contoh perhitungan.
+
 Unit and E2E test infrastructure for the marketplace monorepo.
 
 | Tool | Covers | Config |

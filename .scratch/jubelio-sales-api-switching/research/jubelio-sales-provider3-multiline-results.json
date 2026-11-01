@@ -1,0 +1,122 @@
+{
+  "runAt": "2026-10-28T15:40:10.716Z",
+  "scope": "one provider3 create (2 lines, one whole-line discount, shipping 30000, PPN 11%) + one cancel; no invoice/payment/edit",
+  "tax": {
+    "taxId": -2,
+    "ratePercent": "11",
+    "outputAccountPresent": true
+  },
+  "locationId": -1,
+  "items": [
+    {
+      "role": "A",
+      "itemId": 116334
+    },
+    {
+      "role": "B",
+      "itemId": 156146
+    }
+  ],
+  "expected": {
+    "subTotal": 220001,
+    "totalDisc": 20000,
+    "totalTax": 22001,
+    "grandTotal": 252002,
+    "lineATax": 8801,
+    "lineBTax": 13200
+  },
+  "confirmed": {
+    "salesorderId": 68451,
+    "subTotal": 220001,
+    "totalDisc": 20000,
+    "totalTax": 22001,
+    "grandTotal": 252002,
+    "originalShipmentCost": 30000,
+    "shippingCost": 30000,
+    "items": [
+      {
+        "itemId": 116334,
+        "quantity": 1,
+        "price": 100001,
+        "amount": 88802,
+        "taxId": -2,
+        "taxAmount": 8801
+      },
+      {
+        "itemId": 156146,
+        "quantity": 1,
+        "price": 120000,
+        "amount": 133200,
+        "taxId": -2,
+        "taxAmount": 13200
+      }
+    ]
+  },
+  "salesOrderId": 68451,
+  "createAmbiguous": false,
+  "cancel": {
+    "salesOrderId": 68451,
+    "isCanceled": true
+  },
+  "stockRestored": true,
+  "checks": [
+    {
+      "label": "master pajak ditemukan (tax id tervalidasi)",
+      "ok": true,
+      "detail": "rate=11"
+    },
+    {
+      "label": "rate master sama dengan rate website",
+      "ok": true,
+      "detail": "11 vs 11"
+    },
+    {
+      "label": "mapping pajak keluaran tersedia",
+      "ok": true
+    },
+    {
+      "label": "dua item berstok ditemukan pada satu lokasi",
+      "ok": true,
+      "detail": "lokasi -1"
+    },
+    {
+      "label": "stok tersedia ≥1 untuk kedua item sebelum create",
+      "ok": true,
+      "detail": "[{\"itemId\":116334,\"available\":7,\"onHand\":7},{\"itemId\":156146,\"available\":3,\"onHand\":3}]"
+    },
+    {
+      "label": "snapshot lokal: PPN 22001 dan payable 252002",
+      "ok": true,
+      "detail": "ppn=22001 payable=252002"
+    },
+    {
+      "label": "snapshot lokal: alokasi per baris 8801/13200",
+      "ok": true,
+      "detail": "8801/13200"
+    },
+    {
+      "label": "create provider3 + GET verifikasi per baris",
+      "ok": true,
+      "detail": "salesOrderId=68451"
+    },
+    {
+      "label": "header SO: sub_total 220001 / total_disc 20000 / total_tax 22001 / grand_total 252002",
+      "ok": true,
+      "detail": "220001/20000/22001/252002"
+    },
+    {
+      "label": "pajak per baris provider = alokasi snapshot (8801/13200)",
+      "ok": true,
+      "detail": "A=8801/-2 B=13200/-2"
+    },
+    {
+      "label": "cancel SO terkonfirmasi via GET",
+      "ok": true
+    },
+    {
+      "label": "stok kembali ke nilai sebelum create",
+      "ok": true,
+      "detail": "[{\"itemId\":116334,\"available\":7,\"onHand\":7},{\"itemId\":156146,\"available\":3,\"onHand\":3}]"
+    }
+  ]
+}

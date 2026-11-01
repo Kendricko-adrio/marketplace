@@ -385,41 +385,55 @@ Sifat capture:
 
 - **Ditimpa setiap run** (bukan append), jadi isinya hanya sesi terakhir. Tidak ada
   rotasi/retensi: ini alat debugging, bukan arsip.
-- **File bebas ANSI escape code.** `concurrently` menyuntikkan `FORCE_COLOR` ke
-  setiap anak saat stdout-nya sendiri berupa TTY, sehingga Next/Turbopack tetap
-  mengeluarkan kode warna walaupun stdout sudah dipipe ke `tee`. Karena itu file
-  ditulis lewat `tee >(sed -u -E -f scripts/strip-ansi.sed > logs/<app>.log)`:
-  terminal tetap berwarna, file bersih. `sed -u` penting agar baris langsung
-  ditulis (tanpa `-u` sed menahan output di buffer ~4 KB, jadi `tail -f` terlihat
-  kosong dan baris terakhir bisa hilang saat Ctrl+C).
+- **File bebas ANSI escape code.** Runner Node.js
+  [`scripts/dev-log-capture.mts`](../../scripts/dev-log-capture.mts) menyalin
+  stdout/stderr ke terminal tanpa mengubah warna, lalu membuang ANSI hanya untuk
+  file dengan `stripVTControlCharacters`. Buffer per baris menjaga ANSI yang
+  terpotong antar-chunk; UTF-8 didekode oleh stream Node. Baris lengkap langsung
+  ditulis ke file; potongan terakhir tanpa newline ditulis saat stream berakhir.
 - Terminal tetap menampilkan output yang sama; `concurrently` memberi prefiks nama
-  proses (`[store]`, `[admin]`, `[jubelio-mock]`). Prefiks itu **tidak** masuk file,
-  karena `tee` berjalan di dalam perintah anak.
+  proses (`[store]`, `[admin]`, `[jubelio-mock]`) untuk `dev:all`/`dev:store`.
+  `dev:admin` langsung menjalankan runner tanpa prefiks. Prefiks tidak masuk file
+  karena capture dilakukan sebelum output diteruskan ke `concurrently`.
 - Baris JSON envelope tetap utuh di file sehingga bisa langsung dipakai:
   `grep '"level":"error"' logs/store.log` atau
   `jq -c 'select(.module=="checkout-service")' logs/store.log`.
 - `npm run --silent` dipakai agar banner npm (`> dev:store:app`, `> next dev`)
   tidak mengotori file.
-- Pipeline dibungkus `bash -o pipefail -c '…'` supaya exit code proses anak tidak
-  ditelan `tee`; proses yang mati tetap dilaporkan `concurrently` dan
-  `npm run dev:all` keluar non-zero.
-- Folder `logs/` dibuat oleh `predev:all` / `predev:store` / `predev:admin`
-  (`mkdir -p logs`) dan di-ignore git (`/logs/` di `.gitignore`).
+- Runner menjalankan npm melalui `process.execPath` dan `npm_execpath`, tanpa
+  shell tambahan, serta meneruskan exit code kegagalan. `concurrently` tetap
+  melaporkan proses yang mati; setelah semua proses selesai, hasil gagal membuat
+  `npm run dev:all` keluar non-zero. Proses lain tidak otomatis dihentikan saat
+  satu proses gagal, sesuai perilaku sebelumnya.
+- Folder `logs/` dibuat oleh runner dengan `mkdirSync({ recursive: true })`;
+  folder yang sudah ada tidak menjadi error. Hooks `predev:*` berbasis `mkdir -p`
+  tidak lagi diperlukan. Folder tetap di-ignore git (`/logs/`).
+- Ctrl+C menghentikan process tree. Linux menggunakan signal ke process group,
+  dengan fallback SIGKILL setelah 5 detik. Windows menggunakan `taskkill /T /F`
+  (force termination), sehingga output yang belum dikirim/flushed saat dihentikan
+  tidak dijamin tersimpan. Penghentian oleh `concurrently` juga mengikuti perilaku
+  process-tree milik package tersebut.
 
 Batasan yang perlu diketahui:
 
 - Jangan menjalankan `dev:store`/`dev:admin` bersamaan dengan `dev:all`: dua sesi
   akan menulis file yang sama dan saling menimpa (gejalanya file berisi `\0` /
   campuran dua sesi).
-- Script dev membutuhkan `bash` (Linux/macOS/WSL/Git Bash). `cmd.exe`/PowerShell
-  tidak didukung.
+- Gunakan **Node.js 24 LTS + npm**, konsisten dengan image deployment repo.
+  Runner TypeScript `.mts` dijalankan langsung oleh Node. Commands sama pada
+  Windows (cmd.exe, PowerShell, Git Bash) dan Linux; tidak memerlukan Bash,
+  `tee`, `sed`, WSL, atau konfigurasi `script-shell` khusus. Contoh:
+  `npm run dev:all` dari terminal Windows maupun terminal Linux.
 - Output `next dev` tetap berisi baris non-JSON (compile/HMR); reader yang ketat
   harus melewati baris yang gagal di-parse, seperti
   [`e2e/support/logging-artifacts.ts`](../../e2e/support/logging-artifacts.ts).
 - Produksi tidak berubah: container tetap menulis ke stdout dan dibaca `journald`
   ([`docker-compose.yml`](../../deployment/production/docker-compose.yml)).
 
-Kontrak konfigurasi ini dijaga test
+Kontrak command npm dan perilaku runner dijaga integration tests dengan proses
+Node kecil (tanpa Next.js, DB, atau port aplikasi). Cakupannya termasuk file log,
+stdout/stderr, overwrite, ANSI, exit code, dan penghentian process tree:
+
 [`scripts/dev-log-capture.test.mts`](../../scripts/dev-log-capture.test.mts):
 
 ```bash
@@ -432,7 +446,7 @@ npm run verify:unit:slice -- scripts/dev-log-capture.test.mts
   stdout. Rotasi dan retensi urusan platform (Docker `journald`). Detail
   pembacaan/filter level ada di
   [`docs/deployment-docs/logging.md`](../deployment-docs/logging.md). Capture file
-  saat development dilakukan script npm (`tee`), lihat
+  saat development dilakukan runner Node.js melalui script npm, lihat
   [Capture log development](#capture-log-development-logs).
 - Satu root logger per runtime app. Jangan membuat root/transport baru per module
   atau per request, dan jangan memonkey-patch `console`.

@@ -15,6 +15,16 @@ journald).
 
 ## Artefak
 
+### Perbaikan runner Windows/Linux
+
+- User menyetujui opsi Node.js runner untuk command development lintas OS.
+- Implementasi dan verifikasi Windows 2026-10-30:
+  [catatan verifikasi](ticket/windows-linux-runner-verification.md).
+- Focused tests 10/10 dan typechecks tooling/store/admin lulus. Batch repo belum
+  hijau karena DB specs (schema tidak sinkron, guard non-disposable, duplicate
+  fixture); Linux dan Ctrl+C interaktif belum diverifikasi langsung. Bukti lama
+  pada tabel plan di atas tetap merupakan riwayat implementasi Bash sebelumnya.
+
 ### plan
 
 - [plan/dev-log-capture.md](plan/dev-log-capture.md)

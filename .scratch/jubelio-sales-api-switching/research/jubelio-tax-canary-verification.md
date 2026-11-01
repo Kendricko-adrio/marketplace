@@ -190,3 +190,37 @@ Budget final suite settlement: **login1, create1, invoice1, payment1**, seluruhn
 - Keberhasilan conversion API bukan bukti audit jurnal akuntansi. Tidak ada inspeksi UI vendor atau klaim visual acceptance.
 - Kode aplikasi, system configuration, env, schema, seed, dan deployment **tidak diubah**. Pajak provider nol tetap kontrak runtime sampai perubahan terencana disetujui dan diverifikasi; hasil sandbox bukan izin aktivasi production.
 - Runner sementara di `/tmp/` dicek syntax; token hanya di memory proses dan tidak dipersist ke evidence. Suite aplikasi tidak dijalankan karena tidak ada perubahan runtime. Hasil vendor yang sudah PASS tidak diulang.
+
+## Bukti provider3 multi-line/diskon/ongkir — SO68451 (2026-10-28)
+
+Izin yang dipakai: satu Sales Order create provider3 (dua baris, satu diskon
+whole-line, ongkir 30000) + satu cancel. Tidak ada invoice, payment, edit
+mirror, booking shipment, atau perubahan master.
+
+- Preflight read-only: `POST /login` (test account), `GET /taxes/?page=1&pageSize=100`
+  → tax id **-2** rate 11.00 dengan `tax_out` terisi; `GET /inventory/` +
+  `POST /inventory/items/all-stocks/` → item 116334 (available 7) dan 156146
+  (available 3) pada lokasi -1.
+- Snapshot lokal (pricing1/engine1/**provider3**): baris A price 100001
+  Markdown 20000 → net 80001; baris B price 120000 → net 120000. Net barang
+  200001, PPN `ceil(200001 × 11%) = 22001`, alokasi **8801/13200** (largest
+  remainder: 80001×11% = 8800.11), ongkir 30000 → payable **252002**.
+- Provider (SO68451, satu POST, tanpa retry):
+  `sub_total 220001`, `total_disc 20000`, `total_tax 22001`,
+  `grand_total 252002`, `original_shipment_cost`/`shipping_cost` 30000,
+  `items[0].tax_id -2 / tax_amount 8801 / amount 88802`,
+  `items[1].tax_id -2 / tax_amount 13200 / amount 133200`.
+  GET verifikasi per baris **sama persis** dengan snapshot: provider menerima
+  nominal pajak yang dikirim dan tidak menghitung ulang berbeda.
+- Cancel terkonfirmasi via GET (`is_canceled: true`), stok kedua item kembali
+  ke nilai sebelum create (7 dan 3).
+
+Journal teredaksi: [jubelio-sales-provider3-multiline-results.json](jubelio-sales-provider3-multiline-results.json).
+Script: `apps/store/src/scripts/jubelio-provider3-tax-evidence.ts` (bounded:
+refuse jika bukan test account/api2, abort jika stok/master tidak siap, tidak
+pernah retry POST, membersihkan fixture dengan cancel).
+
+**Masih belum dibuktikan (butuh izin write terpisah):** invoice/payment untuk SO
+multi-line ber-PPN (write finansial), edit mirror ber-PPN pada SO nyata, dan
+perilaku provider untuk subsidi ongkir (net shipping < original) karena fixture
+ini memakai ongkir tanpa subsidi.

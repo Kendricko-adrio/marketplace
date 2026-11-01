@@ -28,6 +28,8 @@ Plan Done yang dahulu sudah dihapus tidak direkonstruksi; outcome dan docs tetap
 
 ### research
 
+- [Bukti provider3 multi-line/diskon/ongkir SO68451](research/jubelio-tax-canary-verification.md#bukti-provider3-multi-lineongkir--so68451-2026-10-28) — 2026-10-28: satu SO provider3 dua baris + Markdown20000 + ongkir30000 → PPN22001 (alokasi8801/13200), grand_total252002 = total customer, GET per baris cocok, cancel terkonfirmasi, stok pulih. Bounded: tanpa invoice/payment/edit. [Journal](research/jubelio-sales-provider3-multiline-results.json).
+
 - [Invoice/payment pajak — hasil kelanjutan](research/jubelio-tax-canary-verification.md#kelanjutan-invoice-dan-payment--berhasil) — PASS 2026-10-26: fixture baru SO68450 → invoice45978 → payment67, tax_id-2/PPN11000/payable111000/paid111000/due0. Satu login/create/invoice/payment berizin; fixture dipertahankan paid, stok berkurang satu sesuai scope, tanpa cancel/reversal. [Journal settlement](research/jubelio-tax-invoice-payment-results.json). Jurnal accounting UI, variasi pajak, dan perubahan aplikasi belum diverifikasi/diimplementasikan.
 
 - [research/jubelio-tax-canary-verification.md](research/jubelio-tax-canary-verification.md) — hasil final 2026-10-26: PASS create/GET/cancel/stok dua kasus pada item116334/lokasi2 yang dipilih setelah izin pemilik. SO68448 NoTax total100000; SO68449 tax_id-2/PPN11000/total111000, seluruh request kasus HTTP200. Keduanya canceled, stok pulih; create2/cancel2, tanpa invoice/payment. Empat login berizin dalam journal kumulatif; blocker preflight sebelumnya dipertahankan sebagai histori. [Journal teredaksi](research/jubelio-tax-canary-results.json). Perubahan system configuration/validator belum diimplementasikan.

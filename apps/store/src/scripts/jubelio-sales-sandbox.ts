@@ -43,7 +43,7 @@ async function main() {
   };
 
   // ---- Series A: SO create → stock series → cancel → stock restored ----
-  const note = `OKCIR_SANDBOX:${Date.now()}`;
+  const note = `SANDBOX:${Date.now()}`;
   const before = await stockSeries();
   console.log("stock before:", before);
   if (before.available < QTY || before.onHand < QTY) {
@@ -90,7 +90,7 @@ async function main() {
   );
 
   // ---- Series B: SO → invoice → payment (Path 1) ----
-  const noteB = `OKCIR_SANDBOX_PAY:${Date.now()}`;
+  const noteB = `SANDBOX_PAY:${Date.now()}`;
   const createdB = await gateway.createSalesOrder({
     contactId: -1,
     customerName: "Sandbox Integration",

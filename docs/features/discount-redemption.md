@@ -18,6 +18,13 @@ Markdown tetap komponen terpisah dan boleh digabung dengan Coupon.
 - Offer `public` tanpa kode dan tanpa prior claim. Kapasitas mengikuti
   `quota_count`, `budget_amount`, dan `per_client_limit` pada Offer yang sama;
   rename, revision, pause, atau ganti email tidak mereset pemakaian.
+- `budget_amount = NULL` berarti **tanpa batas budget nominal**, bukan Rp0;
+  Offer tetap wajib memiliki batas global lain (`quota_count`). Budget eksplisit
+  Rp0 menolak benefit positif, sedangkan budget tepat sebesar benefit masih
+  mengizinkan pemakaian jika kuota/jatah tersedia. Mapping ini berlaku sama pada
+  daftar promo, evaluasi Coupon publik, dan Manual Promo Code. Contoh subtotal
+  Rp800.000, diskon 10% dengan cap Rp20.000, kuota 100 dan usage 0: budget NULL
+  mengizinkan diskon Rp20.000; budget Rp19.999 menolak seluruh benefit.
 - Eligibility (spec §5.1): Offer `enabled`, revision published, waktu server
   aktif (start inklusif, end eksklusif), minimum belanja dari **subtotal setelah
   Markdown**, verified email akun store, benefit goods version1 yang menghasilkan
@@ -308,7 +315,8 @@ persetujuan terikat fingerprint), serta integrasi `order-finalize.ts`,
   (one Redemption/order, ownership, event transition, allocation shape).
 - `apps/store/src/lib/discount-availability.db.test.ts`,
   `discount-selection.db.test.ts` — discovery/eligibility read-only, tanpa
-  reservasi.
+  reservasi; regression budget NULL, Rp0, kurang dari benefit, dan tepat sebesar
+  benefit untuk daftar publik serta evaluasi publik/manual.
 - `apps/store/src/lib/discount-reservation.db.test.ts` — race kuota/budget/jatah,
   serial terhadap pause, consume/release sekali, late review, rollback penuh.
 - `apps/store/src/lib/discount-lifecycle-flow.db.test.ts` — paid/cancel/reject/

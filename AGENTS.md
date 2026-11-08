@@ -2,7 +2,7 @@
 
 ## 1. Project Overview & Architecture
 
-**Okcir marketplace** is an e-commerce monorepo: a storefront for customers, an
+**Marketplace** is an e-commerce monorepo: a storefront for customers, an
 admin dashboard for operations, and a shared database package, managed with npm
 workspaces. Products, stock, and branch data are synced from **Jubelio**
 (master-data API, see `docs/features/jubelio-sync.md`).

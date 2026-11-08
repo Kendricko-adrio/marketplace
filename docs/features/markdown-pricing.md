@@ -71,6 +71,8 @@ Filter **Status harga coret** di dekat pencarian menyediakan:
 
 Filter digabung dengan pencarian SKU/nama pada backend, sebelum pagination dan
 count. Mengganti filter kembali ke halaman pertama tanpa menghapus pilihan SKU.
+Tombol pagination tabel utama dan bagian target nonaktif memakai label **Previous**
+dan **Next**, konsisten dengan halaman Products.
 Contoh: source Rp75.000 dan target Rp80.000 tetap masuk **Sudah disetup** meski
 harga coret tidak aktif. Hasil kosong menampilkan “Tidak ada SKU yang cocok dengan
 pencarian dan filter.” Reload halaman mengembalikan filter ke **Semua**.

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "crypto";
+import type { DiscountDraftIssue } from "@marketplace/db/src/discount-draft";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -116,7 +117,8 @@ export class DiscountAdministrationError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
-    message: string
+    message: string,
+    readonly fieldErrors?: DiscountDraftIssue[]
   ) {
     super(message);
   }
@@ -128,13 +130,16 @@ export interface DiscountErrorDescriptor {
   status: number;
   code: string;
   message: string;
+  fieldErrors?: DiscountDraftIssue[];
 }
 
 export function describeDiscountAdministrationError(
   error: unknown
 ): DiscountErrorDescriptor | null {
   if (error instanceof DiscountAdministrationError) {
-    return { status: error.status, code: error.code, message: error.message };
+    return { status: error.status, code: error.code, message: error.message,
+      ...(error.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
+    };
   }
   return null;
 }
@@ -172,7 +177,7 @@ export async function readDiscountsContractVersion(): Promise<number> {
   );
 }
 
-async function requireActiveContract(): Promise<number> {
+export async function requireActiveContract(): Promise<number> {
   const version = await readDiscountsContractVersion();
   if (version !== SUPPORTED_CONTRACT_VERSION) {
     throw new DiscountAdministrationError(
@@ -797,7 +802,7 @@ async function loadOfferAggregate(
   return { offer, revisions, benefits, usage: usageRows[0] ?? null, codes };
 }
 
-async function readDetailDto(
+export async function readDetailDto(
   executor: Executor,
   offerId: string,
   includeCodeLiterals = false
@@ -821,7 +826,7 @@ async function readDetailDto(
  * no grant rows, so the scope is asserted on the RESULT instead (a branch-scope
  * row cannot even be stored by the schema CHECK).
  */
-function requireDiscountViewer(loaded: LoadedPolicy | null): LoadedPolicy {
+export function requireDiscountViewer(loaded: LoadedPolicy | null): LoadedPolicy {
   const denied = new DiscountAdministrationError(
     403,
     "DENIED",
@@ -841,7 +846,7 @@ function canViewCodeLiterals(loaded: LoadedPolicy | null): boolean {
   );
 }
 
-function requireDiscountEditor(loaded: LoadedPolicy | null): LoadedPolicy {
+export function requireDiscountEditor(loaded: LoadedPolicy | null): LoadedPolicy {
   const denied = new DiscountAdministrationError(
     403,
     "DENIED",
@@ -1170,7 +1175,7 @@ function sanitizeDetailForReceipt(detail: DiscountOfferDetailDto): DiscountOffer
   };
 }
 
-function mapDatabaseError(error: unknown): unknown {
+export function mapDatabaseError(error: unknown): unknown {
   const code = (error as { code?: string } | null)?.code;
   if (code === "55P03" || code === "57014" || code === "40001" || code === "40P01") {
     // Lock timeout, statement timeout, serialization failure/deadlock: the

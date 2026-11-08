@@ -17,6 +17,19 @@ the goods subtotal, not the website total. Delivery checkout is not active.
 > [Kontrak provider berversi (v2)](#kontrak-provider-berversi-v2) dan
 > [delivery orders](delivery-orders.md).
 
+## Penamaan reference operasi baru
+
+Reference operasi baru memakai prefix netral: `SO_CREATE`, `SO_CANCEL`,
+`SO_INVOICE`, dan `SO_PAYMENT`. Contohnya, create checkout memakai
+`SO_CREATE:<orderId>:<identifier-unik>`; cancel baru memakai `SO_CANCEL:<orderId>`.
+Reference yang sudah tersimpan tetap dipakai apa adanya pada replay/recovery,
+termasuk reference dengan prefix lama. Tidak ada perubahan schema, migration,
+atau penulisan ulang data existing di database maupun Jubelio.
+
+Penamaan aplikasi pada dokumentasi dan prototype memakai **Marketplace**, bukan
+nama samaran. Metadata internal workbook dan domain signing/hash checkout tidak
+ikut diganti karena merupakan kontrak kompatibilitas, bukan label aplikasi.
+
 ## ID lokasi dari Jubelio
 
 `jubelio_location_id` mengikuti `location_id` dari `GET /locations/list`,

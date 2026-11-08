@@ -180,7 +180,7 @@ async function main(): Promise<void> {
     `${taxLineA}/${taxLineB}`
   );
 
-  const note = `OKCIR_PPN_EVIDENCE:${Date.now()}`;
+  const note = `PPN_EVIDENCE:${Date.now()}`;
   let salesOrderId: number | null = null;
   try {
     const created = await gateway.createSalesOrder({

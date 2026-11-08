@@ -39,11 +39,38 @@ leaves the following catalog-managed tables empty for the import:
 
 - `category`, `brand`, and `gender`
 - `product`, `product_variant`, `product_to_category`, and `product_image`
-- `branch` and `branch_stock`
+- Branch toko pada `branch` serta seluruh `branch_stock`; pengecualian: branch
+  administratif lokal **HQ** tetap dibuat oleh seeder.
 
 Catalog-dependent sample orders, notifications, carts, homepage product links,
-and stock/order audit entries are also omitted. Admin users remain unassigned
-to a branch until a branch assignment is configured after import.
+and stock/order audit entries are also omitted. `hqmanager` langsung di-assign
+ke branch HQ. User `admintoko` tetap memerlukan assignment branch toko setelah
+import.
+
+## Branch administratif HQ
+
+Kedua mode seed membuat satu branch lokal dengan nama dan code `HQ`, status
+`aktif`, serta `jubelioLocationId = null`. `hqmanager` memakai HQ sebagai Home
+Branch, bukan branch toko Jakarta pada mode demo. Hak akses lintas branch tetap
+berasal dari grants role HQ, bukan assignment Home Branch.
+
+HQ tidak mendapat `branch_stock`, cart, order, atau checkout attempt demo.
+Branch ini tidak menyediakan barang untuk transaksi; tidak ada stok maupun
+mapping lokasi Jubelio untuk fulfillment. Ini bukan pembatasan baru pada schema
+atau larangan global mengubah data HQ di kemudian hari. Kota memakai placeholder
+`Belum dikonfigurasi`, tanpa mengarang alamat operasional atau origin pengiriman.
+
+Contoh: sesudah seed mode Jubelio lalu import, `hqmanager` tetap berada di HQ,
+sedangkan stok produk tetap melekat pada branch toko hasil import Jubelio.
+
+Pengujian fixture ada di `packages/db/src/seed-hq.test.ts`; assertion hasil seed
+(assignment dan ketiadaan stok/transaksi HQ) ada di
+`packages/db/src/rbac/seed-roles-integration.test.ts`. Test integrasi memerlukan
+DB disposable yang sudah di-reset dan di-seed sesuai mode yang ingin diverifikasi.
+
+Context7 checkpoint: `/drizzle-team/drizzle-orm-docs` — pola insert `.values()`
+dan update `.set().where(eq(...))` dikonfirmasi; `/vitest-dev/vitest` — assertion
+`toMatchObject` dikonfirmasi. Tidak ada perubahan schema atau UI.
 
 ## Destructive behavior
 

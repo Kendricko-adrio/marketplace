@@ -1025,7 +1025,7 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
     // ===== SO create and Midtrans OUTSIDE the transaction =====
     const orderId = crypto.randomUUID();
     // Unique provider-facing create note/reference.
-    const createReference = `OKCIR_SO_CREATE:${orderId}:${crypto.randomUUID()}`;
+    const createReference = `SO_CREATE:${orderId}:${crypto.randomUUID()}`;
     // Single anchor for both the local hold clock and the Midtrans expiry
     // countdown (`expiry.start_time`) so async methods (VA/GoPay) cannot outlive
     // the reservation TTL.

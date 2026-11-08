@@ -27,32 +27,6 @@ export type CustomerOrderHistoryItem = {
   itemCount: number;
 };
 
-export async function getCustomers(): Promise<CustomerListItem[]> {
-  const rows = await db
-    .select({
-      id: clients.id,
-      name: clients.name,
-      email: clients.email,
-      phone: clients.phone,
-      birthDate: clients.birthDate,
-      gender: clients.gender,
-      onboardingCompleted: clients.onboardingCompleted,
-      createdAt: clients.createdAt,
-      updatedAt: clients.updatedAt,
-      orderCount: count(orders.id),
-    })
-    .from(clients)
-    .leftJoin(orders, eq(orders.userId, clients.id))
-    .groupBy(clients.id)
-    .orderBy(desc(clients.createdAt));
-
-  return rows.map((row) => ({
-    ...row,
-    createdAt: row.createdAt.toISOString(),
-    updatedAt: row.updatedAt.toISOString(),
-  }));
-}
-
 export async function getCustomerDetail(id: string) {
   const [customer] = await db
     .select()

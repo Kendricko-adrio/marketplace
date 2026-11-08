@@ -151,6 +151,7 @@ Pengecualian yang diketahui (lihat
 | POST | `/api/admin/products/{id}/sync` | admin-session (products:edit) | Re-sync a single product from Jubelio |
 | ~~PUT~~ | ~~`/api/admin/products/{id}`~~ | — | **Removed** — Jubelio is the source of truth; use the Sync button |
 | ~~DELETE~~ | ~~`/api/admin/products/{id}`~~ | — | **Removed** — Jubelio is the source of truth |
+| GET | `/api/admin/customers` | admin-session (customers:view) | Direktori customer global dengan pagination dan search server-side |
 | GET | `/api/admin/categories` | admin-session (products:view) | List active categories |
 | GET | `/api/admin/brands` | admin-session (products:view) | List all product brands (dimension) for the homepage ProductFilterEditor dropdown |
 | GET | `/api/admin/branches` | admin-session (branches:view) | List branches (paginated; `search` nama/kode/kota) |
@@ -237,6 +238,18 @@ Pengecualian yang diketahui (lihat
 ---
 
 # Detailed endpoint reference
+
+## Admin — Direktori Customer
+
+### GET /api/admin/customers
+
+- **Auth**: sesi admin dan permission `customers:view`; data global, bukan branch-scoped. Sesi storefront tidak berlaku.
+- **Tujuan**: memuat satu halaman direktori customer tanpa mengirim seluruh data ke browser.
+- **Query**: `page` default 1; `limit` default 10, maksimum 100; `search` opsional (trim, substring literal case-insensitive nama/email/telepon). Pagination invalid dinormalisasi oleh helper existing. `%`, `_`, dan backslash tidak menjadi wildcard.
+- **Response**: 200 `{ success: true, data: CustomerListItem[], pagination: { page, limit, total, totalPages } }`. DTO berisi `id`, `name`, `email`, `phone`, `birthDate`, `gender`, `onboardingCompleted`, `createdAt`, `updatedAt`, `orderCount`; timestamp berupa ISO string. Header `Cache-Control: private, no-store`.
+- **Pagination**: `total` menghitung customer hasil filter, bukan order; sort `createdAt DESC, id DESC`. Hasil kosong memakai halaman 1 dari 1. Page melebihi rentang dikoreksi ke halaman valid terakhir.
+- **Errors**: 401/403 mengikuti guard RBAC; kegagalan database 500 `{ success: false, error: "Gagal memuat customer." }`. Log tidak memuat search, profil, atau raw SQL.
+- **Catatan**: summary cards mengambil agregasi global terpisah dan tidak disertakan dalam response list. Endpoint read-only, tanpa perubahan schema/env/deployment.
 
 ## Admin — Delivery work lists
 
@@ -350,6 +363,8 @@ Receipt legacy tetap memakai pembaca lama.  Mengembalikan `{ success: true, data
 `POST /api/checkout/preview` dan `POST /api/checkout/place-order` (gate1) memakai counter PostgreSQL `discount_request_window`: preview 60/account + 300/IP per 60 detik; place order baru 10/account + 60/IP. Melebihi batas → `429 RATE_LIMITED` dengan `Retry-After` detik dan `Cache-Control: no-store`; tanpa secret/trusted policy/IP valid → `503 POLICY_UNAVAILABLE`, tanpa fallback ke limiter lokal atau header forged. Subjek disimpan sebagai HMAC pseudonymous (raw IP/token tidak masuk log bisnis). Replay accepted dan result read tidak dihitung sebagai placement baru. Tabel window ephemeral (dibersihkan opportunistic, tanpa cron baru) dan terpisah dari `checkout_request` yang retained. Bucket manual-code 20/120 menyusul ticket 09.
 
 ## Store — Delivery placement
+
+Reference SO untuk checkout baru memakai prefix netral `SO_CREATE`; reference transaksi existing tidak diubah. Perubahan ini tidak mengubah schema atau response API.
 
 `POST /api/checkout/place-order` retains legacy pickup input and additionally accepts strict delivery input `{ itemIds, contactPhone, contactEmail, fulfillmentMethod: "delivery", addressId, courierId, serviceId, approvedPricing, originFingerprint }` or the same delivery approval with `{ newAddress, saveAddress: boolean, saveRequestId: UUID }` instead of `addressId`. `newAddress` uses the client address input fields documented below, including `isDefault` (only applied when `saveAddress` is true). An approved saved address is inserted in the local order transaction; repeated saves with the same client-scoped `saveRequestId` reuse the same address row. A changed destination needs a new request ID. Unsaved destinations produce only an order snapshot (nullable `address_id`). Requires onboarded client session. Delivery omits pickup slots; backend re-derives current cart/address/origin/parcels/rates and compares approval. Changed/unavailable service, pricing, or stored origin fingerprint returns 409 `{ success: false, code: "DELIVERY_REPRICE_REQUIRED", data: { services } }` before order/SO/Snap writes. Fresh service rows carry the same normalized `serviceCategoryId: number | null` as the delivery-quote response; category metadata is display-only and is not accepted as order approval input. Confirmed placement uses one goods-only SO and snapshot-priced Snap. Repayment `/api/payments/midtrans/create` uses persisted amounts, not a new quote. See [delivery orders](features/delivery-orders.md).
 

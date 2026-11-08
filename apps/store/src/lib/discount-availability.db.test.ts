@@ -89,6 +89,7 @@ const offers: OfferFixture[] = [
     name: "Alpha",
     minSubtotal: "0",
     fixedAmount: "5000",
+    budgetAmount: null,
   },
   {
     id: `${PREFIX}-offer-beta`,
@@ -335,6 +336,26 @@ describe("readAvailableOffers — discovery dan reason", () => {
     expect(byName.Iota).toMatchObject({ eligible: false, reason: "CAPACITY_UNAVAILABLE" });
     expect(byName.Theta).toMatchObject({ eligible: false, reason: "CAPACITY_UNAVAILABLE" });
     expect(byName.Beta?.reasonMessage).toBe("Minimum belanja untuk promo ini belum terpenuhi.");
+  });
+
+  it.each([
+    { label: "tanpa batas nominal", budgetAmount: null, eligible: true },
+    { label: "nol", budgetAmount: "0", eligible: false },
+    { label: "kurang dari benefit", budgetAmount: "4999", eligible: false },
+    { label: "tepat sebesar benefit", budgetAmount: "5000", eligible: true },
+  ])("daftar promo: budget $label", async ({ budgetAmount, eligible }) => {
+    const id = `${PREFIX}-offer-alpha`;
+    await pool!.query(`update discount_offer set budget_amount=$2 where id=$1`, [id, budgetAmount]);
+    try {
+      const result = await readAvailableOffers(
+        { clientId: clientVerified, selectedItemIds: selected, now: NOW }, db!
+      );
+      expect(result.items.find((item) => item.offerId === id)).toMatchObject(eligible
+        ? { eligible: true, reason: null, benefitAmount: "5000" }
+        : { eligible: false, reason: "CAPACITY_UNAVAILABLE", benefitAmount: "0" });
+    } finally {
+      await pool!.query(`update discount_offer set budget_amount=null where id=$1`, [id]);
+    }
   });
 
   it("tanpa verified email Offer yang lolos minimum tampil disabled EMAIL_VERIFICATION_REQUIRED", async () => {

@@ -17,6 +17,27 @@ app.
 3. `npm run db:push` — applies the change to the dev DB
 4. No rebuild/sync needed — apps read the schema source via path alias.
 
+## Snapshot draft diskon terpadu (additive, belum cutover)
+
+`discount_offer_revision.draft_configuration` adalah JSONB nullable bertipe
+`DiscountDraftConfiguration` dari `packages/db/src/discount-draft.ts`. Parser
+server menolak field/kind/version asing dan memisahkan validitas draft parsial
+dari kelengkapan publish. DB menegakkan object dengan `draftSchemaVersion: 1`
+dan ukuran maksimal 262144 byte; bentuk lengkap tetap divalidasi aplikasi.
+
+Kolom terms published dan `discount_benefit` tetap projection live yang dibaca
+pricing. Service baru menyimpan proposal kapasitas/kode hanya dalam snapshot;
+publish mematerialisasikannya di transaksi yang sama dengan pointer dan audit.
+Snapshot pada revision published dipertahankan untuk provenance, bukan diedit
+untuk mengubah order lama.
+
+Migration `0057_watery_speed.sql` additive juga membawa perubahan constraint
+Harga dari pekerjaan paralel; SQL generated tidak diedit manual. Revision
+legacy tetap NULL: baseline dapat dibaca oleh repository baru, tetapi ini
+**bukan backfill persisted**. Seed existing tetap kompatibel dengan NULL selama
+cutover endpoint/UI belum selesai. Jangan mengaktifkan writer baru sebelum
+writer legacy dihentikan sesuai [catatan fitur](../features/discount-administration.md#fondasi-editor-terpadu--belum-cutover-httpui).
+
 ## `db:push` vs `db:migrate` (dev)
 
 The dev DB is managed with **`db:push`** (schema-sync), **not** `db:migrate`.
@@ -136,8 +157,10 @@ produces a fully populated, testable DB without manual data entry:
 
 - Add a `DELETE` for any new table at the top of `seed()` (respecting FK order).
 - Add realistic sample rows for the new table/columns in `SEED_MODE=demo`.
-- Keep `SEED_MODE=jubelio` free of dummy catalog, branch, stock, and dependent
-  transactional fixtures; Jubelio import owns those rows in that mode.
+- Jaga `SEED_MODE=jubelio` tanpa dummy catalog, branch toko, stok, atau fixture
+  transaksi terkait; data tersebut mengikuti import Jubelio. Pengecualian:
+  branch administratif lokal HQ tetap dibuat dan di-assign ke `hqmanager`,
+  tanpa stok atau contoh transaksi.
 - The seeder refuses to run when `NODE_ENV=production`.
 
 See [../features/seeding.md](../features/seeding.md) for mode behavior and the

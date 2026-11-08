@@ -53,7 +53,7 @@ No unit/E2E tests, provider calls, infrastructure operations, or runtime exploit
 
 The seller guide documents fixed nominal discounts, percentages with a maximum discount, and cashback coins. It also documents minimum purchase, total usage quota, adjustable maximum uses per buyer (up to five on that platform), one voucher per order, product targeting, and public versus hidden display. Buyers can manually enter a code without claiming it first. [S1]
 
-**Applicable lesson:** claim/discovery is not the same as redemption. The project can offer public selectable coupons and hidden manual codes using shared benefit/limit rules. Shopee's numeric limits are platform-specific, not mandatory defaults for Okcir.
+**Applicable lesson:** claim/discovery is not the same as redemption. The project can offer public selectable coupons and hidden manual codes using shared benefit/limit rules. Shopee's numeric limits are platform-specific, bukan default wajib bagi aplikasi marketplace ini.
 
 ### Shopify
 
@@ -97,7 +97,7 @@ The following are source-backed patterns or explicitly marked project extensions
 | Cashback/points | Earn 5%, maximum Rp20,000 in non-withdrawable store credit after completion | Shopee cashback coins. Not an immediate checkout discount. Needs credit ledger, delayed issuance, expiry, reversals and refund support; later. [S1] |
 | Multiple benefits in one coupon | 10% off goods plus shipping subsidy | Shopify documents multi-benefit discounts via additional solutions. Our first release should avoid this complexity or explicitly account for both components. [S2] |
 
-Eligible-customer examples: first paid order, returning buyers, selected client IDs, future loyalty segments. Eligible-channel examples: website, campaign/referral source, selected branch, fulfillment method. Customer targeting is source-backed [S1, S3, S6]; the exact Okcir segment definitions need a business decision.
+Eligible-customer examples: first paid order, returning buyers, selected client IDs, future loyalty segments. Eligible-channel examples: website, campaign/referral source, selected branch, fulfillment method. Customer targeting is source-backed [S1, S3, S6]; definisi segment aplikasi marketplace ini memerlukan keputusan bisnis.
 
 **Payment-method promotions should wait.** Current checkout freezes money before the customer chooses a method on hosted Midtrans Snap; `paymentMethod` starts null. A browser declaration of “I will use bank X” is not payment proof. A payment-specific discount requires enforced provider selection and a safe money/repricing lifecycle, or a separately designed post-payment reward. [place-order L646](../../../apps/store/src/app/api/checkout/place-order/route.ts#L646); [API payment notes](../../../docs/api-reference.md)
 
@@ -494,7 +494,7 @@ The owner selected a complete specification ready for review as the destination,
 
 ## Sources and access limitations
 
-Primary documentation was consulted through web search and extracted page text. Sources show practices of the named platform, not universal rules or evidence of Okcir behavior.
+Primary documentation was consulted through web search and extracted page text. Sources show practices of the named platform, bukan aturan universal atau bukti perilaku aplikasi marketplace ini.
 
 - **S1 — Shopee Indonesia, “Mengisi Rincian Voucher Toko Saya”**: https://seller.shopee.co.id/edu/article/1863 . The web-search result supplied substantive first-party text (nominal/percentage/cashback, max/min, quota, maximum per buyer, visible/hidden and code entry without claim). Direct fetch returned 404; conclusions are limited to the retrieved search extract, not a successful interactive page audit. Corroborating first-party search result: https://seller.shopee.co.id/edu/article/6972 .
 - **S2 — Shopify, Discount types**: https://help.shopify.com/en/manual/discounts/discount-types . Direct fetch read successfully; simple/advanced/multi-benefit types.

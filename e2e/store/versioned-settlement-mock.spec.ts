@@ -771,6 +771,7 @@ test.describe("public-HTTP pickup settlement (ticket 01, one tracer bullet)", ()
       ).toHaveLength(1);
       expect(soPosts[0].body).toMatchObject({
         sub_total: GOODS_PRICE,
+        note: expect.stringMatching(/^SO_CREATE:/),
         total_disc: 0,
         // Kontrak provider3: PPN yang dibayar customer ikut tercatat pada SO.
         total_tax: 16500,
@@ -926,6 +927,7 @@ test.describe("public-HTTP pickup settlement (ticket 01, one tracer bullet)", ()
         payment_type: PROVIDER_PAYMENT_TYPE,
         contact_id: PROVIDER_CONTACT_ID,
       });
+      expect(payment.note).toMatch(/^SO_PAYMENT:/);
       expect(payment.note, "the payment note carries the order linkage").toContain(
         orderId
       );

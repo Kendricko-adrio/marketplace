@@ -685,9 +685,11 @@ describe.skipIf(!schemaState.ready)(
       await expect(settleJubelioSalesOrder(orderId)).resolves.toEqual({ status: "fulfilled", pickupCode: null });
       expect(await getJubelioSalesOperation(db, { orderId, type: "invoice" })).toMatchObject({
         status: "confirmed", salesOrderId: SO_ID, invoiceId: INVOICE_ID,
+        reference: expect.stringMatching(/^SO_INVOICE:/),
       });
       expect(await getJubelioSalesOperation(db, { orderId, type: "payment" })).toMatchObject({
         status: "confirmed", salesOrderId: SO_ID, invoiceId: INVOICE_ID, paymentId: PAYMENT_ID,
+        reference: expect.stringMatching(/^SO_PAYMENT:/),
       });
       expect(provider.paymentPosts).toEqual([{
         invoiceId: INVOICE_ID, amount: 180_000, accountId: 2, paymentType: 0,

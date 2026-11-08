@@ -6,6 +6,35 @@ persentase dengan cap opsional: draft, review, publish, pause,
 kapasitas, simulasi, usage, dan histori. Slice ini **tidak** mengaktifkan
 redemption customer; pemakaian nyata (reserve/consume) dimiliki ticket 07/12.
 
+## Fondasi editor terpadu — belum cutover HTTP/UI
+
+Implementasi internal baru berada di `apps/admin/src/features/discounts/`:
+
+- `saveDiscountConfiguration` menyimpan snapshot draft parsial secara atomik,
+  dengan request key, expected versions, audit, dan receipt. Live terms,
+  kapasitas, kode, dan usage tidak berubah saat save.
+- `reviewDiscountConfiguration` memeriksa kelengkapan, delta izin kapasitas,
+  komitmen, drift, serta perubahan kode dari snapshot server. Response membawa
+  issue field, perubahan konfigurasi, dan fingerprint seluruh draft.
+- `publishDiscountConfiguration` memeriksa ulang policy/usage/fingerprint di
+  bawah lock, lalu menerapkan benefit, terms, kapasitas, kode, pointer, audit,
+  dan receipt dalam satu transaksi. Counter dan snapshot order tidak direset.
+- `getDiscountEditorDetail` menampilkan snapshot draft atau baseline legacy/live.
+  Viewer tidak menerima proposal literal kode. Receipt tidak menyimpan literal;
+  audit menyimpan kode masked. Replay membaca detail canonical terkini seperti
+  create legacy, tanpa mengulang mutasi.
+
+Snapshot memakai `discount_offer_revision.draft_configuration` JSONB nullable,
+`draftSchemaVersion: 1`, dan batas 256 KiB. Parser strict ada di
+`packages/db/src/discount-draft.ts`; formatter uang/persen murni ada di
+`apps/admin/src/app/admin/discounts/[id]/discount-number-format.ts`.
+
+**Belum tersedia melalui endpoint atau editor:** route dan UI masih memakai
+kontrak existing di bawah. Jangan menjalankan operasi konfigurasi baru pada
+lingkungan operasional bersamaan dengan writer legacy. Backfill persisted,
+cutover writer lama ke 410, wiring HTTP/UI/simulasi, serta verifikasi UX/E2E
+masih harus diselesaikan sebelum fitur terpadu dapat dipakai.
+
 ## 1. Scope dan non-goals
 
 Didukung:

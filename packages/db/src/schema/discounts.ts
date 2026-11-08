@@ -18,6 +18,7 @@ import { relations, sql } from "drizzle-orm";
 import { clients, users } from "./auth";
 import { orderItems, orders } from "./orders";
 import { checkoutAttempts } from "./checkout";
+import type { DiscountDraftConfiguration } from "../discount-draft";
 
 // =========================================================
 // Discount administration — Offer identity, draft revisions, usage projection,
@@ -58,6 +59,9 @@ export const discountOfferRevisions = pgTable(
         onDelete: "restrict",
       }),
     revisionNo: integer("revision_no").notNull(),
+    // Snapshot parsial terpisah dari projection pricing published. NULL untuk
+    // revision legacy sampai backfill/cutover editor terpadu selesai.
+    draftConfiguration: jsonb("draft_configuration").$type<DiscountDraftConfiguration>(),
     // Terms may stay incomplete while the revision is an unpublished draft;
     // publication completeness is enforced when `published_at` is set.
     name: text("name"),
@@ -98,6 +102,10 @@ export const discountOfferRevisions = pgTable(
     uniqueIndex("discount_offer_revision_single_draft_unique")
       .on(t.offerId)
       .where(sql`${t.publishedAt} is null`),
+    check(
+      "discount_offer_revision_draft_configuration_shape",
+      sql`${t.draftConfiguration} is null or (jsonb_typeof(${t.draftConfiguration}) = 'object' and ${t.draftConfiguration}->'draftSchemaVersion' = '1'::jsonb and octet_length(${t.draftConfiguration}::text) <= 262144) is true`
+    ),
     check(
       "discount_offer_revision_no_positive",
       sql`${t.revisionNo} >= 1`

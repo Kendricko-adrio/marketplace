@@ -1,7 +1,7 @@
 # Marketplace Monorepo
 
-Monorepo for the Okcir marketplace: a storefront, an admin dashboard, and
-shared packages, managed with npm workspaces.
+Monorepo marketplace dengan storefront pelanggan, admin dashboard, dan
+shared packages, dikelola menggunakan npm workspaces.
 
 ## Tech Stack
 

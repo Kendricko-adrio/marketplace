@@ -1381,7 +1381,7 @@ describe("sales order GET memuat pajak per baris (kontrak provider3)", () => {
         add_fee: 0,
         add_disc: 0,
         service_fee: 0,
-        note: "OKCIR_SO_CREATE:tax-mock:1",
+        note: "SO_CREATE:tax-mock:1",
         ref_no: "tax-mock",
         items: [
           {

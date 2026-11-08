@@ -132,7 +132,7 @@ function PageControls({
           disabled={busy || !pagination || pagination.page <= 1}
           onClick={() => pagination && onPage(pagination.page - 1)}
         >
-          Sebelumnya
+          Previous
         </Button>
         <Button
           variant="outline"
@@ -144,7 +144,7 @@ function PageControls({
           }
           onClick={() => pagination && onPage(pagination.page + 1)}
         >
-          Berikutnya
+          Next
         </Button>
       </div>
     </div>

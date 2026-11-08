@@ -32,7 +32,7 @@ function verifiedCreatePayload(
       contactId: -1,
       customerName: "Pelanggan Umum",
       locationId: 7,
-      note: "OKCIR_SO_CREATE:order-1:op-1",
+      note: "SO_CREATE:order-1:op-1",
       refNo: overrides.refNo ?? "",
       items: [
         {
@@ -60,7 +60,7 @@ function matchingSnapshot(
     contactId: -1,
     customerName: "Pelanggan Umum",
     locationId: 7,
-    note: "OKCIR_SO_CREATE:order-1:op-1",
+    note: "SO_CREATE:order-1:op-1",
     transactionDate: "2026-09-26T17:00:00.000Z",
     isTaxIncluded: false,
     isCanceled: false,
@@ -297,7 +297,7 @@ const V2_GOODS = 150_000;
 const V2_ORIGINAL_SHIPPING = 30_000;
 const V2_NET_SHIPPING = 30_000;
 const V2_PAYABLE = 180_000;
-const V2_NOTE = "OKCIR_SO_CREATE:v2-order-1:v2-op-1";
+const V2_NOTE = "SO_CREATE:v2-order-1:v2-op-1";
 
 function storedCreatePayload(
   create: Record<string, unknown>
@@ -610,7 +610,7 @@ describe("mirrorPreReadMismatch contract-v3 provider tax (pure unit)", () => {
   const TAX_AMOUNT = 11_000;
   const TAX_PAYABLE = 111_000;
   const TAX_ID = -2;
-  const TAX_NOTE = "OKCIR_SO_CREATE:v3-order-1:v3-op-1";
+  const TAX_NOTE = "SO_CREATE:v3-order-1:v3-op-1";
 
   function taxStoredCreate(overrides: Record<string, unknown> = {}): JubelioSalesOrderEditRequest {
     return v2StoredCreate({

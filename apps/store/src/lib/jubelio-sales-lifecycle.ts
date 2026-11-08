@@ -528,7 +528,7 @@ export async function dispatchJubelioSalesCancel(input: {
   }
 
   const priorCancel = await getJubelioSalesOperation(db, { ...ownerInput, type: "cancel" });
-  const reference = priorCancel?.reference ?? `OKCIR_SO_CANCEL:${input.orderId}`;
+  const reference = priorCancel?.reference ?? `SO_CANCEL:${input.orderId}`;
   const recorded = await recordJubelioSalesIntent(db, {
     ...ownerInput,
     type: "cancel",
@@ -930,7 +930,7 @@ export async function ensureJubelioInvoice(input: {
 
   // No operation yet: persist the intent, claim, POST once, persist the
   // invoice id BEFORE verification, verify, confirm.
-  const reference = `OKCIR_SO_INVOICE:${input.orderId}:${crypto.randomUUID()}`;
+  const reference = `SO_INVOICE:${input.orderId}:${crypto.randomUUID()}`;
   const recorded = await recordJubelioSalesIntent(db, {
     orderId: input.orderId,
     type: "invoice",
@@ -1404,7 +1404,7 @@ export async function ensureJubelioPayment(input: {
       `Order ${input.orderId}: JUBELIO_PAYMENT_ACCOUNT_ID is not configured; the invoice payment cannot be created`
     );
     // Record the intent + manual review so ops sees the blocked settlement.
-    const reference = `OKCIR_SO_PAYMENT:${input.orderId}:${crypto.randomUUID()}`;
+    const reference = `SO_PAYMENT:${input.orderId}:${crypto.randomUUID()}`;
     const recorded = await recordJubelioSalesIntent(db, {
       orderId: input.orderId,
       type: "payment",
@@ -1428,7 +1428,7 @@ export async function ensureJubelioPayment(input: {
     return { status: "manual_review", message };
   }
 
-  const reference = `OKCIR_SO_PAYMENT:${input.orderId}:${crypto.randomUUID()}`;
+  const reference = `SO_PAYMENT:${input.orderId}:${crypto.randomUUID()}`;
   const paymentRequest = {
     invoiceId: order.jubelioInvoiceId,
     accountId,

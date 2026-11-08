@@ -6,6 +6,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { Pool } from "pg";
 import { eq } from "drizzle-orm";
 const { db, branchStocks, branches, clients, jubelioSalesOperations, orderItems, orders, products, productVariants } = await import("@/db");
+const { getJubelioSalesOperation } = await import("./jubelio-sales-operations");
 const { reconcileConfirmedSalesOrderHolds, dispatchJubelioSalesCancel, dispatchJubelioSalesCreate, ensureJubelioInvoice, ensureJubelioPayment } = await import("./jubelio-sales-lifecycle");
 // The app logging facade (not the core, not a mock): the request scope and the
 // canonical request id are observed exactly where the runtime produces them.
@@ -105,6 +106,9 @@ describe("confirmed SO accounting crash recovery (PostgreSQL)", () => {
     expect((await dispatchJubelioSalesCancel({ orderId: orderA, reason: "expiry", gateway })).status).toBe("confirmed");
     expect((await dispatchJubelioSalesCancel({ orderId: orderA, reason: "expiry", gateway })).status).toBe("confirmed");
     expect(cancelPosts).toBe(1);
+    expect(await getJubelioSalesOperation(db, {
+      orderId: orderA, type: "cancel",
+    })).toMatchObject({ reference: `SO_CANCEL:${orderA}` });
     const [afterCancel] = await db.select().from(branchStocks).where(eq(branchStocks.branchId, branchId));
     expect(afterCancel.pendingRemoteStock).toBe(1);
   });

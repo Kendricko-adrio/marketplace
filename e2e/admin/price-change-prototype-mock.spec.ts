@@ -246,6 +246,10 @@ test("filter harga coret menggabungkan search, setup aktif/nonaktif, pagination,
     const table = page.getByRole("table", { name: "Harga coret SKU", exact: true });
     const filter = page.getByRole("combobox", { name: "Status harga coret", exact: true });
     await expect(filter).toHaveText("Semua");
+    await expect(page.getByTestId("bulk-prev-page")).toHaveText("Previous");
+    await expect(page.getByTestId("bulk-next-page")).toHaveText("Next");
+    await expect(page.getByTestId("inactive-prev-page")).toHaveText("Previous");
+    await expect(page.getByTestId("inactive-next-page")).toHaveText("Next");
     await page.getByTestId("bulk-search").fill("e2e parity");
     await page.getByTestId("bulk-search").press("Enter");
     await expect(table).toHaveAttribute("aria-busy", "false");

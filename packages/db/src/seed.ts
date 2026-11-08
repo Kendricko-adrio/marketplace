@@ -9,6 +9,7 @@ import bcrypt from "bcryptjs";
 import { assertSeedEnvironmentSafe } from "./seed-safety";
 import { seedCleanupEntries } from "./seed-cleanup";
 import { resolveSeedPlan } from "./seed-mode";
+import { hqBranchSeedRow } from "./seed-hq";
 import {
   discountContractSystemConfigSeedRows,
   jubelioSalesTaxSystemConfigSeedRows,
@@ -286,6 +287,11 @@ async function seed() {
     // =====================
     // ADMIN USERS
     // =====================
+    // HQ dimiliki aplikasi dan selalu tersedia pada kedua mode seed.
+    // Tidak masuk branchIds: tidak mendapat stok atau contoh transaksi demo.
+    console.log("🏢 Creating local HQ branch...");
+    await db.insert(schema.branches).values(hqBranchSeedRow);
+
     console.log("👤 Creating admin users...");
     const adminId = generateId();
     const hqId = generateId();
@@ -305,6 +311,7 @@ async function seed() {
       {
         id: hqId,
         name: "HQ Manager",
+        branchId: hqBranchSeedRow.id,
         username: "hqmanager",
         displayUsername: "hqmanager",
         email: "hq@store.com",
@@ -1031,13 +1038,12 @@ async function seed() {
     // ASSIGN BRANCHES TO ADMIN USERS
     // =====================
     console.log("🔗 Assigning branches to admin users...");
-    // Every non-Owner Admin User always has exactly one Home Branch. HQ's
-    // all-branch reach comes from its all_branches grants, not from a null
-    // branch — the Home Branch only pins own-branch scope.
+    // Admin demo memakai cabang toko; hqmanager tetap di HQ lokal.
+    // Akses lintas cabang HQ berasal dari grant all_branches pada role.
     await db
       .update(schema.users)
       .set({ branchId: branchIds[0] })
-      .where(inArray(schema.users.id, [adminId, hqId]));
+      .where(eq(schema.users.id, adminId));
 
     console.log("📦 Seeding branch stocks per variant...");
     for (const branchId of branchIds) {
@@ -1426,7 +1432,7 @@ async function seed() {
       })
     );
     } else {
-      console.log("📦 Skipping catalog, branches, and stock (managed by Jubelio import)...");
+      console.log("📦 Skipping catalog, store branches, and stock (managed by Jubelio import); local HQ retained...");
     }
 
     // =====================
@@ -2363,6 +2369,8 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
       id: demoDiscountOfferRevisionId,
       offerId: demoDiscountOfferId,
       revisionNo: 1,
+      // Baseline legacy tetap dipakai sampai endpoint/UI editor terpadu cutover.
+      draftConfiguration: null,
       name: "Diskon Rp25.000 Sepatu Pilihan (draft)",
       currency: "IDR",
       minSubtotal: "0",
@@ -2999,7 +3007,7 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
         name: schema.products.name }).from(schema.productVariants)
         .innerJoin(schema.products, eq(schema.products.id, schema.productVariants.productId))
         .orderBy(asc(schema.productVariants.id)).limit(1);
-      const [attemptBranch] = await db.select().from(schema.branches).orderBy(asc(schema.branches.id)).limit(1);
+      const [attemptBranch] = await db.select().from(schema.branches).where(eq(schema.branches.id, branchIds[0])).limit(1);
       if (attemptVariant && attemptBranch) {
         const anchor = new Date();
         const reservedOrderId = generateId();

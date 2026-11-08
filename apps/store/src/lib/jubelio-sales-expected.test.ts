@@ -40,7 +40,7 @@ function intent(overrides: Partial<VersionedSalesOrderExpectation> = {}): Versio
     contactId: -1,
     customerName: "Customer",
     locationId: 1,
-    note: "OKCIR_SO_CREATE:fixture",
+    note: "SO_CREATE:fixture",
     originalShipmentCost: 0,
     shippingCost: 0,
     netGoods: 162_000,

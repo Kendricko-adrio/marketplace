@@ -40,14 +40,14 @@ function makeOperationRow(overrides: Partial<OperationRow>): OperationRow {
     orderId: "order-1",
     type: "create",
     status: "intent",
-    reference: "OKCIR_SO_CREATE:order-1:op-1",
+    reference: "SO_CREATE:order-1:op-1",
     payload: {
       type: "create",
       create: {
         contactId: -1,
         customerName: "John Doe",
         locationId: 61,
-        note: "OKCIR_SO_CREATE:order-1:op-1",
+        note: "SO_CREATE:order-1:op-1",
         items: [
           {
             itemId: 101187,
@@ -133,7 +133,7 @@ describe("recordJubelioSalesIntent", () => {
       contactId: -1,
       customerName: "John Doe",
       locationId: 61,
-      note: "OKCIR_SO_CREATE:order-1:op-1",
+      note: "SO_CREATE:order-1:op-1",
       items: [
         {
           itemId: 101187,
@@ -199,7 +199,7 @@ describe("recordJubelioSalesIntent", () => {
       recordJubelioSalesIntent(db, {
         orderId: "order-1",
         type: "cancel",
-        reference: "OKCIR_SO_CANCEL:order-1:op-3",
+        reference: "SO_CANCEL:order-1:op-3",
         payload: { type: "cancel", cancel: { salesOrderId: 68378 } },
       })
     ).rejects.toThrow(/sales order id/i);
@@ -213,7 +213,7 @@ describe("recordJubelioSalesIntent", () => {
       recordJubelioSalesIntent(db, {
         orderId: "order-1",
         type: "create",
-        reference: "OKCIR_SO_CREATE:order-1:op-1",
+        reference: "SO_CREATE:order-1:op-1",
         payload: createPayload,
         salesOrderId: 68378,
       })
@@ -228,7 +228,7 @@ describe("recordJubelioSalesIntent", () => {
       recordJubelioSalesIntent(db, {
         orderId: "order-1",
         type: "cancel",
-        reference: "OKCIR_SO_CANCEL:order-1:op-4",
+        reference: "SO_CANCEL:order-1:op-4",
         payload: createPayload,
         salesOrderId: 68378,
       })
@@ -242,7 +242,7 @@ describe("recordJubelioSalesIntent", () => {
 
     await expect(recordJubelioSalesIntent(db, {
       orderId: "order-1", type: "create",
-      reference: "OKCIR_SO_CREATE:order-1:other",
+      reference: "SO_CREATE:order-1:other",
       payload: createPayload,
     })).rejects.toThrow(/does not match/i);
 
@@ -270,6 +270,19 @@ describe("recordJubelioSalesIntent", () => {
     expect(result.operation.status).toBe("dispatched_unknown");
     // No second intent row may be created for the same (order, type).
     expect(result.operation.id).toBe(existing.id);
+  });
+
+  it("replays a legacy reference verbatim without renaming stored evidence", async () => {
+    const reference = "OKCIR_SO_CREATE:order-1:legacy-op";
+    const payload = { type: "create" as const, create: { ...createPayload.create, note: reference } };
+    const existing = makeOperationRow({ reference, payload, status: "dispatched_unknown" });
+    const { db } = fakeDb({ insertReturningRows: [], selectRows: [existing] });
+    const result = await recordJubelioSalesIntent(db, {
+      orderId: "order-1", type: "create", reference, payload,
+    });
+    expect(result.created).toBe(false);
+    expect(result.operation.reference).toBe("OKCIR_SO_CREATE:order-1:legacy-op");
+    expect(result.operation.payload).toEqual(payload);
   });
 });
 

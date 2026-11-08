@@ -38,7 +38,7 @@ function intent(): VersionedSalesOrderExpectation {
     contactId: -1,
     customerName: "Customer",
     locationId: 1,
-    note: "OKCIR_SO_CREATE:shipping-fixture",
+    note: "SO_CREATE:shipping-fixture",
     originalShipmentCost: 30_000,
     shippingCost: 10_000,
     netGoods: 150_000,
@@ -65,7 +65,7 @@ describe("provider shipping — subsidi bukan line discount", () => {
       contactId: -1,
       customerName: "Customer",
       locationId: 1,
-      note: "OKCIR_SO_CREATE:shipping-fixture",
+      note: "SO_CREATE:shipping-fixture",
       refNo: "shipping-fixture",
       items: [
         { itemId: 940_001, quantity: 1, price: 150_000, discAmount: 0, taxAmount: 0, unit: "Buah", taxId: 1 },

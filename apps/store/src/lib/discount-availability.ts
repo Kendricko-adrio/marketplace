@@ -320,7 +320,8 @@ async function readOfferCandidates(
         endAt: row.endAt,
         minSubtotal,
         quotaCount: row.quotaCount,
-        budgetAmount: normalizeMoney(row.budgetAmount),
+        // NULL berarti tanpa batas nominal; bukan budget Rp0.
+        budgetAmount: row.budgetAmount === null ? null : normalizeMoney(row.budgetAmount),
         perClientLimit: row.perClientLimit,
         benefit: benefitPayloadOf(row),
         usage: {

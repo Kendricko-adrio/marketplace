@@ -6,10 +6,32 @@ Notify branch admin staff immediately when a customer successfully pays for an o
 ## What triggers a notification
 Only the **paid order** lifecycle event creates a notification today:
 
-- Midtrans webhook calls `claimAndFinalizePaidOrder()` in `apps/store/src/lib/order-finalize.ts`.
-- When the claim guard flips the order to `paymentStatus = paid` and `status = ready_for_pickup`, a row is inserted into `notifications` for the order's `branchId`.
+- Pickup: `fulfillPaidOrder()` in `apps/store/src/lib/order-finalize.ts` flips
+  the order to `paymentStatus = paid` and `status = ready_for_pickup` and inserts
+  one row into `notifications` for the order's `branchId`.
+- Delivery: the verified financial gate (`settleJubelioSalesOrder`) records the
+  `delivery_ready` communication fact; the projection service materialises
+  exactly ONE notification from it (`apps/store/src/features/order-communications`).
+  Title `Order dibayar — siap diproses`, message
+  `Order #{nomor-ringkas} sudah dibayar dan siap disiapkan untuk pengiriman.`
+  The exactly-once guarantee is the event checkpoint
+  `order_communication_event.notification_created_at`, so repeated webhooks,
+  sweep runs, restarts and parallel processing never create a second row, and an
+  admin deleting the notification does not recreate it.
 
-This guarantees exactly one notification per paid order even if the Midtrans webhook is retried.
+This guarantees exactly one notification per paid order even if the Midtrans
+webhook is retried.
+
+## Jenis Order column (pickup vs delivery)
+
+The notifications list and the real-time item DTO carry
+`order.fulfillmentMethod: "pickup" | "delivery" | null` (same projection in
+both paths). The page renders a non-interactive outline badge (`Pickup` /
+`Delivery`) in the **Jenis Order** column; an unknown/legacy value renders `—`
+and is never guessed as pickup. There is no new type filter. The row action
+follows the method: delivery → **Buka order** (`/admin/orders/{id}`), pickup →
+the existing **Verifikasi pickup** (`?verify=1`). Access control, Branch Scope,
+read/delete/mute and pagination behave exactly as before.
 
 ## Data model
 

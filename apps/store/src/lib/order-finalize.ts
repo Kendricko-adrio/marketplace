@@ -17,6 +17,8 @@ import {
 import { createModuleLogger } from "@/lib/logger";
 import { generatePickupCode } from "@/lib/pickup-code";
 import { dispatchJubelioSalesCancel } from "@/lib/jubelio-sales-lifecycle";
+import { projectOrderCommunications } from "@/features/order-communications/project-order-communications-service";
+import { recordOrderCommunicationEvent } from "@marketplace/db/src/order-communications/order-communication-repository";
 import {
   consumeReservedRedemption,
   findRedemptionForOrder,
@@ -264,11 +266,15 @@ export async function fulfillPaidOrder(
   }
 
   let pickupCode: string | null = null;
-  pickupCode = await db.transaction(async (tx) => {
+  let communicationVersion = 0;
+  const committed = await db.transaction(async (tx) => {
     // Re-check the settlement gate inside the tx: a blocked order must never
     // surface a pickup code.
     const gate = await tx
-      .select({ id: orders.id })
+      .select({
+        id: orders.id,
+        orderCommunicationVersion: orders.orderCommunicationVersion,
+      })
       .from(orders)
       .where(
         and(
@@ -309,10 +315,24 @@ export async function fulfillPaidOrder(
       })
       .where(eq(orders.id, orderId));
 
-    return code;
+    // Fakta komunikasi dicatat pada TRANSAKSI YANG SAMA dengan perubahan
+    // bisnis; order versi 0 (baris lama) tidak mendapat fakta baru.
+    if (gate[0].orderCommunicationVersion >= 1) {
+      await recordOrderCommunicationEvent(tx, {
+        orderId,
+        kind: "pickup_ready",
+        source: "order_finalize",
+        occurredAt: null,
+        receivedAt: new Date(),
+      });
+    }
+
+    return { code, communicationVersion: gate[0].orderCommunicationVersion };
   });
 
-  if (!pickupCode) return { claimed: false };
+  if (!committed) return { claimed: false };
+  pickupCode = committed.code;
+  communicationVersion = committed.communicationVersion;
 
   // Create admin notification so branch/HQ staff see the new paid order.
   let notificationId: string | null = null;
@@ -339,9 +359,30 @@ export async function fulfillPaidOrder(
     );
   }
 
-  // Send pickup-ready email (best-effort, outside the tx).
-  try {
-    const [branchData, itemsForEmail] = await Promise.all([
+  // Send pickup-ready email:
+  //   - order versi komunikasi 1 → job durable + retry diproduksi worker
+  //     (spec §5.2); tidak ada direct-send kedua pada jalur fast/late/sweep.
+  //   - order versi 0 (baris lama) → perilaku legacy dipertahankan.
+  if (communicationVersion >= 1) {
+    try {
+      const projection = await projectOrderCommunications({
+        limit: 1,
+        orderId,
+        mirror: false,
+      });
+      log.info(
+        `Order ${orderId}: pickup-ready email queued (jobs ${projection.emailJobsCreated})`
+      );
+    } catch (projectionError) {
+      log.error(
+        `Order ${orderId}: pickup-ready email queue projection failed`,
+        safeDependencyErrorLog(projectionError)
+      );
+    }
+  } else {
+    // Legacy (order versi komunikasi 0): direct send, perilaku lama.
+    try {
+      const [branchData, itemsForEmail] = await Promise.all([
       db
         .select()
         .from(branches)
@@ -377,13 +418,13 @@ export async function fulfillPaidOrder(
       };
       const html = pickupReadyEmailHTML({
         order: emailOrder,
-        pickupCode,
+        pickupCode: pickupCode!,
         branch,
         items: itemsForEmail,
       });
       const text = pickupReadyEmailText({
         order: emailOrder,
-        pickupCode,
+        pickupCode: pickupCode!,
         branch,
         items: itemsForEmail,
       });
@@ -394,11 +435,12 @@ export async function fulfillPaidOrder(
         text,
       });
     }
-  } catch (emailError) {
-    log.error(
-      `Order ${orderId}: pickup-ready email failed`,
-      safeDependencyErrorLog(emailError)
-    );
+    } catch (emailError) {
+      log.error(
+        `Order ${orderId}: pickup-ready email failed`,
+        safeDependencyErrorLog(emailError)
+      );
+    }
   }
 
   log.info(
@@ -451,8 +493,22 @@ export async function claimAndFailOrder(
       .where(
         and(eq(orders.id, orderId), eq(orders.status, "pending_payment"))
       )
-      .returning({ id: orders.id });
-    return res.length > 0;
+      .returning({
+        id: orders.id,
+        orderCommunicationVersion: orders.orderCommunicationVersion,
+      });
+    const row = res[0];
+    if (!row) return null;
+    if (row.orderCommunicationVersion >= 1) {
+      await recordOrderCommunicationEvent(tx, {
+        orderId,
+        kind: "payment_failed",
+        source: "payment_failure",
+        occurredAt: null,
+        receivedAt: new Date(),
+      });
+    }
+    return { orderCommunicationVersion: row.orderCommunicationVersion };
   });
 
   if (!claimed) return { claimed: false };
@@ -481,6 +537,25 @@ export async function claimAndFailOrder(
   }
 
   // Send payment-failed email (best-effort, outside the tx).
+  //   - versi komunikasi 1 → job durable + retry; worker yang mengirim.
+  //   - versi 0 → jalur legacy existing dipertahankan.
+  if (claimed.orderCommunicationVersion >= 1) {
+    try {
+      const projection = await projectOrderCommunications({
+        limit: 1,
+        orderId,
+        mirror: false,
+      });
+      log.info(
+        `Order ${orderId}: payment-failed email queued (jobs ${projection.emailJobsCreated})`
+      );
+    } catch (projectionError) {
+      log.error(
+        `Order ${orderId}: payment-failed email queue projection failed`,
+        safeDependencyErrorLog(projectionError)
+      );
+    }
+  } else {
   try {
     const [itemsForEmail, orderRows] = await Promise.all([
       db
@@ -540,6 +615,7 @@ export async function claimAndFailOrder(
       `Order ${orderId}: payment-failed email failed`,
       safeDependencyErrorLog(emailError)
     );
+  }
   }
 
   log.info(

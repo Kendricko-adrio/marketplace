@@ -40,6 +40,7 @@ import crypto from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { auditLogs, branches, deliveryShipments, deliveryTrackingEvents, jubelioSalesOperations, orders, users } from "./schema";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { recordOrderCommunicationEvent } from "./order-communications/order-communication-repository";
 
 type TrackingDb = NodePgDatabase<typeof import("./schema")>;
 type TrackingExecutor = TrackingDb | Parameters<Parameters<TrackingDb["transaction"]>[0]>[0];
@@ -142,6 +143,28 @@ const TRACKING_STATUS_RANK: Record<string, number> = {
 
 const EXCEPTION_STATUSES = new Set(["ON_HOLD", "RETURNED", "CANCELED", "SHIPMENT_ISSUE"]);
 function knownStatus(status: string): boolean { return status in TRACKING_STATUS_RANK || EXCEPTION_STATUSES.has(status); }
+
+/**
+ * Spec penyelarasan status/notifikasi/email: fakta komunikasi pengiriman
+ * dicatat pada TRANSAKSI YANG SAMA dengan perubahan yang sudah committed.
+ * Order versi komunikasi 0 (baris lama) tidak pernah mendapat fakta baru.
+ */
+async function recordShippingCommunicationEvent(
+  tx: TrackingExecutor,
+  order: { id: string; orderCommunicationVersion: number },
+  kind: "delivery_in_transit" | "delivery_delivered",
+  source: string,
+  occurredAt: Date | null
+): Promise<void> {
+  if (order.orderCommunicationVersion < 1) return;
+  await recordOrderCommunicationEvent(tx, {
+    orderId: order.id,
+    kind,
+    source,
+    occurredAt,
+    receivedAt: new Date(),
+  });
+}
 function trackingTime(block: unknown): Date | null {
   const entries = Array.isArray(block) ? block : [block];
   const times = entries.map((entry) => entry && typeof entry === "object" ? (entry as Record<string, unknown>).date : null)
@@ -373,6 +396,14 @@ export function createShipmentTracking(
           updatedAt: new Date(),
         })
         .where(eq(deliveryShipments.id, ledger.id));
+      // Bukti pertama barang dibawa: serah-terima petugas yang sah.
+      await recordShippingCommunicationEvent(
+        tx,
+        order,
+        "delivery_in_transit",
+        "carrier_handoff",
+        new Date()
+      );
       await auditInsert(tx, {
         userId: actor.id,
         action: "SHIPMENT_HANDOFF",
@@ -496,6 +527,13 @@ export function createShipmentTracking(
             .set({ status: "completed", fulfillmentBlockedReason: null, updatedAt: new Date() })
             .where(and(eq(orders.id, orderId), eq(orders.status, "processing")));
         }
+        await recordShippingCommunicationEvent(
+          tx,
+          currentOrder,
+          delivered ? "delivery_delivered" : "delivery_in_transit",
+          delivered ? "carrier_delivered" : "carrier_in_transit",
+          providerAt
+        );
         await tx.insert(deliveryTrackingEvents).values({
           id: crypto.randomUUID(), shipmentId: ledger.id, externalShipmentId: ledger.shipmentId,
           refNo: orderId, awb: nonBlank(ledger.awb), latestStatus, source: 'get', applied: true,
@@ -520,7 +558,19 @@ export function createShipmentTracking(
 
       // Informational only — a completed order may still learn the billed
       // cost but NEVER a late status/issue/handoff; an absent bill stays NULL
-      // (never 0).
+      // (never 0). ONE exception, per the approved spec: a VALID DELIVERED
+      // proof that arrives after a manual finish still produces the
+      // `delivery_delivered` communication fact (the customer is told the
+      // parcel arrived) without reopening the order.
+      if (completed && latestStatus === "DELIVERED" && ledger.deliveredAt == null) {
+        await recordShippingCommunicationEvent(
+          tx,
+          currentOrder,
+          "delivery_delivered",
+          "carrier_delivered_late",
+          providerAt
+        );
+      }
       if (billed !== null && (ledger.billedPrice == null || Number(ledger.billedPrice) !== billed)) {
         await tx
           .update(deliveryShipments)
@@ -663,6 +713,21 @@ export function createShipmentTracking(
       } else if (order.status === "completed") {
         // Terminal: never reopen, never create new issues (ticket 07).
         ignoredReason = "order_completed";
+        // Spesifikasi tetap mengizinkan SATU fakta komunikasi dari bukti
+        // DELIVERED yang valid setelah penutupan manual — tanpa membuka order.
+        if (
+          reportedStatus === "DELIVERED" &&
+          matchedIdentity &&
+          ledger.deliveredAt == null
+        ) {
+          await recordShippingCommunicationEvent(
+            tx,
+            order,
+            "delivery_delivered",
+            "carrier_delivered_late",
+            providerEventAt
+          );
+        }
       } else if (order.status !== "processing" || order.paymentStatus !== "paid" || order.fulfillmentBlockedReason) {
         ignoredReason = "order_not_ready";
       } else if (!reportedStatus) {
@@ -718,6 +783,20 @@ export function createShipmentTracking(
           policyVersion: null,
           branchId: order?.branchId ?? null,
         });
+        if (
+          order &&
+          (delivered ||
+            reportedStatus === "PICKED_UP" ||
+            reportedStatus === "ON_DELIVERY")
+        ) {
+          await recordShippingCommunicationEvent(
+            tx,
+            order,
+            delivered ? "delivery_delivered" : "delivery_in_transit",
+            delivered ? "carrier_delivered" : "carrier_in_transit",
+            providerEventAt
+          );
+        }
       }
 
       await tx.insert(deliveryTrackingEvents).values({

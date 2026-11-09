@@ -365,6 +365,16 @@ describe.skipIf(!enabled)("checkout stock reservation and definitive rejection (
     expect((await pool.query("SELECT count(*)::int AS count FROM orders WHERE id='not-an-order-yet'")).rows).toEqual([{ count: 1 }]);
     expect((await pool.query("SELECT count(*)::int AS count FROM cart_item WHERE id='cart-line'")).rows).toEqual([{ count: 0 }]);
     expect(await getJubelioSalesOperation(paymentDatabase, { orderId: "not-an-order-yet", type: "create" })).toMatchObject({ salesOrderId: 42, checkoutAttemptId: "attempt-fixture" });
+    // Spec penyelarasan: promosi order BARU memberi marker komunikasi 1, dan
+    // replay promosi tidak mengubah marker order yang sudah ada.
+    expect(
+      (await pool.query("SELECT order_communication_version FROM orders WHERE id='not-an-order-yet'")).rows
+    ).toEqual([{ order_communication_version: 1 }]);
+    await pool.query("UPDATE orders SET order_communication_version=0 WHERE id='not-an-order-yet'");
+    expect(await promoteCheckoutAttempt({ attemptId: "attempt-fixture" }, paymentDatabase)).toMatchObject({ orderId: "not-an-order-yet" });
+    expect(
+      (await pool.query("SELECT order_communication_version FROM orders WHERE id='not-an-order-yet'")).rows
+    ).toEqual([{ order_communication_version: 0 }]);
   });
 
   it("keeps a cart line the customer changed after review instead of deleting it", async () => {

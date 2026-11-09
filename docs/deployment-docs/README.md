@@ -60,6 +60,7 @@ deployment/
 | 20 | [rbac-rollout.md](rbac-rollout.md) | RBAC cutover maintenance window: verified backup/restore, paired code+schema migration, Owner bootstrap, smoke tests, monitoring, paired rollback |
 | 21 | [rbac-owner-bootstrap.md](rbac-owner-bootstrap.md) | One-time System Owner bootstrap CLI (RBAC) |
 | 22 | [discounts-cutover.md](discounts-cutover.md) | Cutover/rollout/rollback diskon: gate `discounts.contractVersion`, trusted IP + batas request proxy, UAT staging dan forward-fix |
+| 23 | [order-communications.md](order-communications.md) | Cron komunikasi order (proyeksi fakta + antrean email/retry) |
 
 ## Quick start (staging)
 

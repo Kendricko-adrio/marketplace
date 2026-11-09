@@ -41,6 +41,10 @@ export * from "./discounts";
 // Notifications schema
 export * from "./notifications";
 
+// Order communications (spec penyelarasan status/notifikasi/email): durable
+// fakta komunikasi + antrean pekerjaan email per (order, kind).
+export * from "./order-communications";
+
 // Durable Jubelio stock reserve/release saga
 export * from "./jubelio-stock";
 

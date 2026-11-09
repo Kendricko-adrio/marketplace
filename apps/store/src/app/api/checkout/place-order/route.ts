@@ -1361,6 +1361,9 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
           status: "pending_payment",
           paymentMethod: null,
           paymentStatus: "pending",
+          // Spec penyelarasan status/notifikasi/email: order baru memberi marker
+          // komunikasi 1 supaya worker tidak pernah memproyeksikan order lama.
+          orderCommunicationVersion: 1,
           // Delivery rows carry NO pickup slots and their immutable snapshot;
           // pickup rows keep the legacy columns (default method: pickup).
           fulfillmentMethod: isDelivery ? "delivery" : "pickup",

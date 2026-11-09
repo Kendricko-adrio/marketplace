@@ -77,6 +77,7 @@ ADRs dan referensi arsitektur permanen tetap berada di `docs/`.
 | Domain docs (glossary, ADR, cara mengonsumsinya) | [`docs/agents/domain.md`](agents/domain.md) |
 | Home delivery lifecycle | [`docs/features/home-delivery.md`](features/home-delivery.md) |
 | Delivery follow-up | [`docs/features/delivery-follow-up.md`](features/delivery-follow-up.md) |
+| Komunikasi order (status, notifikasi admin, email + retry) | [`docs/features/order-communications.md`](features/order-communications.md) |
 | Delivery handoff and tracking | [`docs/features/delivery-tracking.md`](features/delivery-tracking.md) |
 | Delivery packing and booking | [`docs/features/delivery-fulfillment.md`](features/delivery-fulfillment.md) |
 | Guided admin delivery workflow | [`docs/features/admin-delivery-workflow.md`](features/admin-delivery-workflow.md) |

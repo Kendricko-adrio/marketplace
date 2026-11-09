@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, exists, gt, inArray, isNotNull, ne, notExists, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, gt, inArray, isNotNull, isNull, ne, notExists, or, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
   jubelioChannelStatusIntents,
@@ -928,6 +928,8 @@ type MirrorContext = {
     status: string;
     paymentStatus: string;
     fulfillmentBlockedReason: string | null;
+    /** Spec penyelarasan: delivery baru memakai derivasi Siap Proses sendiri. */
+    fulfillmentMethod: string | null;
   };
   create: JubelioSalesOperation | null;
   cancel: JubelioSalesOperation | null;
@@ -983,6 +985,7 @@ async function loadMirrorContext(
       status: order.status,
       paymentStatus: order.paymentStatus,
       fulfillmentBlockedReason: order.fulfillmentBlockedReason,
+      fulfillmentMethod: order.fulfillmentMethod,
     },
     create: byType("create"),
     cancel: byType("cancel"),
@@ -1007,20 +1010,39 @@ async function loadMirrorContext(
 }
 
 /**
- * The ticket #03 target, derived in this module: committed
- * `ready_for_pickup` plus a VERIFIED invoice and payment. Anything else is
- * not a `Siap Proses` mirror trigger.
+ * Target `Siap Proses`: pickup memakai syarat existing (`ready_for_pickup`),
+ * sedangkan spec penyelarasan menambahkan DELIVERY BARU: pembayaran customer,
+ * create, invoice, dan payment Jubelio terverifikasi, masih `processing`,
+ * tanpa blocker fulfillment/cancel aktif. Delivery tidak pernah menjadi
+ * `ready_for_pickup` dan tidak pernah mendapat pickup code.
  */
 export function isSiapProsesTargetApplicable(context: MirrorContext): boolean {
-  return (
-    context.order.status === "ready_for_pickup" &&
+  const verifiedLedger =
     context.create?.status === "confirmed" &&
     isSafePositiveInteger(context.create.salesOrderId) &&
     context.invoice?.status === "confirmed" &&
     isSafePositiveInteger(context.invoice.invoiceId) &&
     context.payment?.status === "confirmed" &&
-    isSafePositiveInteger(context.payment.paymentId)
-  );
+    isSafePositiveInteger(context.payment.paymentId);
+  if (!verifiedLedger) return false;
+
+  // Syarat existing dipertahankan: committed `ready_for_pickup` (pickup, dan
+  // baris delivery legacy yang sudah terlanjur berada di status itu).
+  if (context.order.status === "ready_for_pickup") return true;
+
+  if (context.order.fulfillmentMethod === "delivery") {
+    return (
+      context.order.status === "processing" &&
+      context.order.paymentStatus === "paid" &&
+      context.order.fulfillmentBlockedReason == null &&
+      // A committed manual-review ledger op is an operator investigation, not
+      // a green light: `Menunggu Verifikasi` owns that state.
+      !context.hasManualReviewOp &&
+      !isCancelPathActive(context.cancel)
+    );
+  }
+
+  return false;
 }
 
 /**
@@ -2747,8 +2769,37 @@ export async function reconcileChannelStatusMirrorForSweep(
     .where(
       and(
         // Ticket #06: the completed local state (only reachable after
-        // pickup) also projects a marker (Selesai).
-        inArray(orders.status, ["ready_for_pickup", "completed"]),
+        // pickup) also projects a marker (Selesai). Spec penyelarasan: a NEW
+        // delivery order projects `Siap Proses` from verified
+        // processing/paid, unblocked, with no started/confirmed cancel path —
+        // EXACTLY the rule of isSiapProsesTargetApplicable, so the bounded
+        // scan never spends its budget on an order the seam would skip.
+        or(
+          inArray(orders.status, ["ready_for_pickup", "completed"]),
+          and(
+            eq(orders.fulfillmentMethod, "delivery"),
+            eq(orders.status, "processing"),
+            eq(orders.paymentStatus, "paid"),
+            isNull(orders.fulfillmentBlockedReason),
+            notExists(
+              db
+                .select({ one: sql`1` })
+                .from(jubelioSalesOperations)
+                .where(
+                  and(
+                    eq(jubelioSalesOperations.orderId, orders.id),
+                    eq(jubelioSalesOperations.type, "cancel"),
+                    inArray(jubelioSalesOperations.status, [
+                      "intent",
+                      "dispatched_unknown",
+                      "confirmed",
+                      "manual_review",
+                    ])
+                  )
+                )
+            )
+          )
+        ),
         eq(orders.paymentStatus, "paid"),
         // Mirror eligibility is provable in SQL from committed state.
         exists(
@@ -2832,8 +2883,7 @@ export async function reconcileChannelStatusMirrorForSweep(
                   eq(
                     jubelioChannelStatusIntents.targetStatus,
                     sql`case when ${orders.status} = 'completed' then 'Selesai' else 'Siap Proses' end`
-                  ),
-                  // Never regress a non-terminal order past a confirmed
+                  ),                  // Never regress a non-terminal order past a confirmed
                   // Selesai (unreachable in the lawful flow; guarded anyway).
                   and(
                     ne(orders.status, "completed"),

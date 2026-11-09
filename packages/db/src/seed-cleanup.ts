@@ -41,6 +41,12 @@ export const seedCleanupEntries: ReadonlyArray<
   ["variantPriceRevisions", schema.variantPriceRevisions],
   ["priceChangeBatches", schema.priceChangeBatches],
   ["notifications", schema.notifications],
+  // Order communications (spec penyelarasan status/notifikasi/email). The email
+  // queue references its event, and both reference the order with CASCADE, but
+  // they are cleared explicitly BEFORE the orders DELETE so a seed reset never
+  // leaves a claim/lease pointing at a removed business row.
+  ["orderEmailJobs", schema.orderEmailJobs],
+  ["orderCommunicationEvents", schema.orderCommunicationEvents],
   // New RBAC tables: grants before roles; roles after users because
   // users.role_id references admin_role with ON DELETE RESTRICT.
   // (The legacy permission table was dropped by migration 0018.)

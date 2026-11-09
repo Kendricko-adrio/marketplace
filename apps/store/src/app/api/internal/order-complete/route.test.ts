@@ -68,28 +68,47 @@ const updateSets: Array<Record<string, unknown>> = [];
 vi.mock("@/db", () => {
   const ORDERS = "orders-table";
   const ITEMS = "items-table";
+  // Guarded completion now runs inside ONE transaction together with the
+  // durable communication fact (spec penyelarasan status/notifikasi/email).
+  const executor = {
+    select: () => ({
+      from: (table: unknown) => ({
+        where: () => ({
+          limit: async () => (table === ORDERS ? selectOrdersResult : []),
+        }),
+      }),
+    }),
+    update: () => ({
+      set: (values: Record<string, unknown>) => {
+        updateSets.push(values);
+        return {
+          where: () => ({
+            returning: async () => selectOrdersResult,
+          }),
+        };
+      },
+    }),
+  };
   return {
     orders: ORDERS,
     orderItems: ITEMS,
     db: {
-      select: () => ({
-        from: (table: unknown) => ({
-          where: () => ({
-            limit: async () => (table === ORDERS ? selectOrdersResult : []),
-          }),
-        }),
-      }),
-      update: () => ({
-        set: (values: Record<string, unknown>) => {
-          updateSets.push(values);
-          return {
-            where: async () => undefined,
-          };
-        },
-      }),
+      ...executor,
+      transaction: async (callback: (tx: typeof executor) => Promise<unknown>) =>
+        callback(executor),
     },
   };
 });
+
+vi.mock(
+  "@marketplace/db/src/order-communications/order-communication-repository",
+  () => ({
+    recordOrderCommunicationEvent: vi.fn(async () => ({
+      eventId: "event-1",
+      created: true,
+    })),
+  })
+);
 
 function completeRequest(orderIdInput: string, secret?: string): NextRequest {
   return new NextRequest("http://localhost:3000/api/internal/order-complete", {

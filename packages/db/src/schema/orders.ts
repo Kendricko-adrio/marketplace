@@ -346,6 +346,13 @@ export const orders = pgTable("orders", {
   deliveryManualReason: text("delivery_manual_reason"),
   deliveryManualAt: timestamp("delivery_manual_at", { withTimezone: true }),
   deliveryManualBy: text("delivery_manual_by").references(() => users.id),
+  // Spec penyelarasan status/notifikasi/email — marker batas komunikasi:
+  // order yang dibuat runtime yang sudah diperbarui mengisi `1`; baris lama
+  // tetap `0` dan TIDAK di-backfill, sehingga worker komunikasi tidak pernah
+  // memproyeksikan pemberitahuan historis untuk order lama.
+  orderCommunicationVersion: integer("order_communication_version")
+    .notNull()
+    .default(0),
   // Phase 2 shipping fields (nullable, unused in Phase 1)
   shippingCarrier: text("shipping_carrier"),
   trackingNumber: text("tracking_number"),
@@ -410,6 +417,10 @@ export const orders = pgTable("orders", {
   pickupAttemptsCheck: check(
     "orders_pickup_attempts_nonnegative",
     sql`${t.pickupVerificationAttempts} >= 0`
+  ),
+  orderCommunicationVersionCheck: check(
+    "orders_order_communication_version_valid",
+    sql`${t.orderCommunicationVersion} >= 0`
   ),
   // Ticket 01 — hanya kombinasi versi yang sah yang boleh tersimpan: baris
   // legacy 0/0/0, kontrak baru pricing1/engine1/provider2 (tanpa pajak

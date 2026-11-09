@@ -127,7 +127,8 @@ Use the SO id for a read-only GET; do not re-POST the create or edit marker
 without a separately approved procedure. Logs contain only IDs and reason codes,
 not customer or provider response bodies.
 
-## Channel-status mirror — Siap Proses (ticket #03)
+## Channel-status mirror — Siap Proses (ticket #03, extended by the
+## status/notification/email alignment spec)
 
 After an order is **committed** `ready_for_pickup` (which happens only after
 the verified invoice + payment above), the website status is mirrored onto
@@ -138,10 +139,15 @@ blocking payment or pickup:
   settlement pipeline, and again in the sweep's bounded mirror pass. The
   trigger derives eligibility ONLY from committed state: local
   `ready_for_pickup` + confirmed `invoice` + confirmed `payment` ledger
-  operations. A merely `paid` Midtrans status or an in-flight settlement is
-  never a `Siap Proses` trigger. `Selesai` is projected separately from
-  committed completion (ticket #06); `Gagal Bayar` and `Menunggu Verifikasi`
-  follow tickets #05 and #04 below.
+  operations. **Delivery orders use their own derivation** (spec
+  penyelarasan status/notifikasi/email): a paid `processing` delivery with
+  the same verified ledger, no `fulfillment_blocked_reason`, no committed
+  `manual_review` operation and no started/confirmed cancel path targets
+  `Siap Proses` without ever becoming `ready_for_pickup`. A merely `paid`
+  Midtrans status or an in-flight settlement is never a `Siap Proses`
+  trigger. `Selesai` is projected separately from committed completion
+  (ticket #06, including a manual delivery finish); `Gagal Bayar` and
+  `Menunggu Verifikasi` follow tickets #05 and #04 below.
 - **Intent ledger.** `jubelio_channel_status_intent`
   (packages/db/src/schema/jubelio-channel.ts) persists one intent per
   (order, monotonic `target_version`) with the known SO id and the target

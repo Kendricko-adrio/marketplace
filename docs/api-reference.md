@@ -45,7 +45,7 @@ zod issues) on validation failures. Status codes are noted per endpoint.
 
 | Secret / env | Used by | Header / mechanism |
 |---|---|---|
-| `CRON_SECRET` | `POST /api/cron/sweep-reservations` | `X-Cron-Secret` |
+| `CRON_SECRET` | `POST /api/cron/sweep-reservations`, `POST /api/cron/process-order-communications` | `X-Cron-Secret` |
 | `JUBELIO_WEBHOOK_SECRET` | `POST /api/webhooks/jubelio` | `Sign` (`HMAC-SHA256(body+secret, secret)`; legacy aliases supported) |
 | `MIDTRANS_SERVER_KEY` | `POST /api/webhooks/midtrans`, payment creation | `signature_key` verification |
 | `BETTER_AUTH_SECRET` | `POST /api/internal/order-complete` | HMAC body secret (shared store↔admin) |
@@ -137,6 +137,7 @@ Pengecualian yang diketahui (lihat
 | POST | `/api/webhooks/jubelio` | signature `HMAC-SHA256(body+secret, secret)` | **Jubelio master-data sync (product/price/stock push)** |
 | POST | `/api/internal/order-complete` | internal (HMAC) | Admin→store: mark order completed + email |
 | POST | `/api/cron/sweep-reservations` | secret-header `X-Cron-Secret` | Release stale reservation safety-net |
+| POST | `/api/cron/process-order-communications` | secret-header `X-Cron-Secret` | Project order communication facts + dispatch due order emails |
 | GET | `/api/onboarding/sync` | client-session | Sync onboarding cookie, redirect |
 | GET/POST | `/api/auth/*` | Better Auth (catch-all) | Store auth endpoints (sign-up/in/out, verify, …) |
 | GET | `/uploads/{path...}` | none | Serve an uploaded file |
@@ -610,6 +611,14 @@ Admin branch POST/PUT requires verified `shippingProvinceId`, `shippingCityId`, 
 - **Body**: none
 - **Response**: 200 `{ success: true, pages, items, observed, missing, failed }`; partial/failed reads → 503 `{ success: false, ...counts }`; unexpected error → 503.
 - **Notes**: DB-backed keyset cursor advances per batch (100 IDs, max 200 pages/invocation), so a bad item cannot starve subsequent items. Only complete observations update existing `branch_stock` provider series and `provider_stock_synced_at`; pending local holds are untouched. Schedule once daily as webhook-gap reconciliation; place-order independently re-reads selected Jubelio stock before SO create. Monitor failures, run duration and mapped-row coverage. See `docs/deployment-docs/jubelio-sync.md`.
+
+#### `POST` `/api/cron/process-order-communications`
+- **Auth**: secret-header (`X-Cron-Secret` vs `process.env.CRON_SECRET`) — **503** if env unset, **401** on mismatch
+- **Purpose**: Project committed order communication facts (recovery for communication-version-1 orders) and dispatch due order emails through the durable queue.
+- **Params**: query `limit` (optional, default 20, capped 50)
+- **Body**: none — recipient/HTML/order override/payment status/provider write instructions are never accepted
+- **Response**: 503 `{ success: false, error: "Cron not configured" }`; 401 `{ success: false, error: "Unauthorized" }`; 503 `{ success: false, error: "Sweep unavailable" }`; 200 `{ success: true, limit, projected, emailJobsCreated, notificationsCreated, claimed, sent, retry, failed, superseded }`
+- **Notes**: The route is a thin HTTP adapter with no query/provider call. The sweep service recovers missing facts for orders with `order_communication_version >= 1` (delivery ready/in-transit/delivered/manual-close, pickup ready/completed), materialises exactly one email job per `(orderId, kind)` and one `delivery_ready` notification (checkpoint = exactly-once), then claims due jobs atomically with a five-minute lease and dispatches them in the same request budget. Attempts are recorded before SMTP; 1 initial attempt + max 3 retries, five-minute retry delay; definitive failures stop, temporary/uncertain results retry within the same budget. Email content is rendered from stored order data and links to the storefront order detail. Email failures never change payment/order status. See `docs/features/order-communications.md` and `docs/deployment-docs/order-communications.md`.
 
 #### `POST` `/api/cron/sweep-reservations`
 - **Auth**: secret-header (`X-Cron-Secret` vs `process.env.CRON_SECRET`) — **503** if env unset, **401** on mismatch

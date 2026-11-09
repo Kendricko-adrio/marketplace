@@ -1965,6 +1965,50 @@ async function seed() {
     }
 
     // =====================
+    // SAMPLE ORDER COMMUNICATIONS (spec penyelarasan status/notifikasi/email)
+    // =====================
+    // Inert by construction: the job is already `sent` with its attempt
+    // recorded, so the cron worker never re-sends. The seeder never calls SMTP
+    // or a provider write.
+    console.log("📨 Creating sample order communication rows (inert)...");
+    const communicationOrders = await db
+      .select({
+        id: schema.orders.id,
+        fulfillmentMethod: schema.orders.fulfillmentMethod,
+      })
+      .from(schema.orders)
+      .where(eq(schema.orders.paymentStatus, "paid"))
+      .limit(2);
+    for (const communicationOrder of communicationOrders) {
+      const eventId = generateId();
+      const kind =
+        communicationOrder.fulfillmentMethod === "pickup"
+          ? "pickup_ready"
+          : "delivery_ready";
+      const stamp = new Date();
+      await db.insert(schema.orderCommunicationEvents).values({
+        id: eventId,
+        orderId: communicationOrder.id,
+        kind,
+        source: "seed",
+        occurredAt: stamp,
+        receivedAt: stamp,
+        emailJobCreatedAt: stamp,
+        notificationCreatedAt: kind === "delivery_ready" ? stamp : null,
+      });
+      await db.insert(schema.orderEmailJobs).values({
+        id: generateId(),
+        orderId: communicationOrder.id,
+        kind,
+        eventId,
+        status: "sent",
+        attemptCount: 1,
+        nextAttemptAt: stamp,
+        sentAt: stamp,
+      });
+    }
+
+    // =====================
     // SAMPLE CART (multi-branch — items from different branches)
     // =====================
     console.log("🛒 Creating sample cart (multi-branch)...");
@@ -2999,6 +3043,84 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
     }
     }
 
+
+    // Fixture state editor terpadu (spec editor diskon §9.2): draft parsial,
+    // Offer published yang masih punya draft berbeda (badge "Ada draft"), dan
+    // Offer dijeda. Semua memakai snapshot draftConfiguration yang sama dengan
+    // editor; gate rollout tetap 0.
+    {
+      const snapshot = (overrides: Record<string, unknown>) => ({
+        draftSchemaVersion: 1 as const, name: null, currency: "IDR" as const,
+        minSubtotal: null, startAt: null, endAt: null, benefit: null,
+        capacity: { quotaCount: null, budgetAmount: null, perClientLimit: null },
+        codeChanges: { proposedCodes: [], states: [] }, ...overrides,
+      });
+      const fixtures = [
+        { name: "Draft Demo Belum Lengkap", state: "draft" as const, published: false,
+          configuration: snapshot({ name: "Draft Demo Belum Lengkap" }) },
+        { name: "Promo Demo Dengan Draft Baru", state: "enabled" as const, published: true,
+          configuration: snapshot({ name: "Promo Demo Dengan Draft Baru", minSubtotal: "0",
+            benefit: { kind: "fixed_goods", paramsVersion: 1, fixedAmount: "15000" },
+            capacity: { quotaCount: 40, budgetAmount: "800000", perClientLimit: 1 } }) },
+        { name: "Promo Demo Dijeda", state: "paused" as const, published: true,
+          configuration: snapshot({ name: "Promo Demo Dijeda", minSubtotal: "0",
+            benefit: { kind: "fixed_goods", paramsVersion: 1, fixedAmount: "10000" },
+            capacity: { quotaCount: 20, budgetAmount: "400000", perClientLimit: 1 } }) },
+      ];
+      for (const fixture of fixtures) {
+        const offerId = generateId();
+        const liveRevisionId = generateId();
+        const draftRevisionId = generateId();
+        const now = new Date();
+        await db.insert(schema.discountOffers).values({
+          // Insert sebagai draft dulu; check constraint live menuntut pointer
+          // revision + kapasitas, jadi state live di-set setelah revision dibuat.
+          id: offerId, key: generateId(), activationKind: "public", state: "draft",
+          // FK ownership: pointer live diisi setelah revision dibuat.
+          currentRevisionId: null,
+          version: fixture.published ? 2 : 1, draftVersion: fixture.published ? 2 : 1,
+          quotaCount: null,
+          budgetAmount: null,
+          perClientLimit: 1,
+          policyVersion: 1, actorId: hqId, actorIdentity: hqId, createdAt: now, updatedAt: now,
+        });
+        if (fixture.published) {
+          await db.insert(schema.discountOfferRevisions).values({
+            id: liveRevisionId, offerId, revisionNo: 1, name: fixture.name, currency: "IDR",
+            minSubtotal: "0", startAt: null, endAt: null, schemaVersion: 1, engineVersion: 1,
+            draftVersion: 1, publishedAt: now, actorId: hqId, actorIdentity: hqId,
+            createdAt: now, updatedAt: now,
+          });
+          await db.insert(schema.discountBenefits).values({
+            id: generateId(), revisionId: liveRevisionId, kind: "fixed_goods", scope: "goods",
+            fixedAmount: "10000", paramsVersion: 1, createdAt: now,
+          });
+          // Draft berbeda dari live: editor menampilkan badge Ada draft.
+          await db.insert(schema.discountOfferRevisions).values({
+            id: draftRevisionId, offerId, revisionNo: 2, name: null, currency: null,
+            minSubtotal: null, startAt: null, endAt: null, schemaVersion: 1, engineVersion: 1,
+            draftVersion: 2, publishedAt: null, draftConfiguration: fixture.configuration,
+            actorId: hqId, actorIdentity: hqId, createdAt: now, updatedAt: now,
+          });
+          await db.update(schema.discountOffers)
+            .set({
+              state: fixture.state,
+              currentRevisionId: liveRevisionId,
+              quotaCount: fixture.configuration.capacity.quotaCount,
+              budgetAmount: fixture.configuration.capacity.budgetAmount,
+            })
+            .where(eq(schema.discountOffers.id, offerId));
+        } else {
+          await db.insert(schema.discountOfferRevisions).values({
+            id: draftRevisionId, offerId, revisionNo: 1, name: null, currency: null,
+            minSubtotal: null, startAt: null, endAt: null, schemaVersion: 1, engineVersion: 1,
+            draftVersion: 1, publishedAt: null, draftConfiguration: fixture.configuration,
+            actorId: hqId, actorIdentity: hqId, createdAt: now, updatedAt: now,
+          });
+        }
+        await db.insert(schema.discountOfferUsage).values({ offerId });
+      }
+    }
 
     if (seedPlan.seedCatalogDependentFixtures) {
       // Failed checkout evidence is retained without manufacturing a failed order.

@@ -511,6 +511,8 @@ export async function promoteCheckoutAttempt(
       await tx.insert(orders).values({ ...draft, id: attempt.reservedOrderId, userId: attempt.clientId,
         branchId: attempt.branchId, addressId, pickupDate: pickupDate ? new Date(pickupDate) : null,
         status: "pending_payment", paymentStatus: "pending", expiresAt: attempt.expiresAt,
+        // Spec penyelarasan: promosi attempt baru juga memberi marker komunikasi 1.
+        orderCommunicationVersion: 1,
         snapRedirectUrl: attempt.paymentRedirectUrl, jubelioSalesOrderId: create.salesOrderId,
         createdAt: now, updatedAt: now });
       for (const item of attempt.snapshot.items) await tx.insert(orderItems).values({ ...item, orderId: attempt.reservedOrderId });

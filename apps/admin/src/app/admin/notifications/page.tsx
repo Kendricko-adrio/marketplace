@@ -8,6 +8,7 @@ import {
   Bell,
   Loader2,
   Send,
+  ExternalLink,
   Volume2,
   BellOff,
 } from "lucide-react";
@@ -163,7 +164,7 @@ export default function NotificationsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <Bell className="h-6 w-6" /> Notifikasi
@@ -172,7 +173,7 @@ export default function NotificationsPage() {
             Pantau order yang sudah dibayar secara real-time.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" size="sm" onClick={toggleMute}>
             {isMuted ? (
               <><BellOff className="h-4 w-4 mr-2" /> Bunyikan</>
@@ -191,7 +192,7 @@ export default function NotificationsPage() {
 
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
             <div>
               <CardTitle>Daftar Notifikasi</CardTitle>
               <CardDescription>
@@ -235,6 +236,7 @@ export default function NotificationsPage() {
                     <TableHead>Judul</TableHead>
                     {isAllBranchViewer && <TableHead>Cabang</TableHead>}
                     <TableHead>Order</TableHead>
+                    <TableHead>Jenis Order</TableHead>
                     <TableHead>Waktu</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Aksi</TableHead>
@@ -283,6 +285,17 @@ export default function NotificationsPage() {
                           <span className="text-xs text-muted-foreground">—</span>
                         )}
                       </TableCell>
+                      <TableCell>
+                        {n.order?.fulfillmentMethod ? (
+                          <Badge variant="outline">
+                            {n.order.fulfillmentMethod === "delivery"
+                              ? "Delivery"
+                              : "Pickup"}
+                          </Badge>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-sm whitespace-nowrap">
                         {new Date(n.createdAt).toLocaleString("id-ID", {
                           day: "numeric",
@@ -318,11 +331,34 @@ export default function NotificationsPage() {
                               )}
                             </Button>
                           )}
-                          <Link href={`/admin/orders/${n.orderId}?verify=1`}>
-                            <Button variant="ghost" size="icon" className="h-8 w-8" title="Verifikasi pickup">
-                              <Send className="h-4 w-4" />
-                            </Button>
-                          </Link>
+                          {n.order?.fulfillmentMethod === "delivery" ? (
+                            <Link
+                              href={`/admin/orders/${n.orderId}`}
+                              aria-label={`Buka order ${n.orderId.slice(0, 8).toUpperCase()}`}
+                            >
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                title="Buka order"
+                                aria-label="Buka order"
+                              >
+                                <ExternalLink className="h-4 w-4" />
+                              </Button>
+                            </Link>
+                          ) : (
+                            <Link href={`/admin/orders/${n.orderId}?verify=1`}>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8"
+                                title="Verifikasi pickup"
+                                aria-label="Verifikasi pickup"
+                              >
+                                <Send className="h-4 w-4" />
+                              </Button>
+                            </Link>
+                          )}
                           <Button
                             variant="ghost"
                             size="icon"

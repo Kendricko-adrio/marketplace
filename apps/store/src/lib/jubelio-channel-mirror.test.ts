@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { JubelioSalesOrderEditSnapshot } from "./jubelio-sales-client";
 import {
   channelStatusMarkerForTerminalLocalOrderStatus,
+  deriveChannelStatusTarget,
   isChannelTargetRegression,
+  isSiapProsesTargetApplicable,
   mirrorPreReadMismatch,
 } from "./jubelio-channel-mirror";
 import type { JubelioSalesOrderEditRequest } from "@marketplace/db/src/schema";
@@ -720,5 +722,82 @@ describe("mirrorPreReadMismatch contract-v3 provider tax (pure unit)", () => {
         verifiedInvoiceId: V2_INVOICE_ID,
       })
     ).toBe("SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE");
+  });
+});
+
+// =========================================================
+// Spec penyelarasan status/notifikasi/email — derivasi delivery:
+// Belum Bayar → Siap Proses → Selesai tanpa pernah menjadi ready_for_pickup.
+// Pure unit: derivasi dibaca dari keadaan committed, bukan dari respons provider.
+// =========================================================
+
+function mirrorContext(input: {
+  status?: string;
+  paymentStatus?: string;
+  fulfillmentMethod?: string;
+  fulfillmentBlockedReason?: string | null;
+  hasManualReviewOp?: boolean;
+  cancelStatus?: string | null;
+  invoiceConfirmed?: boolean;
+  paymentConfirmed?: boolean;
+} = {}) {
+  return {
+    order: {
+      id: "order-delivery-fixture",
+      status: input.status ?? "processing",
+      paymentStatus: input.paymentStatus ?? "paid",
+      fulfillmentBlockedReason: input.fulfillmentBlockedReason ?? null,
+      fulfillmentMethod: input.fulfillmentMethod ?? "delivery",
+    },
+    create: { status: "confirmed", salesOrderId: 5001 },
+    cancel:
+      input.cancelStatus == null
+        ? null
+        : { status: input.cancelStatus },
+    invoice: { status: input.invoiceConfirmed === false ? "intent" : "confirmed", invoiceId: 6001 },
+    payment: { status: input.paymentConfirmed === false ? "intent" : "confirmed", paymentId: 7001 },
+    hasManualReviewOp: input.hasManualReviewOp ?? false,
+    orderPricing: {},
+  } as unknown as Parameters<typeof isSiapProsesTargetApplicable>[0];
+}
+
+describe("delivery Siap Proses derivation (spec penyelarasan, pure unit)", () => {
+  it("delivery processing/paid dengan ledger terverifikasi menjadi Siap Proses", () => {
+    expect(deriveChannelStatusTarget(mirrorContext())).toBe("Siap Proses");
+  });
+
+  it("pickup tetap memakai syarat existing (ready_for_pickup)", () => {
+    expect(
+      deriveChannelStatusTarget(
+        mirrorContext({ fulfillmentMethod: "pickup", status: "ready_for_pickup" })
+      )
+    ).toBe("Siap Proses");
+  });
+
+  it("delivery processing/paid tanpa invoice atau payment terverifikasi tidak ditargetkan", () => {
+    expect(deriveChannelStatusTarget(mirrorContext({ invoiceConfirmed: false }))).toBeNull();
+    expect(deriveChannelStatusTarget(mirrorContext({ paymentConfirmed: false }))).toBeNull();
+  });
+
+  it("delivery paid yang masih blocked tetap Menunggu Verifikasi, bukan Siap Proses", () => {
+    expect(
+      deriveChannelStatusTarget(
+        mirrorContext({ fulfillmentBlockedReason: "Sales-Order invoice is unverified" })
+      )
+    ).toBe("Menunggu Verifikasi");
+    expect(
+      deriveChannelStatusTarget(mirrorContext({ hasManualReviewOp: true }))
+    ).toBe("Menunggu Verifikasi");
+  });
+
+  it("cancel path aktif menahan Siap Proses delivery", () => {
+    expect(isSiapProsesTargetApplicable(mirrorContext({ cancelStatus: "confirmed" }))).toBe(
+      false
+    );
+    expect(isSiapProsesTargetApplicable(mirrorContext({ cancelStatus: "rejected" }))).toBe(true);
+  });
+
+  it("delivery completed memproyeksikan Selesai, bukan Siap Proses", () => {
+    expect(deriveChannelStatusTarget(mirrorContext({ status: "completed" }))).toBe("Selesai");
   });
 });

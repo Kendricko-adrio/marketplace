@@ -98,7 +98,7 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   / `apps/admin/src/lib/logger.ts`): minimum `info` on success, `error` with
   context on failure. Details: [`docs/features/logging.md`](docs/features/logging.md).
 - Keep AGENTS.md in **English**. For generated documents, follow the
-  **Indonesian documentation policy** in §6.
+  **Indonesian documentation policy** in section 6.
 - **Bahasa dokumentasi:** seluruh dokumen project yang dibuat atau di-generate
   harus menggunakan **bahasa Indonesia**, termasuk AGENTS.md, research notes,
   plans, spesifikasi, decision/implementation tickets, wayfinder maps, ADRs,
@@ -119,7 +119,10 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   orchestrator self-review is not approval. Obtain separate approval of a
   multi-session ticket breakdown before publishing it. Small, well-defined
   requests may proceed from agreed conversational scope without a plan file.
-  Stop for new product decisions; do not silently re-plan. Read the on-demand
+  Stop for new product decisions; do not silently re-plan. After research,
+  classify open items and recommend the next step without automatically
+  starting another stage; follow the research-to-alignment procedure in the
+  skill below. Read the on-demand
   [`development-workflow` skill](.agents/skills/development-workflow/SKILL.md)
   for the full process and gates.
 - **Write the technical and UX blueprint before implementation.** A nontrivial
@@ -130,8 +133,8 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   become open items, and a requested prototype is the binding reference for
   flow, structure, and states while existing tokens/components stay the visual
   source of truth. A small single-session change may use a 4–6 line mini
-  version. Details: [`development-workflow` §2](.agents/skills/development-workflow/SKILL.md)
-  and [`ux-design` §3](.agents/skills/ux-design/SKILL.md).
+  version. Details: [`development-workflow` section 2](.agents/skills/development-workflow/SKILL.md)
+  and [`ux-design` section 3](.agents/skills/ux-design/SKILL.md).
 - **Subagents are opt-in, bounded, and edit-only implementers.** Spawn only
   when the user explicitly authorizes delegation for the current task/session;
   plan approval is not permission. For implementation handoffs, subagents may
@@ -144,7 +147,7 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   loop-stop rules. Implementation handoffs use the project `implementer` agent
   ([`.agents/agents/implementer.md`](.agents/agents/implementer.md)), whose tool
   allowlist has no shell — a child cannot run validation even by accident. The
-  main agent owns the verification ladder in §5.
+  main agent owns the verification ladder in section 5.
 - **Plan → execute → review applies to any behavior-affecting change.** "Code"
   is broadly defined — no loopholes: app code, config/env files, schema files,
   seeders, middleware/route configs, files under `deployment/`. Pure research,
@@ -154,6 +157,27 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   [`.scratch/README.md`](.scratch/README.md).
   Implement approved scope one verifiable slice at a time; review against the
   approved behavior and repo standards before accepting the result.
+- **No completion claim without AC coverage.** Before reporting work, turn the
+  approved spec's acceptance criteria (or the ticket's) into an `AC → evidence`
+  table and mark every row `Verified` (with the command/spec and its result) or
+  `Pending`. Completion language ("selesai", "done", "implemented", "fixed")
+  is allowed only when every row is `Verified`. Otherwise the report's first
+  line must state in plain terms what the user will still see unchanged and
+  which ACs are `Pending`. Test counts, typecheck, lint, and a clean diff are
+  evidence for rows — never a substitute for rows. When the spec has its own
+  closing checklist, copy its unfinished items verbatim into the limitations.
+- **No layer-first delivery when the approved spec changes user-visible
+  behavior.** Ship tracer-bullet slices that end in a working user path (e.g.
+  list → create → editor). A backend-only foundation slice is not a deliverable:
+  report it as "belum ada perubahan yang terlihat" and name the surface that
+  still runs the old implementation. Never present schema/services/tests as
+  delivery of a UI contract.
+- **Schema sync against the user's development database needs explicit
+  permission and a stated breakage risk.** A foundation slice that adds a column
+  without the matching `db:push` turns an unchanged page into a 500; a slice
+  that adds it unannounced destroys their working state. Ask before touching
+  their local DB, say what breaks until it is applied, and never bundle it into
+  an unreported checkpoint.
 - **Load the matching skill first** — the lookup is mandatory before
   implementation, for the main agent **and** for an authorized implementer
   subagent: `ux-design` (all coding; mandatory UX and cross-page consistency
@@ -165,6 +189,14 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   matching skill too; subagent use never bypasses a rule, and loading a skill
   never grants scope, delegation, or commit/remote permission that the user did
   not approve separately.
+- **Mandatory `to-spec` skill lookup before writing specifications.** Read
+  [`.agents/skills/to-spec/SKILL.md`](.agents/skills/to-spec/SKILL.md) in full
+  and use it to synthesize specifications from the agreed conversation,
+  research, and decisions; merely naming the skill is not loading it. This
+  applies to the main agent and any authorized subagent writing a spec.
+  The project's technical/UX blueprints, artifact placement, and explicit
+  approval gates in `development-workflow` still take precedence over upstream
+  file-path restrictions and automatic publication or `ready-for-agent` steps.
 - **Mandatory UX skill lookup before coding, especially frontend development.**
   Read [`.agents/skills/ux-design/SKILL.md`](.agents/skills/ux-design/SKILL.md)
   in full before any coding task; merely naming the skill is not loading it.
@@ -177,6 +209,17 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   `frontend-design`. For backend-only work without UX impact, record that the
   visual gates are not applicable. This requirement also applies to authorized
   implementer subagents; the main agent still owns all validation.
+- **Confirm UX decisions, reuse established patterns.** Before frontend
+  implementation, resolve user-owned workflow, information-priority, action,
+  and permission decisions during alignment (or grill/wayfinder when used).
+  Agents must inspect and reuse established visual and data-behavior patterns,
+  not ask users to decide every color or spacing value. Record the reference
+  and list/table contract (search scope, pagination, sorting, filters, URL state,
+  and feedback states) in the approved spec or small-change conversation.
+  Do not silently substitute client-side search for backend search or omit
+  pagination. Ambiguous standards or necessary deviations require a reasoned
+  proposal and user decision before the affected implementation. Follow
+  `ux-design` for reference audits and rendered/behavioral verification.
 - **Context7 inquiry is mandatory before implementation.** Model knowledge stops
   at its training cut-off, so never write library/framework API code from
   memory. Before the first code slice that touches an external package
@@ -280,24 +323,44 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   the failing test first for features and bug fixes. When an implementation is
   delegated, the subagent authors/updates tests but does not execute them; the
   main agent runs the tests and completes the red → green verification loop.
-- **Verification ladder — cheap per slice, expensive per batch.** Batching test
-  runs is allowed; skipping verification is not.
-  - **L0 (every slice, seconds):** `npm run verify:types:store` and/or
-    `npm run verify:types:admin` (`tsc --noEmit`, incremental).
-  - **L1 (every slice):** `npm run verify:unit:slice -- <explicit test paths>` —
-    only the files the slice touched. Never leave the file list implicit.
-  - **L2 (every batch of tickets):** `npm run verify:batch:unit` (serial, compact
-    reporter) plus only the mock E2E specs the batch touched:
-    `npm run verify:batch:e2e -- e2e/store/<spec>-mock.spec.ts`.
-  - **L3 (before commit/PR, and at the integration ticket):** the full suites
-    required above. The legacy `npm run test:e2e` still needs separate
-    authorization.
-  - A ticket may sit at `claimed` until its batch gate passes, but it is never
-    `resolved` without recorded L2/L3 evidence. Keep output bounded: capture to a
-    log outside the repo or print only summary/FAIL lines, and never re-run a
-    suite that already passed — record its summary line as evidence instead. New
-    mock specs must also be added to `playwright.mock.config.ts` `testMatch`, or
-    they silently never run.
+- **Verification ladder — focused development, full verification at the end.**
+  - **L0 (per slice):** `npm run verify:types:store` and/or
+    `npm run verify:types:admin` (`tsc --noEmit`, incremental) for affected apps.
+  - **L1 (development/TDD):** run
+    `npm run verify:unit:slice -- <explicit test paths>` at the agreed public
+    seams for the current slice. Always list the relevant unit test files;
+    never default to a whole workspace or full suite. Prove RED before GREEN.
+    Refactoring belongs to review per `tdd`; verify affected files afterward.
+  - **L2 (final integration of the user-agreed deliverable):** run the full
+    unit suite for logic changes (`npm run test:unit`) and the required E2E
+    suites for UI/routing/auth changes. Run affected mock specs with explicit
+    paths via `npm run verify:batch:e2e -- <spec paths>` at this final gate,
+    not per internal batch. The legacy `npm run test:e2e` still requires
+    separate authorization; if unavailable, report final verification Pending.
+  - The end means the end of the requested scope, not every slice, ticket,
+    internal batch, or progress report. Several approved tickets requested
+    together share a final gate after integration. Do not run full unit,
+    integration, or E2E suites during development by default; an earlier run
+    requires an explicit user request. Before commit/PR or claiming completion,
+    the final gate must pass for the current integrated changes.
+  - Author required E2E coverage alongside the feature, but defer its execution
+    to the final gate. Unit tests do not prove browser/integration behavior;
+    keep the corresponding ACs Pending until the required evidence exists.
+    Rendered UI review remains required for frontend acceptance.
+  - Tickets awaiting final evidence may remain `claimed`; do not mark them
+    `resolved` solely on focused unit tests. Record final gate evidence for
+    each ticket when the integrated deliverable passes; partial progress keeps
+    final verification and affected ACs Pending, without forcing a broad run.
+  - Re-run focused tests only when relevant code, tests, dependencies, or test
+    conditions changed, or a specific failure needs investigation. Preserve
+    passing evidence for unchanged code; do not re-run just for reassurance.
+    If a final suite fails, diagnose and repair using focused tests first,
+    then repeat the affected final gate. If changes invalidate previous
+    evidence, revalidate the impacted gate rather than reusing stale results.
+  - Keep output bounded: capture logs outside the repo or print summary/FAIL
+    lines (Playwright artifacts still belong under `/playwright/`). New mock
+    specs must be added to `playwright.mock.config.ts` `testMatch`, or they
+    silently never run.
 - **Keep tests deterministic.** Do not depend on random data, time-of-day, or
   external services that are not mocked / controlled in the test environment.
 - **Centralize disposable Playwright output under `/playwright/` (gitignored).**

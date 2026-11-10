@@ -1,74 +1,37 @@
 import { NextRequest } from "next/server";
-import { z } from "zod";
 
 import { guard } from "@/lib/rbac/guard";
 import { createModuleLogger, withRequestContext } from "@/lib/logger";
-import {
-  setDiscountCodeState,
-  DiscountAdministrationError,
-} from "@/lib/discounts-administration";
-import {
-  discountFailureResponse,
-  discountSuccessResponse,
-  requireActorId,
-} from "@/lib/discounts-http";
+import { discountErrorResponse } from "@/lib/discounts-http";
 
 // =========================================================
-// PATCH /api/admin/discounts/[id]/codes/[codeId]         [discounts:edit]
+// PATCH /api/admin/discounts/[id]/codes/[codeId]  [discounts:edit] — DITUTUP
 // =========================================================
-// Active/inactive/archived only. Perintah ini tidak menerima literal maupun
-// owner baru: kode tidak dapat dipindah ke Offer lain, literal publikasi tidak
-// berubah, dan usage Offer tidak pernah direset. Arsip bersifat terminal.
+// Status kode dulu diubah langsung pada kode live. Sekarang status target
+// adalah bagian dari draft (header "Kode yang sudah diterbitkan") dan baru
+// berlaku saat publish, sehingga endpoint ini mengembalikan 410 alih-alih
+// menulis eligibility di luar lifecycle draft.
 export const dynamic = "force-dynamic";
 
-/**
- * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
- * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
- * (`withRequestContext` di export handler membuka scope tersebut).
- */
-const log = createModuleLogger("admin-discount-code-state");
+const log = createModuleLogger("admin-discount-code-state-moved");
 
 type RouteContext = { params: Promise<{ id: string; codeId: string }> };
 
-const codeStateSchema = z.strictObject({
-  expectedOfferVersion: z.number().int().positive(),
-  expectedCodeVersion: z.number().int().positive(),
-  state: z.enum(["active", "inactive", "archived"]),
-});
-
-async function setCodeState(
-  request: NextRequest,
+async function moved(
+  _request: NextRequest,
   { params }: RouteContext
 ): Promise<Response> {
   const guardResult = await guard("discounts", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { ctx } = guardResult;
-
-  try {
-    const parsed = codeStateSchema.safeParse(await request.json().catch(() => null));
-    if (!parsed.success) {
-      log.warn("discounts codes state ditolak: body tidak valid (outcome denied)");
-      return discountFailureResponse(
-        new DiscountAdministrationError(400, "INPUT_INVALID", "Invalid request body"),
-        "discounts codes state ditolak"
-      );
-    }
-
-    const { id, codeId } = await params;
-    const result = await setDiscountCodeState(
-      { offerId: id, codeId, ...parsed.data },
-      requireActorId(ctx.user.id)
-    );
-
-    // Literal kode tidak pernah masuk log — hanya id kode + versi.
-    log.info(
-      `discounts codes state (offer ${id}, codeId ${codeId}, version ${result.data.version}, replayed ${result.replayed}, actor ${ctx.user.id}, policyVersion ${ctx.policy.policyVersion}, outcome success)`
-    );
-    return discountSuccessResponse(result.data);
-  } catch (error) {
-    return discountFailureResponse(error, "discounts codes state gagal");
-  }
+  const { id, codeId } = await params;
+  log.warn(
+    `discounts codes state ditolak: writer lama ditutup (offer ${id}, codeId ${codeId}, outcome denied)`
+  );
+  return discountErrorResponse(
+    410,
+    "CONFIGURATION_MOVED_TO_DRAFT",
+    "Ubah konfigurasi melalui draft, lalu publish"
+  );
 }
 
-/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
-export const PATCH = withRequestContext(setCodeState, "admin-discount-code-state");
+export const PATCH = withRequestContext(moved, "admin-discount-code-state-moved");

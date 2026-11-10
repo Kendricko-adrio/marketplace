@@ -6,34 +6,63 @@ persentase dengan cap opsional: draft, review, publish, pause,
 kapasitas, simulasi, usage, dan histori. Slice ini **tidak** mengaktifkan
 redemption customer; pemakaian nyata (reserve/consume) dimiliki ticket 07/12.
 
-## Fondasi editor terpadu — belum cutover HTTP/UI
+## Editor terpadu (satu snapshot draft)
 
-Implementasi internal baru berada di `apps/admin/src/features/discounts/`:
+Halaman Diskon memakai satu editor: identitas, potongan, minimum, jadwal,
+kuota/budget, batas per customer, dan perubahan kode disimpan sebagai **satu
+snapshot draft** pada kolom `discount_offer_revision.draft_configuration`
+(JSONB, `draftSchemaVersion: 1`, batas 256 KiB, parser strict di
+`packages/db/src/discount-draft.ts`). Tidak ada simpan per bagian.
 
-- `saveDiscountConfiguration` menyimpan snapshot draft parsial secara atomik,
-  dengan request key, expected versions, audit, dan receipt. Live terms,
-  kapasitas, kode, dan usage tidak berubah saat save.
-- `reviewDiscountConfiguration` memeriksa kelengkapan, delta izin kapasitas,
-  komitmen, drift, serta perubahan kode dari snapshot server. Response membawa
-  issue field, perubahan konfigurasi, dan fingerprint seluruh draft.
-- `publishDiscountConfiguration` memeriksa ulang policy/usage/fingerprint di
-  bawah lock, lalu menerapkan benefit, terms, kapasitas, kode, pointer, audit,
-  dan receipt dalam satu transaksi. Counter dan snapshot order tidak direset.
-- `getDiscountEditorDetail` menampilkan snapshot draft atau baseline legacy/live.
-  Viewer tidak menerima proposal literal kode. Receipt tidak menyimpan literal;
-  audit menyimpan kode masked. Replay membaca detail canonical terkini seperti
-  create legacy, tanpa mengulang mutasi.
+- **Daftar** memakai satu tabel (Nama diskon, Jenis, Potongan, Status, Sisa
+  kuota, Sisa budget, Aksi) dengan filter **Semua jenis** dan **Semua status**.
+  Offer yang belum pernah publish menampilkan label kapasitas **Belum berlaku**;
+  Offer published yang punya draft menampilkan badge **Ada draft**.
+- **Buat diskon** membuka dialog dengan radio **Jenis promo** (Kupon publik /
+  Kode promo). Jenis tidak diwarisi dari filter daftar, dan Batal tidak membuat
+  record. Create menulis snapshot draft kosong tanpa reservasi kode.
+- **Pengaturan** dan **Kode** berbagi state draft. Tab Kode hanya dirender untuk
+  kode promo; kupon publik tidak memiliki panel "tidak punya kode". Input uang
+  menampilkan prefix `Rp` dan format `Rp 100.000,00` saat blur; persen memakai
+  koma dan suffix `%`. Saat mengetik, separator ribuan muncul langsung
+  (`2` → `20` → `200` → `2.000` → `20.000` → `200.000`): buffer field hanya
+  menyimpan digit polos, sedangkan separator `,00` dan titik ribuan murni hasil
+  render, sehingga `fill()`/ketikan berikutnya tidak menumpuk separator menjadi
+  nilai yang tidak terbaca (mis. `2.00000`). Persentase memakai aturan yang sama:
+  buffer menyimpan teks yang sedang diketik (nol di belakang koma tidak hilang)
+  dan dirapikan saat blur, serta **ketikan yang membuat nilai melewati 100%
+  ditolak** — field tidak pernah berisi persentase yang mustahil disimpan.
+  Pecahan tetap diizinkan sampai 6 angka desimal sesuai aturan server.
+- **Simpan draft** (`PUT /api/admin/discounts/{id}/draft`) menyimpan seluruh
+  konfigurasi; draft parsial diterima. Live terms, kapasitas, status kode, dan
+  usage tidak berubah.
+- **Lanjut ke publish** memvalidasi seluruh field lintas tab, menyimpan draft
+  bila dirty, lalu meminta review (`POST .../review`) dan menampilkan dialog
+  **Periksa sebelum publish** berisi perubahan **Saat ini → Setelah publish**,
+  peringatan jadwal/paused, dan syarat email terverifikasi. Publish
+  (`POST .../publish`) memakai fingerprint review dan menerapkan terms,
+  benefit, kapasitas, batas per customer, kode, pointer revision, audit, dan
+  receipt dalam satu transaksi.
+- **Simulasi** memakai versi draft tersimpan yang eksplisit; bila konfigurasi
+  dirty, aksinya **Simpan draft dan simulasikan**. Draft belum lengkap
+  diarahkan ke field terkait, bukan memakai nilai live diam-diam.
+- **Pemakaian** menampilkan angka live (**Pemakaian saat ini**) tanpa field
+  konfigurasi; **Riwayat** membaca audit manusiawi tanpa JSON mentah.
+- Keluar dari editor saat dirty meminta **Tetap mengedit**, **Buang perubahan**,
+  atau **Simpan draft dan keluar**; refresh/tutup tab memakai peringatan browser.
 
-Snapshot memakai `discount_offer_revision.draft_configuration` JSONB nullable,
-`draftSchemaVersion: 1`, dan batas 256 KiB. Parser strict ada di
-`packages/db/src/discount-draft.ts`; formatter uang/persen murni ada di
-`apps/admin/src/app/admin/discounts/[id]/discount-number-format.ts`.
+Writer konfigurasi lama ditutup: `PATCH /policy`, `POST /codes`, dan
+`PATCH /codes/{codeId}` mengembalikan **410 CONFIGURATION_MOVED_TO_DRAFT**
+("Ubah konfigurasi melalui draft, lalu publish"). Pause/aktifkan/arsip tetap di
+`PATCH /state` sebagai aksi lifecycle eksplisit di menu **Tindakan**.
 
-**Belum tersedia melalui endpoint atau editor:** route dan UI masih memakai
-kontrak existing di bawah. Jangan menjalankan operasi konfigurasi baru pada
-lingkungan operasional bersamaan dengan writer legacy. Backfill persisted,
-cutover writer lama ke 410, wiring HTTP/UI/simulasi, serta verifikasi UX/E2E
-masih harus diselesaikan sebelum fitur terpadu dapat dipakai.
+Envelope error menambahkan `fieldErrors: {path, message}[]` agar editor dapat
+memfokuskan field/tab yang bermasalah; pesan SQL/provider tidak pernah
+diekspos.
+
+Draft lama yang belum memiliki snapshot diisi oleh
+`npm run db:backfill-discount-drafts` (idempotent, hanya revision belum
+publish, tanpa mengubah pointer live/kapasitas/kode/usage/version).
 
 ## 1. Scope dan non-goals
 

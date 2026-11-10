@@ -29,6 +29,25 @@ export interface DiscountDraftIssue {
   message: string;
 }
 
+/**
+ * Snapshot draft kosong untuk Offer yang baru dibuat: satu sumber kebenaran
+ * draft sejak awal, tanpa mengarang nama/benefit/kuota. Semua field opsional
+ * tetap null sampai editor menyimpannya.
+ */
+export function createEmptyDiscountDraftConfiguration(): DiscountDraftConfiguration {
+  return {
+    draftSchemaVersion: 1,
+    name: null,
+    currency: "IDR",
+    minSubtotal: null,
+    startAt: null,
+    endAt: null,
+    benefit: null,
+    capacity: { quotaCount: null, budgetAmount: null, perClientLimit: null },
+    codeChanges: { proposedCodes: [], states: [] },
+  };
+}
+
 export type DraftParseResult =
   | { success: true; configuration: DiscountDraftConfiguration }
   | { success: false; issues: DiscountDraftIssue[] };

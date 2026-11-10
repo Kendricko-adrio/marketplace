@@ -147,6 +147,20 @@ pointer → revisions → batch; reset tidak lagi memalsukan state `pending` pad
 row yang gagal parse.
 
 
+## Demo state editor terpadu
+
+`SEED_MODE=demo` juga membuat tiga Offer fixture untuk editor terpadu, semua
+memakai snapshot `draft_configuration` seperti UI:
+
+- **Draft Demo Belum Lengkap** — Offer `draft` dengan snapshot hanya berisi nama;
+- **Promo Demo Dengan Draft Baru** — Offer `enabled` dengan revision live dan
+draft berbeda, sehingga daftar/editor menampilkan badge **Ada draft**;
+- **Promo Demo Dijeda** — Offer `paused` dengan draft tersimpan.
+
+Offer lain (kupon publik, kode manual, persentase, subsidi ongkir) tetap ada.
+`discounts.contractVersion` tetap `0`; fixture ini hanya untuk melihat state
+editor, bukan aktivasi rollout.
+
 ## Demo subsidi ongkir (ticket 11)
 
 Seed demo menambahkan satu Offer publik `Subsidi Ongkir Demo Rp20.000` (cap

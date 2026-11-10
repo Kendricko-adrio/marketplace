@@ -7,6 +7,7 @@ import {
   setDiscountOfferState,
   DiscountAdministrationError,
 } from "@/lib/discounts-administration";
+import { getDiscountEditorDetail } from "@/features/discounts/discount-configuration-repository";
 import {
   discountFailureResponse,
   discountSuccessResponse,
@@ -65,7 +66,10 @@ async function setState(
     log.info(
       `discounts state (offer ${id}, state ${result.data.state}, version ${result.data.version}, replayed ${result.replayed}, actor ${ctx.user.id}, policyVersion ${ctx.policy.policyVersion}, outcome success)`
     );
-    return discountSuccessResponse(result.data);
+    // Editor read model (termasuk draftConfiguration) supaya layar tidak
+    // kehilangan snapshot draft setelah mutasi lifecycle.
+    const detail = await getDiscountEditorDetail(id, requireActorId(ctx.user.id));
+    return discountSuccessResponse(detail);
   } catch (error) {
     return discountFailureResponse(error, "discounts state gagal");
   }

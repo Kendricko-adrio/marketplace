@@ -34,6 +34,7 @@
     "db:reset": "cd packages/db && npm run db:reset",
     "db:bootstrap-owner": "cd packages/db && npx tsx src/bootstrap-owner.ts",
     "db:import-jubelio": "cd packages/db && npm run db:import-jubelio --",
+    "db:backfill-discount-drafts": "cd packages/db && npm run db:backfill-discount-drafts",
     "lint": "cd apps/store && npm run lint && cd ../admin && npm run lint",
     "lint:store": "cd apps/store && npm run lint",
     "lint:admin": "cd apps/admin && npm run lint",

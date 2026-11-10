@@ -4,6 +4,8 @@ export type NumericInputResult =
   | { status: "incomplete"; canonical: null }
   | { status: "invalid"; canonical: null; message: string };
 
+export type NumberInputKind = "money" | "percent";
+
 const MONEY_MAX = BigInt("9999999999999");
 const invalid = (message: string): NumericInputResult => ({ status: "invalid", canonical: null, message });
 const incomplete = (): NumericInputResult => ({ status: "incomplete", canonical: null });
@@ -53,4 +55,49 @@ export function parsePercentInput(text: string): NumericInputResult {
 /** Bagian editable saja; caller menampilkan suffix % yang selalu terlihat. */
 export function formatPercentInput(canonical: string | null): string {
   return canonical === null ? "" : canonical.replace(".", ",");
+}
+
+/**
+ * Teks input → buffer state. Separator grouping yang dirender input dibuang agar
+ * buffer selalu angka polos; kalau grouping ikut tersimpan, ketikan berikutnya
+ * menghasilkan buffer yang tidak terbaca (mis. `2.000` + `0` menjadi `2.0000`).
+ * Persen ditolak saat ketikan itu membuat nilai melewati 100%: buffer lama
+ * dipertahankan, jadi field tidak pernah berisi nilai yang mustahil disimpan.
+ */
+export function numberTypingBuffer(
+  previous: string,
+  next: string,
+  kind: NumberInputKind
+): string {
+  if (kind === "money") return next.replace(/\./g, "");
+  return percentExceedsMax(next) ? previous : next;
+}
+
+/** Persen di atas 100, termasuk pecahan seperti `100,5`; bukan validasi lain. */
+function percentExceedsMax(text: string): boolean {
+  const match = /^(\d+)(?:,(\d*))?$/.exec(text.trim().replace(/%$/, "").trim());
+  if (!match) return false;
+  const whole = BigInt(match[1]);
+  if (whole > BigInt(100)) return true;
+  return whole === BigInt(100) && (match[2] ?? "").replace(/0+$/, "") !== "";
+}
+
+/**
+ * Buffer → teks yang tampil. Uang dirender dengan grouping (fokus menyembunyikan
+ * `,00`); persen menampilkan apa yang sedang diketik supaya angka nol di belakang
+ * koma tidak hilang, lalu dirapikan saat blur. Buffer belum lengkap/invalid
+ * ditampilkan apa adanya.
+ */
+export function displayNumberInput(
+  text: string,
+  kind: NumberInputKind,
+  focused: boolean
+): string {
+  if (kind === "percent") {
+    const percent = parsePercentInput(text);
+    if (percent.status !== "valid") return text;
+    return focused ? text : formatPercentInput(percent.canonical);
+  }
+  const money = parseMoneyInput(text);
+  return money.status === "valid" ? formatMoneyInput(money.canonical, focused) : text;
 }

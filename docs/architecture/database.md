@@ -10,6 +10,12 @@ Apps are read-only consumers: they create a local `db` connection and re-export
 the shared schema (see [overview.md](overview.md)). Never define tables in an
 app.
 
+## Backfill snapshot draft diskon
+
+Revision draft yang dibuat sebelum kolom `draft_configuration` ada diisi oleh
+`npm run db:backfill-discount-drafts` (idempotent; hanya revision belum publish;
+tidak mengubah pointer live, kapasitas, kode, usage, version, atau audit).
+
 ## Schema Change Workflow
 
 1. Edit `packages/db/src/schema/*.ts`

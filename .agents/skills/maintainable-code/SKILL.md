@@ -119,7 +119,7 @@ berarti itu hanya pass-through.
 memanggil `list-products.ts` dari `route.ts`. Menambahkan
 `list-products-service.ts` yang meneruskan parameter ke fungsi itu tidak menambah
 leverage, hanya menambah file; sebaliknya, memindahkan query 60 baris ke dalam
-`route.ts` karena "masih satu query" juga melanggar aturan §2.
+`route.ts` karena "masih satu query" juga melanggar aturan bagian 2.
 
 ## 6. Types, error, test, privacy
 
@@ -141,6 +141,65 @@ leverage, hanya menambah file; sebaliknya, memindahkan query 60 baris ke dalam
   cookie, authorization header, raw provider response, atau full URL query ke
   log. Authorization tetap dicek dekat data, bukan hanya di route/middleware.
   Audit Event database bukan application log: jangan diganti dengan stdout.
+
+### 6.1 `try/catch` harus memiliki tujuan
+
+- Jangan membungkus setiap function dengan `catch` yang hanya menulis log lalu
+  melempar error yang sama. Tanpa kebutuhan penanganan lokal, biarkan exception
+  atau rejected promise naik ke caller; ini bukan berarti error diabaikan.
+- Gunakan `catch` untuk pekerjaan nyata: translasi error teknis yang dikenali,
+  recovery/fallback yang aman, compensation, atau penambahan konteks penting yang
+  tidak tersedia di boundary. Jangan menambah boilerplate semata-mata agar setiap
+  function terlihat memiliki error handling.
+- **Translasi spesifik:** kenali error/code/constraint yang memang mewakili
+  expected outcome. Contoh: hanya unique constraint kode affiliate menjadi
+  `code_taken`; koneksi DB putus atau constraint lain tetap unexpected failure.
+  Jangan mengubah semua exception menjadi `null`, `not_found`, atau conflict.
+- **Recovery aman:** cache gagal boleh beralih ke database bila sesuai kontrak.
+  Database gagal tidak boleh dianggap daftar kosong. Jangan mengubah kegagalan
+  harga, stok, ongkir, atau pembayaran menjadi fallback sukses yang melanggar
+  invariant bisnis.
+- **Compensation berbasis evidence:** batalkan efek sebelumnya hanya ketika
+  outcome dan kontrak mengizinkannya. Timeout/lost response provider bukan bukti
+  penolakan; simpan status unknown untuk reconciliation, bukan otomatis cancel
+  atau retry write. Jika compensation gagal, pertahankan evidence dan catat
+  kebutuhan recovery/manual review secara durable sesuai desain. Jika pencatatan
+  itu juga gagal, kegagalannya harus diteruskan, bukan diklaim telah tertangani.
+- Pertahankan error asli atau gunakan `cause` saat menambahkan konteks. Jangan
+  mengganti semua kegagalan dengan generic error yang menghilangkan diagnosis;
+  sanitasi proyeksi log/response tetap wajib sesuai bagian 7 dan kontrak privacy.
+
+### 6.2 Pemilik error logging
+
+- Tetapkan satu boundary sebagai pemilik log unexpected failure dalam alur yang
+  sama. Default HTTP: repository/service meneruskan error; route mencatat sekali
+  dan memetakan response. Default job/CLI: entry point menjadi pemiliknya.
+- Kewajiban logging backend bukan kewajiban `catch` atau error log di setiap
+  function. Layer bawah boleh mencatat event bisnis penting, recovery yang
+  benar-benar dilakukan, atau konteks unik; jangan mengulang stack/error yang
+  sama di setiap layer. Jika ownership log dialihkan, caller tidak mencatat
+  ulang failure yang sama; jelaskan pembagian tersebut dalam desain.
+- Expected outcome seperti `code_taken`/`not_found` tidak otomatis menjadi error
+  log. Recovery yang berhasil dapat dicatat pada level yang sesuai (misalnya
+  `warn` saat beralih dari cache ke DB), tanpa mengklaim seluruh operasi gagal.
+
+Contoh ilustratif: service update affiliate tidak membutuhkan `catch` bila tidak
+ada penanganan lokal. Import/tipe dan business success logging disingkat di sini;
+ini bukan template endpoint lengkap:
+
+```ts
+const affiliate = await affiliateRepository.update(affiliateId, changes);
+
+if (!affiliate) {
+  return { kind: "not_found" };
+}
+
+return { kind: "updated", affiliate };
+```
+
+Jika repository melempar unexpected error, error naik ke route untuk dicatat dan
+dipetakan sekali. Pertanyaan review: **selain log lalu throw error yang sama,
+pekerjaan apa yang dilakukan `catch` ini?** Jika tidak ada, hilangkan `catch`.
 
 ## 7. Contextual logging (target kontrak)
 
@@ -263,6 +322,8 @@ membatalkan correctness, security, atau kontrak HTTP/auth/stream yang ada.
 - [ ] Handler hanya parse/auth/validasi/map/log; tidak ada query Drizzle di `route.ts`.
 - [ ] Service dinamai per operasi bisnis; tidak ada God Service/`helpers` dumping ground.
 - [ ] Service bebas SQL dan bebas `NextRequest`/`NextResponse`.
+- [ ] Setiap `catch` memiliki tujuan nyata; translasi error spesifik, fallback/compensation aman, dan unexpected failure tidak disamarkan sebagai expected outcome/success.
+- [ ] Pemilik error logging jelas; failure yang sama tidak di-log lalu dilempar ulang pada setiap layer, dan konteks penyebab tetap terjaga tanpa membocorkan data sensitif.
 - [ ] Persistence dan scope ada di repository/query module; provider call di luar transaksi.
 - [ ] Tidak ada parameter `logger`/`requestId`/request object yang diteruskan untuk logging; dependency bisnis/DB/provider bertipe tetap sah; logger dibuat di module scope.
 - [ ] Data bisnis ada di `message`; field log hanya whitelist; error tersanitasi.

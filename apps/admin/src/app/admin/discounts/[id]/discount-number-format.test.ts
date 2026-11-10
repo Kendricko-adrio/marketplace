@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parseMoneyInput, formatMoneyInput, parsePercentInput, formatPercentInput } from "./discount-number-format";
+import {
+  parseMoneyInput,
+  formatMoneyInput,
+  parsePercentInput,
+  formatPercentInput,
+  displayNumberInput,
+  numberTypingBuffer,
+} from "./discount-number-format";
 
 describe("angka editor diskon", () => {
   it.each([
@@ -51,5 +58,84 @@ describe("angka editor diskon", () => {
     expect(formatPercentInput("12.5")).toBe("12,5");
     expect(formatPercentInput("10")).toBe("10");
     expect(formatPercentInput(null)).toBe("");
+  });
+
+  it("memakai buffer koma untuk display persen", () => {
+    expect(displayNumberInput("12,5", "percent", true)).toBe("12,5");
+    expect(displayNumberInput("10", "percent", false)).toBe("10");
+    expect(displayNumberInput("", "percent", false)).toBe("");
+  });
+});
+
+/** Meniru input controlled: tiap ketikan memakai teks yang tampil lalu menyimpan buffer state. */
+function typeDigitByDigit(keys: string, kind: "money" | "percent" = "money") {
+  let buffer = "";
+  const shown: string[] = [];
+  for (const key of keys) {
+    const displayed = displayNumberInput(buffer, kind, true);
+    buffer = numberTypingBuffer(buffer, displayed + key, kind);
+    shown.push(displayNumberInput(buffer, kind, true));
+  }
+  return { buffer, shown, blurred: displayNumberInput(buffer, kind, false) };
+}
+
+describe("mengetik nominal rupiah", () => {
+  it("memberi grouping yang hidup tanpa merusak nilainya", () => {
+    const typed = typeDigitByDigit("200000");
+
+    expect(typed.shown).toEqual(["2", "20", "200", "2.000", "20.000", "200.000"]);
+    expect(typed.blurred).toBe("200.000,00");
+    expect(parseMoneyInput(typed.buffer)).toEqual({ status: "valid", canonical: "200000" });
+  });
+
+  it("tetap benar setelah mengetik lewat batas ribuan berkali-kali", () => {
+    const typed = typeDigitByDigit("2000000");
+
+    expect(typed.shown.at(-1)).toBe("2.000.000");
+    expect(parseMoneyInput(typed.buffer)).toEqual({ status: "valid", canonical: "2000000" });
+  });
+
+  it("menerima nominal yang ditempel lengkap dengan separator", () => {
+    const buffer = numberTypingBuffer("", "Rp 20.000,00", "money");
+
+    expect(displayNumberInput(buffer, "money", true)).toBe("20.000");
+    expect(parseMoneyInput(buffer)).toEqual({ status: "valid", canonical: "20000" });
+  });
+});
+
+describe("mengetik persentase diskon", () => {
+  it("tidak memakan angka nol di belakang koma saat mengetik", () => {
+    const typed = typeDigitByDigit("12,50", "percent");
+
+    expect(typed.shown).toEqual(["1", "12", "12,", "12,5", "12,50"]);
+    expect(typed.blurred).toBe("12,5");
+    expect(parsePercentInput(typed.buffer)).toEqual({ status: "valid", canonical: "12.5" });
+  });
+
+  it("mengizinkan tepat 100", () => {
+    const typed = typeDigitByDigit("100", "percent");
+
+    expect(typed.shown.at(-1)).toBe("100");
+    expect(typed.blurred).toBe("100");
+    expect(parsePercentInput(typed.buffer)).toEqual({ status: "valid", canonical: "100" });
+  });
+
+  it("menolak ketikan yang membuat nilai melewati 100%", () => {
+    const typed = typeDigitByDigit("150", "percent");
+
+    expect(typed.shown).toEqual(["1", "15", "15"]);
+    expect(parsePercentInput(typed.buffer)).toEqual({ status: "valid", canonical: "15" });
+  });
+
+  it("menolak pecahan di atas 100% tanpa memakan ketikan sebelumnya", () => {
+    const typed = typeDigitByDigit("100,5", "percent");
+
+    expect(typed.shown).toEqual(["1", "10", "100", "100,", "100,"]);
+    expect(parsePercentInput(typed.buffer)).toEqual({ status: "incomplete", canonical: null });
+  });
+
+  it("menolak tempelan di atas 100% dan mempertahankan nilai lama", () => {
+    expect(numberTypingBuffer("12,5", "150", "percent")).toBe("12,5");
+    expect(numberTypingBuffer("", "12,50", "percent")).toBe("12,50");
   });
 });

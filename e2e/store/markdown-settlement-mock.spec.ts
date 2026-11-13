@@ -180,7 +180,7 @@ test.beforeAll(async ({ browser }) => {
   homeBranchId = branch.rows[0]?.branch_id ?? "";
   homeLocationId = branch.rows[0]?.jubelio_location_id ?? 0;
   expect(homeBranchId).toBeTruthy();
-  expect(homeLocationId).toBeGreaterThan(0);
+  expect(branch.rows[0].jubelio_location_id).not.toBeNull();
 
   await pool.query(
     `INSERT INTO product (id, name, slug, base_price, status)

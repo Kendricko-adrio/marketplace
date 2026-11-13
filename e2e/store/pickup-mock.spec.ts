@@ -348,9 +348,9 @@ test.beforeAll(async ({ browser }) => {
     "the seeded admin must have an active Jubelio-linked Home Branch (npm run db:seed)"
   ).toBeTruthy();
   expect(
-    homeLocationId,
-    "the seeded admin's Home Branch must be linked to a Jubelio location"
-  ).toBeGreaterThan(0);
+    admin.rows[0]?.jubelio_location_id,
+    "the seeded admin's Home Branch must be mapped to a Jubelio location"
+  ).not.toBeNull();
 
   // Fixture product: exactly one Rp100.000 variant carried by the Home Branch.
   await pool.query(

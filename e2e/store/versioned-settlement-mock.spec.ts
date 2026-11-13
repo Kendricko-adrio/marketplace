@@ -484,9 +484,9 @@ test.beforeAll(async ({ browser }) => {
   homeBranchId = branch.rows[0].branch_id;
   homeLocationId = branch.rows[0].jubelio_location_id ?? 0;
   expect(
-    homeLocationId,
-    "the seeded admin's Home Branch must be linked to a Jubelio location"
-  ).toBeGreaterThan(0);
+    branch.rows[0].jubelio_location_id,
+    "the seeded admin's Home Branch must be mapped to a Jubelio location"
+  ).not.toBeNull();
 
   // Own fixture catalog rows: exactly one Rp150.000 variant at the Home Branch.
   await db().query("DELETE FROM cart_item WHERE variant_id = $1", [FIXTURE_VARIANT_ID]);

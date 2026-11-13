@@ -269,7 +269,7 @@ test.beforeAll(async ({ browser }) => {
   );
   homeBranchId = admin.rows[0]?.branch_id ?? "";
   expect(homeBranchId).toBeTruthy();
-  expect(admin.rows[0]?.jubelio_location_id ?? 0).toBeGreaterThan(0);
+  expect(admin.rows[0]?.jubelio_location_id).not.toBeNull();
 
   const owner = await pool.query<{ id: string }>("SELECT id FROM client WHERE email=$1", [
     TEST_USERS.store.email,

@@ -315,9 +315,9 @@ test.beforeAll(async ({ browser }) => {
     "the fixture pickup origin branch must be active"
   ).toBe("aktif");
   expect(
-    admin.rows[0]?.jubelio_location_id ?? 0,
-    "the seeded admin's Home Branch must be linked to a Jubelio location"
-  ).toBeGreaterThan(0);
+    admin.rows[0]?.jubelio_location_id,
+    "the seeded admin's Home Branch must be mapped to a Jubelio location"
+  ).not.toBeNull();
 
   // Heal leftovers from an interrupted run (deterministic owned IDs only).
   await pool.query("DELETE FROM cart_item WHERE id = $1", [

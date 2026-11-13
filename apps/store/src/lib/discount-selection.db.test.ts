@@ -67,7 +67,7 @@ async function createOffer(input: {
   state?: string;
   minSubtotal?: string;
   quotaCount?: number;
-  budgetAmount?: string;
+  budgetAmount?: string | null;
   perClientLimit?: number;
   activationKind?: "public" | "manual_only";
   /** Percentage goods (ticket 10); bila diisi, fixedAmount tidak dipakai. */
@@ -103,7 +103,7 @@ async function createOffer(input: {
       input.state ?? "enabled",
       `${input.id}-revision`,
       input.quotaCount ?? 100,
-      input.budgetAmount ?? "1000000",
+      input.budgetAmount === undefined ? "1000000" : input.budgetAmount,
       input.perClientLimit ?? 1,
     ]
   );
@@ -292,6 +292,42 @@ describe("evaluateSelectedPublicOffer", () => {
     );
     expect(redemptions.rows[0].count).toBe(0);
   });
+});
+
+describe("budget opsional pada evaluasi Offer", () => {
+  const budgets = [
+    { label: "tanpa batas nominal", budgetAmount: null, eligible: true },
+    { label: "nol", budgetAmount: "0", eligible: false },
+    { label: "kurang dari benefit", budgetAmount: "19999", eligible: false },
+    { label: "tepat sebesar benefit", budgetAmount: "20000", eligible: true },
+  ];
+
+  for (const activationKind of ["public", "manual_only"] as const) {
+    it.each(budgets)(`${activationKind}: budget $label`, async ({ budgetAmount, eligible }) => {
+      const id = `${PREFIX}-budget-${activationKind}-${budgetAmount ?? "null"}`;
+      await createOffer({
+        id, name: "Budget Opsional", activationKind, budgetAmount,
+        quotaCount: 100, perClientLimit: 3, rate: "10", capAmount: "20000",
+      });
+      let result;
+      if (activationKind === "manual_only") {
+        const code = `BUDGET${crypto.randomUUID().replaceAll("-", "").toUpperCase()}`;
+        await pool!.query(
+          `insert into discount_code (id, offer_id, canonical_code, state, actor_identity)
+           values ($1,$2,$3,'active','fixture')`,
+          [`${id}-code`, id, code]
+        );
+        result = await evaluateSelectedManualCode({
+          code, clientId, verifiedEmail: true, subtotalAfterMarkdown: "800000", now: NOW,
+        }, db!);
+      } else {
+        result = await evaluate(id, { subtotal: "800000" });
+      }
+      expect(result).toMatchObject(eligible
+        ? { ok: true, candidate: { offerId: id, benefitAmount: "20000" } }
+        : { ok: false, reason: "CAPACITY_UNAVAILABLE" });
+    });
+  }
 });
 
 describe("mapOfferReasonToHttp", () => {

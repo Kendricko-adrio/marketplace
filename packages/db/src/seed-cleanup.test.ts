@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { seedCleanupEntries } from "./seed-cleanup";
 
 describe("seed cleanup order", () => {
+  it("clears attempt evidence after its dependents and before orders, branches and clients", () => {
+    const names = seedCleanupEntries.map(([name]) => name);
+    expect(names).toContain("checkoutAttempts");
+    for (const dependent of ["jubelioSalesOperations", "discountRedemptions", "checkoutRequests"]) {
+      expect(names.indexOf(dependent)).toBeLessThan(names.indexOf("checkoutAttempts"));
+    }
+    for (const parent of ["orders", "branches", "clients"]) {
+      expect(names.indexOf("checkoutAttempts")).toBeLessThan(names.indexOf(parent));
+    }
+  });
   it("clears the Shipment ledger before parent orders and admin attribution", () => {
     const names = seedCleanupEntries.map(([name]) => name);
     expect(names).toContain('deliveryBookingReviews');

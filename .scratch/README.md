@@ -9,7 +9,8 @@ tetap di `.agents/skills/`. Aturan utama: [`AGENTS.md`](../AGENTS.md).
 ```text
 .scratch/
   README.md                  # panduan, bukan register status global
-  templates/plan.md          # template bersama
+  templates/plan.md          # template plan/spec bersama
+  templates/ticket.md        # template implementation ticket
   discounts/
     index.md                 # navigasi dan status plan fitur ini saja
     research/                # research, protokol, evidence pendukung
@@ -33,7 +34,10 @@ file status yang sama. Daftar fitur dapat dilihat dengan `ls .scratch/`.
 3. `research` menulis ke `research/`; `to-spec` ke `plan/`; `wayfinder` ke
    `wayfinder/`; `to-tickets` ke `ticket/`. Map masing-masing tahap bernama
    `map.md` di subfoldernya. Nomor decision ticket dan implementation ticket
-   adalah namespace berbeda.
+   adalah namespace berbeda. Implementation ticket dibuat dari
+   [`templates/ticket.md`](templates/ticket.md) dan wajib membawa irisan
+   blueprint, seam, serta batas keputusan untuk slice-nya, agar satu sesi yang
+   hanya membaca ticket tidak mengarang struktur sendiri.
 4. Buat/perbarui `index.md` fitur: tujuan, link artefak, satu baris per plan,
    approval, status, blocker, dan link bukti. Status ticket tetap hanya pada
    ticket; map/index cukup menautkan, bukan memelihara daftar status kedua.

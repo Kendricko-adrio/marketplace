@@ -1,12 +1,32 @@
 /** Kontrak uang checkout berversi; pure, tanpa runtime DB/HTTP/config.
  * Dipindahkan dari store agar paired reader admin memakai kontrak yang sama.
  */
-import type { PricingSnapshotLinePayload, PricingSnapshotPayloadV1 } from "./schema/orders";
+import type {
+  PricingSnapshotLinePayload,
+  PricingSnapshotLinePayloadV2,
+  PricingSnapshotLinePayloadV3,
+  PricingSnapshotPayloadProviderV2,
+  PricingSnapshotPayloadProviderV3,
+  PricingSnapshotPayloadV1,
+} from "./schema/orders";
+import {
+  allocateProviderTax,
+  MAX_PROVIDER_TAX_RUPIAH,
+  parseValidatedProviderTax,
+  type ValidatedProviderTax,
+} from "./provider-tax";
 
 export const PRICING_CONTRACT_VERSION = 1;
 export const PRICING_ENGINE_VERSION = 1;
+/** Kontrak provider tanpa pajak provider (baris lama/kompatibilitas). */
 export const PROVIDER_CONTRACT_VERSION = 2;
-export const MAX_MONEY_RUPIAH = BigInt("9999999999999");
+/** Kontrak provider yang mencatat PPN checkout pada SO/invoice/payment. */
+export const PROVIDER_TAX_CONTRACT_VERSION = 3;
+export const MAX_MONEY_RUPIAH = MAX_PROVIDER_TAX_RUPIAH;
+
+function isSupportedProviderVersion(value: number): value is 2 | 3 {
+  return value === PROVIDER_CONTRACT_VERSION || value === PROVIDER_TAX_CONTRACT_VERSION;
+}
 const RATE_SCALE_DIGITS = 6;
 const RATE_SCALE = BigInt(10) ** BigInt(RATE_SCALE_DIGITS);
 const HUNDRED = BigInt(100);
@@ -91,6 +111,17 @@ export interface BuildPricingSnapshotInput {
   lines: readonly PricingLineInput[];
   shippingBeforeSubsidy?: string | number;
   providerQuotedShippingCost?: string | number | null;
+  /**
+   * Tax context tervalidasi (config + master provider) yang membeku ke snapshot.
+   *
+   * - hadir → kontrak provider3: PPN order (ceil sekali atas net barang)
+   *   dialokasikan ke setiap whole line dan provider payable = net barang + PPN +
+   *   net ongkir. `providerTax.ratePercent` wajib sama dengan `ppnRatePercent`.
+   * - tidak hadir → kontrak provider2 apa adanya (kompatibilitas eksplisit dan
+   *   test seam untuk record lama). Endpoint order baru WAJIB memakai konteks
+   *   tervalidasi atau memblokir checkout; builder tidak pernah membaca config.
+   */
+  providerTax?: ValidatedProviderTax | null;
 }
 export type PricingSnapshotLine = PricingSnapshotLinePayload;
 export type PricingSnapshot = PricingSnapshotPayloadV1;
@@ -98,7 +129,7 @@ export type PricingSnapshot = PricingSnapshotPayloadV1;
 export function buildPricingSnapshot(input: BuildPricingSnapshotInput): PricingSnapshot {
   const fulfillmentMethod = input.fulfillmentMethod;
   if (fulfillmentMethod !== "pickup" && fulfillmentMethod !== "delivery") throw inputInvalid("fulfillmentMethod must be pickup or delivery");
-  const lines: PricingSnapshotLine[] = [];
+  const lines: PricingSnapshotLinePayloadV2[] = [];
   let sourceGoodsSubtotal = BigInt(0);
   let markdownTotal = BigInt(0);
   let effectiveGoodsTotal = BigInt(0);
@@ -146,20 +177,90 @@ export function buildPricingSnapshot(input: BuildPricingSnapshotInput): PricingS
   const serviceFee = BigInt(0);
   const taxableBase = netGoods;
   const rateScaled = parseRateScaled(input.ppnRatePercent, "ppnRatePercent");
+  const ppnRatePercent = formatRate(rateScaled);
   const ppnAmount = assertMoneyBound(ceilDiv(taxableBase * rateScaled, HUNDRED * RATE_SCALE), "ppnAmount");
   const total = assertMoneyBound(netGoods + ppnAmount + shippingCost + serviceFee, "total");
-  const expectedProviderPayable = assertMoneyBound(netGoods + shippingCost, "expectedProviderPayable");
+  const providerQuotedShippingCost =
+    input.providerQuotedShippingCost === undefined || input.providerQuotedShippingCost === null
+      ? null
+      : formatMoney(parseMoney(input.providerQuotedShippingCost, "providerQuotedShippingCost"));
+  const shared = {
+    pricingContractVersion: PRICING_CONTRACT_VERSION, pricingEngineVersion: PRICING_ENGINE_VERSION,
+    currency: "IDR" as const, fulfillmentMethod, sourceGoodsSubtotal: formatMoney(sourceGoodsSubtotal),
+    markdownTotal: formatMoney(markdownTotal), subtotal: formatMoney(subtotal), goodsDiscount: formatMoney(goodsDiscount),
+    netGoods: formatMoney(netGoods), shippingBeforeSubsidy: formatMoney(shippingBeforeSubsidy),
+    shippingSubsidy: formatMoney(shippingSubsidy), shippingCost: formatMoney(shippingCost),
+    merchantFunding: formatMoney(merchantFunding), serviceFee: formatMoney(serviceFee),
+    taxableBase: formatMoney(taxableBase), ppnRatePercent, ppnAmount: formatMoney(ppnAmount),
+    total: formatMoney(total), providerQuotedShippingCost, providerBilledShippingCost: null,
+  } as const;
+
+  // Tanpa konteks tervalidasi: kontrak provider2 lama, uang provider tanpa PPN.
+  if (input.providerTax === undefined || input.providerTax === null) {
+    return {
+      ...shared,
+      providerContractVersion: PROVIDER_CONTRACT_VERSION,
+      expectedProviderPayable: formatMoney(assertMoneyBound(netGoods + shippingCost, "expectedProviderPayable")),
+      lines,
+    } satisfies PricingSnapshotPayloadProviderV2;
+  }
+
+  // Provider3: PPN customer dan PPN provider adalah satu nominal yang sama.
+  let providerTax: ValidatedProviderTax;
+  try {
+    providerTax = parseValidatedProviderTax(input.providerTax);
+  } catch (error) {
+    throw inputInvalid(
+      error instanceof Error ? error.message : "providerTax is not a valid tax context"
+    );
+  }
+  if (parseRateScaled(providerTax.ratePercent, "providerTax.ratePercent") !== rateScaled) {
+    throw inputInvalid("providerTax.ratePercent must equal ppnRatePercent");
+  }
+  const taxLines = allocateProviderTaxLines(lines, ppnRatePercent, formatMoney(ppnAmount));
   return {
-    pricingContractVersion: PRICING_CONTRACT_VERSION, pricingEngineVersion: PRICING_ENGINE_VERSION, providerContractVersion: PROVIDER_CONTRACT_VERSION,
-    currency: "IDR", fulfillmentMethod, sourceGoodsSubtotal: formatMoney(sourceGoodsSubtotal), markdownTotal: formatMoney(markdownTotal),
-    subtotal: formatMoney(subtotal), goodsDiscount: formatMoney(goodsDiscount), netGoods: formatMoney(netGoods),
-    shippingBeforeSubsidy: formatMoney(shippingBeforeSubsidy), shippingSubsidy: formatMoney(shippingSubsidy), shippingCost: formatMoney(shippingCost),
-    merchantFunding: formatMoney(merchantFunding), serviceFee: formatMoney(serviceFee), taxableBase: formatMoney(taxableBase),
-    ppnRatePercent: formatRate(rateScaled), ppnAmount: formatMoney(ppnAmount), total: formatMoney(total), expectedProviderPayable: formatMoney(expectedProviderPayable),
-    providerQuotedShippingCost: input.providerQuotedShippingCost === undefined || input.providerQuotedShippingCost === null
-      ? null : formatMoney(parseMoney(input.providerQuotedShippingCost, "providerQuotedShippingCost")),
-    providerBilledShippingCost: null, lines,
-  };
+    ...shared,
+    providerContractVersion: PROVIDER_TAX_CONTRACT_VERSION,
+    expectedProviderPayable: formatMoney(
+      assertMoneyBound(netGoods + ppnAmount + shippingCost, "expectedProviderPayable")
+    ),
+    providerTax,
+    lines: taxLines,
+  } satisfies PricingSnapshotPayloadProviderV3;
+}
+
+/**
+ * Alokasi PPN exact per whole line; total selalu sama dengan `ppnAmount` order.
+ * Error domain provider-tax diproyeksikan menjadi error kontrak pricing agar
+ * pemanggil hanya perlu menangani satu tipe kegagalan.
+ */
+function allocateProviderTaxLines(
+  lines: readonly PricingSnapshotLinePayloadV2[],
+  ppnRatePercent: string,
+  ppnAmount: string
+): PricingSnapshotLinePayloadV3[] {
+  try {
+    const allocation = allocateProviderTax({
+      lines: lines.map((line) => ({ variantId: line.variantId, netLineAmount: line.netLineAmount })),
+      ppnRatePercent,
+      ppnAmount,
+    });
+    const byVariant = new Map(
+      allocation.map((entry) => [entry.variantId, entry.providerTaxAmount] as const)
+    );
+    return lines.map((line) => {
+      const providerTaxAmount = byVariant.get(line.variantId);
+      if (providerTaxAmount === undefined) {
+        throw inputInvalid("provider tax allocation is missing a whole line");
+      }
+      return { ...line, providerTaxAmount };
+    });
+  } catch (error) {
+    if (error instanceof PricingContractError) throw error;
+    throw inputInvalid(
+      error instanceof Error ? error.message : "provider tax allocation failed"
+    );
+  }
 }
 function ceilDiv(numerator: bigint, denominator: bigint): bigint {
   if (numerator === BigInt(0)) return BigInt(0);
@@ -226,11 +327,23 @@ function decodeLegacyRate(value: unknown): bigint {
 export function readOrderPricing(row: PersistedOrderPricingRow): PricingSnapshot | LegacyOrderPricingSnapshot {
   const pricingVersion = row.pricingContractVersion ?? 0;
   if (pricingVersion === PRICING_CONTRACT_VERSION) {
-    if ((row.pricingEngineVersion !== undefined && row.pricingEngineVersion !== null && row.pricingEngineVersion !== PRICING_ENGINE_VERSION) ||
-        (row.providerContractVersion !== undefined && row.providerContractVersion !== null && row.providerContractVersion !== PROVIDER_CONTRACT_VERSION)) {
+    const relationalEngine = row.pricingEngineVersion ?? null;
+    const relationalProvider = row.providerContractVersion ?? null;
+    if (relationalEngine !== null && relationalEngine !== PRICING_ENGINE_VERSION) {
       throw snapshotUnsupportedVersion("order relational pricing versions are unknown or unsupported");
     }
-    return decodePricingSnapshot(row.pricingSnapshot);
+    if (relationalProvider !== null && !isSupportedProviderVersion(relationalProvider)) {
+      throw snapshotUnsupportedVersion("order relational pricing versions are unknown or unsupported");
+    }
+    const snapshot = decodePricingSnapshot(row.pricingSnapshot);
+    // Kolom relasional dan payload tersimpan harus bercerita sama; campuran
+    // versi (mis. kolom provider2 dengan payload provider3) fail closed.
+    if (relationalProvider !== null && relationalProvider !== snapshot.providerContractVersion) {
+      throw snapshotUnsupportedVersion(
+        "order relational provider version disagrees with the stored pricing snapshot"
+      );
+    }
+    return snapshot;
   }
   if (pricingVersion === 0) {
     const engineVersion = row.pricingEngineVersion ?? 0;
@@ -246,9 +359,11 @@ const SNAPSHOT_FIELDS = new Set<string>([
   "pricingContractVersion", "pricingEngineVersion", "providerContractVersion", "currency", "fulfillmentMethod", "sourceGoodsSubtotal", "markdownTotal",
   "subtotal", "goodsDiscount", "netGoods", "shippingBeforeSubsidy", "shippingSubsidy", "shippingCost", "merchantFunding", "serviceFee", "taxableBase",
   "ppnRatePercent", "ppnAmount", "total", "expectedProviderPayable", "providerQuotedShippingCost", "providerBilledShippingCost", "lines",
+  "providerTax",
 ]);
 const SNAPSHOT_LINE_FIELDS = new Set<string>([
   "variantId", "quantity", "sourceUnitPrice", "effectiveUnitPrice", "sourceLineAmount", "markdownAmount", "goodsDiscountAmount", "netLineAmount", "markdownRevisionId",
+  "providerTaxAmount",
 ]);
 function snapshotCorrupt(message: string): PricingContractError { return new PricingContractError("PRICING_SNAPSHOT_CORRUPT", message); }
 function snapshotTooLarge(bytes: number): PricingContractError {
@@ -310,8 +425,21 @@ export function decodePricingSnapshot(payload: unknown): PricingSnapshot {
     throw snapshotUnsupportedVersion("pricing snapshot version is unknown or unsupported; legacy rows need the explicit legacy decoder");
   }
   if (payload.pricingEngineVersion !== PRICING_ENGINE_VERSION) throw snapshotUnsupportedVersion("pricing engine version is unknown or unsupported");
-  if (payload.providerContractVersion !== PROVIDER_CONTRACT_VERSION) throw snapshotUnsupportedVersion("provider contract version is unknown or unsupported");
+  const providerContractVersion = payload.providerContractVersion;
+  if (typeof providerContractVersion !== "number" || !isSupportedProviderVersion(providerContractVersion)) {
+    throw snapshotUnsupportedVersion("provider contract version is unknown or unsupported");
+  }
+  const isTaxContract = providerContractVersion === PROVIDER_TAX_CONTRACT_VERSION;
   assertKnownFields(payload, SNAPSHOT_FIELDS, "pricing snapshot");
+  // Field pajak provider hanya milik kontrak3 dan WAJIB ada di sana: corruption
+  // tidak boleh diam-diam menjadi pajak 0.
+  const hasProviderTaxField = Object.prototype.hasOwnProperty.call(payload, "providerTax");
+  if (isTaxContract && !hasProviderTaxField) {
+    throw snapshotCorrupt("provider3 snapshot must carry the frozen provider tax context");
+  }
+  if (!isTaxContract && hasProviderTaxField) {
+    throw snapshotCorrupt("provider2 snapshot must not carry a provider tax context");
+  }
   if (payload.currency !== "IDR") throw snapshotCorrupt("pricing snapshot currency must be IDR");
   const fulfillmentMethod = payload.fulfillmentMethod;
   if (fulfillmentMethod !== "pickup" && fulfillmentMethod !== "delivery") throw snapshotCorrupt("pricing snapshot fulfillmentMethod must be pickup or delivery");
@@ -340,6 +468,7 @@ export function decodePricingSnapshot(payload: unknown): PricingSnapshot {
   let lineSourceTotal = BigInt(0);
   let lineMarkdownTotal = BigInt(0);
   let lineNetTotal = BigInt(0);
+  let lineTaxTotal = BigInt(0);
   payload.lines.forEach((rawLine, index) => {
     const field = `lines[${index}]`;
     if (!isPlainObject(rawLine)) throw snapshotCorrupt(`${field} must be a JSON object`);
@@ -366,9 +495,23 @@ export function decodePricingSnapshot(payload: unknown): PricingSnapshot {
     lineSourceTotal = decodeBound(lineSourceTotal + sourceLineAmount, "lines.sourceLineAmount");
     lineMarkdownTotal = decodeBound(lineMarkdownTotal + lineMarkdownAmount, "lines.markdownAmount");
     lineNetTotal = decodeBound(lineNetTotal + netLineAmount, "lines.netLineAmount");
+    const hasLineTaxField = Object.prototype.hasOwnProperty.call(rawLine, "providerTaxAmount");
+    if (isTaxContract && !hasLineTaxField) {
+      throw snapshotCorrupt(`${field}.providerTaxAmount is required on a provider3 line`);
+    }
+    if (!isTaxContract && hasLineTaxField) {
+      throw snapshotCorrupt(`${field}.providerTaxAmount is not part of the provider2 line contract`);
+    }
+    const providerTaxAmount = hasLineTaxField
+      ? decodeMoneyField(rawLine.providerTaxAmount, `${field}.providerTaxAmount`)
+      : null;
+    if (providerTaxAmount !== null) {
+      lineTaxTotal = decodeBound(lineTaxTotal + providerTaxAmount, "lines.providerTaxAmount");
+    }
     lines.push({ variantId, quantity, sourceUnitPrice: formatMoney(sourceUnitPrice), effectiveUnitPrice: formatMoney(effectiveUnitPrice),
       sourceLineAmount: formatMoney(sourceLineAmount), markdownAmount: formatMoney(lineMarkdownAmount), goodsDiscountAmount: formatMoney(lineGoodsDiscount),
-      netLineAmount: formatMoney(netLineAmount), markdownRevisionId });
+      netLineAmount: formatMoney(netLineAmount), markdownRevisionId,
+      ...(providerTaxAmount === null ? {} : { providerTaxAmount: formatMoney(providerTaxAmount) }) });
   });
   if (lineSourceTotal !== sourceGoodsSubtotal) throw snapshotCorrupt("lines.sourceLineAmount does not sum to sourceGoodsSubtotal");
   if (lineMarkdownTotal !== markdownTotal) throw snapshotCorrupt("lines.markdownAmount does not sum to markdownTotal");
@@ -385,13 +528,61 @@ export function decodePricingSnapshot(payload: unknown): PricingSnapshot {
   const expectedPpnAmount = decodeBound(ceilDiv(netGoods * rateScaled, HUNDRED * RATE_SCALE), "ppnAmount");
   if (ppnAmount !== expectedPpnAmount) throw snapshotCorrupt("ppnAmount does not match netGoods × ppnRatePercent");
   if (netGoods + ppnAmount + shippingCost + serviceFee !== total) throw snapshotCorrupt("total does not match netGoods + PPN + shippingCost");
-  if (netGoods + shippingCost !== expectedProviderPayable) throw snapshotCorrupt("expectedProviderPayable does not match netGoods + shippingCost");
-  return { pricingContractVersion: PRICING_CONTRACT_VERSION, pricingEngineVersion: PRICING_ENGINE_VERSION, providerContractVersion: PROVIDER_CONTRACT_VERSION,
-    currency: "IDR", fulfillmentMethod, sourceGoodsSubtotal: formatMoney(sourceGoodsSubtotal), markdownTotal: formatMoney(markdownTotal),
+  // Payable provider ikut versi kontrak: provider2 tanpa PPN, provider3 dengan
+  // PPN barang yang sudah menjadi bagian total customer (tanpa pajak kedua).
+  if (!isTaxContract) {
+    if (netGoods + shippingCost !== expectedProviderPayable) {
+      throw snapshotCorrupt("expectedProviderPayable does not match netGoods + shippingCost");
+    }
+  } else if (netGoods + ppnAmount + shippingCost !== expectedProviderPayable) {
+    throw snapshotCorrupt("expectedProviderPayable does not match netGoods + PPN + shippingCost");
+  }
+  const snapshotBase = {
+    pricingContractVersion: PRICING_CONTRACT_VERSION, pricingEngineVersion: PRICING_ENGINE_VERSION,
+    currency: "IDR" as const, fulfillmentMethod, sourceGoodsSubtotal: formatMoney(sourceGoodsSubtotal), markdownTotal: formatMoney(markdownTotal),
     subtotal: formatMoney(subtotal), goodsDiscount: formatMoney(goodsDiscount), netGoods: formatMoney(netGoods),
     shippingBeforeSubsidy: formatMoney(shippingBeforeSubsidy), shippingSubsidy: formatMoney(shippingSubsidy), shippingCost: formatMoney(shippingCost),
     merchantFunding: formatMoney(merchantFunding), serviceFee: formatMoney(serviceFee), taxableBase: formatMoney(taxableBase), ppnRatePercent: formatRate(rateScaled),
     ppnAmount: formatMoney(ppnAmount), total: formatMoney(total), expectedProviderPayable: formatMoney(expectedProviderPayable),
     providerQuotedShippingCost: providerQuotedShippingCost === null ? null : formatMoney(providerQuotedShippingCost),
-    providerBilledShippingCost: providerBilledShippingCost === null ? null : formatMoney(providerBilledShippingCost), lines };
+    providerBilledShippingCost: providerBilledShippingCost === null ? null : formatMoney(providerBilledShippingCost),
+  } as const;
+  if (!isTaxContract) {
+    return { ...snapshotBase, providerContractVersion: PROVIDER_CONTRACT_VERSION,
+      lines: lines as PricingSnapshotLinePayloadV2[] } satisfies PricingSnapshotPayloadProviderV2;
+  }
+
+  // Provider3: tax identity/rate/nominal wajib dapat direproduksi persis dari
+  // baris-barisnya. Snapshot yang menyimpang tidak boleh dibaca sebagai pajak 0.
+  let providerTax: ValidatedProviderTax;
+  try {
+    providerTax = parseValidatedProviderTax(payload.providerTax);
+  } catch {
+    throw snapshotCorrupt("providerTax is not a valid frozen tax context");
+  }
+  if (decodeRateField(providerTax.ratePercent, "providerTax.ratePercent") !== rateScaled) {
+    throw snapshotCorrupt("providerTax.ratePercent does not match ppnRatePercent");
+  }
+  const taxLines = lines as PricingSnapshotLinePayloadV3[];
+  let allocation: readonly { variantId: string; providerTaxAmount: string }[];
+  try {
+    allocation = allocateProviderTax({
+      lines: taxLines.map((line) => ({ variantId: line.variantId, netLineAmount: line.netLineAmount })),
+      ppnRatePercent: formatRate(rateScaled),
+      ppnAmount: formatMoney(ppnAmount),
+    });
+  } catch {
+    throw snapshotCorrupt("provider tax allocation cannot be reproduced from the stored lines");
+  }
+  const allocatedByVariant = new Map(allocation.map((entry) => [entry.variantId, entry.providerTaxAmount] as const));
+  taxLines.forEach((line, index) => {
+    if (allocatedByVariant.get(line.variantId) !== line.providerTaxAmount) {
+      throw snapshotCorrupt(`lines[${index}].providerTaxAmount does not match the exact whole-line allocation`);
+    }
+  });
+  if (lineTaxTotal !== ppnAmount) {
+    throw snapshotCorrupt("lines.providerTaxAmount does not sum to ppnAmount");
+  }
+  return { ...snapshotBase, providerContractVersion: PROVIDER_TAX_CONTRACT_VERSION, providerTax,
+    lines: taxLines } satisfies PricingSnapshotPayloadProviderV3;
 }

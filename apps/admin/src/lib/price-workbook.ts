@@ -16,8 +16,8 @@ import {
 // =========================================================
 // Template/export/report format:
 //   sheet  : exactly one sheet named `Harga`
-//   A1     : literal `markdown_v1`
-//   row 2  : `sku`, `action`, `new_price` (this order), followed only by the
+//   A1     : literal `markdown_v2` (v1 remains readable)
+//   row 2  : `sku`, `action`, `new_price`, `input_type`, followed only by the
 //            official NON-authoritative reference columns
 //   row 3+ : data
 //
@@ -38,10 +38,13 @@ import {
 // Durable batch identity is unchanged so existing history, receipts, and the
 // database CHECK remain compatible. This value is not the workbook label.
 export const WORKBOOK_TEMPLATE_VERSION = "OKCIR_MARKDOWN_V1";
-export const WORKBOOK_MARKER = "markdown_v1";
+export const WORKBOOK_MARKER = "markdown_v2";
 export const WORKBOOK_SHEET_NAME = "Harga";
 
-export const WORKBOOK_INPUT_HEADERS = ["sku", "action", "new_price"] as const;
+const LEGACY_INPUT_HEADERS = ["sku", "action", "new_price"] as const;
+export const WORKBOOK_INPUT_HEADERS = [...LEGACY_INPUT_HEADERS, "input_type"] as const;
+export type WorkbookInputType = "price" | "percent";
+const EXAMPLE_SKUS = new Set(["CONTOH-GANTI-SKU-HARGA", "CONTOH-GANTI-SKU-PERSEN"]);
 export const WORKBOOK_REFERENCE_HEADERS = [
   "row_number",
   "product_name",
@@ -74,6 +77,10 @@ export const WORKBOOK_ROW_ERROR = {
   duplicateSku: "DUPLICATE_SKU",
   originRowInvalid: "ORIGIN_ROW_INVALID",
   unexpectedColumn: "UNEXPECTED_COLUMN",
+  inputTypeInvalid: "INPUT_TYPE_INVALID",
+  inputTypeNotAllowed: "INPUT_TYPE_NOT_ALLOWED",
+  percentInvalid: "PERCENT_INVALID",
+  exampleNotReplaced: "EXAMPLE_ROW_NOT_REPLACED",
 } as const;
 
 export type WorkbookRowError =
@@ -94,6 +101,9 @@ export interface ParsedWorkbookRow {
   targetUnitPrice: string | null;
   /** Raw price cell text (kept for the report/failed subset). */
   targetRaw: string | null;
+  inputType: WorkbookInputType | null;
+  inputTypeRaw: string | null;
+  discountPercent: string | null;
   /** Official `origin_row` reference (validated server-side against a parent batch). */
   originRow: number | null;
   /** First row error, `null` when the row is accepted. */
@@ -643,7 +653,8 @@ function cellText(cell: RawCell | undefined, shared: string[]): string {
 
 function parseHeaderRow(
   row: RawRow | undefined,
-  shared: string[]
+  shared: string[],
+  isV2: boolean
 ): WorkbookHeader[] {
   if (!row) fatal("HEADER_INVALID", "The header row is missing");
   const headers: WorkbookHeader[] = [];
@@ -666,22 +677,20 @@ function parseHeaderRow(
     headers.push(text as WorkbookHeader);
     column += 1;
   }
-  if (headers.length < WORKBOOK_INPUT_HEADERS.length) {
+  const inputHeaders = isV2 ? WORKBOOK_INPUT_HEADERS : LEGACY_INPUT_HEADERS;
+  if (headers.length < inputHeaders.length) {
     fatal("HEADER_INVALID", "The header row is missing required columns");
   }
-  WORKBOOK_INPUT_HEADERS.forEach((header, index) => {
+  inputHeaders.forEach((header, index) => {
     if (headers[index] !== header) {
       fatal(
         "HEADER_INVALID",
-        `The first three headers must be ${WORKBOOK_INPUT_HEADERS.join(", ")}`
+        `The input headers must be ${inputHeaders.join(", ")}`
       );
     }
   });
-  for (let index = WORKBOOK_INPUT_HEADERS.length; index < headers.length; index += 1) {
-    if (
-      index > WORKBOOK_INPUT_HEADERS.length &&
-      !WORKBOOK_REFERENCE_HEADERS.includes(headers[index - 1] as ReferenceHeader)
-    ) {
+  for (let index = inputHeaders.length; index < headers.length; index += 1) {
+    if (!WORKBOOK_REFERENCE_HEADERS.includes(headers[index] as ReferenceHeader)) {
       fatal("HEADER_INVALID", "Reference headers must stay contiguous");
     }
   }
@@ -716,6 +725,7 @@ function classifyRows(
   const skuColumn = columnOf("sku");
   const actionColumn = columnOf("action");
   const priceColumn = columnOf("new_price");
+  const typeColumn = columnOf("input_type");
   const originColumn = headers.includes("origin_row")
     ? columnOf("origin_row")
     : -1;
@@ -737,6 +747,10 @@ function classifyRows(
     const sku = cellText(skuCell, shared);
     const actionRaw = cellText(actionCell, shared);
     const targetRaw = cellText(priceCell, shared);
+    const inputTypeRaw = typeColumn < 0
+      ? (actionRaw === "restore_base" ? "" : "price")
+      : cellText(raw.cells.get(typeColumn), shared);
+    const inputType: WorkbookInputType | null = inputTypeRaw === "price" || inputTypeRaw === "percent" ? inputTypeRaw : null;
     const action: WorkbookAction =
       actionRaw === "set_price" || actionRaw === "restore_base"
         ? actionRaw
@@ -754,7 +768,7 @@ function classifyRows(
     } else if (unexpectedColumn !== undefined) {
       error = WORKBOOK_ROW_ERROR.unexpectedColumn;
     } else if (sku.length === 0) {
-      if (actionRaw.length > 0 || targetRaw.length > 0) {
+      if (actionRaw.length > 0 || targetRaw.length > 0 || (typeColumn >= 0 && inputTypeRaw.length > 0)) {
         error = WORKBOOK_ROW_ERROR.skuRequired;
       } else {
         // Only reference cells: nothing to import.
@@ -762,18 +776,27 @@ function classifyRows(
       }
     } else if (cellKind(skuCell) !== "text") {
       error = WORKBOOK_ROW_ERROR.skuNotText;
+    } else if (EXAMPLE_SKUS.has(sku)) {
+      error = WORKBOOK_ROW_ERROR.exampleNotReplaced;
     } else if (action === "invalid") {
       error = WORKBOOK_ROW_ERROR.actionInvalid;
     } else if (action === "set_price") {
-      const numeric = parseIntegerCell(priceCell);
-      if (targetRaw.length === 0) {
-        // A blank price is NOT a restore.
+      if (inputType === null || (typeColumn >= 0 && cellKind(raw.cells.get(typeColumn)) !== "text")) {
+        error = WORKBOOK_ROW_ERROR.inputTypeInvalid;
+      } else if (targetRaw.length === 0) {
+        // A blank value is NOT a restore.
         error = WORKBOOK_ROW_ERROR.priceRequired;
-      } else if (numeric === null) {
+      } else if (inputType === "percent") {
+        if (cellKind(priceCell) !== "number" || !/^\d+(?:\.\d{1,6})?$/.test(targetRaw) || Number(targetRaw) <= 0 || Number(targetRaw) >= 100) {
+          error = WORKBOOK_ROW_ERROR.percentInvalid;
+        }
+      } else if (parseIntegerCell(priceCell) === null) {
         error = WORKBOOK_ROW_ERROR.priceInvalid;
       }
     } else if (targetRaw.length > 0) {
       error = WORKBOOK_ROW_ERROR.priceNotAllowed;
+    } else if (inputTypeRaw.length > 0) {
+      error = WORKBOOK_ROW_ERROR.inputTypeNotAllowed;
     }
 
     if (error === null && originColumn >= 0) {
@@ -788,7 +811,7 @@ function classifyRows(
     }
 
     const numericPrice =
-      error === null && action === "set_price"
+      error === null && action === "set_price" && inputType === "price"
         ? parseIntegerCell(priceCell)
         : null;
 
@@ -799,6 +822,9 @@ function classifyRows(
       actionRaw: actionRaw.length > 0 ? actionRaw : null,
       targetUnitPrice: numericPrice ? String(numericPrice.value) : null,
       targetRaw: targetRaw.length > 0 ? targetRaw : null,
+      inputType,
+      inputTypeRaw: inputTypeRaw || null,
+      discountPercent: error === null && action === "set_price" && inputType === "percent" ? targetRaw : null,
       originRow,
       error,
     });
@@ -815,6 +841,7 @@ function classifyRows(
     if (row.inputSku.length > 0 && (counts.get(row.inputSku) ?? 0) > 1) {
       row.error = WORKBOOK_ROW_ERROR.duplicateSku;
       row.targetUnitPrice = null;
+      row.discountPercent = null;
     }
   }
 
@@ -862,8 +889,8 @@ export function parsePriceWorkbook(
   if (
     !marker ||
     cellKind(marker) !== "text" ||
-    (cellText(marker, shared) !== WORKBOOK_MARKER &&
-      cellText(marker, shared) !== WORKBOOK_TEMPLATE_VERSION)
+    marker.formula ||
+    ![WORKBOOK_MARKER, "markdown_v1", WORKBOOK_TEMPLATE_VERSION].includes(cellText(marker, shared))
   ) {
     fatal(
       "UNSUPPORTED_MARKER",
@@ -877,7 +904,7 @@ export function parsePriceWorkbook(
     fatal("HEADER_INVALID", "Row 1 may only contain the version marker");
   }
 
-  const headers = parseHeaderRow(byNumber.get(2), shared);
+  const headers = parseHeaderRow(byNumber.get(2), shared, cellText(marker, shared) === WORKBOOK_MARKER);
   const dataRows = [...byNumber.values()]
     .filter((row) => row.rowNumber >= 3)
     .sort((a, b) => a.rowNumber - b.rowNumber);
@@ -903,6 +930,7 @@ export interface PriceWorkbookRow {
   sku: string;
   action: string;
   newPrice: string | number | null;
+  inputType?: string | null;
   productName?: string | null;
   variantLabel?: string | null;
   sourcePrice?: string | null;
@@ -999,7 +1027,7 @@ function buildWorkbookBytes(
   });
 
   const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${sheetRows.join(
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cols><col min="1" max="1" style="1" width="30" customWidth="1"/></cols><sheetData>${sheetRows.join(
     ""
   )}</sheetData></worksheet>`;
 
@@ -1007,7 +1035,7 @@ function buildWorkbookBytes(
     {
       name: "[Content_Types].xml",
       data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`,
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
     },
     {
       name: "_rels/.rels",
@@ -1022,7 +1050,12 @@ function buildWorkbookBytes(
     {
       name: "xl/_rels/workbook.xml.rels",
       data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`,
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
+    },
+    {
+      name: "xl/styles.xml",
+      data: `<?xml version="1.0" encoding="UTF-8"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="49" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
     },
     {
       name: "xl/worksheets/sheet1.xml",
@@ -1033,9 +1066,12 @@ function buildWorkbookBytes(
 
 const NUMERIC_REFERENCE = /^\d+$/;
 
-/** Blank versioned template: marker in A1, official headers in row 2, no data. */
+/** Template dengan dua contoh dummy; wajib diganti/dihapus sebelum apply. */
 export function writePriceTemplate(): Uint8Array {
-  return buildWorkbookBytes([], false);
+  return writePriceWorkbook([
+    { sku: "CONTOH-GANTI-SKU-HARGA", action: "set_price", newPrice: 150000, inputType: "price" },
+    { sku: "CONTOH-GANTI-SKU-PERSEN", action: "set_price", newPrice: 10, inputType: "percent" },
+  ]);
 }
 
 /**
@@ -1053,7 +1089,8 @@ export function writePriceWorkbook(
       { kind: "text", value: row.action },
       row.newPrice === null
         ? { kind: "empty" }
-        : { kind: "number", value: String(row.newPrice) },
+        : { kind: /^-?\d+(?:\.\d+)?$/.test(String(row.newPrice)) ? "number" : "text", value: String(row.newPrice) },
+      { kind: "text", value: row.inputType ?? (row.action === "restore_base" ? "" : "price") },
     ];
     if (!withReferences) return input;
     const reference = (

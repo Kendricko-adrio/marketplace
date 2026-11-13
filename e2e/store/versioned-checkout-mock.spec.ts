@@ -1,6 +1,6 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import { Pool } from "pg";
-import { deleteRetainedOrderFixtures } from "../../packages/db/src/testing/retained-order-fixtures";
+import { deleteRetainedOrderFixtures, deleteUnpromotedCheckoutAttempts } from "../../packages/db/src/testing/retained-order-fixtures";
 import { TEST_USERS } from "../config";
 
 // Setup SQL hanya pada DB disposable; semua assertion aplikasi lewat HTTP/UI.
@@ -39,6 +39,8 @@ const HQ = {
 
 async function cleanupOrders() {
   const ids = (await pool.query("SELECT id FROM orders WHERE contact_email=ANY($1::text[])", [contactEmails])).rows.map((row) => row.id);
+  const owners = (await pool.query("SELECT id FROM client WHERE email=ANY($1::text[])", [contactEmails])).rows.map((row: { id: string }) => row.id);
+  await deleteUnpromotedCheckoutAttempts(pool, owners);
   if (!ids.length) return;
   // FK-ordered teardown helper; only this spec's own fixture order IDs.
   await deleteRetainedOrderFixtures(pool, ids);
@@ -258,6 +260,9 @@ test.afterAll(async () => {
 });
 
 test("gate1 pickup review uses the versioned goods-only tax contract without a service charge", async () => {
+  await mockControl("/__control/reset", {});
+  const reviewLocationId = (await pool.query("SELECT jubelio_location_id FROM branch WHERE id=$1", [branchId])).rows[0].jubelio_location_id;
+  await mockControl("/__control/stocks/ensure", { locationId: reviewLocationId, itemId: 920001, onHand: 5 });
   const added = await context.request.post("/api/cart/items", { data: { variantId, branchId, quantity: 1 } });
   expect(added.ok(), await added.text()).toBe(true);
   const response = await context.request.get("/api/cart");
@@ -325,6 +330,27 @@ test("gate1 pickup persists immutable pricing through real Snap creation, detail
   await page.getByRole("option", { name: "10:00" }).click();
   await page.getByLabel("Nomor Telepon *").fill("081234567890");
   await page.getByLabel("Email *").fill(contactEmail);
+  // Observe even a transient feedback panel before navigation, not just the
+  // destination page (where a checkout flash would already have disappeared).
+  const checkoutFeedback: string[] = [];
+  await page.exposeFunction("recordCheckoutFeedback", (message: string) => {
+    checkoutFeedback.push(message);
+  });
+  await page.evaluate(() => {
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          const panel = node.matches('[data-testid="checkout-attempt-feedback"]')
+            ? node : node.querySelector('[data-testid="checkout-attempt-feedback"]');
+          if (panel) {
+            void (window as unknown as { recordCheckoutFeedback: (message: string) => Promise<void> })
+              .recordCheckoutFeedback(panel.textContent ?? "");
+          }
+        }
+      }
+    }).observe(document.documentElement, { childList: true, subtree: true });
+  });
   await page.getByRole("button", { name: "Lanjut" }).click();
   await page.getByText(/Saya telah memeriksa pesanan/).click();
   // Register the passthrough observer BEFORE the click: the real response is
@@ -335,15 +361,21 @@ test("gate1 pickup persists immutable pricing through real Snap creation, detail
   expect(placed.ok, placed.text).toBe(true);
   const result = JSON.parse(placed.text) as { orderId: string; redirectUrl: string };
   await expect(page.getByRole("heading", { name: "Pembayaran fixture" })).toBeVisible();
+  expect(checkoutFeedback, "successful checkout must not flash an error panel").toEqual([]);
   const detailResponse = await context.request.get(`/api/orders/${result.orderId}`);
   expect(detailResponse.ok()).toBe(true);
   const detail = (await detailResponse.json()).data;
-  expect(detail).toMatchObject({ pricingContractVersion: 1, pricingEngineVersion: 1, providerContractVersion: 2 });
+  expect(detail).toMatchObject({ pricingContractVersion: 1, pricingEngineVersion: 1, providerContractVersion: 3 });
   expect(detail.pricingSnapshot).toMatchObject({
     sourceGoodsSubtotal: "150000", subtotal: "150000", netGoods: "150000",
     ppnRatePercent: "11", taxableBase: "150000", ppnAmount: "16500", serviceFee: "0",
-    shippingBeforeSubsidy: "0", shippingCost: "0", total: "166500", expectedProviderPayable: "150000",
+    shippingBeforeSubsidy: "0", shippingCost: "0", total: "166500", expectedProviderPayable: "166500",
+    providerTax: { taxId: -2, ratePercent: "11" },
   });
+  // Kontrak3: PPN barang menjadi bagian payable provider, tanpa tagihan kedua.
+  expect(detail.pricingSnapshot.lines).toEqual([
+    expect.objectContaining({ netLineAmount: "150000", providerTaxAmount: "16500" }),
+  ]);
   const captures = (await mockControl("/__control/requests")).data;
   const snaps = captures.filter((record: { path: string }) => record.path === "/snap/v1/transactions");
   expect(snaps).toHaveLength(1);
@@ -353,7 +385,12 @@ test("gate1 pickup persists immutable pricing through real Snap creation, detail
     { id: "PPN", name: "PPN 11%", price: 16500, quantity: 1 },
   ]);
   const so = captures.find((record: { path: string; method: string }) => record.path === "/sales/orders/" && record.method === "POST");
-  expect(so.body).toMatchObject({ original_shipment_cost: 0, shipping_cost: 0, grand_total: 150000 });
+  expect(so.body).toMatchObject({
+    original_shipment_cost: 0, shipping_cost: 0, total_tax: 16500, grand_total: 166500,
+  });
+  expect(so.body.items).toEqual([
+    expect.objectContaining({ item_id: 920001, tax_id: -2, tax_amount: 16500, amount: 166500 }),
+  ]);
   const taxBefore = (await pool.query("SELECT value FROM system_config WHERE key='tax.ppnRatePercent'")).rows[0].value;
   try {
     await pool.query("UPDATE product_variant SET price='990000.00' WHERE id=$1", [variantId]);
@@ -381,7 +418,8 @@ test("gate1 pickup persists immutable pricing through real Snap creation, detail
 test("gate1 delivery keeps PPN on goods only and the provider payable on net goods plus net shipping through quote, Snap, detail, admin detail and repayment", async ({ browser }) => {
   // Independent worked money (never recomputed from the implementation):
   //   goods 150.000 + ongkir 30.000, PPN 11% atas net barang saja = 16.500
-  //   → customer 196.500, provider (SO/invoice/payment) 180.000, fee 0.
+  //   → customer 196.500 = provider (SO/invoice/payment) 196.500, fee 0.
+  //   (Kontrak provider3: PPN barang ikut tercatat pada dokumen provider.)
   test.setTimeout(120_000);
   await mockControl("/__control/reset", {});
   expect((await mockControl("/__control/shipment", { scenario: "rate-normal", rates: 30000 }, "PUT")).status).toBe("ok");
@@ -443,13 +481,14 @@ test("gate1 delivery keeps PPN on goods only and the provider payable on net goo
     const detailResponse = await context.request.get(`/api/orders/${result.orderId}`);
     expect(detailResponse.ok()).toBe(true);
     const detail = (await detailResponse.json()).data;
-    expect(detail).toMatchObject({ pricingContractVersion: 1, pricingEngineVersion: 1, providerContractVersion: 2 });
+    expect(detail).toMatchObject({ pricingContractVersion: 1, pricingEngineVersion: 1, providerContractVersion: 3 });
     expect(detail.pricingSnapshot).toMatchObject({
       fulfillmentMethod: "delivery",
       sourceGoodsSubtotal: "150000", subtotal: "150000", netGoods: "150000",
       shippingBeforeSubsidy: "30000", shippingSubsidy: "0", shippingCost: "30000",
       serviceFee: "0", taxableBase: "150000", ppnRatePercent: "11", ppnAmount: "16500",
-      total: "196500", expectedProviderPayable: "180000",
+      total: "196500", expectedProviderPayable: "196500",
+      providerTax: { taxId: -2, ratePercent: "11" },
     });
 
     // ===== Provider boundary: captured Snap + Sales Order requests =====
@@ -466,15 +505,18 @@ test("gate1 delivery keeps PPN on goods only and the provider payable on net goo
     const soPosts = captures.filter((record) => record.method === "POST" && record.path === "/sales/orders/" && record.body.ref_no === result.orderId);
     expect(soPosts, "exactly ONE Sales Order create POST for this delivery order").toHaveLength(1);
     expect(soPosts[0].body).toMatchObject({
-      sub_total: 150000, total_disc: 0, total_tax: 0,
+      sub_total: 150000, total_disc: 0, total_tax: 16500,
       original_shipment_cost: 30000, shipping_cost: 30000,
-      grand_total: 180000, location_id: deliveryLocationId, ref_no: result.orderId,
+      grand_total: 196500, location_id: deliveryLocationId, ref_no: result.orderId,
     });
     // The provider request carries no shipping-discount key at all.
     expect(soPosts[0].body.shipping_cost_discount).toBeUndefined();
     const soItems = soPosts[0].body.items as Array<Record<string, unknown>>;
     expect(soItems).toHaveLength(1);
-    expect(soItems[0]).toMatchObject({ item_id: 920001, qty_in_base: 1, price: 150000, disc_amount: 0, amount: 150000 });
+    expect(soItems[0]).toMatchObject({
+      item_id: 920001, qty_in_base: 1, price: 150000, disc_amount: 0,
+      tax_id: -2, tax_amount: 16500, amount: 166500,
+    });
 
     // ===== Drift after the order: master price/tax must not reprice =====
     const taxBefore = (await pool.query("SELECT value FROM system_config WHERE key='tax.ppnRatePercent'")).rows[0].value;
@@ -537,12 +579,12 @@ test("gate1 delivery keeps PPN on goods only and the provider payable on net goo
       expect(adminDetailResponse.ok(), await adminDetailResponse.text()).toBe(true);
       const adminOrder = (await adminDetailResponse.json()).data as Record<string, unknown>;
       expect(adminOrder).toMatchObject({
-        pricingContractVersion: 1, pricingEngineVersion: 1, providerContractVersion: 2,
+        pricingContractVersion: 1, pricingEngineVersion: 1, providerContractVersion: 3,
       });
       expect(adminOrder.pricingSnapshot).toMatchObject({
         fulfillmentMethod: "delivery",
         netGoods: "150000", shippingCost: "30000", serviceFee: "0",
-        ppnRatePercent: "11", ppnAmount: "16500", total: "196500", expectedProviderPayable: "180000",
+        ppnRatePercent: "11", ppnAmount: "16500", total: "196500", expectedProviderPayable: "196500",
       });
       // Paired readers decode the one stored snapshot, never master/config.
       expect(adminOrder.pricingSnapshot).toEqual(detail.pricingSnapshot);

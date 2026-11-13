@@ -1,0 +1,7 @@
+ALTER TABLE "discount_redemption" ALTER COLUMN "order_id" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "discount_redemption" ADD COLUMN "checkout_attempt_id" text;--> statement-breakpoint
+ALTER TABLE "discount_redemption" ADD CONSTRAINT "discount_redemption_attempt_owner_fk" FOREIGN KEY ("checkout_attempt_id","client_id") REFERENCES "public"."checkout_attempt"("id","client_id") ON DELETE restrict ON UPDATE restrict;--> statement-breakpoint
+ALTER TABLE "discount_redemption" ADD CONSTRAINT "discount_redemption_attempt_order_fk" FOREIGN KEY ("checkout_attempt_id","order_id") REFERENCES "public"."checkout_attempt"("id","order_id") ON DELETE restrict ON UPDATE restrict;--> statement-breakpoint
+CREATE UNIQUE INDEX "discount_redemption_attempt_unique" ON "discount_redemption" USING btree ("checkout_attempt_id");--> statement-breakpoint
+ALTER TABLE "discount_redemption" ADD CONSTRAINT "discount_redemption_owner_required" CHECK ("discount_redemption"."order_id" IS NOT NULL OR "discount_redemption"."checkout_attempt_id" IS NOT NULL);--> statement-breakpoint
+ALTER TABLE "discount_redemption" ADD CONSTRAINT "discount_redemption_consumed_order_required" CHECK ("discount_redemption"."status" <> 'consumed' OR "discount_redemption"."order_id" IS NOT NULL);

@@ -3,10 +3,8 @@ import { z } from "zod";
 
 import { guard } from "@/lib/rbac/guard";
 import { createModuleLogger, withRequestContext } from "@/lib/logger";
-import {
-  simulateDiscountOffer,
-  DiscountAdministrationError,
-} from "@/lib/discounts-administration";
+import { simulateDiscountConfiguration } from "@/features/discounts/simulate-discount-configuration-service";
+import { DiscountAdministrationError } from "@/lib/discounts-administration";
 import {
   discountFailureResponse,
   discountSuccessResponse,
@@ -16,11 +14,12 @@ import {
 // =========================================================
 // POST /api/admin/discounts/[id]/simulate                [discounts:edit]
 // =========================================================
-// Admin-only pricing preview through the shared versioned Pricing interface
-// (the same evaluator the customer path will use). The response is labelled as
-// a simulation: it is not a quote, not an order, reserves no stock/capacity and
-// promises no quota. The draft version is part of the request so a preview can
-// never silently use different terms than the editor is looking at.
+// Admin-only pricing preview computed from the SAVED draft snapshot through the
+// shared versioned Pricing interface (the same evaluator the customer path
+// uses). The response is labelled as a simulation: not a quote, not an order,
+// reserves no stock/capacity and promises no quota. `expectedDraftVersion` is
+// part of the request so a preview can never silently use different terms than
+// the editor is looking at.
 export const dynamic = "force-dynamic";
 
 /**
@@ -69,7 +68,7 @@ async function simulateOffer(
     }
 
     const { id } = await params;
-    const result = await simulateDiscountOffer(
+    const result = await simulateDiscountConfiguration(
       { offerId: id, ...parsed.data },
       requireActorId(ctx.user.id)
     );

@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "crypto";
+import type { DiscountDraftIssue } from "@marketplace/db/src/discount-draft";
+import { createEmptyDiscountDraftConfiguration, parseDiscountDraftConfiguration } from "@marketplace/db/src/discount-draft";
 import { and, asc, desc, eq, sql } from "drizzle-orm";
 
 import { db } from "@/db";
@@ -116,7 +118,8 @@ export class DiscountAdministrationError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
-    message: string
+    message: string,
+    readonly fieldErrors?: DiscountDraftIssue[]
   ) {
     super(message);
   }
@@ -128,13 +131,16 @@ export interface DiscountErrorDescriptor {
   status: number;
   code: string;
   message: string;
+  fieldErrors?: DiscountDraftIssue[];
 }
 
 export function describeDiscountAdministrationError(
   error: unknown
 ): DiscountErrorDescriptor | null {
   if (error instanceof DiscountAdministrationError) {
-    return { status: error.status, code: error.code, message: error.message };
+    return { status: error.status, code: error.code, message: error.message,
+      ...(error.fieldErrors ? { fieldErrors: error.fieldErrors } : {}),
+    };
   }
   return null;
 }
@@ -172,7 +178,7 @@ export async function readDiscountsContractVersion(): Promise<number> {
   );
 }
 
-async function requireActiveContract(): Promise<number> {
+export async function requireActiveContract(): Promise<number> {
   const version = await readDiscountsContractVersion();
   if (version !== SUPPORTED_CONTRACT_VERSION) {
     throw new DiscountAdministrationError(
@@ -473,6 +479,20 @@ export interface DiscountOfferSummaryDto {
   quotaCount: number | null;
   budgetAmount: string | null;
   updatedAt: string;
+  /** Nama live bila sudah publish, nama draft bila belum; null = tanpa nama. */
+  displayName: string | null;
+  /**
+   * Ringkasan draft aman untuk daftar (nama + potongan). Bukan literal kode,
+   * bukan dokumen konfigurasi penuh. Null bila draft tidak dapat dibaca.
+   */
+  draftSummary: {
+    name: string | null;
+    kind: string | null;
+    scope: string | null;
+    fixedAmount: string | null;
+    rate: string | null;
+    capAmount: string | null;
+  } | null;
   capacitySummary: DiscountOfferDetailDto["capacitySummary"] | null;
   liveRevision: {
     id: string;
@@ -797,7 +817,7 @@ async function loadOfferAggregate(
   return { offer, revisions, benefits, usage: usageRows[0] ?? null, codes };
 }
 
-async function readDetailDto(
+export async function readDetailDto(
   executor: Executor,
   offerId: string,
   includeCodeLiterals = false
@@ -821,7 +841,7 @@ async function readDetailDto(
  * no grant rows, so the scope is asserted on the RESULT instead (a branch-scope
  * row cannot even be stored by the schema CHECK).
  */
-function requireDiscountViewer(loaded: LoadedPolicy | null): LoadedPolicy {
+export function requireDiscountViewer(loaded: LoadedPolicy | null): LoadedPolicy {
   const denied = new DiscountAdministrationError(
     403,
     "DENIED",
@@ -841,7 +861,7 @@ function canViewCodeLiterals(loaded: LoadedPolicy | null): boolean {
   );
 }
 
-function requireDiscountEditor(loaded: LoadedPolicy | null): LoadedPolicy {
+export function requireDiscountEditor(loaded: LoadedPolicy | null): LoadedPolicy {
   const denied = new DiscountAdministrationError(
     403,
     "DENIED",
@@ -1170,7 +1190,7 @@ function sanitizeDetailForReceipt(detail: DiscountOfferDetailDto): DiscountOffer
   };
 }
 
-function mapDatabaseError(error: unknown): unknown {
+export function mapDatabaseError(error: unknown): unknown {
   const code = (error as { code?: string } | null)?.code;
   if (code === "55P03" || code === "57014" || code === "40001" || code === "40P01") {
     // Lock timeout, statement timeout, serialization failure/deadlock: the
@@ -1426,6 +1446,9 @@ export async function createPublicDraftOffer(
         engineVersion: OFFER_ENGINE_VERSION,
         draftVersion: 1,
         publishedAt: null,
+        // Snapshot draft kosong: satu sumber kebenaran draft sejak create,
+        // tanpa mengarang nama/benefit/kuota dan tanpa reservasi kode dari UI.
+        draftConfiguration: createEmptyDiscountDraftConfiguration(),
         actorId: actorUserId,
         actorIdentity: actorUserId,
         createdAt: now,
@@ -1972,6 +1995,37 @@ export async function listDiscountOffers(
     const draft = revisionRows.find(
       (row) => row.offerId === offer.id && row.publishedAt === null
     );
+    // Snapshot draft diparse ketat; draft rusak tidak boleh tampil sebagai
+    // benefit/kuota karangan. Snapshot null (revision lama) tidak punya ringkasan.
+    const draftConfiguration = (() => {
+      if (!draft?.draftConfiguration) return null;
+      const parsed = parseDiscountDraftConfiguration(draft.draftConfiguration);
+      return parsed.success ? parsed.configuration : null;
+    })();
+    const draftSummary = draftConfiguration
+      ? {
+          name: draftConfiguration.name,
+          kind: draftConfiguration.benefit?.kind ?? null,
+          scope:
+            draftConfiguration.benefit === null
+              ? null
+              : draftConfiguration.benefit.kind === "shipping"
+                ? "shipping"
+                : "goods",
+          fixedAmount:
+            draftConfiguration.benefit?.kind === "fixed_goods"
+              ? draftConfiguration.benefit.fixedAmount
+              : null,
+          rate:
+            draftConfiguration.benefit?.kind === "percentage_goods"
+              ? draftConfiguration.benefit.rate
+              : null,
+          capAmount:
+            draftConfiguration.benefit === null || draftConfiguration.benefit.kind === "fixed_goods"
+              ? null
+              : draftConfiguration.benefit.capAmount,
+        }
+      : null;
     return {
       id: offer.id,
       key: offer.key,
@@ -1985,6 +2039,8 @@ export async function listDiscountOffers(
       budgetAmount:
         offer.budgetAmount === null ? null : dbMoneyText(offer.budgetAmount),
       updatedAt: offer.updatedAt.toISOString(),
+      displayName: live?.name ?? draftConfiguration?.name ?? null,
+      draftSummary,
       capacitySummary: (() => {
         const usage = usageByOffer.get(offer.id);
         if (!usage) return null;
@@ -2936,7 +2992,7 @@ function normalizeSimulationLines(
   });
 }
 
-async function readPpnRatePercent(): Promise<string> {
+export async function readPpnRatePercent(): Promise<string> {
   const rows = await db
     .select({ value: systemConfig.value })
     .from(systemConfig)
@@ -2949,7 +3005,7 @@ async function readPpnRatePercent(): Promise<string> {
   return raw;
 }
 
-function toBreakdown(snapshot: PricingSnapshot): SimulationBreakdownDto {
+export function toBreakdown(snapshot: PricingSnapshot): SimulationBreakdownDto {
   return {
     subtotal: snapshot.subtotal,
     goodsDiscount: snapshot.goodsDiscount,

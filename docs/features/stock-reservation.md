@@ -45,12 +45,54 @@ rows.
   never adjust quantities. Later atomic-hold races still fail closed and ask
   the customer to retry; no quantity adjustment uses an unverified snapshot.
   Contract tests: `apps/store/src/app/api/checkout/place-order/route.test.ts`
-  and `e2e/store/checkout-stock-adjustment.spec.ts` (provider APIs stubbed).
+  dan `e2e/store/checkout-stock-adjustment-mock.spec.ts` (provider API di-stub,
+  dijalankan melalui `playwright.mock.config.ts`). Spec legacy
+  `e2e/store/checkout-stock-adjustment.spec.ts` tetap tersedia, tetapi bukan
+  bukti verifikasi alur dua langkah saat ini.
+
 - Concurrency guarantees are proven against PostgreSQL in
   `apps/store/src/lib/jubelio-sales-holds.db.test.ts` (parallel checkouts
   cannot oversell; a sync refresh never clears or double-subtracts a hold).
 - `reserved_stock` is a legacy adjustment-era ledger column: historical record
   only, never part of the sellable formula, never written by the SO flow.
+
+### Pemulihan kontrak penyesuaian stok
+
+Kedua endpoint memakai
+`apps/store/src/features/checkout/verify-checkout-stock-service.ts` melalui
+`verifyAndAdjustCheckoutStock(db, cartId, selections)`. Service memverifikasi
+seluruh pasangan barang/cabang sebelum memanggil transaksi penyesuaian quantity
+existing. Provider read berada di luar transaksi; stok nol tidak menghapus item,
+dan observasi gagal/tidak lengkap tidak mengubah quantity. HTTP adapter tetap
+memetakan shortage ke `409 CHECKOUT_STOCK_ADJUSTED` beserta `adjustments`, atau
+observasi unavailable ke `503` tanpa adjustments.
+
+Test HTTP mencakup kedua endpoint dan pembacaan cart dengan proyeksi Markdown.
+Mock Playwright memverifikasi rendering checkout, pesan penyesuaian, quantity,
+total, serta kewajiban konfirmasi ulang pada desktop/mobile untuk
+`pricingContractVersion: 0` dan `1`.
+
+Pada contract v1, `submitVersioned` memperlakukan respons gagal dengan
+`CHECKOUT_STOCK_ADJUSTED` dan daftar adjustments nonkosong sebagai penolakan
+stok definitif, bukan hasil order yang ambigu. Consumer memperbarui cart dan
+selection melalui handler shared, lalu menghapus pending request key, review
+token/acknowledgements lama, serta feedback attempt lama. Tidak ada auto-submit
+atau preview otomatis. Pickup tetap di pembayaran dengan tombol
+**Periksa ulang pesanan**; tombol bayar tetap disabled meskipun checkbox dicentang
+sebelum review baru tersedia. Setelah review dan konfirmasi baru, submit berikutnya
+memakai request key baru. Delivery kembali ke langkah pengiriman, membuang
+approval/layanan lama dan meminta quote serta pemilihan layanan ulang. Alamat dan
+kontak tetap dipertahankan. Stok nol hanya mengubah selection; jika semua pilihan
+habis, customer kembali ke cart tanpa menghapus barang.
+
+Koneksi terputus, observasi provider unavailable, atau response adjustment tanpa
+daftar adjustments tidak menghapus key/review lama dan tidak mengubah quantity.
+Customer tetap memeriksa status dengan key yang sama; hanya bila lookup menjawab
+404, recovery mengirim ulang body/key yang sama. Hasil attempt v2 dan order yang
+sudah diterima tetap ditangani lebih dahulu, sebelum cabang penolakan stok.
+Contoh: 10 unit senilai Rp 11.100 menjadi 5 unit senilai Rp 5.550 (PPN 11%):
+customer harus membuat review baru dan mengonfirmasi ulang sebelum submit baru;
+network failure saja tidak boleh mengubah 10 unit atau membuat key baru.
 
 ## Batas sebelum checkout
 

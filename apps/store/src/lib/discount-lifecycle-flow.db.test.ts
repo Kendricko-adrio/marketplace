@@ -149,7 +149,7 @@ async function insertOperation(input: {
       input.orderId,
       input.type,
       input.status,
-      `OKCIR_${input.type.toUpperCase()}:${input.orderId}`,
+      `SO_${input.type.toUpperCase()}:${input.orderId}`,
       JSON.stringify({ type: input.type }),
       input.salesOrderId ?? null,
       input.status === "confirmed" ? new Date() : null,

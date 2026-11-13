@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { jubelioSalesOperations, orders } from "@/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import {
   ensureJubelioInvoice,
   ensureJubelioPayment,
@@ -19,6 +19,8 @@ import {
 } from "./order-finalize";
 import { reconcileJubelioChannelStatusForOrder } from "./jubelio-channel-mirror";
 import { createModuleLogger } from "./logger";
+import { projectOrderCommunications } from "@/features/order-communications/project-order-communications-service";
+import { recordOrderCommunicationEvent } from "@marketplace/db/src/order-communications/order-communication-repository";
 
 /**
  * Sales-Order settlement pipeline (plan: jubelio-sales-api-switching,
@@ -124,6 +126,7 @@ type SettleOrderRow = {
   // completes in `processing` (no ready_for_pickup, no pickup code).
   fulfillmentMethod: string | null;
   fulfillmentBlockedReason: string | null;
+  orderCommunicationVersion: number;
 };
 
 async function loadOrder(orderId: string): Promise<SettleOrderRow | null> {
@@ -143,6 +146,7 @@ async function loadOrder(orderId: string): Promise<SettleOrderRow | null> {
       paymentStatus: orders.paymentStatus,
       fulfillmentMethod: orders.fulfillmentMethod,
       fulfillmentBlockedReason: orders.fulfillmentBlockedReason,
+      orderCommunicationVersion: orders.orderCommunicationVersion,
     })
     .from(orders)
     .where(eq(orders.id, orderId))
@@ -250,17 +254,55 @@ export async function settleJubelioSalesOrder(
   // ticket 05. The outcome is decided by the committed ledger, not by the
   // update's row count.
   if (order.fulfillmentMethod === "delivery") {
-    await db
-      .update(orders)
-      .set({ fulfillmentBlockedReason: null, updatedAt: new Date() })
-      .where(
-        and(
-          eq(orders.id, orderId),
-          eq(orders.paymentStatus, "paid"),
-          eq(orders.status, "processing")
+    // Spec penyelarasan status/notifikasi/email: gate finansial delivery yang
+    // terverifikasi mencatat fakta `delivery_ready` pada TRANSAKSI YANG SAMA
+    // dengan pembersihan block, lalu memproyeksikan efeknya (notifikasi + job
+    // email + mirror Siap Proses) secara best-effort setelah commit. Mirror
+    // atau email gagal tidak pernah menurunkan status paid.
+    const committed = await db.transaction(async (tx) => {
+      const updated = await tx
+        .update(orders)
+        .set({ fulfillmentBlockedReason: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(orders.id, orderId),
+            eq(orders.paymentStatus, "paid"),
+            eq(orders.status, "processing")
+          )
         )
-      );
+        .returning({ id: orders.id });
+      if (updated.length === 0) return false;
+      if (order.orderCommunicationVersion >= 1) {
+        await recordOrderCommunicationEvent(tx, {
+          orderId,
+          kind: "delivery_ready",
+          source: "settlement",
+          occurredAt: null,
+          receivedAt: new Date(),
+        });
+      }
+      return true;
+    });
+    // The outcome is decided by the committed ledger, never by the guarded
+    // update's row count (ticket 04 contract). The communication fact/projection
+    // only runs when this call actually applied the gate transition.
     log.info(`Order ${orderId}: delivery fulfillment gate completed in processing`);
+    if (committed && order.orderCommunicationVersion >= 1) {
+      try {
+        const projection = await projectOrderCommunications({
+          limit: 1,
+          orderId,
+        });
+        log.info(
+          `Order ${orderId}: delivery ready communication projected (jobs ${projection.emailJobsCreated}, notifications ${projection.notificationsCreated}, mirror ${projection.channelMirrorAttempted})`
+        );
+      } catch (error) {
+        log.error(
+          `Order ${orderId}: delivery ready communication projection failed`,
+          safeDependencyErrorLog(error)
+        );
+      }
+    }
     return { status: "fulfilled", pickupCode: null };
   }
 
@@ -403,7 +445,7 @@ export async function reconcileJubelioSalesOperations(
   const rows = await db
     .select()
     .from(jubelioSalesOperations)
-    .where(inArray(jubelioSalesOperations.status, ["dispatched_unknown"]))
+    .where(and(inArray(jubelioSalesOperations.status, ["dispatched_unknown"]), isNotNull(jubelioSalesOperations.orderId)))
     .limit(limit);
 
   let confirmed = 0;
@@ -413,6 +455,7 @@ export async function reconcileJubelioSalesOperations(
   const gateway = getDefaultJubelioSalesGateway();
 
   for (const op of rows) {
+    if (!op.orderId) continue; // Unpromoted operations are owned by attempt recovery, not order settlement.
     const aged = op.dispatchedAt != null && op.dispatchedAt.getTime() < staleCutoff;
 
     if (op.type === "cancel" && op.salesOrderId != null) {

@@ -187,7 +187,8 @@ export async function evaluateSelectedOffer(
       endAt: row.endAt,
       minSubtotal,
       quotaCount: row.quotaCount,
-      budgetAmount: moneyOrZero(row.budgetAmount),
+      // NULL berarti tanpa batas nominal; bukan budget Rp0.
+      budgetAmount: row.budgetAmount === null ? null : moneyOrZero(row.budgetAmount),
       perClientLimit: row.perClientLimit,
       benefit: benefitPayload,
       usage: {

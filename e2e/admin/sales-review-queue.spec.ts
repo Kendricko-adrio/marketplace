@@ -53,7 +53,7 @@ test.beforeAll(async () => {
     [
       OPERATION_ID,
       ORDER_ID,
-      `OKCIR_SO_INVOICE:${ORDER_ID}:e2e`,
+      `SO_INVOICE:${ORDER_ID}:e2e`,
       JSON.stringify({ type: "invoice", invoice: { salesOrderId: 69000999 } }),
     ]
   );

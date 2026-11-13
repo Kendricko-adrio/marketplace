@@ -10,6 +10,9 @@ node_modules
 !.yarn/releases
 !.yarn/versions
 
+# dev log capture (npm run dev:* → logs/<app>.log); disposable, never commit
+/logs/
+
 # testing
 /coverage
 /playwright/

@@ -46,6 +46,9 @@ import {
 import { loadPolicy, type LoadedPolicy } from "./rbac/resolver";
 import { readDiscountsContractVersion } from "./discounts-administration";
 import { readDiscountImportLimitsUncached } from "./discount-import-limits";
+import { createModuleLogger } from "./logger";
+
+const workbookLog = createModuleLogger("price-workbook-staging");
 
 // =========================================================
 // Manual Markdown price changes — stage → review → apply + immutable history
@@ -300,6 +303,9 @@ export interface PriceChangePreview {
   /** Workbook-only raw action/target text (kept for review and the report). */
   inputActionRaw?: string | null;
   inputTargetRaw?: string | null;
+  inputType?: "price" | "percent" | null;
+  inputTypeRaw?: string | null;
+  inputValueRaw?: string | null;
   /** Workbook row error that made this row fail before apply, if any. */
   errorReason?: string | null;
   /** Latest source price observed while STAGING (not the apply authority). */
@@ -822,6 +828,8 @@ interface NormalizedStageRow {
   rejectedReason: string | null;
   actionRaw: string | null;
   targetRaw: string | null;
+  inputType?: "price" | "percent" | null;
+  inputTypeRaw?: string | null;
 }
 
 function normalizeStageRow(
@@ -955,6 +963,11 @@ async function readImportLimits(): Promise<DiscountImportLimits> {
 }
 
 interface PreparedStageRow {
+  /** Workbook row number when the row came from a workbook upload. */
+  sheetRow: number | null;
+  inputType: "price" | "percent" | null;
+  inputTypeRaw: string | null;
+  targetRaw: string | null;
   id: string;
   rowNumber: number;
   inputSku: string;
@@ -1048,31 +1061,34 @@ async function prepareStageRows(
       ? (pointerByVariant.get(variant.variantId) ?? null)
       : null;
     let targetUnitPrice = row.targetUnitPrice;
+    let rejectedReason = row.rejectedReason;
     if (
       row.action === "set_price" &&
       targetUnitPrice === null &&
-      row.discountPercent !== null
+      row.discountPercent !== null && rejectedReason === null
     ) {
       // Percent shortcut: the fixed target is frozen HERE against the source
       // read in this transaction, so apply never re-derives a percentage.
-      if (!variant) {
-        inputInvalid(
-          `rows[${index}].discountPercent needs an existing SKU because the fixed target is frozen at stage`
-        );
+      if (!variant && row.sheetRow === null) {
+        inputInvalid(`rows[${index}].discountPercent needs an existing SKU because the fixed target is frozen at stage`);
       }
-      try {
-        targetUnitPrice = computePercentTarget(
-          variant.price,
-          row.discountPercent
-        );
-      } catch (error) {
-        if (error instanceof MarkdownPriceError) {
-          inputInvalid(`rows[${index}].discountPercent: ${error.message}`);
+      if (!variant) {
+        rejectedReason = "VARIANT_NOT_FOUND";
+      } else {
+        try {
+          targetUnitPrice = computePercentTarget(variant.price, row.discountPercent);
+        } catch (error) {
+          if (!(error instanceof MarkdownPriceError)) throw error;
+          if (row.sheetRow === null) inputInvalid(`rows[${index}].discountPercent: ${error.message}`);
+          rejectedReason = error.code;
         }
-        throw error;
       }
     }
     return {
+      sheetRow: row.sheetRow,
+      inputType: row.inputType ?? null,
+      inputTypeRaw: row.inputTypeRaw ?? null,
+      targetRaw: row.targetRaw,
       id: randomUUID(),
       rowNumber: row.sheetRow ?? index + 1,
       inputSku: row.sku,
@@ -1080,18 +1096,25 @@ async function prepareStageRows(
       action: row.action,
       targetUnitPrice,
       originRow: row.originRow,
-      state: row.rejectedReason === null ? ("pending" as const) : ("failed" as const),
-      resultCode: row.rejectedReason,
-      preview: buildPreview({
-        inputSku: row.sku,
-        variant,
-        action: row.action,
-        targetUnitPrice,
-        pointer,
-        inputActionRaw: row.actionRaw,
-        inputTargetRaw: row.targetRaw,
-        errorReason: row.rejectedReason,
-      }),
+      state: rejectedReason === null ? ("pending" as const) : ("failed" as const),
+      resultCode: rejectedReason,
+      preview: {
+        ...buildPreview({
+          inputSku: row.sku,
+          variant,
+          action: row.action,
+          targetUnitPrice,
+          pointer,
+          inputActionRaw: row.actionRaw,
+          inputTargetRaw: row.targetRaw,
+          errorReason: rejectedReason,
+        }),
+        ...(row.sheetRow === null ? {} : {
+          inputType: row.inputType ?? null,
+          inputTypeRaw: row.inputTypeRaw ?? null,
+          inputValueRaw: row.targetRaw,
+        }),
+      },
     };
   });
 }
@@ -1313,6 +1336,11 @@ async function runStage(
             templateVersion: command.templateVersion,
             parentBatchId: command.parentBatchId,
             rowError: row.resultCode,
+            ...(row.sheetRow === null ? {} : {
+              workbookInputType: row.inputType,
+              workbookInputTypeRaw: row.inputTypeRaw,
+              workbookInputValueRaw: row.targetRaw,
+            }),
             reason: command.reason,
           },
           policyVersion: actor.policyVersion,
@@ -2216,8 +2244,11 @@ export async function listPriceChangeCandidates(
   const page = requirePage(query.page, 1, 1_000_000);
   const limit = requirePage(query.limit, 25, MAX_PAGE_SIZE);
   const search = normalizeSearch(query.search);
-  if (query.markdownStatus !== undefined && query.markdownStatus !== "inactive") {
-    inputInvalid("markdownStatus must be inactive when provided");
+  if (
+    query.markdownStatus !== undefined &&
+    !["inactive", "configured", "unconfigured"].includes(query.markdownStatus)
+  ) {
+    inputInvalid("markdownStatus must be inactive, configured, or unconfigured when provided");
   }
   const searchFilter =
     search === null
@@ -2227,8 +2258,10 @@ export async function listPriceChangeCandidates(
           ilike(products.name, `%${escapeLikePattern(search)}%`)
         );
 
-  // Same predicate and joins for rows/count: inactive targets cover the entire
-  // catalogue, not only the current page. Match the whole-Rupiah source reader
+  // Same predicate and joins for rows/count: status filters cover the entire
+  // catalogue, not only the current page. Setup is based on the current target,
+  // not historical revisions or whether the markdown is active today.
+  // Match the whole-Rupiah source reader
   // (zero is valid; legacy fractional/negative/oversized sources are not).
   const candidateFilter = and(
     searchFilter,
@@ -2238,7 +2271,11 @@ export async function listPriceChangeCandidates(
           AND ${productVariants.price} <= ${MAX_MONEY_RUPIAH.toString()}::numeric
           AND ${productVariants.price} = trunc(${productVariants.price})
           AND ${productVariants.price} <= ${variantPriceRevisions.targetUnitPrice}`
-      : undefined
+      : query.markdownStatus === "configured"
+        ? sql`${variantPriceRevisions.targetUnitPrice} IS NOT NULL`
+        : query.markdownStatus === "unconfigured"
+          ? sql`${variantPriceRevisions.targetUnitPrice} IS NULL`
+          : undefined
   );
   const totalRows = await db
     .select({ count: sql<number>`count(*)::int` })
@@ -2365,7 +2402,9 @@ function workbookRowToStageRow(row: ParsedWorkbookRow): NormalizedStageRow {
     // `set_price`/`restore_base`, even when a price cell was present.
     action: row.action,
     targetUnitPrice: row.action === "invalid" ? null : row.targetUnitPrice,
-    discountPercent: null,
+    discountPercent: row.discountPercent,
+    inputType: row.inputType,
+    inputTypeRaw: row.inputTypeRaw,
     sheetRow: row.rowNumber,
     originRow: row.originRow,
     rejectedReason: row.error,
@@ -2429,6 +2468,9 @@ export async function stageWorkbookPriceChange(
           actionRaw: row.actionRaw,
           targetUnitPrice: row.targetUnitPrice,
           targetRaw: row.targetRaw,
+          inputType: row.inputType,
+          inputTypeRaw: row.inputTypeRaw,
+          discountPercent: row.discountPercent,
           sheetRow: row.sheetRow,
           originRow: row.originRow,
           rejectedReason: row.rejectedReason,
@@ -2437,18 +2479,29 @@ export async function stageWorkbookPriceChange(
     )
     .digest("hex");
 
-  return runStage(
-    {
-      requestKey,
-      source: "xlsx",
-      templateVersion: parsed.templateVersion,
-      parentBatchId,
-      reason,
-      fingerprint,
-      rows,
-    },
-    actorUserId
-  );
+  try {
+    const result = await runStage(
+      {
+        requestKey,
+        source: "xlsx",
+        templateVersion: parsed.templateVersion,
+        parentBatchId,
+        reason,
+        fingerprint,
+        rows,
+      },
+      actorUserId
+    );
+    workbookLog.info(`Workbook batch ${result.data.id}: ${result.data.rowCount} baris di-stage, ${result.data.failedCount} gagal, ${result.data.pendingCount} pending`);
+    return result;
+  } catch (error) {
+    workbookLog.error(`Staging workbook gagal (${rows.length} baris)`, {
+      name: error instanceof Error ? error.name : "Error",
+      message: "Workbook staging failed",
+      code: error instanceof PriceChangeError ? error.code : "UNEXPECTED_ERROR",
+    });
+    throw error;
+  }
 }
 
 // =========================================================
@@ -2672,7 +2725,8 @@ export async function getPriceChangeReport(
           : row.action,
       // The report names the REQUESTED target; raw workbook text is used when
       // the row never produced a usable integer.
-      newPrice: requestedTarget ?? preview.inputTargetRaw ?? null,
+      inputType: preview.inputTypeRaw !== undefined ? (preview.inputTypeRaw ?? "") : (preview.inputType ?? (row.action === "restore_base" ? "" : "price")),
+      newPrice: preview.inputValueRaw ?? requestedTarget ?? preview.inputTargetRaw ?? null,
       productName: preview.productName,
       variantLabel: preview.variantLabel,
       sourcePrice: dbMoney(row.sourceUnitPrice) ?? preview.sourceUnitPrice,

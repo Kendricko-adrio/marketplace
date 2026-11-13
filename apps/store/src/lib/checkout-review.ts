@@ -62,6 +62,13 @@ export interface CheckoutReviewPricing {
   pricingContractVersion: number;
   pricingEngineVersion: number;
   providerContractVersion: number;
+  /**
+   * Identitas + rate pajak provider3 yang dibekukan. `null`/absent berarti
+   * kontrak provider2/legacy: payable provider tidak memuat PPN dan tidak ada
+   * tax id yang perlu diikat. Perubahan tax id/rate WAJIB mengubah fingerprint
+   * walaupun total kebetulan sama (spec PPN §5.5).
+   */
+  providerTax?: { taxId: number; ratePercent: string } | null;
 }
 
 /** One priced selection line; money/quantity already normalized by the engine. */
@@ -197,6 +204,12 @@ export function buildCheckoutReviewContextFingerprint(
         ppnRatePercent: context.pricing.ppnRatePercent,
         ppnAmount: context.pricing.ppnAmount,
         total: context.pricing.total,
+        providerTax: context.pricing.providerTax
+          ? {
+              taxId: context.pricing.providerTax.taxId,
+              ratePercent: context.pricing.providerTax.ratePercent,
+            }
+          : null,
       },
       selection,
     })

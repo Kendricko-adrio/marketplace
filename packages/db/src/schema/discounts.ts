@@ -17,6 +17,8 @@ import { relations, sql } from "drizzle-orm";
 
 import { clients, users } from "./auth";
 import { orderItems, orders } from "./orders";
+import { checkoutAttempts } from "./checkout";
+import type { DiscountDraftConfiguration } from "../discount-draft";
 
 // =========================================================
 // Discount administration — Offer identity, draft revisions, usage projection,
@@ -57,6 +59,9 @@ export const discountOfferRevisions = pgTable(
         onDelete: "restrict",
       }),
     revisionNo: integer("revision_no").notNull(),
+    // Snapshot parsial terpisah dari projection pricing published. NULL untuk
+    // revision legacy sampai backfill/cutover editor terpadu selesai.
+    draftConfiguration: jsonb("draft_configuration").$type<DiscountDraftConfiguration>(),
     // Terms may stay incomplete while the revision is an unpublished draft;
     // publication completeness is enforced when `published_at` is set.
     name: text("name"),
@@ -97,6 +102,10 @@ export const discountOfferRevisions = pgTable(
     uniqueIndex("discount_offer_revision_single_draft_unique")
       .on(t.offerId)
       .where(sql`${t.publishedAt} is null`),
+    check(
+      "discount_offer_revision_draft_configuration_shape",
+      sql`${t.draftConfiguration} is null or (jsonb_typeof(${t.draftConfiguration}) = 'object' and ${t.draftConfiguration}->'draftSchemaVersion' = '1'::jsonb and octet_length(${t.draftConfiguration}::text) <= 262144) is true`
+    ),
     check(
       "discount_offer_revision_no_positive",
       sql`${t.revisionNo} >= 1`
@@ -555,7 +564,8 @@ export const discountRedemptions = pgTable(
   "discount_redemption",
   {
     id: text("id").primaryKey(),
-    orderId: text("order_id").notNull(),
+    orderId: text("order_id"),
+    checkoutAttemptId: text("checkout_attempt_id"),
     clientId: text("client_id").notNull(),
     offerId: text("offer_id").notNull(),
     revisionId: text("revision_id").notNull(),
@@ -595,6 +605,13 @@ export const discountRedemptions = pgTable(
   (t) => [
     // ONE Redemption per order — for every status, released included.
     uniqueIndex("discount_redemption_order_unique").on(t.orderId),
+    uniqueIndex("discount_redemption_attempt_unique").on(t.checkoutAttemptId),
+    foreignKey({ name: "discount_redemption_attempt_owner_fk", columns: [t.checkoutAttemptId, t.clientId],
+      foreignColumns: [checkoutAttempts.id, checkoutAttempts.clientId] }).onDelete("restrict").onUpdate("restrict"),
+    foreignKey({ name: "discount_redemption_attempt_order_fk", columns: [t.checkoutAttemptId, t.orderId],
+      foreignColumns: [checkoutAttempts.id, checkoutAttempts.orderId] }).onDelete("restrict").onUpdate("restrict"),
+    check("discount_redemption_owner_required", sql`${t.orderId} IS NOT NULL OR ${t.checkoutAttemptId} IS NOT NULL`),
+    check("discount_redemption_consumed_order_required", sql`${t.status} <> 'consumed' OR ${t.orderId} IS NOT NULL`),
     // Composite ownership targets for `order_discount_allocation`.
     unique("discount_redemption_order_id_unique").on(t.orderId, t.id),
     unique("discount_redemption_id_benefit_unique").on(t.id, t.benefitId),

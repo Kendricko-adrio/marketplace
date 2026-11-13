@@ -169,11 +169,11 @@ async function seedBookedShipment(orderId: string, ledger: LedgerFixture): Promi
         shipping_cost, discount, service_fee, ppn_rate, ppn_amount,
         contact_phone, contact_email, jubelio_sales_order_id,
         jubelio_invoice_id, jubelio_payment_id, fulfillment_method,
-        delivery_snapshot, expires_at)
+        delivery_snapshot, expires_at, order_communication_version)
      VALUES ($1, $2, $3, 'processing', 'paid', '133200.00', '100000.00',
         '20000.00', '0', '0', '11', '13200.00',
         '081299999999', 'tracking-e2e@example.test', 7001, 7101, 7201,
-        'delivery', $4, now() - interval '5 days')`,
+        'delivery', $4, now() - interval '5 days', 1)`,
     [orderId, CLIENT_ID, BRANCH_A_ID, JSON.stringify(SNAPSHOT)]
   );
   await pool.query(
@@ -235,6 +235,13 @@ describe("createShipmentTracking — handoff (PostgreSQL-backed)", () => {
       )).rows[0];
       expect(ledger.stamped).toBe(true);
       expect(ledger.handed_over_by).toBe(USER_HOME_ID);
+      // Spec penyelarasan: serah-terima sah mencatat SATU fakta komunikasi
+      // delivery_in_transit (worker yang mengirim emailnya).
+      const handoffFacts = (await pool!.query(
+        "SELECT kind FROM order_communication_event WHERE order_id = $1 ORDER BY kind",
+        [ORDER_ID]
+      )).rows;
+      expect(handoffFacts).toEqual([{ kind: "delivery_in_transit" }]);
 
       // A duplicate handoff is idempotent: no error, no second effect.
       const again = await tracking.handoff(ORDER_ID, ACTOR_HOME);
@@ -351,6 +358,16 @@ describe("createShipmentTracking — handoff (PostgreSQL-backed)", () => {
         [ORDER_ID]
       )).rows[0];
       expect(ledger.latest_status).toBe("DELIVERED");
+      // PICKED_UP → delivery_in_transit, DELIVERED → delivery_delivered; satu
+      // fakta per (order, kind) walau status berulang.
+      const deliveredFacts = (await pool!.query(
+        "SELECT kind FROM order_communication_event WHERE order_id = $1 ORDER BY kind",
+        [ORDER_ID]
+      )).rows.map((row: { kind: string }) => row.kind).sort();
+      expect(deliveredFacts).toEqual([
+        "delivery_delivered",
+        "delivery_in_transit",
+      ]);
       expect(ledger.delivered).toBe(true);
       expect(ledger.pod_url).toBe(null);
       const order = (await pool!.query("SELECT status FROM orders WHERE id = $1", [ORDER_ID])).rows[0];

@@ -392,13 +392,14 @@ test.afterAll(async () => {
 async function openOfferFromList(context: BrowserContext, name: string) {
   const page = await context.newPage();
   await page.goto("/admin/discounts");
-  await page.getByRole("tab", { name: /Kode promo/ }).click();
-  await expect(page.getByText("Daftar promo", { exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Filter jenis promo" }).click();
+  await page.getByRole("option", { name: "Kode promo", exact: true }).click();
+  await expect(page.getByText("Daftar diskon", { exact: true })).toBeVisible();
   const row = page.getByRole("row", { name: new RegExp(name) });
   await expect(row).toBeVisible();
   await row.getByRole("link", { name: "Kelola" }).click();
   await page.waitForURL(`**/admin/discounts/${OFFER}`);
-  await page.getByRole("tab", { name: "Pemakaian & budget", exact: true }).click();
+  await page.getByRole("tab", { name: "Pemakaian", exact: true }).click();
   return page;
 }
 
@@ -406,21 +407,19 @@ test("editor navigates summary → scoped entries → history with masked usage"
   const page = await openOfferFromList(hqContext, OFFER_NAME);
 
   // Global authority: 20 quota, 1 consumed + 1 held → 18 available.
-  await expect(page.getByText("Kapasitas global (otoritas)")).toBeVisible();
-  await expect(
-    page.getByText(/consumed 1 · held 1 · tersedia 18 pemakaian/)
-  ).toBeVisible();
-  await expect(
-    page.getByText(/Amount: consumed Rp 25\.000 · held Rp 25\.000 · tersedia Rp 450\.000/)
-  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pemakaian saat ini" })).toBeVisible();
+  await expect(page.getByText("Terpakai 1 · ditahan 1")).toBeVisible();
+  await expect(page.getByText("Tersedia 18 dari 20")).toBeVisible();
+  await expect(page.getByText("Terpakai Rp 25.000 · ditahan Rp 25.000")).toBeVisible();
+  await expect(page.getByText(/Tersedia Rp 450.000/)).toBeVisible();
 
   // Scoped list (all branches) shows both orders and never the code literal.
-  await expect(page.getByText("Pemakaian redemption (semua cabang)")).toBeVisible();
+  await expect(page.getByText("Pemakaian (semua cabang)")).toBeVisible();
   await expect(page.locator(`a[href="/admin/orders/${JKT_ORDER}"]`)).toBeVisible();
   await expect(page.locator(`a[href="/admin/orders/${SBY_ORDER}"]`)).toBeVisible();
   // The usage table only ever shows the masked label; the protected code panel
   // above is the editor-only literal channel.
-  await expect(page.getByRole("cell", { name: /^OP.+AT manual_only$/ }).first()).toBeVisible();
+  await expect(page.getByRole("cell", { name: /^OP.+AT$/ }).first()).toBeVisible();
   const usageApi = await hqContext.request.get(`/api/admin/discounts/${OFFER}/usage`);
   const usageRaw = await usageApi.text();
   expect(usageRaw).not.toContain(CODE_LITERAL);
@@ -438,8 +437,8 @@ test("editor navigates summary → scoped entries → history with masked usage"
 
   // History: actual revision/actor/time from the immutable audit rows.
   await page.getByRole("tab", { name: "Riwayat", exact: true }).click();
-  await expect(page.getByText("Histori audit")).toBeVisible();
-  await expect(page.getByText("Aktor: HQ Manager").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Riwayat" })).toBeVisible();
+  await expect(page.getByText(/Oleh HQ Manager/).first()).toBeVisible();
   await expect(page.getByText(/revision 1/).first()).toBeVisible();
 
   // The protected editor detail is the literal channel.
@@ -459,9 +458,9 @@ test("promo viewer without Orders:view gets the aggregate only", async ({ browse
   await signInAsCreatedUser(context, EMAIL_NO_ORDERS);
   try {
     const page = await openOfferFromList(context, OFFER_NAME);
-    await expect(page.getByText("Pemakaian redemption (agregat saja)")).toBeVisible();
+    await expect(page.getByText("Pemakaian (ringkasan)")).toBeVisible();
     await expect(
-      page.getByText(/hanya agregat global yang ditampilkan/)
+      page.getByText(/hanya ringkasan yang tampil/)
     ).toBeVisible();
     await expect(page.locator(`a[href="/admin/orders/${JKT_ORDER}"]`)).toHaveCount(0);
     await expect(page.locator(`a[href="/admin/orders/${SBY_ORDER}"]`)).toHaveCount(0);
@@ -487,7 +486,7 @@ test("Jakarta own-branch viewer cannot open the Surabaya entry by filter, id or 
   await signInAsCreatedUser(context, EMAIL_JKT);
   try {
     const page = await openOfferFromList(context, OFFER_NAME);
-    await expect(page.getByText("Pemakaian redemption (cabang Anda)")).toBeVisible();
+    await expect(page.getByText("Pemakaian (cabang Anda)")).toBeVisible();
     await expect(page.locator(`a[href="/admin/orders/${JKT_ORDER}"]`)).toBeVisible();
     await expect(page.locator(`a[href="/admin/orders/${SBY_ORDER}"]`)).toHaveCount(0);
 
@@ -529,10 +528,11 @@ test("safe pause stops new use without cancelling or resetting held entries", as
     data: { entries: { items: Array<{ id: string; status: string }> }; availability: unknown };
   };
 
-  await page.getByRole("button", { name: "Jeda", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Jeda promo?", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Tindakan", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Jeda diskon", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Jeda diskon?", exact: true })).toBeVisible();
   await expect(
-    page.getByText(/Hold yang sudah ada tidak dibatalkan dan usage tidak di-reset/)
+    page.getByText(/Pemakaian yang sudah tercatat tidak dibatalkan/)
   ).toBeVisible();
   await page.getByRole("button", { name: "Ya, lanjutkan" }).click();
   await expect(page.getByText("Dijeda", { exact: true })).toBeVisible();

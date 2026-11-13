@@ -19,6 +19,7 @@ const { DiscountAvailabilityError, readAvailableOffers } = await import(
   "./discount-availability"
 );
 
+const { readAvailablePromoPage } = await import("@/features/discounts/available-promos-service");
 const url = process.env.DATABASE_URL;
 const PREFIX = `discount-availability-${crypto.randomUUID()}`;
 const clientVerified = `${PREFIX}-client-verified`;
@@ -88,6 +89,7 @@ const offers: OfferFixture[] = [
     name: "Alpha",
     minSubtotal: "0",
     fixedAmount: "5000",
+    budgetAmount: null,
   },
   {
     id: `${PREFIX}-offer-beta`,
@@ -336,6 +338,26 @@ describe("readAvailableOffers — discovery dan reason", () => {
     expect(byName.Beta?.reasonMessage).toBe("Minimum belanja untuk promo ini belum terpenuhi.");
   });
 
+  it.each([
+    { label: "tanpa batas nominal", budgetAmount: null, eligible: true },
+    { label: "nol", budgetAmount: "0", eligible: false },
+    { label: "kurang dari benefit", budgetAmount: "4999", eligible: false },
+    { label: "tepat sebesar benefit", budgetAmount: "5000", eligible: true },
+  ])("daftar promo: budget $label", async ({ budgetAmount, eligible }) => {
+    const id = `${PREFIX}-offer-alpha`;
+    await pool!.query(`update discount_offer set budget_amount=$2 where id=$1`, [id, budgetAmount]);
+    try {
+      const result = await readAvailableOffers(
+        { clientId: clientVerified, selectedItemIds: selected, now: NOW }, db!
+      );
+      expect(result.items.find((item) => item.offerId === id)).toMatchObject(eligible
+        ? { eligible: true, reason: null, benefitAmount: "5000" }
+        : { eligible: false, reason: "CAPACITY_UNAVAILABLE", benefitAmount: "0" });
+    } finally {
+      await pool!.query(`update discount_offer set budget_amount=null where id=$1`, [id]);
+    }
+  });
+
   it("tanpa verified email Offer yang lolos minimum tampil disabled EMAIL_VERIFICATION_REQUIRED", async () => {
     const result = await readAvailableOffers(
       {
@@ -413,6 +435,47 @@ describe("readAvailableOffers — discovery dan reason", () => {
       "Lambda",
       "Theta",
     ]);
+  });
+
+  it("numbered discovery ranks globally, keeps selected projection outside the page, and preserves ownership", async () => {
+    const input = { clientId: clientVerified, selectedItemIds: selected, now: NOW,
+      fulfillment: { fulfillmentMethod: "pickup" as const }, page: 1 };
+    const first = await readAvailablePromoPage(input, db!);
+    expect(first.pageSize).toBe(10);
+    expect(first.items.length).toBeLessThanOrEqual(10);
+    const lambda = first.items.find(o => o.name === "Lambda");
+    expect(lambda).toMatchObject({ benefitAmount: "31250", estimatedSavings: "34687", estimatedTotal: "242813" });
+    const last = await readAvailablePromoPage({ ...input, page: 999, selectedOfferId: lambda!.offerId }, db!);
+    expect(last.page).toBe(Math.max(1, last.totalPages));
+    expect(last.selectedOffer).toMatchObject({ offerId: lambda!.offerId, eligible: true });
+    expect(last.selectedOfferUnavailable).toBe(false);
+    await expect(readAvailablePromoPage({ ...input, clientId: clientUnverified }, db!)).rejects.toBeInstanceOf(DiscountAvailabilityError);
+    const missing = await readAvailablePromoPage({ ...input, selectedOfferId: "private-or-missing" }, db!);
+    expect(missing.selectedOffer).toBeNull();
+    expect(missing.selectedOfferUnavailable).toBe(true);
+  });
+
+  it("sorts all candidates before pagination, including the best offer beyond 25 alphabetical rows", async () => {
+    for (let i = 0; i < 27; i++) {
+      const id = `${PREFIX}-pagination-${i}`;
+      await pool!.query("insert into discount_offer (id,key,activation_kind,actor_identity) values ($1,$1,'public','fixture')", [id]);
+      await pool!.query(`insert into discount_offer_revision (id,offer_id,revision_no,name,currency,min_subtotal,published_at,actor_identity)
+        values ($1,$2,1,$3,'IDR','0',$4,'fixture')`, [id + "-revision", id, i === 26 ? "ZZ pagination best" : "A pagination " + i, NOW]);
+      await pool!.query("insert into discount_benefit (id,revision_id,kind,scope,fixed_amount) values ($1,$2,'fixed_goods','goods',$3)", [id + "-benefit", id + "-revision", i === 26 ? "50000" : "1000"]);
+      await pool!.query("insert into discount_offer_usage (offer_id) values ($1)", [id]);
+      await pool!.query("update discount_offer set state='enabled',current_revision_id=$2,quota_count=100,budget_amount='1000000',per_client_limit=1 where id=$1", [id, id + "-revision"]);
+    }
+    const input = { clientId: clientVerified, selectedItemIds: selected, now: NOW,
+      fulfillment: { fulfillmentMethod: "pickup" as const }, page: 1, selectedOfferId: `${PREFIX}-pagination-26` };
+    const first = await readAvailablePromoPage(input, db!);
+    expect(first.items[0]).toMatchObject({ name: "ZZ pagination best", estimatedTotal: "222000", recommended: true });
+    const second = await readAvailablePromoPage({ ...input, page: 2 }, db!);
+    expect(second.items).toHaveLength(10);
+    expect(second.items.some(o => first.items.some(f => f.offerId === o.offerId))).toBe(false);
+    expect(second.selectedOffer).toMatchObject({ offerId: input.selectedOfferId, eligible: true });
+    expect(second.selectedOfferUnavailable).toBe(false);
+    const before = await pool!.query("select count(*)::int as count from discount_redemption where offer_id like $1", [PREFIX + "%"]);
+    expect(before.rows[0].count).toBe(0);
   });
 
   it("barang di luar cart milik client ditolak NOT_FOUND", async () => {

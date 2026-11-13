@@ -84,6 +84,23 @@ vi.mock("@/lib/jubelio-sales-lifecycle", () => ({
   reconcileConfirmedSalesOrderHolds: vi.fn(async () => 0),
 }));
 
+const recoveryMock = vi.hoisted(() => ({
+  listDuePendingPaymentOrders: vi.fn(async () => [] as Array<{ id: string }>),
+}));
+vi.mock("@/features/orders/transaction-recovery-repository", () => ({
+  listDuePendingPaymentOrders: recoveryMock.listDuePendingPaymentOrders,
+}));
+
+type ReconcileResultStub = { kind: string; settled?: boolean; reason?: string };
+const paymentReconcileMock = vi.hoisted(() => ({
+  reconcilePendingPayment: vi.fn<(input: { orderId: string }) => Promise<ReconcileResultStub>>(
+    async () => ({ kind: "deferred", reason: "deadline_not_reached" })
+  ),
+}));
+vi.mock("@/features/payments/reconcile-pending-payment-service", () => ({
+  reconcilePendingPayment: paymentReconcileMock.reconcilePendingPayment,
+}));
+
 
 function cronRequest(secret?: string): NextRequest {
   return new NextRequest("http://localhost:3000/api/cron/sweep-reservations", {
@@ -201,5 +218,71 @@ describe("sweep cron HTTP boundary (channel mirror included)", () => {
     const body = await response.json();
     expect(body.success).toBe(true);
     expect(body.channelMirrorReview.failed).toBe(1);
+  });
+});
+
+// =========================================================
+// TX-01: the stale pending_payment sweep delegates to the evidence-based
+// payment reconciliation use case. The route no longer reads Midtrans status
+// or fails orders inline: a pending/expire-conflict order that turns out to be
+// paid must stay paid, and counters must stay honest.
+// =========================================================
+describe("sweep cron payment reconciliation wiring (TX-01)", () => {
+  beforeEach(() => {
+    process.env.CRON_SECRET = "test-cron-secret";
+    recoveryMock.listDuePendingPaymentOrders.mockReset();
+    recoveryMock.listDuePendingPaymentOrders.mockResolvedValue([]);
+    paymentReconcileMock.reconcilePendingPayment.mockReset();
+    paymentReconcileMock.reconcilePendingPayment.mockResolvedValue({
+      kind: "deferred",
+      reason: "deadline_not_reached",
+    });
+  });
+
+  it("delegates each due order to the use case instead of failing it inline", async () => {
+    recoveryMock.listDuePendingPaymentOrders.mockResolvedValueOnce([{ id: "order-stale" }]);
+    paymentReconcileMock.reconcilePendingPayment.mockResolvedValueOnce({
+      kind: "paid",
+      settled: true,
+    });
+
+    const { POST } = await import("./route");
+    const response = await POST(cronRequest("test-cron-secret"));
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(paymentReconcileMock.reconcilePendingPayment).toHaveBeenCalledWith({
+      orderId: "order-stale",
+    });
+    expect(body).toMatchObject({ scanned: 1, finalized: 1, failed: 0 });
+  });
+
+  it("counts deferred, manual-review and error outcomes honestly", async () => {
+    recoveryMock.listDuePendingPaymentOrders.mockResolvedValueOnce([
+      { id: "order-held" },
+      { id: "order-review" },
+      { id: "order-poison" },
+      { id: "order-expired" },
+    ]);
+    paymentReconcileMock.reconcilePendingPayment
+      .mockResolvedValueOnce({ kind: "deferred", reason: "provider_unknown" })
+      .mockResolvedValueOnce({ kind: "manual_review", reason: "no_proof" })
+      .mockRejectedValueOnce(new Error("db unavailable"))
+      .mockResolvedValueOnce({ kind: "expired" });
+
+    const { POST } = await import("./route");
+    const response = await POST(cronRequest("test-cron-secret"));
+    const body = await response.json();
+
+    expect(body).toMatchObject({
+      scanned: 4,
+      finalized: 0,
+      failed: 1,
+      held: 1,
+      review: 1,
+      errors: 1,
+    });
+    // One poison order never stops the batch.
+    expect(paymentReconcileMock.reconcilePendingPayment).toHaveBeenCalledTimes(4);
   });
 });

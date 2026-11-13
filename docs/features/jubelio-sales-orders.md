@@ -17,6 +17,52 @@ the goods subtotal, not the website total. Delivery checkout is not active.
 > [Kontrak provider berversi (v2)](#kontrak-provider-berversi-v2) dan
 > [delivery orders](delivery-orders.md).
 
+## Penamaan reference operasi baru
+
+Reference operasi baru memakai prefix netral: `SO_CREATE`, `SO_CANCEL`,
+`SO_INVOICE`, dan `SO_PAYMENT`. Contohnya, create checkout memakai
+`SO_CREATE:<orderId>:<identifier-unik>`; cancel baru memakai `SO_CANCEL:<orderId>`.
+Reference yang sudah tersimpan tetap dipakai apa adanya pada replay/recovery,
+termasuk reference dengan prefix lama. Tidak ada perubahan schema, migration,
+atau penulisan ulang data existing di database maupun Jubelio.
+
+Penamaan aplikasi pada dokumentasi dan prototype memakai **Marketplace**, bukan
+nama samaran. Metadata internal workbook dan domain signing/hash checkout tidak
+ikut diganti karena merupakan kontrak kompatibilitas, bukan label aplikasi.
+
+## ID lokasi dari Jubelio
+
+`jubelio_location_id` mengikuti `location_id` dari `GET /locations/list`,
+bukan `location_code`. Inspeksi API pada 2026-10-25 mengonfirmasi
+`ADF OUTLET TANGERANG` aktif dengan `location_id: -1` dan `location_code: "334"`.
+Import mempertahankan ID tersebut; gateway Sales Order juga meneruskannya tanpa
+remapping dan hanya memvalidasi bahwa ID berupa integer, bukan harus positif.
+Input non-integer tetap ditolak sebelum request HTTP. Regression test pada
+`apps/store/src/lib/jubelio-sales-client.test.ts` mencakup POST dan verifikasi
+GET memakai HTTP mock; ini bukan bukti keberhasilan POST nyata untuk Tangerang.
+
+Decoder contract v2 (`jubelio-sales-expected.ts`) yang dipakai settlement
+invoice/payment dan channel-status mirror juga menerima **signed safe integer**
+untuk `locationId`, termasuk `-1`, tanpa remapping atau coercion. Nol lolos
+validasi format, tetapi bukan bukti lokasi tersebut tersedia di Jubelio: mapping
+cabang dan independent provider confirmation tetap wajib. Nilai hilang, `null`,
+string numerik, pecahan, non-finite, dan integer di luar safe range ditolak.
+Validasi positif untuk item/tax ID, quantity, serta ID SO/invoice/payment tidak
+berubah; kecocokan lokasi, financial snapshot, dan invoice linkage tetap fail
+closed.
+
+Regression coverage ada di `jubelio-sales-expected.test.ts`,
+`jubelio-channel-mirror.test.ts`, dan `jubelio-sales-versioned.db.test.ts` pada
+`apps/store/src/lib/`. Integration test memakai PostgreSQL fixture terisolasi
+dan gateway fake, bukan transaksi provider nyata. Contohnya: stored location
+`-1` dengan invoice lokasi `-1` dapat dilanjutkan; invoice lokasi `15` untuk
+request `-1` tetap ditahan.
+
+Perbaikan validator **tidak otomatis memulihkan order lama** yang sudah blocked.
+Jika operation invoice belum terbentuk, recovery GET-only tidak membuat operation
+atau POST baru. Penanganan order existing perlu scope dan izin terpisah; tidak
+boleh meminta pembayaran ulang hanya karena blocker integrasi ini.
+
 ## Kontrak provider berversi (v2)
 
 Kontrak baru menambahkan versi pada dua record tersimpan: baris order
@@ -81,7 +127,8 @@ Use the SO id for a read-only GET; do not re-POST the create or edit marker
 without a separately approved procedure. Logs contain only IDs and reason codes,
 not customer or provider response bodies.
 
-## Channel-status mirror — Siap Proses (ticket #03)
+## Channel-status mirror — Siap Proses (ticket #03, extended by the
+## status/notification/email alignment spec)
 
 After an order is **committed** `ready_for_pickup` (which happens only after
 the verified invoice + payment above), the website status is mirrored onto
@@ -92,10 +139,15 @@ blocking payment or pickup:
   settlement pipeline, and again in the sweep's bounded mirror pass. The
   trigger derives eligibility ONLY from committed state: local
   `ready_for_pickup` + confirmed `invoice` + confirmed `payment` ledger
-  operations. A merely `paid` Midtrans status or an in-flight settlement is
-  never a `Siap Proses` trigger. `Selesai` is projected separately from
-  committed completion (ticket #06); `Gagal Bayar` and `Menunggu Verifikasi`
-  follow tickets #05 and #04 below.
+  operations. **Delivery orders use their own derivation** (spec
+  penyelarasan status/notifikasi/email): a paid `processing` delivery with
+  the same verified ledger, no `fulfillment_blocked_reason`, no committed
+  `manual_review` operation and no started/confirmed cancel path targets
+  `Siap Proses` without ever becoming `ready_for_pickup`. A merely `paid`
+  Midtrans status or an in-flight settlement is never a `Siap Proses`
+  trigger. `Selesai` is projected separately from committed completion
+  (ticket #06, including a manual delivery finish); `Gagal Bayar` and
+  `Menunggu Verifikasi` follow tickets #05 and #04 below.
 - **Intent ledger.** `jubelio_channel_status_intent`
   (packages/db/src/schema/jubelio-channel.ts) persists one intent per
   (order, monotonic `target_version`) with the known SO id and the target
@@ -451,3 +503,67 @@ SO/invoice/payment operations and paid-but-blocked orders with remote ids,
 reasons and timestamps. It is strictly read-only: operators investigate in
 Jubelio using the remote ids; no blind writes. Order detail shows the remote
 SO/invoice/payment ids and the block reason.
+
+## Checkout attempt sebelum order (plan: checkout-attempt-before-order)
+
+Checkout baru tidak lagi membuat `orders` sebelum provider berhasil. Urutannya:
+`checkout_attempt` + hold stok/promo + SO intent di-commit dulu (tanpa order),
+lalu `POST /sales/orders/` + verifikasi GET, lalu pembuatan sesi Snap, dan baru
+setelah keduanya siap **promotion** membuat baris `orders`, `order_item`,
+alokasi diskon, `checkout_request`, serta menautkan ledger SO dan Redemption.
+
+- `checkout_attempt` menyimpan snapshot harga/fulfillment, `reserved_order_id`
+  (reference provider), `state`, `payment_state`, `stock_hold_state`, dan hasil
+  verifikasi pembayaran yang ternormalisasi. Tidak ada token/snapshot di DTO
+  publik.
+- `jubelio_sales_operation` dan `discount_redemption` dapat dimiliki attempt
+  (`checkout_attempt_id`) sebelum `order_id` ada. Constraint owner mewajibkan
+  tepat satu pemilik; `invoice`/`payment` tetap wajib sudah dipromosikan.
+- SO ditolak pasti sebelum diterapkan: hold stok/promo dilepas **sekali**, tidak
+  ada Midtrans, tidak ada order/email gagal; customer tetap di checkout.
+- Respons ambigu (timeout/5xx, klaim lokal gagal) tidak pernah dianggap gagal:
+  attempt menjadi `manual_review`/`processing`, tanpa POST ulang dan tanpa
+  pelepasan hold. Hanya rejection 401 terverifikasi dari SDK Snap (Context7
+  `midtrans-nodejs-client`, error `httpStatusCode`/`ApiResponse`) yang dianggap
+  definitive untuk pembatalan SO; 4xx lain — termasuk `order_id` duplikat —
+  tetap ambigu.
+- Cancel SO harus **confirmed** sebelum stok dikembalikan dan retry dibuka.
+- Retry key yang sama melanjutkan attempt yang tersimpan (bukan reserve ulang);
+  key berbeda saat attempt belum selesai ditolak `409 CHECKOUT_ATTEMPT_IN_PROGRESS`.
+- Sweep cron memulihkan attempt: klaim intent yang belum pernah dikirim,
+  menyelesaikan promotion lokal yang tertunda, dan meng-*abort* reservation
+  kedaluwarsa yang SO-nya belum pernah dikirim. Hasil possibly-sent hanya
+  GET/review.
+
+## Kontrak provider3 — PPN pada SO, invoice, dan payment
+
+Writer order baru mencatat PPN yang sudah dibayar customer sebagai pajak barang
+pada Sales Order. Kontraknya (spec
+[PPN checkout](../../.scratch/jubelio-sales-api-switching/plan/jubelio-sales-order-tax-spec.md)):
+
+- `items[].tax_id` = `providerTax.taxId` dari snapshot tervalidasi (tenant riset:
+  `-2`); `items[].tax_amount` = `providerTaxAmount` whole-line; header
+  `total_tax` = jumlah line tax = `ppnAmount`; `grand_total` =
+  `expectedProviderPayable` = net barang + PPN + net ongkir. `is_tax_included`
+  tetap `false`, `shipping_cost_discount` tetap tidak dikirim.
+- Tax ID **signed**: `0` tetap ditolak (FK provider), sedangkan ID negatif
+  adalah data master yang sah. Guard `tax_amount = 0` hanya berlaku untuk
+  intent unversioned dan provider2.
+- Pembuatan SO tetap exactly once; verifikasi `GET /sales/orders/{id}` untuk
+  provider3 juga memeriksa **tax id dan nominal per baris**, bukan hanya header.
+- Invoice tetap dikonversi `{ salesorder_id }` tanpa mengirim ulang pajak;
+  verifikasi invoice memeriksa `total_tax`, pajak per baris, dan
+  `payment_amount`/`due`. Payment tetap memakai `amount` payable tersimpan
+  (kini termasuk PPN) dan association `payment_amount`.
+- Mirror status channel tetap version-aware: full-payload edit hanya mengubah
+  marker; tax id, nominal per baris/header, detail id, diskon, ongkir, dan link
+  invoice dipertahankan. Pre-read yang menemukan drift pajak menahan POST dan
+  mencatat investigation case.
+- Replay/recovery order lama membaca snapshot tersimpan dan **tidak** membaca
+  ulang config/master, sehingga outage pajak atau perubahan key tidak
+  menggagalkan transaksi yang sedang dilanjutkan. Perubahan config hanya berlaku
+  untuk checkout baru.
+- Konfigurasi: `jubelio.salesTaxId` di `system_config` (tanpa menu admin) +
+  `tax.ppnRatePercent`. Keduanya diverifikasi ke `GET /taxes/` setiap checkout
+  baru; kegagalan = `503 CHECKOUT_TAX_UNAVAILABLE` dengan copy customer, tanpa
+  SO/invoice/payment/Midtrans, reservation, atau perubahan cart.

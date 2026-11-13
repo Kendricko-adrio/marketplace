@@ -47,7 +47,7 @@ test.describe("admin customers — HQ", () => {
     await expect(
       page.getByRole("heading", { name: "Customer", exact: true })
     ).toBeVisible();
-    await expect(page.getByRole("columnheader", { name: "Birth Date" })).toBeVisible();
+    await expect(page.getByRole("columnheader", { name: "Tanggal lahir" })).toBeVisible();
     await expect(page.getByRole("columnheader", { name: "Onboarding" })).toBeVisible();
 
     const johnRow = page.getByRole("row").filter({ hasText: "john@example.com" });
@@ -56,7 +56,7 @@ test.describe("admin customers — HQ", () => {
     // transition only commits after the detail payload + chunks arrive, so
     // assert the visible URL after the click with a load-tolerant timeout
     // instead of Promise.all(waitForURL(load), click).
-    await johnRow.getByRole("link", { name: "View detail" }).click();
+    await johnRow.getByRole("link", { name: "Lihat detail John Doe" }).click();
     await expect(page).toHaveURL(/\/admin\/customers\/[^/]+$/, {
       timeout: 30_000,
     });

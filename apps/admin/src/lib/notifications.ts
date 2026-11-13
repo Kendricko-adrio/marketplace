@@ -49,6 +49,14 @@ export async function getDbNow(): Promise<Date> {
   return row ? new Date(row.now) : new Date();
 }
 
+/** Normalisasi nilai kolom: hanya dua cara pemenuhan yang sah. Nilai lain
+ * (legacy/unknown) menjadi null dan TIDAK ditebak menjadi pickup. */
+function normalizeFulfillmentMethod(
+  value: string | null | undefined
+): "pickup" | "delivery" | null {
+  return value === "pickup" || value === "delivery" ? value : null;
+}
+
 export interface NotificationListItem {
   id: string;
   type: string;
@@ -67,6 +75,8 @@ export interface NotificationListItem {
     status: string;
     paymentStatus: string;
     customerName: string | null;
+    /** Cara pemenuhan order (spec penyelarasan status/notifikasi/email). */
+    fulfillmentMethod: "pickup" | "delivery" | null;
   } | null;
 }
 
@@ -91,6 +101,7 @@ export async function getNotificationItem(
         total: orders.total,
         status: orders.status,
         paymentStatus: orders.paymentStatus,
+        fulfillmentMethod: orders.fulfillmentMethod,
       },
       customerName: clients.name,
     })
@@ -129,6 +140,9 @@ export async function getNotificationItem(
           status: row.order.status,
           paymentStatus: row.order.paymentStatus,
           customerName: row.customerName,
+          fulfillmentMethod: normalizeFulfillmentMethod(
+            row.order.fulfillmentMethod
+          ),
         }
       : null,
   };
@@ -181,6 +195,7 @@ export async function listNotifications(
         total: orders.total,
         status: orders.status,
         paymentStatus: orders.paymentStatus,
+        fulfillmentMethod: orders.fulfillmentMethod,
       },
       customerName: clients.name,
     })
@@ -223,6 +238,9 @@ export async function listNotifications(
           status: row.order.status,
           paymentStatus: row.order.paymentStatus,
           customerName: row.customerName,
+          fulfillmentMethod: normalizeFulfillmentMethod(
+            row.order.fulfillmentMethod
+          ),
         }
       : null,
   }));

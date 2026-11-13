@@ -68,6 +68,7 @@ import type {
   DeliverySnapshotPayload,
   ShipmentCreateRequestPayload,
 } from "@marketplace/db/src/schema";
+import { recordOrderCommunicationEvent } from "@marketplace/db/src/order-communications/order-communication-repository";
 import { writeAuditEvent } from "@/lib/rbac/audit-writer";
 import { createModuleLogger } from "@/lib/logger";
 
@@ -575,6 +576,19 @@ export function createDeliveryFollowUp(db: FollowUpDb) {
           updatedAt: new Date(),
         })
         .where(and(eq(orders.id, orderId), eq(orders.status, "processing")));
+      // Spec penyelarasan status/notifikasi/email: penutupan manual dicatat
+      // sebagai FAKTA pada transaksi yang sama — penanganan berakhir, BUKAN
+      // bukti barang diterima. Store worker memproyeksikan Selesai dari fakta
+      // ini; tidak ada email sudah sampai yang dibuat di sini.
+      if (order.orderCommunicationVersion >= 1) {
+        await recordOrderCommunicationEvent(tx, {
+          orderId,
+          kind: "delivery_closed_manually",
+          source: "manual_finish",
+          occurredAt: new Date(),
+          receivedAt: new Date(),
+        });
+      }
       await writeAuditEvent(tx, {
         actorId: actor.id,
         action: "SHIPMENT_MANUAL_FINISH",

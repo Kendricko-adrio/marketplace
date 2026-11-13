@@ -32,6 +32,7 @@ import {
 } from "./promo-replacement";
 import { applyOfferBenefitToPricing } from "./offer-pricing";
 import type { OfferEligibilityReason } from "@marketplace/db/src/discount-eligibility";
+import type { ValidatedProviderTax } from "@marketplace/db/src/provider-tax";
 
 /**
  * Gagal promo pada review delivery. Status/code/notifikasi aman dipetakan route
@@ -121,7 +122,22 @@ function reviewPricingOf(value: PricingSnapshot): CheckoutReviewPricing {
     pricingContractVersion: value.pricingContractVersion,
     pricingEngineVersion: value.pricingEngineVersion,
     providerContractVersion: value.providerContractVersion,
+    providerTax: value.providerContractVersion === 3 ? value.providerTax : null,
   };
+}
+
+/**
+ * Proyeksi HTTP untuk browser: identitas tax provider hanya milik fingerprint
+ * server-side, bukan payload customer. Tanpa strip ini, `approvedPricing` yang
+ * dikirim balik browser ditolak schema money (spec §5.5: browser tidak menerima
+ * tax id internal).
+ */
+function publicPricingOf(
+  value: CheckoutReviewPricing
+): Omit<CheckoutReviewPricing, "providerTax"> {
+  const { providerTax: _internalTax, ...publicPricing } = value;
+  void _internalTax;
+  return publicPricing;
 }
 
 function promoOf(candidate: {
@@ -158,7 +174,11 @@ function promoOf(candidate: {
  * Ongkir quote/booking tetap ORIGINAL (`service.shippingCost`); pricing serta
  * snapshot menyimpan subsidi dan ongkir net customer secara terpisah.
  */
-export async function previewDeliveryReview(clientId: string, input: z.infer<typeof deliveryReviewSchema>) {
+export async function previewDeliveryReview(
+  clientId: string,
+  input: z.infer<typeof deliveryReviewSchema>,
+  providerTax?: ValidatedProviderTax
+) {
   const loaded = await loadOwnedQuoteCartItems(clientId, input.itemIds);
   const { branchId } = loaded;
   const items = loaded.items.map((item) => {
@@ -166,13 +186,15 @@ export async function previewDeliveryReview(clientId: string, input: z.infer<typ
     return { ...item, variantId: item.variantId };
   });
   items.sort((a, b) => a.variantId < b.variantId ? -1 : a.variantId > b.variantId ? 1 : 0);
-  const ppnRatePercent = await getPpnRatePercent();
+  // Preflight pajak (config + master) menentukan rate; fallback config lama
+  // hanya untuk pemanggil kompatibilitas tanpa konteks tervalidasi.
+  const ppnRatePercent = providerTax?.ratePercent ?? (await getPpnRatePercent());
   // Source bounds sebelum region/rates HTTP.
   const lines = items.map((item) => ({ variantId: item.variantId, quantity: item.quantity,
     sourceUnitPrice: String(item.value),
     effectiveUnitPrice: String(item.effectiveValue ?? item.value),
     markdownRevisionId: item.markdownRevisionId ?? null }));
-  buildPricingSnapshot({ fulfillmentMethod: "delivery", ppnRatePercent, lines });
+  buildPricingSnapshot({ fulfillmentMethod: "delivery", ppnRatePercent, lines, providerTax });
   const origin = await loadQuoteOriginBranch(branchId);
   const destination = "addressId" in input ? await loadRevalidatedDestination(clientId, input.addressId)
     : await loadRevalidatedNewDestination(input.newAddress);
@@ -185,7 +207,7 @@ export async function previewDeliveryReview(clientId: string, input: z.infer<typ
   if (!chosen || chosen.originFingerprint !== input.originFingerprint) {
     throw new QuoteDeliveryError("INVALID_INPUT", "Layanan pengiriman berubah. Periksa kembali ongkir.");
   }
-  const baseline = buildPricingSnapshot({ fulfillmentMethod: "delivery", ppnRatePercent, lines,
+  const baseline = buildPricingSnapshot({ fulfillmentMethod: "delivery", ppnRatePercent, lines, providerTax,
     // Quote customer sekaligus provider quote cost; booking tetap original.
     shippingBeforeSubsidy: String(chosen.shippingCost), providerQuotedShippingCost: chosen.shippingCost });
   const parcel = buildShipmentParcel({ items: items.map((item) => ({ itemName: item.itemName, quantity: item.quantity,
@@ -348,7 +370,7 @@ export async function previewDeliveryReview(clientId: string, input: z.infer<typ
     requiresContinueWithoutPromoAcknowledgement,
   });
   return {
-    pricing,
+    pricing: publicPricingOf(pricing),
     promo,
     contextFingerprint,
     reviewToken,

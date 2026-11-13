@@ -43,7 +43,7 @@ import {
 } from "@/lib/checkout-admission";
 import { CheckoutInputError, readCheckoutJson } from "@/lib/checkout-input";
 import { validatePickupSlot } from "@/lib/pickup-validation";
-import { getDiscountsContractVersion, getPpnRatePercent } from "@/lib/config";
+import { getDiscountsContractVersion } from "@/lib/config";
 import { buildPricingSnapshot, PricingContractError, type PricingSnapshot } from "@/lib/versioned-pricing";
 import { evaluatePricing } from "@marketplace/db/src/discount-pricing";
 import type { OfferEligibilityReason } from "@marketplace/db/src/discount-eligibility";
@@ -55,6 +55,11 @@ import {
   offerReasonMessage,
 } from "@/lib/discount-selection";
 import { readVariantProjections } from "@/lib/variant-price-projection";
+import {
+  CheckoutTaxUnavailableError,
+  prepareCheckoutTax,
+} from "@/features/checkout/prepare-checkout-tax-service";
+import type { ValidatedProviderTax } from "@marketplace/db/src/provider-tax";
 import {
   buildCheckoutReviewContextFingerprint,
   CheckoutReviewRequiredError,
@@ -100,6 +105,7 @@ type PreviewErrorCode =
   | "NOT_FOUND"
   | "UNSUPPORTED_VERSION"
   | "PRICING_UNAVAILABLE"
+  | "CHECKOUT_TAX_UNAVAILABLE"
   | "DELIVERY_REPRICE_REQUIRED"
   | "PROMO_UNAVAILABLE"
   | "PROMO_INELIGIBLE"
@@ -131,6 +137,39 @@ function previewFailure(
     },
     { status, headers: { "Cache-Control": "no-store" } }
   );
+}
+
+/** Copy final preflight pajak (spec PPN §5.5); tanpa ID/rate/akun internal. */
+const CHECKOUT_TAX_UNAVAILABLE_COPY =
+  "Checkout belum dapat diproses karena konfigurasi pajak belum sesuai. Silakan coba lagi nanti.";
+
+/**
+ * Preflight pajak wajib SEBELUM harga/attempt order baru dibentuk. Kegagalan
+ * apa pun (config DB, master provider, rate mismatch, mapping keluaran) diblokir
+ * sebagai 503 tanpa membuat SO/invoice/payment/Midtrans, reservation, atau
+ * perubahan cart.
+ */
+async function requireCheckoutTax(): Promise<ValidatedProviderTax> {
+  try {
+    return await prepareCheckoutTax();
+  } catch (error) {
+    if (error instanceof CheckoutTaxUnavailableError) {
+      log.error(
+        `checkout preview blocked — pajak belum tersedia (outcome unavailable, reason ${error.reason})`,
+        new RouteLogError("checkout tax preflight unavailable")
+      );
+      throw new CheckoutTaxBlockedError();
+    }
+    throw error;
+  }
+}
+
+/** Sinyal internal: route memetakan ke satu response 503 tanpa data. */
+class CheckoutTaxBlockedError extends Error {
+  constructor() {
+    super("checkout tax preflight blocked");
+    this.name = "CheckoutTaxBlockedError";
+  }
 }
 
 const selectedIdsSchema = z
@@ -247,7 +286,16 @@ async function previewCheckout(request: NextRequest): Promise<Response> {
         log.warn("delivery review input rejected (outcome invalid_input)");
         return previewFailure(400, "INPUT_INVALID", "Data checkout tidak valid.");
       }
-      const data = await previewDeliveryReview(session.user.id, delivery.data);
+      let providerTax: ValidatedProviderTax;
+      try {
+        providerTax = await requireCheckoutTax();
+      } catch (error) {
+        if (error instanceof CheckoutTaxBlockedError) {
+          return previewFailure(503, "CHECKOUT_TAX_UNAVAILABLE", CHECKOUT_TAX_UNAVAILABLE_COPY);
+        }
+        throw error;
+      }
+      const data = await previewDeliveryReview(session.user.id, delivery.data, providerTax);
       log.info(
         `delivery review preview succeeded: total ${data.pricing.total}, goodsDiscount ${data.pricing.discount}, shippingBeforeSubsidy ${data.pricing.shippingBeforeSubsidy}, shippingSubsidy ${data.pricing.shippingSubsidy}, shippingCost ${data.pricing.shippingCost}, fingerprint ${data.contextFingerprint}, promo ${data.promo.kind}, replacement ${data.replacement?.direction ?? "-"}`
       );
@@ -381,7 +429,18 @@ async function previewCheckout(request: NextRequest): Promise<Response> {
     );
 
     // ===== Authoritative breakdown from the versioned pricing engine ======
-    const ppnRatePercent = await getPpnRatePercent();
+    // Preflight pajak (config DB + master Jubelio) menentukan kontrak provider3:
+    // PPN yang dibayar customer dicatat pada SO, rate WAJIB sama dengan master.
+    let providerTax: ValidatedProviderTax;
+    try {
+      providerTax = await requireCheckoutTax();
+    } catch (error) {
+      if (error instanceof CheckoutTaxBlockedError) {
+        return previewFailure(503, "CHECKOUT_TAX_UNAVAILABLE", CHECKOUT_TAX_UNAVAILABLE_COPY);
+      }
+      throw error;
+    }
+    const ppnRatePercent = providerTax.ratePercent;
     const pricedLines = [...selected]
       .sort((a, b) =>
         a.variantId < b.variantId ? -1 : a.variantId > b.variantId ? 1 : 0
@@ -400,6 +459,7 @@ async function previewCheckout(request: NextRequest): Promise<Response> {
       fulfillmentMethod: "pickup",
       ppnRatePercent,
       lines: pricedLines,
+      providerTax,
     });
 
     // ===== One public Coupon in the single promo slot (ticket 07) ==========
@@ -426,6 +486,7 @@ async function previewCheckout(request: NextRequest): Promise<Response> {
       pricingContractVersion: value.pricingContractVersion,
       pricingEngineVersion: value.pricingEngineVersion,
       providerContractVersion: value.providerContractVersion,
+      providerTax: value.providerContractVersion === 3 ? value.providerTax : null,
     });
     const contextFingerprintOf = (
       value: PricingSnapshot,
@@ -480,6 +541,7 @@ async function previewCheckout(request: NextRequest): Promise<Response> {
         fulfillmentMethod: "pickup",
         ppnRatePercent,
         lines: pricedLines,
+        providerTax,
         // Bentuk benefit asli (fixed atau percentage rate/cap), bukan nominal
         // yang sudah dibulatkan: allocation/rate tidak hilang dari snapshot.
         benefit: candidate.benefit,

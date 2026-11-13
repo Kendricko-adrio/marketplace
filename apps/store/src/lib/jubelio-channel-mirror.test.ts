@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { JubelioSalesOrderEditSnapshot } from "./jubelio-sales-client";
 import {
   channelStatusMarkerForTerminalLocalOrderStatus,
+  deriveChannelStatusTarget,
   isChannelTargetRegression,
+  isSiapProsesTargetApplicable,
   mirrorPreReadMismatch,
 } from "./jubelio-channel-mirror";
 import type { JubelioSalesOrderEditRequest } from "@marketplace/db/src/schema";
@@ -32,7 +34,7 @@ function verifiedCreatePayload(
       contactId: -1,
       customerName: "Pelanggan Umum",
       locationId: 7,
-      note: "OKCIR_SO_CREATE:order-1:op-1",
+      note: "SO_CREATE:order-1:op-1",
       refNo: overrides.refNo ?? "",
       items: [
         {
@@ -60,7 +62,7 @@ function matchingSnapshot(
     contactId: -1,
     customerName: "Pelanggan Umum",
     locationId: 7,
-    note: "OKCIR_SO_CREATE:order-1:op-1",
+    note: "SO_CREATE:order-1:op-1",
     transactionDate: "2026-09-26T17:00:00.000Z",
     isTaxIncluded: false,
     isCanceled: false,
@@ -297,7 +299,7 @@ const V2_GOODS = 150_000;
 const V2_ORIGINAL_SHIPPING = 30_000;
 const V2_NET_SHIPPING = 30_000;
 const V2_PAYABLE = 180_000;
-const V2_NOTE = "OKCIR_SO_CREATE:v2-order-1:v2-op-1";
+const V2_NOTE = "SO_CREATE:v2-order-1:v2-op-1";
 
 function storedCreatePayload(
   create: Record<string, unknown>
@@ -384,6 +386,38 @@ function v2Snapshot(
 }
 
 describe("mirrorPreReadMismatch contract-v2 envelope (ticket 01, pure unit)", () => {
+  it("accepts a matching signed location -1 on the stored request and provider header/items", () => {
+    const snapshot = v2Snapshot({ locationId: -1 });
+    snapshot.items[0].locationId = -1;
+    expect(mirrorPreReadMismatch({
+      snapshot,
+      create: confirmedCreate(v2StoredCreate({ locationId: -1 })),
+      verifiedInvoiceId: V2_INVOICE_ID,
+    })).toBeNull();
+  });
+
+  it("still rejects a different provider location when the stored location is negative", () => {
+    expect(mirrorPreReadMismatch({
+      snapshot: v2Snapshot(),
+      create: confirmedCreate(v2StoredCreate({ locationId: -1 })),
+      verifiedInvoiceId: V2_INVOICE_ID,
+    })).toBe("PRE_READ_CONTACT_OR_LOCATION_MISMATCH");
+  });
+
+  it("still rejects money drift and invoice-link mismatch at a negative location", () => {
+    const snapshot = v2Snapshot({ locationId: -1 });
+    snapshot.items[0].locationId = -1;
+    const create = confirmedCreate(v2StoredCreate({ locationId: -1 }));
+    expect(mirrorPreReadMismatch({
+      snapshot: { ...snapshot, grandTotal: V2_PAYABLE - 1 }, create,
+      verifiedInvoiceId: V2_INVOICE_ID,
+    })).toBe("PRE_READ_MONEY_MISMATCH");
+    expect(mirrorPreReadMismatch({
+      snapshot: { ...snapshot, invoiceId: null }, create,
+      verifiedInvoiceId: V2_INVOICE_ID,
+    })).toBe("PRE_READ_INVOICE_LINK_MISMATCH");
+  });
+
   it("accepts a v2 delivery pre-read whose payable is net goods + net shipping, not sub_total", () => {
     expect(
       mirrorPreReadMismatch({
@@ -459,7 +493,8 @@ describe("mirrorPreReadMismatch contract-v2 envelope (ticket 01, pure unit)", ()
   });
 
   it("fail-closes on an unknown stored provider contract version instead of falling back to legacy rules", () => {
-    for (const version of [1, 3, null]) {
+    // Versi 3 kini kontrak sah (PPN provider); versi 4 tetap unknown.
+    for (const version of [1, 4, null]) {
       expect(
         mirrorPreReadMismatch({
           snapshot: v2Snapshot(),
@@ -563,5 +598,206 @@ describe("isChannelTargetRegression (ticket #06: no backward overwrite of a conf
     expect(isChannelTargetRegression("Gagal Bayar", "Selesai")).toBe(false);
     expect(isChannelTargetRegression("Gagal Bayar", "Siap Proses")).toBe(false);
     expect(isChannelTargetRegression("Belum Bayar", "Selesai")).toBe(false);
+  });
+});
+
+// =========================================================
+// Kontrak provider3 — mirror full-payload mempertahankan PPN
+// =========================================================
+// Spec PPN §5.4: edit marker hanya mengubah channel status; tax id, nominal
+// per line, dan header total_tax wajib tetap sama dengan snapshot tersimpan.
+// Expected values literal dari spec: barang100000 + PPN11000 = payable111000.
+describe("mirrorPreReadMismatch contract-v3 provider tax (pure unit)", () => {
+  const TAX_GOODS = 100_000;
+  const TAX_AMOUNT = 11_000;
+  const TAX_PAYABLE = 111_000;
+  const TAX_ID = -2;
+  const TAX_NOTE = "SO_CREATE:v3-order-1:v3-op-1";
+
+  function taxStoredCreate(overrides: Record<string, unknown> = {}): JubelioSalesOrderEditRequest {
+    return v2StoredCreate({
+      note: TAX_NOTE,
+      providerContractVersion: 3,
+      originalShipmentCost: 0,
+      shippingCost: 0,
+      expectedProviderPayable: TAX_PAYABLE,
+      providerTax: { taxId: TAX_ID, ratePercent: "11" },
+      items: [
+        {
+          itemId: V2_ITEM_ID,
+          quantity: 1,
+          price: TAX_GOODS,
+          discAmount: 0,
+          taxAmount: TAX_AMOUNT,
+          unit: "Buah",
+          taxId: TAX_ID,
+        },
+      ],
+      ...overrides,
+    });
+  }
+
+  function taxSnapshot(
+    overrides: Partial<JubelioSalesOrderEditSnapshot> = {}
+  ): JubelioSalesOrderEditSnapshot {
+    const snapshot = v2Snapshot({
+      note: TAX_NOTE,
+      subTotal: TAX_GOODS,
+      totalDisc: 0,
+      totalTax: TAX_AMOUNT,
+      grandTotal: TAX_PAYABLE,
+      originalShipmentCost: 0,
+      shippingCost: 0,
+      ...overrides,
+    });
+    snapshot.items = [
+      {
+        salesorderDetailId: 74_728,
+        itemId: V2_ITEM_ID,
+        quantity: 1,
+        price: TAX_GOODS,
+        disc: 0,
+        discAmount: 0,
+        taxAmount: TAX_AMOUNT,
+        amount: TAX_PAYABLE,
+        unit: "Buah",
+        taxId: TAX_ID,
+        locationId: 7,
+      },
+    ];
+    return snapshot;
+  }
+
+  it("menerima marker edit ketika tax id/nominal per line dan header sama", () => {
+    expect(
+      mirrorPreReadMismatch({
+        snapshot: taxSnapshot(),
+        create: confirmedCreate(taxStoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBeNull();
+  });
+
+  it("menahan edit ketika nominal pajak per line provider berbeda", () => {
+    const snapshot = taxSnapshot();
+    snapshot.items[0].taxAmount = TAX_AMOUNT - 1;
+    snapshot.items[0].amount = TAX_GOODS + TAX_AMOUNT - 1;
+    expect(
+      mirrorPreReadMismatch({
+        snapshot,
+        create: confirmedCreate(taxStoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("PRE_READ_ITEM_MISMATCH");
+  });
+
+  it("menahan edit ketika tax id provider tidak lagi sama dengan snapshot", () => {
+    const snapshot = taxSnapshot();
+    snapshot.items[0].taxId = 1;
+    expect(
+      mirrorPreReadMismatch({
+        snapshot,
+        create: confirmedCreate(taxStoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("PRE_READ_ITEM_MISMATCH");
+  });
+
+  it("menahan edit ketika header total_tax dipindahkan walau baris tetap", () => {
+    const snapshot = taxSnapshot({ totalTax: 0, grandTotal: TAX_GOODS });
+    expect(
+      mirrorPreReadMismatch({
+        snapshot,
+        create: confirmedCreate(taxStoredCreate()),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("PRE_READ_MONEY_MISMATCH");
+  });
+
+  it("fail-closed ketika intent provider3 kehilangan konteks pajak tervalidasi", () => {
+    expect(
+      mirrorPreReadMismatch({
+        snapshot: taxSnapshot(),
+        create: confirmedCreate(taxStoredCreate({ providerTax: undefined })),
+        verifiedInvoiceId: V2_INVOICE_ID,
+      })
+    ).toBe("SNAPSHOT_PROVIDER_ENVELOPE_INCOMPLETE");
+  });
+});
+
+// =========================================================
+// Spec penyelarasan status/notifikasi/email — derivasi delivery:
+// Belum Bayar → Siap Proses → Selesai tanpa pernah menjadi ready_for_pickup.
+// Pure unit: derivasi dibaca dari keadaan committed, bukan dari respons provider.
+// =========================================================
+
+function mirrorContext(input: {
+  status?: string;
+  paymentStatus?: string;
+  fulfillmentMethod?: string;
+  fulfillmentBlockedReason?: string | null;
+  hasManualReviewOp?: boolean;
+  cancelStatus?: string | null;
+  invoiceConfirmed?: boolean;
+  paymentConfirmed?: boolean;
+} = {}) {
+  return {
+    order: {
+      id: "order-delivery-fixture",
+      status: input.status ?? "processing",
+      paymentStatus: input.paymentStatus ?? "paid",
+      fulfillmentBlockedReason: input.fulfillmentBlockedReason ?? null,
+      fulfillmentMethod: input.fulfillmentMethod ?? "delivery",
+    },
+    create: { status: "confirmed", salesOrderId: 5001 },
+    cancel:
+      input.cancelStatus == null
+        ? null
+        : { status: input.cancelStatus },
+    invoice: { status: input.invoiceConfirmed === false ? "intent" : "confirmed", invoiceId: 6001 },
+    payment: { status: input.paymentConfirmed === false ? "intent" : "confirmed", paymentId: 7001 },
+    hasManualReviewOp: input.hasManualReviewOp ?? false,
+    orderPricing: {},
+  } as unknown as Parameters<typeof isSiapProsesTargetApplicable>[0];
+}
+
+describe("delivery Siap Proses derivation (spec penyelarasan, pure unit)", () => {
+  it("delivery processing/paid dengan ledger terverifikasi menjadi Siap Proses", () => {
+    expect(deriveChannelStatusTarget(mirrorContext())).toBe("Siap Proses");
+  });
+
+  it("pickup tetap memakai syarat existing (ready_for_pickup)", () => {
+    expect(
+      deriveChannelStatusTarget(
+        mirrorContext({ fulfillmentMethod: "pickup", status: "ready_for_pickup" })
+      )
+    ).toBe("Siap Proses");
+  });
+
+  it("delivery processing/paid tanpa invoice atau payment terverifikasi tidak ditargetkan", () => {
+    expect(deriveChannelStatusTarget(mirrorContext({ invoiceConfirmed: false }))).toBeNull();
+    expect(deriveChannelStatusTarget(mirrorContext({ paymentConfirmed: false }))).toBeNull();
+  });
+
+  it("delivery paid yang masih blocked tetap Menunggu Verifikasi, bukan Siap Proses", () => {
+    expect(
+      deriveChannelStatusTarget(
+        mirrorContext({ fulfillmentBlockedReason: "Sales-Order invoice is unverified" })
+      )
+    ).toBe("Menunggu Verifikasi");
+    expect(
+      deriveChannelStatusTarget(mirrorContext({ hasManualReviewOp: true }))
+    ).toBe("Menunggu Verifikasi");
+  });
+
+  it("cancel path aktif menahan Siap Proses delivery", () => {
+    expect(isSiapProsesTargetApplicable(mirrorContext({ cancelStatus: "confirmed" }))).toBe(
+      false
+    );
+    expect(isSiapProsesTargetApplicable(mirrorContext({ cancelStatus: "rejected" }))).toBe(true);
+  });
+
+  it("delivery completed memproyeksikan Selesai, bukan Siap Proses", () => {
+    expect(deriveChannelStatusTarget(mirrorContext({ status: "completed" }))).toBe("Selesai");
   });
 });

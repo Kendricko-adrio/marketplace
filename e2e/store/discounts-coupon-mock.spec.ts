@@ -18,7 +18,7 @@ import { createHmac } from "node:crypto";
 import { Pool } from "pg";
 import dotenv from "dotenv";
 import { TEST_USERS } from "../config";
-import { deleteRetainedOrderFixtures } from "../../packages/db/src/testing/retained-order-fixtures";
+import { deleteRetainedOrderFixtures, deleteUnpromotedCheckoutAttempts } from "../../packages/db/src/testing/retained-order-fixtures";
 
 dotenv.config({ path: ".env" });
 
@@ -211,6 +211,29 @@ async function createOffer(input: {
  * Drives cart → checkout → pickup slot + contact → review step, where the
  * single promo slot lives (the contact step no longer exists).
  */
+async function openPromoPicker(page: Page) {
+  if (!await page.getByRole("dialog").isVisible()) {
+    await page.getByRole("button", { name: /^(Pilih promo|Ubah promo|Pilih promo lain)$/ }).click();
+  }
+  await expect(page.getByRole("dialog", { name: "Pilih promo", exact: true })).toBeVisible();
+}
+async function choosePromo(page: Page, name: RegExp) {
+  await openPromoPicker(page);
+  await page.getByRole("radio", { name }).check();
+  await page.getByRole("button", { name: "Gunakan promo", exact: true }).click();
+}
+async function enterPromoCode(page: Page, code: string) {
+  await openPromoPicker(page);
+  await page.getByLabel("Kode promo", { exact: true }).fill(code);
+  const response = page.waitForResponse(r => r.url().endsWith("/api/checkout/preview"));
+  await page.getByRole("button", { name: "Periksa", exact: true }).click();
+  const body = await (await response).json();
+  if (body.success) {
+    await expect(page.getByText("Kode promo valid. Pilih Gunakan promo untuk menerapkan.")).toBeVisible();
+    await page.getByRole("button", { name: "Gunakan promo", exact: true }).click();
+  }
+}
+
 async function reachPaymentStep(page: Page): Promise<void> {
   const add = await storeContext.request.post("/api/cart/items", {
     data: { variantId: VARIANT_ID, branchId: homeBranchId, quantity: 1 },
@@ -447,6 +470,7 @@ test.afterEach(async () => {
   ]);
   await deleteRetainedOrderFixtures(pool, [...fixtureOrderIds]);
   fixtureOrderIds.clear();
+  await deleteUnpromotedCheckoutAttempts(pool, [clientId]);
   await pool.query(
     "UPDATE branch_stock SET pending_remote_stock=0, available_stock=5, stock=5 WHERE product_variant_id=$1",
     [VARIANT_ID]
@@ -520,12 +544,13 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     const disabled = offers.find((offer) => offer.offerId === MIN_OFFER_ID);
     expect(disabled).toMatchObject({ eligible: false, reason: "MINIMUM_NOT_MET" });
 
+    await openPromoPicker(page);
     // Disabled Offer tidak bisa dipilih dan menampilkan alasan aman.
-    await expect(page.getByRole("button", { name: /Mock Minimum Tinggi/ })).toBeDisabled();
+    await expect(page.getByRole("radio", { name: /Mock Minimum Tinggi/ })).toBeDisabled();
     await expect(page.getByText("Minimum belanja untuk promo ini belum terpenuhi.")).toBeVisible();
 
-    await page.getByRole("button", { name: /Mock Hemat 25/ }).click();
-    await expect(page.getByRole("button", { name: /Mock Hemat 25/ })).toHaveAttribute("aria-pressed", "true");
+    await choosePromo(page, /Mock Hemat 25/);
+    await expect(page.getByRole("region", { name: "Promo", exact: true })).toContainText("Dipakai");
 
     await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
     await expect(page.getByText(/Promo dipakai:/)).toContainText("Mock Hemat 25");
@@ -545,7 +570,7 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     });
 
     await reachPaymentStep(page);
-    await page.getByRole("button", { name: /Mock Hemat 25/ }).click();
+    await choosePromo(page, /Mock Hemat 25/);
     await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
 
     // Keep the browser on the isolated origin if the dev mock redirects to :3000.
@@ -633,6 +658,160 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     await expect(page.getByText(/Diskon promo \(Mock Hemat 25\)/)).toBeVisible();
   });
 
+  test("modal promo: daftar scrollable 10 per halaman, draft lintas halaman dan batal tidak menerapkan", async () => {
+    const page = await storeContext.newPage();
+    await page.route("**/api/discounts/available", async route => {
+      const body = route.request().postDataJSON();
+      const current = body.page ?? 1;
+      const items = Array.from({ length: 27 }, (_, i) => ({
+        offerId: `pagination-${i}`, name: `Promo halaman ${i + 1}`,
+        benefitAmount: "10000", benefitKind: "fixed_goods", rate: null, capAmount: null,
+        minSubtotal: "0", endsAt: null, eligible: true, reason: null, reasonMessage: null,
+        estimatedSavings: "11100", estimatedTotal: "155400", recommended: i === 0,
+      }));
+      await route.fulfill({ json: { success: true, data: {
+        items: items.slice((current - 1) * 10, current * 10), page: current,
+        pageSize: 10, totalItems: 27, totalPages: 3, selectedOffer: null, selectedOfferUnavailable: false,
+      } } });
+    });
+    await page.setViewportSize({ width: 390, height: 740 });
+    await reachPaymentStep(page);
+    await expect(page.getByRole("radio", { name: /Promo halaman/ })).toHaveCount(0);
+    await page.getByRole("button", { name: "Pilih promo", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "Pilih promo", exact: true });
+    await expect(dialog.getByRole("radio")).toHaveCount(10);
+    await expect(dialog.getByRole("button", { name: "Gunakan promo" })).toBeDisabled();
+    await dialog.getByRole("radio").first().check();
+    const list = dialog.getByRole("region", { name: "Daftar promo" });
+    expect(await list.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
+    await list.evaluate(el => { el.scrollTop = el.scrollHeight; });
+    await dialog.getByRole("button", { name: "Halaman promo berikutnya" }).click();
+    await expect(dialog.getByText("11–20 dari 27 promo")).toBeVisible();
+    await expect(dialog.getByText("Pilihan: Promo halaman 1", { exact: true })).toBeVisible();
+    expect(await list.evaluate(el => el.scrollTop)).toBe(0);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Pilih promo", exact: true })).toBeFocused();
+    await expect(page.getByText(/Promo dipakai:/)).toHaveCount(0);
+    await page.getByRole("button", { name: "Pilih promo", exact: true }).click();
+    await expect(dialog.getByText("1–10 dari 27 promo")).toBeVisible();
+    await expect(dialog.getByRole("radio", { checked: true })).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Batal", exact: true }).click();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.close();
+  });
+
+  test("modal promo: kode draft, input edit, dan response apply setelah Escape tidak mengubah checkout", async () => {
+    const page = await storeContext.newPage();
+    await reachPaymentStep(page);
+    await openPromoPicker(page);
+    const dialog = page.getByRole("dialog", { name: "Pilih promo", exact: true });
+    await page.getByLabel("Kode promo", { exact: true }).fill(MANUAL_CODE);
+    await dialog.getByRole("button", { name: "Periksa", exact: true }).click();
+    await expect(dialog.getByText("Kode promo valid. Pilih Gunakan promo untuk menerapkan.")).toBeVisible();
+    await expect(page.getByText(/Promo dipakai:/)).toHaveCount(0);
+    await page.getByLabel("Kode promo", { exact: true }).fill("EDITED");
+    await expect(dialog.getByRole("button", { name: "Gunakan promo", exact: true })).toBeDisabled();
+    await expect(dialog.getByText("Kode promo valid. Pilih Gunakan promo untuk menerapkan.")).toHaveCount(0);
+    // Actual rendered evidence for main-agent visual review; not failure screenshots.
+    for (const width of [360, 1440]) {
+      await page.setViewportSize({ width, height: 850 });
+      await dialog.getByRole("radio", { name: /Mock Hemat 25/ }).check();
+      await page.screenshot({ path: `playwright/mcp/promo-modal/modal-${width}.png` });
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    }
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let arrived!: () => void;
+    const started = new Promise<void>(resolve => { arrived = resolve; });
+    let finished!: () => void;
+    const complete = new Promise<void>(resolve => { finished = resolve; });
+    await page.route("**/api/checkout/preview", async route => {
+      const response = await route.fetch();
+      arrived();
+      await gate;
+      await route.fulfill({ response });
+      finished();
+    });
+    await dialog.getByRole("button", { name: "Gunakan promo", exact: true }).click();
+    await started;
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    release();
+    await complete;
+    await expect(page.getByRole("button", { name: "Pilih promo", exact: true })).toBeEnabled();
+    await expect(page.getByText(/Promo dipakai:/)).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Rincian Pembayaran" }).getByText("Rp 166.500", { exact: true })).toBeVisible();
+    await page.screenshot({ path: "playwright/mcp/promo-modal/checkout-summary-1440.png", fullPage: true });
+    await page.close();
+  });
+
+  test("modal promo: error dapat dicoba ulang, empty tetap menerima kode, kontrak page menolak cursor campuran", async () => {
+    const page = await storeContext.newPage();
+    await reachPaymentStep(page);
+    const cart = (await (await storeContext.request.get("/api/cart")).json()).data;
+    const invalid = await storeContext.request.post("/api/discounts/available", { data: {
+      selectedItemIds: [cart.items[0].id], page: 1, cursor: "legacy",
+    } });
+    expect(invalid.status()).toBe(400);
+    let fail = true;
+    await page.route("**/api/discounts/available", async route => {
+      await route.fulfill(fail ? { status: 503, json: { success: false, error: "Promo belum dapat dimuat." } }
+        : { json: { success: true, data: { items: [], page: 1, pageSize: 10, totalItems: 0,
+          totalPages: 0, selectedOffer: null, selectedOfferUnavailable: false } } });
+    });
+    await openPromoPicker(page);
+    const dialog = page.getByRole("dialog", { name: "Pilih promo", exact: true });
+    await expect(dialog.getByRole("alert")).toHaveText(/Promo belum dapat dimuat/);
+    fail = false;
+    await dialog.getByRole("button", { name: "Coba lagi", exact: true }).click();
+    await expect(dialog.getByText("Belum ada promo yang tersedia untuk pesanan ini.")).toBeVisible();
+    await expect(dialog.getByRole("navigation", { name: "Pagination promo" })).toHaveCount(0);
+    await expect(dialog.getByRole("button", { name: "Gunakan promo", exact: true })).toBeDisabled();
+    await dialog.getByLabel("Kode promo", { exact: true }).fill(MANUAL_CODE);
+    await dialog.getByRole("button", { name: "Periksa", exact: true }).click();
+    await expect(dialog.getByText("Kode promo valid. Pilih Gunakan promo untuk menerapkan.")).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Gunakan promo", exact: true })).toBeEnabled();
+    await dialog.getByRole("button", { name: "Batal", exact: true }).click();
+    await expect(page.getByText(/Promo dipakai:/)).toHaveCount(0);
+    // Render the agreed peer dialog for main-agent cross-pattern visual review.
+    await page.getByRole("button", { name: "Kembali", exact: true }).click();
+    await page.getByText("Kirim ke alamat", { exact: true }).click();
+    await page.getByRole("button", { name: "Gunakan alamat baru", exact: true }).click();
+    await expect(page.getByRole("dialog", { name: "Alamat baru", exact: true })).toBeVisible();
+    for (const width of [360, 1440]) {
+      await page.setViewportSize({ width, height: 850 });
+      await page.screenshot({ path: `playwright/mcp/promo-modal/reference-address-${width}.png` });
+    }
+    await page.getByRole("dialog").getByRole("button", { name: "Batal", exact: true }).click();
+    await page.close();
+  });
+
+  test("modal promo: radio keyboard, focus trap dan footer viewport pendek tetap dapat digunakan", async () => {
+    const page = await storeContext.newPage();
+    await page.setViewportSize({ width: 360, height: 500 });
+    await reachPaymentStep(page);
+    await openPromoPicker(page);
+    const dialog = page.getByRole("dialog", { name: "Pilih promo", exact: true });
+    const radios = dialog.getByRole("radio");
+    await radios.first().focus();
+    await page.keyboard.press("ArrowDown");
+    await expect(radios.nth(1)).toBeChecked();
+    await expect(radios.first()).not.toBeChecked();
+    for (let i = 0; i < 10; i++) {
+      await page.keyboard.press(i % 2 ? "Shift+Tab" : "Tab");
+      expect(await dialog.evaluate(el => el.contains(document.activeElement))).toBe(true);
+    }
+    const action = await dialog.getByRole("button", { name: "Gunakan promo", exact: true }).boundingBox();
+    expect(action).not.toBeNull();
+    expect(action!.y).toBeGreaterThanOrEqual(0);
+    expect(action!.y + action!.height).toBeLessThanOrEqual(500);
+    expect(await dialog.getByRole("region", { name: "Daftar promo" }).evaluate(el => el.clientHeight)).toBeGreaterThan(0);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: "Pilih promo", exact: true })).toBeFocused();
+    await page.close();
+  });
+
   test("percentage goods 10% cap20000: picker jujur, place order menyimpan allocation exact", async () => {
     const page = await storeContext.newPage();
     const location = await pool.query("SELECT jubelio_location_id FROM branch WHERE id=$1", [homeBranchId]);
@@ -662,10 +841,11 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     });
 
     // Label persentase, bukan nominal fixed yang menyesatkan.
-    await expect(page.getByRole("button", { name: /Mock Persen 10/ })).toContainText(
+    await openPromoPicker(page);
+    await expect(page.getByRole("radio", { name: /Mock Persen 10/ }).locator("..")).toContainText(
       "Diskon 10% (maks Rp 20.000)"
     );
-    await page.getByRole("button", { name: /Mock Persen 10/ }).click();
+    await choosePromo(page, /Mock Persen 10/);
     await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
     await expect(page.getByText("Diskon promo").first()).toBeVisible();
     await expect(page.getByText(`Rp ${PERCENT_TOTAL.toLocaleString("id-ID")}`).first()).toBeVisible();
@@ -760,8 +940,7 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     });
 
     await reachPaymentStep(page);
-    await page.getByLabel("Punya kode promo?").fill(` ${MANUAL_PERCENT_CODE.toLowerCase()} `);
-    await page.getByRole("button", { name: "Terapkan" }).click();
+    await enterPromoCode(page, ` ${MANUAL_PERCENT_CODE.toLowerCase()} `);
 
     // Kode canonical manual diterapkan dengan benefit percentage yang sama:
     // 10% × 150000 = 15000 (cap20000 belum mengikat), total149850.
@@ -937,7 +1116,7 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
       response.url().endsWith("/api/discounts/available")
     );
     await reachPaymentStep(page);
-    await page.getByRole("button", { name: /Mock Hemat 25/ }).click();
+    await choosePromo(page, /Mock Hemat 25/);
     await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
     await reviewPicker;
     await expect(page.getByText(/Promo dipakai:/)).toContainText("Mock Hemat 25");
@@ -955,7 +1134,7 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
         response.url().endsWith("/api/checkout/preview") &&
         (response.request().postData() ?? "").includes("\"previous\"")
     );
-    await page.getByRole("button", { name: /Mock Hemat 10/ }).click();
+    await choosePromo(page, /Mock Hemat 10/);
     const preview = await replacementResponse;
     expect(preview.status()).toBe(200);
     const previewBody = await preview.json();
@@ -980,12 +1159,12 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
 
     // Batal: pilihan & total lama dipertahankan; tidak ada applied state palsu.
     await dialog.getByRole("button", { name: "Batal" }).click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByRole("dialog", { name: "Pilih promo", exact: true })).toBeVisible();
     await expect(page.getByText(/Promo dipakai:/)).toContainText("Mock Hemat 25");
     await expect(page.getByText(rupiah(TOTAL)).first()).toBeVisible();
 
     // Konfirmasi: breakdown berganti ke kandidat (net 140000, PPN 15400).
-    await page.getByRole("button", { name: /Mock Hemat 10/ }).click();
+    await choosePromo(page, /Mock Hemat 10/);
     await expect(page.getByRole("dialog")).toBeVisible();
     await page.getByRole("dialog").getByRole("button", { name: "Ya, ganti promo" }).click();
     await expect(page.getByRole("dialog")).toHaveCount(0);
@@ -1103,7 +1282,7 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
     const page = await storeContext.newPage();
     await ensureStock();
     await reachPaymentStep(page);
-    await page.getByRole("button", { name: /Mock Hemat 10/ }).click();
+    await choosePromo(page, /Mock Hemat 10/);
     await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
     await expect(page.getByText(rupiah(TOTAL_AFTER_SMALL)).first()).toBeVisible();
 
@@ -1112,7 +1291,7 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
         response.url().endsWith("/api/checkout/preview") &&
         (response.request().postData() ?? "").includes("\"previous\"")
     );
-    await page.getByRole("button", { name: /Mock Hemat 25/ }).click();
+    await choosePromo(page, /Mock Hemat 25/);
     const preview = await replacementResponse;
     expect(preview.status()).toBe(200);
     const body = await preview.json();
@@ -1141,7 +1320,7 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
         response.url().endsWith("/api/checkout/preview") &&
         (response.request().postData() ?? "").includes("\"previous\"")
       );
-      await page.getByRole("button", { name: "Pakai tanpa promo" }).click();
+      await page.getByRole("button", { name: "Lepas promo" }).click();
       const rejection = await rejected;
       expect(rejection.status()).toBe(409);
       expect((await rejection.json()).code).toBe("PROMO_UNAVAILABLE");
@@ -1229,7 +1408,9 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
     await ensureStock();
     await reviewWithCoupon25(page);
 
-    // Kandidat dipause setelah daftar dimuat: preview menolak, pilihan lama tetap.
+    // Open and load before pausing, so this actually exercises a stale displayed candidate.
+    await openPromoPicker(page);
+    await expect(page.getByRole("radio", { name: /Mock Hemat 10/ })).toBeEnabled();
     await setOfferState(SMALL_OFFER_ID, "paused");
     try {
       const candidateResponse = page.waitForResponse(
@@ -1242,11 +1423,12 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
       const pickerReload = page.waitForResponse((response) =>
         response.url().endsWith("/api/discounts/available")
       );
-      await page.getByRole("button", { name: /Mock Hemat 10/ }).click();
+      await choosePromo(page, /Mock Hemat 10/);
       const rejection = await candidateResponse;
       expect(rejection.status()).toBe(409);
       expect((await rejection.json()).code).toBe("PROMO_UNAVAILABLE");
-      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(page.getByRole("dialog").getByRole("alert")).toBeVisible();
+      await page.getByRole("dialog").getByRole("button", { name: "Batal", exact: true }).click();
       await expect(page.getByText(/Promo dipakai:/)).toContainText("Mock Hemat 25");
       await expect(page.getByText(rupiah(TOTAL)).first()).toBeVisible();
       await pickerReload;
@@ -1335,7 +1517,7 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
         response.url().endsWith("/api/checkout/preview") &&
         (response.request().postData() ?? "").includes("\"previous\"")
     );
-    await page.getByRole("button", { name: /Mock Hemat 10/ }).click();
+    await choosePromo(page, /Mock Hemat 10/);
     const stale = await staleResponse;
     expect(stale.status()).toBe(409);
     expect((await stale.json()).code).toBe("CHECKOUT_REVIEW_REQUIRED");
@@ -1344,12 +1526,12 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
     await expect(page.getByRole("heading", { name: "Cara Pengiriman", exact: true })).toBeVisible();
     await expect(page.getByText(/Promo dipakai:/)).toHaveCount(0);
 
-    // Review baru memakai konteks terbaru dan pilihan yang diklik customer
-    // (qty2: 300000 - 10000 = 290000, PPN 31900, total 321900) tanpa dialog.
+    // Draft kandidat dibuang ketika konteks berubah. Review baru memvalidasi ulang
+    // promo aktif lama: qty2, 300000 - 25000 + PPN30250 = 305250.
     await page.getByRole("button", { name: "Lanjut", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
-    await expect(page.getByText(rupiah(321_900)).first()).toBeVisible();
-    await expect(page.getByText(/Promo dipakai:/)).toContainText("Mock Hemat 10");
+    await expect(page.getByText(rupiah(305_250)).first()).toBeVisible();
+    await expect(page.getByText(/Promo dipakai:/)).toContainText("Mock Hemat 25");
     await expect(page.getByRole("dialog")).toHaveCount(0);
   });
 
@@ -1366,16 +1548,14 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
     });
 
     await reachPaymentStep(page);
-    await page.getByLabel("Punya kode promo?").fill(" manualmock25 ");
-    await page.getByRole("button", { name: "Terapkan" }).click();
+    await enterPromoCode(page, " manualmock25 ");
 
     // Kode canonical (trim+uppercase) diterapkan dan total memakai benefit 25000.
     await expect(page.getByText(rupiah(TOTAL)).first()).toBeVisible();
     await expect(page.getByText(MANUAL_CODE)).toBeVisible();
 
     // Kode unknown TIDAK mengganti pilihan lama yang masih sah.
-    await page.getByLabel("Punya kode promo?").fill("NOPE999");
-    await page.getByRole("button", { name: "Terapkan" }).click();
+    await enterPromoCode(page, "NOPE999");
     await expect(page.getByRole("alert").filter({ hasText: /tidak tersedia|tidak dapat/i })).toBeVisible();
     await expect(page.getByText(MANUAL_CODE)).toBeVisible();
     await expect(page.getByText(rupiah(TOTAL)).first()).toBeVisible();
@@ -1387,7 +1567,7 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
 
     // Ganti ke Coupon publik benefit lebih kecil: total naik → dialog, batal
     // mempertahankan kode manual dan total lamanya.
-    await page.getByRole("button", { name: /Mock Hemat 10/ }).click();
+    await choosePromo(page, /Mock Hemat 10/);
     const dialog = page.getByRole("dialog");
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText(rupiah(TOTAL));
@@ -1396,7 +1576,9 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
     await expect(page.getByText(MANUAL_CODE)).toBeVisible();
     await expect(page.getByText(rupiah(TOTAL)).first()).toBeVisible();
 
-    // Terapkan manual code langsung membuat review terbaru (langkah Pembayaran).
+    // Batal di tahap kenaikan kembali ke draft; tutup picker sebelum melanjutkan checkout.
+    await expect(page.getByRole("dialog", { name: "Pilih promo", exact: true })).toBeVisible();
+    await page.getByRole("dialog").getByRole("button", { name: "Batal", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
     await page.route("**/checkout/payment-test?*", (route) => {
       const requestUrl = new URL(route.request().url());
@@ -1475,8 +1657,7 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
     const page = await storeContext.newPage();
     await ensureStock();
     await reachPaymentStep(page);
-    await page.getByLabel("Punya kode promo?").fill(MANUAL_CODE);
-    await page.getByRole("button", { name: "Terapkan" }).click();
+    await enterPromoCode(page, MANUAL_CODE);
     await expect(page.getByText(rupiah(TOTAL)).first()).toBeVisible();
 
     const ordersBefore = await pool.query(
@@ -1495,7 +1676,7 @@ test.describe("Penggantian dan gugurnya promo (ticket 08)", () => {
           response.url().endsWith("/api/checkout/preview") &&
           (response.request().postData() ?? "").includes('"previous"')
       );
-      await page.getByRole("button", { name: "Lepas kode" }).click();
+      await page.getByRole("button", { name: "Lepas promo" }).click();
       const previewResponse = await previewPromise;
       expect(previewResponse.status()).toBe(409);
       await expect(page.getByText("Promo sebelumnya tidak lagi berlaku").first()).toBeVisible();

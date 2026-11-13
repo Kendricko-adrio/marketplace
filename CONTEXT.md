@@ -140,6 +140,24 @@ _Avoid_: remote HQ pickup, all-branch pickup override
 The Action that permits modifying data and, where scope can authorize a new target, creating data in a Module. Creating a branch is an explicit all-branch operation.
 _Avoid_: update-only permission
 
+### Pemenuhan Order Delivery
+
+**Order Selesai**:
+Order yang penanganannya telah berakhir, termasuk delivery yang ditutup secara manual. Status ini sendiri bukan bukti barang telah diterima customer.
+_Avoid_: selalu berarti barang sudah sampai
+
+**Delivery Siap Diproses**:
+Order delivery yang pembayaran customer, invoice Jubelio, dan pembayaran Jubelio sudah terverifikasi sehingga dapat disiapkan untuk pengiriman. Belum berarti barang telah diserahkan kepada kurir.
+_Avoid_: barang sudah dikirim, barang sudah sampai
+
+**Delivery Mulai Diantar**:
+Tahap ketika petugas mencatat penyerahan barang kepada kurir atau kurir mengonfirmasi barang sudah dibawa, mana yang lebih dahulu. Pembuatan resi saja bukan bukti barang mulai diantar.
+_Avoid_: resi terbit, booking berhasil
+
+**Delivery Sudah Sampai**:
+Tahap ketika kurir mengonfirmasi barang telah diterima. Penutupan order secara manual bukan bukti bahwa barang sudah sampai.
+_Avoid_: order ditutup manual, barang diserahkan ke kurir
+
 ### Product Pricing and Promotions
 
 **Base Price**:

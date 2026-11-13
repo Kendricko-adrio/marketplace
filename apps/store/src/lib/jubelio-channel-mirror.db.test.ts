@@ -60,7 +60,7 @@ const PAYMENT_ID = 28_000_001;
 const ITEM_ID = 43_842;
 const LOCATION_ID = 7;
 const PRICE = 1000;
-const NOTE = "OKCIR_SO_CREATE:jcm-dbtest-order:jcm-dbtest-op-create";
+const NOTE = "SO_CREATE:jcm-dbtest-order:jcm-dbtest-op-create";
 
 const url = process.env.DATABASE_URL;
 
@@ -234,7 +234,7 @@ async function seedMirrorFixture(input: FixtureOptions): Promise<{
   // always edits a KNOWN SO. The note/reference is unique per fixture (the
   // ledger's reference is globally UNIQUE).
   const createOperationId = `${PREFIX}op-create-${suffix}`;
-  const note = `OKCIR_SO_CREATE:${orderId}:${createOperationId}`;
+  const note = `SO_CREATE:${orderId}:${createOperationId}`;
   // The persisted create-intent snapshot is the immutable source of the
   // expected provider money envelope (ticket 01). `createRequestExtra`/
   // `createRequestOmit` let a fixture persist a contract-v2 envelope, or a
@@ -283,7 +283,7 @@ async function seedMirrorFixture(input: FixtureOptions): Promise<{
             orderId,
             type: "payment",
             status: input.paymentOpStatus ?? "confirmed",
-            reference: `OKCIR_SO_PAYMENT:${orderId}:${suffix}`,
+            reference: `SO_PAYMENT:${orderId}:${suffix}`,
             payload: {
               type: "payment",
               payment: {
@@ -312,7 +312,7 @@ async function seedMirrorFixture(input: FixtureOptions): Promise<{
         orderId,
         type: "invoice",
         status: input.invoiceOpStatus ?? "confirmed",
-        reference: `OKCIR_SO_INVOICE:${orderId}:${suffix}`,
+        reference: `SO_INVOICE:${orderId}:${suffix}`,
         payload: { type: "invoice", invoice: { salesOrderId: soId } },
         salesOrderId: soId,
         invoiceId: INVOICE_ID,
@@ -457,6 +457,9 @@ function controlledGateway(options: {
     },
     async getPayment() {
       throw new Error("unexpected getPayment in mirror test");
+    },
+    async getTaxRecord() {
+      throw new Error("unexpected getTaxRecord in mirror test");
     },
     editCalls,
     getForEditCalls,
@@ -3076,7 +3079,7 @@ describe.skipIf(!schemaState.ready)(
         orderId: fixture.orderId,
         type: "cancel",
         status: "confirmed",
-        reference: `OKCIR_SO_CANCEL:${fixture.orderId}:${suffix}`,
+        reference: `SO_CANCEL:${fixture.orderId}:${suffix}`,
         payload: { type: "cancel", cancel: { salesOrderId: fixture.soId } },
         salesOrderId: fixture.soId,
         attemptCount: 1,
@@ -3125,7 +3128,7 @@ describe.skipIf(!schemaState.ready)(
         orderId: fixture.orderId,
         type: "cancel",
         status: "dispatched_unknown",
-        reference: `OKCIR_SO_CANCEL:${fixture.orderId}:${suffix}`,
+        reference: `SO_CANCEL:${fixture.orderId}:${suffix}`,
         payload: { type: "cancel", cancel: { salesOrderId: fixture.soId } },
         salesOrderId: fixture.soId,
         attemptCount: 1,
@@ -3184,7 +3187,7 @@ describe.skipIf(!schemaState.ready)(
         orderId: fixture.orderId,
         type: "cancel",
         status: "rejected",
-        reference: `OKCIR_SO_CANCEL:${fixture.orderId}:${PREFIX}op-gb-rejected-${suffix}`,
+        reference: `SO_CANCEL:${fixture.orderId}:${PREFIX}op-gb-rejected-${suffix}`,
         payload: { type: "cancel", cancel: { salesOrderId: fixture.soId } },
         salesOrderId: fixture.soId,
         attemptCount: 1,
@@ -3339,7 +3342,7 @@ describe.skipIf(!schemaState.ready)(
         orderId: fixture.orderId,
         type: "cancel",
         status: "confirmed",
-        reference: `OKCIR_SO_CANCEL:${fixture.orderId}:${suffix}`,
+        reference: `SO_CANCEL:${fixture.orderId}:${suffix}`,
         payload: { type: "cancel", cancel: { salesOrderId: fixture.soId } },
         salesOrderId: fixture.soId,
         attemptCount: 1,
@@ -3479,7 +3482,7 @@ describe.skipIf(!schemaState.ready)(
         orderId: fixture.orderId,
         type: "cancel",
         status: "confirmed",
-        reference: `OKCIR_SO_CANCEL:${fixture.orderId}:${suffix}`,
+        reference: `SO_CANCEL:${fixture.orderId}:${suffix}`,
         payload: { type: "cancel", cancel: { salesOrderId: fixture.soId } },
         salesOrderId: fixture.soId,
         attemptCount: 1,
@@ -3666,7 +3669,7 @@ describe.skipIf(!schemaState.ready)(
         orderId: fixture.orderId,
         type: "cancel",
         status: "dispatched_unknown",
-        reference: `OKCIR_SO_CANCEL:${fixture.orderId}:${suffix}`,
+        reference: `SO_CANCEL:${fixture.orderId}:${suffix}`,
         payload: { type: "cancel", cancel: { salesOrderId: fixture.soId } },
         salesOrderId: fixture.soId,
         attemptCount: 1,
@@ -3719,7 +3722,7 @@ describe.skipIf(!schemaState.ready)(
         orderId: fixture.orderId,
         type: "cancel",
         status: "manual_review",
-        reference: `OKCIR_SO_CANCEL:${fixture.orderId}:${suffix}`,
+        reference: `SO_CANCEL:${fixture.orderId}:${suffix}`,
         payload: { type: "cancel", cancel: { salesOrderId: fixture.soId } },
         salesOrderId: fixture.soId,
         attemptCount: 1,
@@ -3777,7 +3780,7 @@ describe.skipIf(!schemaState.ready)(
         orderId: fixture.orderId,
         type: "cancel",
         status: "confirmed",
-        reference: `OKCIR_SO_CANCEL:${fixture.orderId}:${suffix}`,
+        reference: `SO_CANCEL:${fixture.orderId}:${suffix}`,
         payload: { type: "cancel", cancel: { salesOrderId: fixture.soId } },
         salesOrderId: fixture.soId,
         attemptCount: 1,
@@ -3870,7 +3873,7 @@ describe.skipIf(!schemaState.ready)(
           orderId: fixture.orderId,
           type: "cancel",
           status: "dispatched_unknown",
-          reference: `OKCIR_SO_CANCEL:${fixture.orderId}:${suffix}`,
+          reference: `SO_CANCEL:${fixture.orderId}:${suffix}`,
           payload: { type: "cancel", cancel: { salesOrderId: fixture.soId } },
           salesOrderId: fixture.soId,
           attemptCount: 1,
@@ -3909,7 +3912,7 @@ describe.skipIf(!schemaState.ready)(
         orderId: fixture.orderId,
         type: "cancel",
         status: "confirmed",
-        reference: `OKCIR_SO_CANCEL:${fixture.orderId}:${suffix}`,
+        reference: `SO_CANCEL:${fixture.orderId}:${suffix}`,
         payload: { type: "cancel", cancel: { salesOrderId: fixture.soId } },
         salesOrderId: fixture.soId,
         attemptCount: 1,

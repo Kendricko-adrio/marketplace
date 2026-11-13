@@ -64,6 +64,71 @@ function fatalReason(run: () => unknown): string {
   throw new Error("expected a WorkbookFatalError");
 }
 
+function workbookV2(rows: readonly SheetRow[]) {
+  return buildWorkbookFixture([
+    { row: 1, cells: { A: { kind: "text", value: "markdown_v2" } } },
+    { row: 2, cells: { ...HEADER_ROW.cells, D: { kind: "text", value: "input_type" } } },
+    ...rows,
+  ]);
+}
+
+function typedRow(row: number, sku: string, action: string, price: number | undefined, inputType: string): SheetRow {
+  const base = dataRow(row, sku, action, price);
+  return { ...base, cells: { ...base.cells, D: { kind: "text", value: inputType } } };
+}
+
+describe("workbook v2 nominal dan persen", () => {
+  it("memisahkan target nominal dari diskon persen dan restore", () => {
+    const parsed = parsePriceWorkbook(workbookV2([
+      typedRow(3, "00123", "set_price", 150000, "price"),
+      typedRow(4, "SKU-PERCENT", "set_price", 12.5, "percent"),
+      typedRow(5, "SKU-RESTORE", "restore_base", undefined, ""),
+    ]), LIMITS);
+    expect(parsed.rows).toMatchObject([
+      { inputSku: "00123", inputType: "price", targetUnitPrice: "150000", discountPercent: null, error: null },
+      { inputType: "percent", targetUnitPrice: null, discountPercent: "12.5", error: null },
+      { inputType: null, targetUnitPrice: null, discountPercent: null, error: null },
+    ]);
+    expect(parsed.templateVersion).toBe("OKCIR_MARKDOWN_V1");
+  });
+
+  it.each([
+    ["", 10, "INPUT_TYPE_INVALID"], ["rupiah", 10, "INPUT_TYPE_INVALID"],
+    ["percent", -1, "PERCENT_INVALID"], ["percent", 0, "PERCENT_INVALID"],
+    ["percent", 100, "PERCENT_INVALID"], ["percent", 101, "PERCENT_INVALID"],
+    ["percent", 1.1234567, "PERCENT_INVALID"], ["price", 1.5, "PRICE_INVALID"],
+  ])("menolak tipe %s nilai %s sebagai error baris", (type, value, error) => {
+    const parsed = parsePriceWorkbook(workbookV2([
+      typedRow(3, "BAD", "set_price", value, type),
+      typedRow(4, "GOOD", "set_price", 10000, "price"),
+    ]), LIMITS);
+    expect(parsed.rows[0].error).toBe(error);
+    expect(parsed.rows[1].error).toBeNull();
+  });
+
+  it("tidak mengira nilai tersimpan 0.1 sebagai 10 persen dan membatasi restore", () => {
+    const parsed = parsePriceWorkbook(workbookV2([
+      typedRow(3, "PERCENT-CELL", "set_price", 0.1, "percent"),
+      typedRow(4, "RESTORE-TYPE", "restore_base", undefined, "price"),
+      typedRow(5, "RESTORE-VALUE", "restore_base", 100, ""),
+    ]), LIMITS);
+    expect(parsed.rows).toMatchObject([
+      { discountPercent: "0.1", error: null },
+      { error: "INPUT_TYPE_NOT_ALLOWED" }, { error: "PRICE_NOT_ALLOWED" },
+    ]);
+  });
+
+  it("menolak campuran marker/header v1 dan v2", () => {
+    expect(fatalReason(() => parsePriceWorkbook(buildWorkbookFixture([
+      MARKER_ROW,
+      { row: 2, cells: { ...HEADER_ROW.cells, D: { kind: "text", value: "input_type" } } },
+    ]), LIMITS))).toBe("HEADER_INVALID");
+    expect(fatalReason(() => parsePriceWorkbook(buildWorkbookFixture([
+      { row: 1, cells: { A: { kind: "text", value: "markdown_v2" } } }, HEADER_ROW,
+    ]), LIMITS))).toBe("HEADER_INVALID");
+  });
+});
+
 describe("parsePriceWorkbook — accepted rows", () => {
   it("menerima marker markdown_v1 dan file lama dengan identitas internal batch tetap stabil", () => {
     for (const marker of ["markdown_v1", "OKCIR_MARKDOWN_V1"]) {
@@ -588,19 +653,40 @@ describe("parsePriceWorkbook — fatal structural rejections", () => {
 });
 
 describe("writePriceTemplate / writePriceWorkbook", () => {
-  it("writes the versioned template with official headers and no data rows", () => {
+  it("menulis template v2 dengan SKU Text dan dua contoh yang aman", () => {
     const parts = readZipFixture(writePriceTemplate());
     expect([...parts.keys()]).toContain("xl/worksheets/sheet1.xml");
     const sheet = textOf(parts.get("xl/worksheets/sheet1.xml")!);
-    expect(sheet).toContain(">markdown_v1<");
+    expect(sheet).toContain(">markdown_v2<");
+    expect(sheet).toContain('<col min="1" max="1" style="1"');
+    expect(textOf(parts.get("xl/styles.xml")!)).toContain('numFmtId="49"');
+    expect(textOf(parts.get("xl/_rels/workbook.xml.rels")!)).toContain('Target="styles.xml"');
     expect(sheet).not.toMatch(/okcir/i);
     expect(sheet).toContain(">sku<");
     expect(sheet).toContain(">action<");
     expect(sheet).toContain(">new_price<");
     expect(sheet).not.toContain("<f>");
     const parsed = parsePriceWorkbook(writePriceTemplate(), LIMITS);
-    expect(parsed.rows).toEqual([]);
-    expect(parsed.headers).toEqual(["sku", "action", "new_price"]);
+    expect(parsed.headers).toEqual(["sku", "action", "new_price", "input_type"]);
+    expect(parsed.rows).toMatchObject([
+      { rowNumber: 3, inputSku: "CONTOH-GANTI-SKU-HARGA", targetRaw: "150000", inputType: "price", error: "EXAMPLE_ROW_NOT_REPLACED" },
+      { rowNumber: 4, inputSku: "CONTOH-GANTI-SKU-PERSEN", targetRaw: "10", inputType: "percent", error: "EXAMPLE_ROW_NOT_REPLACED" },
+    ]);
+  });
+
+  it("round-trip persen dan tipe invalid tanpa mengubahnya menjadi nominal", () => {
+    const bytes = writePriceWorkbook([
+      { sku: "PERCENT", action: "set_price", newPrice: "12.5", inputType: "percent" },
+      { sku: "INVALID", action: "set_price", newPrice: "=1+1", inputType: "" },
+      { sku: "RESTORE", action: "restore_base", newPrice: null },
+    ]);
+    expect(textOf(readZipFixture(bytes).get("xl/worksheets/sheet1.xml")!)).toContain('<c r="C4" t="inlineStr">');
+    const parsed = parsePriceWorkbook(bytes, LIMITS);
+    expect(parsed.rows).toMatchObject([
+      { inputType: "percent", discountPercent: "12.5", error: null },
+      { inputTypeRaw: null, targetRaw: "=1+1", error: "INPUT_TYPE_INVALID" },
+      { inputType: null, error: null },
+    ]);
   });
 
   it("keeps literal text out of formulas (no prefix mangling, no <f> element)", () => {
@@ -645,6 +731,7 @@ describe("writePriceTemplate / writePriceWorkbook", () => {
       "sku",
       "action",
       "new_price",
+      "input_type",
       ...WORKBOOK_REFERENCE_HEADERS,
     ]);
     expect(parsed.rows[0]).toMatchObject({

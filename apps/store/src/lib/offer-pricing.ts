@@ -39,6 +39,10 @@ export function applyOfferBenefitToPricing(
     })),
     shippingBeforeSubsidy: baseline.shippingBeforeSubsidy,
     providerQuotedShippingCost: baseline.providerQuotedShippingCost,
+    // Tax context provider3 HARUS ikut: rebuild benefit tidak boleh menjatuhkan
+    // payable provider ke kontrak provider2 (PPN hilang dari SO/invoice).
+    providerTax:
+      baseline.providerContractVersion === 3 ? baseline.providerTax : undefined,
     benefit: candidate.benefit,
   });
   const actual =

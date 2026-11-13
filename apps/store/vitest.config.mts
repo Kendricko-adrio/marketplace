@@ -4,6 +4,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
+      "@/components/ui": path.resolve(import.meta.dirname, "../../packages/ui/src/components/ui"),
       "@": path.resolve(import.meta.dirname, "src"),
       // More specific subpath first — @rollup/plugin-alias matches the first
       // entry whose key is a prefix of the specifier.

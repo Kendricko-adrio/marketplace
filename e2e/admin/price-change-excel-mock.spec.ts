@@ -286,25 +286,33 @@ test.afterAll(async () => {
   await pool.end();
 });
 
-test("UI dan template memakai markdown_v1 tanpa label merek", async () => {
+test("UI dan template v2 menjelaskan action dan dua contoh nominal/persen", async () => {
   const page = await hqContext.newPage();
   await page.goto("/admin/products/harga");
   await page.getByRole("button", { name: "Import Excel", exact: true }).click();
   await page.getByText("Format file", { exact: true }).click();
-  await expect(page.getByText("markdown_v1", { exact: true })).toBeVisible();
+  await expect(page.getByText("markdown_v2", { exact: true })).toBeVisible();
+  await expect(page.getByText("set_price:", { exact: true })).toBeVisible();
+  await expect(page.getByText("restore_base:", { exact: true })).toBeVisible();
+  await expect(page.getByText("Template berisi 2 baris contoh.", { exact: false })).toBeVisible();
+  await expect(page.getByText("10 untuk 10%", { exact: false })).toBeVisible();
   await expect(page.locator("main")).not.toContainText(/okcir/i);
   await page.close();
   const response = await hqContext.request.get("/api/admin/price-changes/template");
   expect(response.status()).toBe(200);
   expect(response.headers()["content-type"]).toContain("spreadsheetml.sheet");
   const sheet = sheetOf(new Uint8Array(await response.body()));
-  expect(sheet).toContain(">markdown_v1<");
+  expect(sheet).toContain(">markdown_v2<");
+  expect(sheet).toContain('style="1"');
+  expect(sheet).toContain(">input_type<");
+  expect(sheet).toContain("CONTOH-GANTI-SKU-HARGA");
+  expect(sheet).toContain("CONTOH-GANTI-SKU-PERSEN");
   expect(sheet).not.toMatch(/okcir/i);
   expect(sheet).toContain(">sku<");
   expect(sheet).toContain(">action<");
   expect(sheet).toContain(">new_price<");
   expect(sheet).not.toContain("<f>");
-  expect((sheet.match(/<row /g) ?? []).length).toBe(2);
+  expect((sheet.match(/<row /g) ?? []).length).toBe(4);
 });
 
 test("upload staging, apply parsial, laporan dan subset gagal yang jujur", async () => {
@@ -544,6 +552,35 @@ test("workbook fatal ditolak sebelum ada batch atau harga berubah", async () => 
 
   expect(await batchRowCount()).toBe(batchesBefore);
   expect(await revisionCount(VARIANT_IDS[0])).toBe(revisionsBefore);
+});
+
+test("review v2 menampilkan input persen dan target serta contoh tertinggal tidak diterapkan", async () => {
+  const workbook = Buffer.from(buildWorkbookFixture([
+    { row: 1, cells: { A: { kind: "text", value: "markdown_v2" } } },
+    { row: 2, cells: { ...HEADER_ROW.cells, D: { kind: "text", value: "input_type" } } },
+    { row: 3, cells: { ...dataRow(3, SKU_VALID, "set_price", 10).cells, D: { kind: "text", value: "percent" } } },
+    { row: 4, cells: { ...dataRow(4, "CONTOH-GANTI-SKU-HARGA", "set_price", 150000).cells, D: { kind: "text", value: "price" } } },
+    { row: 5, cells: { ...dataRow(5, SKU_VALID_2, "set_price", 100).cells, D: { kind: "text", value: "percent" } } },
+  ]));
+  const page = await hqContext.newPage();
+  await page.goto("/admin/products/harga");
+  await page.getByRole("button", { name: "Import Excel", exact: true }).click();
+  await page.getByTestId("excel-file").setInputFiles({ name: "persen.xlsx", mimeType: XLSX_MIME, buffer: workbook });
+  await page.getByTestId("excel-upload").click();
+  const summary = page.getByTestId("excel-batch-summary");
+  await expect(summary).toContainText("1 pending");
+  await expect(summary).toContainText("2 gagal");
+  const table = page.getByTestId("excel-row-table");
+  const valid = table.getByRole("row").filter({ hasText: SKU_VALID }).first();
+  await expect(valid).toContainText("10% dari source");
+  await expect(valid).toContainText("Rp 270.000");
+  await expect(table).toContainText("Ganti SKU contoh");
+  await expect(table).toContainText("Isi diskon persen");
+  await page.getByTestId("excel-apply").click();
+  await expect(summary).toContainText("1 diterapkan");
+  await expect(summary).toContainText("2 gagal");
+  await expect(summary).toContainText("0 pending");
+  await page.close();
 });
 
 test("admin tanpa grant prices ditolak pada template/report/export/upload", async () => {

@@ -19,3 +19,4 @@ Belum ada status keseluruhan yang dapat dipindahkan dari index lama. Artefak leg
 ### research
 
 - [research/agent-workflow-research.md](research/agent-workflow-research.md)
+- [research/implementer-plan-context-gap.md](research/implementer-plan-context-gap.md) — riset 2026-10-26: kenapa spec/ticket upstream bebas path sehingga implementer kehilangan HOW, dibandingkan dengan blueprint yang sudah ada di repo ini.

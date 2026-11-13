@@ -25,7 +25,17 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuth } from "@/providers/auth-provider";
 import { useCart } from "@/providers/cart-provider";
 import { signOut } from "@/lib/auth-client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useSyncExternalStore } from "react";
+
+// `mounted` gates client-only UI (the auth cluster) so the server HTML and the
+// first client render agree; React then re-renders once after hydration.
+// `useSyncExternalStore` expresses that without a setState call inside an
+// effect (which cascades renders and is rejected by the react-hooks lint rule):
+// the server snapshot is `false`, the client snapshot is `true`, and the store
+// never changes afterwards, so the subscription is a no-op.
+const subscribeToHydration = () => () => {};
+const getClientSnapshot = () => true;
+const getServerSnapshot = () => false;
 
 export default function Header() {
   const router = useRouter();
@@ -33,11 +43,11 @@ export default function Header() {
   const { itemCount } = useCart();
   const [searchQuery, setSearchQuery] = useState("");
   const [scrolled, setScrolled] = useState(false);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  const mounted = useSyncExternalStore(
+    subscribeToHydration,
+    getClientSnapshot,
+    getServerSnapshot
+  );
 
   useEffect(() => {
     const handleScroll = () => {
@@ -101,7 +111,7 @@ export default function Header() {
             placeholder="Cari produk..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 rounded-full bg-white/10 border-white/20 text-white placeholder:text-white/60 focus-visible:bg-white/20 focus-visible:border-white/40"
+            className="w-full pl-10 rounded-full bg-white/10 border-white/20 text-white placeholder:text-white/45 focus-visible:bg-white/20 focus-visible:border-white/40"
           />
         </form>
 

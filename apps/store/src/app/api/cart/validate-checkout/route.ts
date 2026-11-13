@@ -10,6 +10,8 @@ import {
 import { eq, and, inArray } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
+import { verifyAndAdjustCheckoutStock } from "@/features/checkout/verify-checkout-stock-service";
+import { checkoutStockAdjustmentMessage } from "@/lib/checkout-stock-adjustment";
 import { createModuleLogger, withRequestContext } from "@/lib/logger";
 
 /**
@@ -182,9 +184,41 @@ async function validateCheckout(request: NextRequest): Promise<Response> {
       });
     }
 
-    // Local stock is provisional. Never remove or lower cart items using a
-    // daily snapshot; the final place-order verifies the provider live.
-    // Branch is active — ok to proceed to /checkout.
+    const unmappedItem = selectedItems.find((item) => item.jubelioItemId == null);
+    if (branch[0].jubelioLocationId == null || unmappedItem) {
+      log.warn(`checkout validation rejected — missing Jubelio mapping (branch ${branchId})`);
+      return NextResponse.json({
+        success: false,
+        error: "Barang atau cabang belum terhubung ke stok Jubelio. Silakan hubungi toko.",
+      }, { status: 409 });
+    }
+
+    // Snapshot katalog hanya advisory; jangan mengubah quantity tanpa live read.
+    // Place-order mengulang verifikasi dan memperoleh hold secara independen.
+    const stockCheck = await verifyAndAdjustCheckoutStock(db, cart.id, selectedItems.map((item) => ({
+      cartItemId: item.id,
+      branchId,
+      variantId: item.variantId,
+      itemId: item.jubelioItemId!,
+      locationId: branch[0].jubelioLocationId!,
+      quantity: item.quantity,
+      productName: item.productName,
+    })));
+    if (!stockCheck.ok) {
+      if (stockCheck.reason === "unavailable") {
+        log.error(`checkout validation rejected — Jubelio stock unavailable (branch ${branchId}, detail ${stockCheck.detail ?? "-"})`);
+        return NextResponse.json({
+          success: false,
+          error: "Stok Jubelio belum dapat diverifikasi. Silakan coba beberapa saat lagi.",
+        }, { status: 503 });
+      }
+      return NextResponse.json({
+        success: false,
+        code: "CHECKOUT_STOCK_ADJUSTED",
+        adjustments: stockCheck.adjustments,
+        error: checkoutStockAdjustmentMessage(stockCheck.adjustments),
+      }, { status: 409 });
+    }
     log.info(
       `checkout validation passed: user ${session.user.id}, branch ${branchId}`
     );

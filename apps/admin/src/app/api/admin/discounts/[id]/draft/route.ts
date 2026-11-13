@@ -3,7 +3,8 @@ import { z } from "zod";
 
 import { guard } from "@/lib/rbac/guard";
 import { createModuleLogger, withRequestContext } from "@/lib/logger";
-import { saveDiscountOfferDraft, DiscountAdministrationError } from "@/lib/discounts-administration";
+import { DiscountAdministrationError } from "@/lib/discounts-administration";
+import { saveDiscountConfiguration } from "@/features/discounts/save-discount-configuration-service";
 import {
   discountFailureResponse,
   discountSuccessResponse,
@@ -13,54 +14,48 @@ import {
 // =========================================================
 // PUT /api/admin/discounts/[id]/draft                    [discounts:edit]
 // =========================================================
-// Save ONE complete draft (terms + a single goods benefit: fixed nominal or
-// percentage rate/cap). The draft is separate from the published revision, so
-// live terms never change here. Both Offer and draft versions are optimistic
-// guards: two stale editors get 409 STALE_REVISION and must reload/review
-// instead of overwriting each other. Unknown benefit kinds/versions/currencies
-// and fields that belong to another kind are refused, never defaulted.
+// ONE atomic full-replacement snapshot for the whole configuration: identity,
+// benefit, schedule, quota/budget/per-customer limit and staged code changes.
+// There is no per-tab save. A partial draft is accepted (publish completeness
+// is validated on review/publish); live terms, capacity, code eligibility and
+// usage never change here. Both Offer and draft versions are optimistic guards.
 export const dynamic = "force-dynamic";
 
-/**
- * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
- * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
- * (`withRequestContext` di export handler membuka scope tersebut).
- */
 const log = createModuleLogger("admin-discount-draft");
 
 type RouteContext = { params: Promise<{ id: string }> };
 
+const money = z.union([z.string(), z.null()]);
 const draftSchema = z.strictObject({
+  requestKey: z.uuid(),
   expectedOfferVersion: z.number().int().positive(),
   expectedDraftVersion: z.number().int().positive(),
-  terms: z.strictObject({
-    name: z.string().min(1).max(120),
-    currency: z.string().min(1).max(8),
-    minSubtotal: z.union([z.string(), z.number()]),
-    startAt: z.string().nullable().optional(),
-    endAt: z.string().nullable().optional(),
-    // Exact per-kind shape: a percentage request cannot smuggle a fixed
-    // nominal (and vice versa). Precision/bounds stay in the domain validator.
+  configuration: z.strictObject({
+    draftSchemaVersion: z.literal(1),
+    name: z.union([z.string().max(120), z.null()]),
+    currency: z.literal("IDR"),
+    minSubtotal: money,
+    startAt: z.union([z.string(), z.null()]),
+    endAt: z.union([z.string(), z.null()]),
     benefit: z.union([
-      z.strictObject({
-        kind: z.literal("fixed_goods"),
-        paramsVersion: z.literal(1),
-        fixedAmount: z.union([z.string(), z.number()]),
-      }),
-      z.strictObject({
-        kind: z.literal("shipping"),
-        paramsVersion: z.literal(1),
-        capAmount: z.union([z.string(), z.number()]),
-      }),
-      z.strictObject({
-        kind: z.literal("percentage_goods"),
-        paramsVersion: z.literal(1),
-        rate: z.union([z.string(), z.number()]),
-        capAmount: z
-          .union([z.string(), z.number(), z.null()])
-          .optional(),
-      }),
+      z.strictObject({ kind: z.literal("fixed_goods"), paramsVersion: z.literal(1), fixedAmount: money }),
+      z.strictObject({ kind: z.literal("shipping"), paramsVersion: z.literal(1), capAmount: money }),
+      z.strictObject({ kind: z.literal("percentage_goods"), paramsVersion: z.literal(1), rate: money, capAmount: money }),
+      z.null(),
     ]),
+    capacity: z.strictObject({
+      quotaCount: z.union([z.number().int(), z.null()]),
+      budgetAmount: money,
+      perClientLimit: z.union([z.number().int(), z.null()]),
+    }),
+    codeChanges: z.strictObject({
+      proposedCodes: z.array(z.string()).max(50),
+      states: z.array(z.strictObject({
+        codeId: z.string().min(1).max(128),
+        expectedCodeVersion: z.number().int().positive(),
+        state: z.enum(["active", "inactive", "archived"]),
+      })).max(500),
+    }),
   }),
 });
 
@@ -73,9 +68,7 @@ async function saveDraft(
   const { ctx } = guardResult;
 
   try {
-    const parsed = draftSchema.safeParse(
-      await request.json().catch(() => null)
-    );
+    const parsed = draftSchema.safeParse(await request.json().catch(() => null));
     if (!parsed.success) {
       log.warn("discounts draft ditolak: body tidak valid (outcome denied)");
       return discountFailureResponse(
@@ -85,13 +78,20 @@ async function saveDraft(
     }
 
     const { id } = await params;
-    const detail = await saveDiscountOfferDraft(
-      { offerId: id, ...parsed.data },
+    const detail = await saveDiscountConfiguration(
+      {
+        offerId: id,
+        requestKey: parsed.data.requestKey,
+        expectedOfferVersion: parsed.data.expectedOfferVersion,
+        expectedDraftVersion: parsed.data.expectedDraftVersion,
+        configuration: parsed.data.configuration,
+      },
       requireActorId(ctx.user.id)
     );
 
+    // Konfigurasi, usulan kode, request key, dan fingerprint tidak masuk log.
     log.info(
-      `discounts draft saved (offer ${detail.id}, draftVersion ${detail.draftVersion}, draftRevisionId ${detail.draftRevision?.id ?? "none"}, actor ${ctx.user.id}, policyVersion ${ctx.policy.policyVersion}, outcome success)`
+      `discounts draft saved (offer ${detail.id}, draftVersion ${detail.draftVersion}, codeProposalCount ${detail.draftConfiguration.codeChanges.proposedCodes.length}, actor ${ctx.user.id}, outcome success)`
     );
     return discountSuccessResponse(detail);
   } catch (error) {
@@ -99,5 +99,4 @@ async function saveDraft(
   }
 }
 
-/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
 export const PUT = withRequestContext(saveDraft, "admin-discount-draft");

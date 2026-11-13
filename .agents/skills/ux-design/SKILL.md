@@ -33,12 +33,31 @@ Buat catatan singkat — di percakapan untuk perubahan kecil, di artefak spec/pl
 
 - **Tugas:** siapa pengguna, apa yang ingin diselesaikan, kondisi awal, dan hasil sukses.
 - **Referensi:** cari halaman/pattern sejenis yang telah disepakati dan periksa komponen shared beserta token di konteks render sebenarnya. Jangan bertanya kepada pengguna tentang fakta yang bisa dicari di repo.
-- **Hierarki:** tentukan informasi utama, primary action, grouping, dan tindakan sekunder. Untuk perubahan nontrivial, masukkan sketsa/susunan, state matrix, dan label final ke artefak spec/plan yang disetujui (lihat `development-workflow` §2) sehingga dapat direview sebelum implementasi; untuk perubahan kecil satu sesi, catatan di percakapan cukup.
+- **Hierarki:** tentukan informasi utama, primary action, grouping, dan tindakan sekunder. Untuk perubahan nontrivial, masukkan sketsa/susunan, state matrix, dan label final ke artefak spec/plan yang disetujui (lihat `development-workflow` bagian 2) sehingga dapat direview sebelum implementasi; untuk perubahan kecil satu sesi, catatan di percakapan cukup.
 - **Content inventory:** klasifikasikan copy menjadi perlu sekarang, pencegah kesalahan penting, bantuan tambahan, atau duplikasi yang dapat digabung/dihapus.
 - **State:** identifikasi idle, selected, keyboard focus, loading, empty, sukses, error, disabled, permission-restricted, dan unsaved state yang relevan. Untuk perubahan nontrivial, state matrix beserta copy/label final masuk ke artefak spec/plan, bukan hanya slice notes; state yang belum diputuskan dicatat sebagai open item.
 - **Batas scope:** perubahan flow, makna status, syarat bisnis, atau bahasa visual yang belum disepakati harus ditanyakan dahulu. Jangan melakukan redesign lintas halaman diam-diam.
 
 Jika tidak ada referensi yang disepakati atau pattern lama bermasalah, usulkan pattern dan jelaskan dampaknya. Jangan menjadikan halaman buruk sebagai standar hanya demi keseragaman.
+
+### Batas keputusan user dan tanggung jawab agent
+
+- **Konfirmasikan keputusan produk/UX:** alur, prioritas informasi, aksi, permission, dan konsekuensinya. Selesaikan saat alignment atau sesi `grill-with-docs`/`wayfinder` yang digunakan, sebelum approval spec. Jangan mengulang pertanyaan yang keputusannya sudah tercatat.
+- **Agent mencari dan mengikuti standar:** warna, typography, spacing, helper text, bentuk kontrol, dan perilaku pattern existing yang sudah disepakati bukan pertanyaan baru untuk user pada setiap halaman. Nyatakan referensi yang dipakai dalam blueprint, bukan meminta user menjadi penjaga konsistensi per komponen.
+- **Tanyakan ambiguitas/penyimpangan:** jika pola existing berbeda-beda atau kebutuhan tidak cocok, tunjukkan temuan, rekomendasi, trade-off, dan dampak. Minta keputusan sebelum mengimplementasikan bagian terkait. Bila teks belum cukup, usulkan mockup/prototype; jangan otomatis menambah tahap untuk semua halaman.
+
+### Audit referensi dan kontrak list/table
+
+Sebelum coding list/table, periksa halaman sejenis dari hasil render sampai jalur query/backend, bukan hanya komponen `Table`. Catat full paths referensi, reusable components, serta alasan referensi layak. Jangan menganggap seluruh halaman existing otomatis benar atau menyeragamkan halaman lain di luar scope.
+
+Di spec/plan atau catatan percakapan untuk perubahan kecil, tetapkan kontrak sesuai `development-workflow` bagian 2:
+
+- Sumber data dan cakupan search: seluruh dataset yang boleh diakses atau subset yang dinyatakan; backend search berbeda dari filter browser atas current page.
+- Server/client-side search, pagination, ukuran/default halaman, total/indikator navigasi, sorting stabil, filter, reset halaman saat search/filter berubah, serta URL state/perilaku navigasi sesuai pola yang disepakati.
+- Toolbar, header, row actions, pagination, badges, typography, semantic colors, spacing, helper text, serta loading/empty/no-results/error/permission states mengikuti shared pattern dan copy yang disepakati.
+- Reuse komponen existing terlebih dahulu. Usulkan ekstraksi bagian berulang bila perlu, bukan membuat universal table besar atau menggandakan komponen lokal tanpa alasan.
+
+Jangan menghilangkan pagination atau mengganti backend search dengan client-side search tanpa keputusan eksplisit atas penyimpangan. Client-side dapat dipilih untuk dataset kecil yang dimuat lengkap jika kontraknya disepakati; jangan menyebut filter satu halaman sebagai pencarian seluruh data. Catat N/A beserta alasan untuk aspek yang tidak relevan.
 
 ### Sumber kebenaran rancangan UX
 
@@ -118,13 +137,15 @@ Sebelum pekerjaan frontend dinyatakan selesai, agent utama wajib:
 2. **Bandingkan antar-page:** gunakan halaman/pattern referensi sejenis pada kondisi yang sama. Periksa typography, spacing, warna, ukuran kontrol, posisi tindakan, serta selected/focus/error treatment. Untuk shared changes, periksa consumer yang terdampak.
 3. **Jalankan task:** mulai dari kondisi awal, lakukan tindakan utama, lalu periksa status dan hasilnya. Periksa state relevan yang telah diidentifikasi dan keyboard behavior kontrol yang diubah.
 4. **Tests dan checks:** gunakan `tdd`, tambahkan/update Playwright coverage perilaku user-visible sesuai `AGENTS.md`, lalu jalankan verification ladder yang relevan. Ikuti izin terpisah untuk legacy E2E. Jika Playwright gagal, diagnosis dari laporan Markdown; jangan membuka screenshot attachment kegagalan.
-5. **Laporkan bukti:** tuliskan referensi konsistensi, behavior/state yang diperiksa, hasil checks, dan keterbatasan. Jika browser/infrastruktur tidak tersedia, nyatakan UX verification masih terblokir; jangan mengklaim frontend selesai atau sudah UX-friendly.
+5. **Verifikasi kontrak list/table bila relevan:** tambahkan dan jalankan coverage Playwright deterministik yang membuktikan search menemukan record di luar halaman awal, reset pagination sesuai kontrak, navigasi mengambil halaman data yang benar, dan filter/URL state dipertahankan sesuai rancangan. Untuk server-side, periksa request/query dan hasilnya, bukan hanya input terlihat atau rows current page berubah. Bandingkan rendered toolbar/table/pagination dan feedback dengan referensi pada kondisi sepadan. Gunakan fixture/mocks terkontrol; jangan bergantung pada dataset yang berubah.
+6. **Laporkan bukti:** tuliskan referensi konsistensi, behavior/state yang diperiksa, hasil checks, dan keterbatasan. Jika browser/infrastruktur tidak tersedia, nyatakan UX verification masih terblokir; jangan mengklaim frontend selesai atau sudah UX-friendly.
 
 Heuristic review dan automated tests bukan pengganti usability testing dengan pengguna representatif. Jangan mengarang angka waktu, keberhasilan, atau klaim peningkatan UX yang belum diukur.
 
 ### Blocker: perbaiki atau eskalasi sebelum menerima hasil
 
 - Style/perilaku pattern yang sama berbeda antar-page tanpa pengecualian yang disepakati.
+- Kontrak list/table tidak dipenuhi: pagination hilang, search hanya memfilter current page padahal kontrak mencakup seluruh dataset, atau perilaku sorting/filter/URL state menyimpang tanpa keputusan user.
 - Kontrol penting menyerupai teks pasif saat idle; selected/focus state tidak jelas.
 - Pengguna tidak dapat mengenali tindakan lanjutan atau akibat pentingnya.
 - Informasi kritis tersembunyi atau hanya tersedia lewat hover.

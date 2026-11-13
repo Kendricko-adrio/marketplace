@@ -99,7 +99,7 @@ it("records marker-only divergence on a confirmed create without stopping the lo
 
   const create = {
     contactId: -1, customerName: "Marker Test", locationId: 7,
-    note: `OKCIR_SO_CREATE:${orderId}`, refNo: orderId, channelStatus: "Belum Bayar" as const,
+    note: `SO_CREATE:${orderId}`, refNo: orderId, channelStatus: "Belum Bayar" as const,
     items: [{ itemId: 43842, quantity: 1, price: 1000, discAmount: 0, taxAmount: 0, unit: "Buah", taxId: 1 }],
   };
   let posts = 0;
@@ -208,7 +208,7 @@ it("records marker-only divergence on a confirmed create without stopping the lo
   const rawLog = captured.join("");
   expect(rawLog).not.toContain("Operator changed marker");
   expect(rawLog).not.toContain("Marker Test");
-  expect(rawLog).not.toContain("OKCIR_SO_CREATE:");
+  expect(rawLog).not.toContain("SO_CREATE:");
   expect(rawLog).not.toContain("channelStatus");
   expect(rawLog).not.toContain("customerName");
   expect(rawLog).not.toContain("itemId");

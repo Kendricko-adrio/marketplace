@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { readCheckoutResult } from "@/lib/checkout-request";
+import { readOwnedCheckoutAttempt } from "@/features/checkout/checkout-attempt-repository";
 import {
   createModuleLogger,
   getRequestId,
@@ -34,7 +35,16 @@ async function readOwnedCheckoutResult(
     const access = await requireOnboardedApiSession();
     if (!access.ok) return access.response;
     const { requestKey } = await params;
-    const result = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestKey)
+    const validKey = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(requestKey);
+    // Pre-order attempts are read FIRST: an unresolved checkout has no order yet.
+    const attempt = validKey
+      ? await readOwnedCheckoutAttempt({ clientId: access.session.user.id, requestKey: requestKey.toLowerCase() })
+      : null;
+    if (attempt) {
+      log.info(`owned checkout attempt read: attempt ${attempt.attemptId}, state ${attempt.state}`);
+      return NextResponse.json({ success: true, data: attempt }, { headers: { "Cache-Control": "no-store" } });
+    }
+    const result = validKey
       ? await readCheckoutResult(access.session.user.id, requestKey.toLowerCase()) : null;
     if (!result) {
       // Path param tidak pernah masuk log: nilainya input klien dan bisa

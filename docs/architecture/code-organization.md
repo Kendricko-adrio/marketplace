@@ -82,6 +82,35 @@ packages/db/src/schema/                     # sole owner of shared table definit
 
 The filenames above are **illustrative future locations**, not an inventory of existing files. Prefer specific names (`place-order-service.ts`, `checkout-repository.ts`) to a feature folder full of ambiguous `service.ts` files. Keep tests next to the code they exercise, following the repo's current test conventions.
 
+## Struktur aktual checkout place-order
+
+Endpoint `POST /api/checkout/place-order` memakai struktur feature-first berikut.
+Refactor ini tidak mengubah kontrak HTTP atau menyatukan lifecycle legacy dan v2.
+
+| Path | Tanggung jawab |
+|---|---|
+| `apps/store/src/app/api/checkout/place-order/route.ts` | Auth, bounded JSON reader, validasi input, payment/admission adapter, serialisasi outcome dan error per fase, recovery hasil accepted dan bounded wait existing. Tidak menulis query. |
+| `apps/store/src/features/checkout/place-checkout-service.ts` | Urutan replay → pause/contract/review → cart/branch/tax/promo/stock → pricing/delivery → pemilihan lifecycle. Mengembalikan discriminated outcome tanpa objek HTTP. |
+| `apps/store/src/features/checkout/place-order-legacy-service.ts` | Transaksi legacy dengan batas `step(...)` existing, SO dispatch di luar transaksi, compensation dan inisialisasi pembayaran. |
+| `apps/store/src/features/checkout/place-order-repository.ts` | Query baca/tulis, lock, conditional stock hold, stable address-ID/dedup, serta persistence metadata pembayaran dan cart. |
+| `apps/store/src/features/checkout/place-order-input.ts` | Schema pickup/delivery, parser dan ekstraksi contact/selection tanpa normalisasi tambahan. |
+| `apps/store/src/features/checkout/place-order-errors.ts` | Kelas error dan keputusan berdasarkan fase; tidak melakukan recovery, logging atau membuat HTTP response. |
+| `apps/store/src/features/checkout/place-order-pricing.ts` | Snapshot awal/fresh delivery, final pricing dan payment item details. Perbedaan perhitungan legacy/v1 tetap dipertahankan. |
+| `apps/store/src/features/checkout/place-order-promo.ts` | Evaluasi single promo slot dan pemetaan candidate ke promo identity + pricing final; parameter pickup yang omitted tidak ditambahkan diam-diam. |
+| `apps/store/src/features/checkout/place-order-delivery.ts` | Requote, validasi approval, snapshot tujuan/parcel/service dan hasil promo delivery. Semua exception non-data tetap memakai outcome repricing. |
+| `apps/store/src/features/checkout/place-order-jubelio-request.ts` | Payload SO legacy/provider2/provider3 dari source price, whole-line discount dan frozen provider tax. |
+
+`apps/store/src/features/checkout/place-order-service.ts` tetap menjadi pemilik
+lifecycle v2 `placeCheckout`/`replayCheckoutAttempt`; implementasinya tidak diubah.
+Logger hasil ekstraksi tetap menggunakan identifier `checkout-place-order` dan
+scope request dari route, bukan nama file baru atau parameter logger/requestId.
+
+Seam verifikasi berada pada `route.test.ts` existing, characterization
+`route.parity.test.ts`/`route.lifecycle-parity.test.ts`, unit domain/use-case, dan
+`place-order-repository.db.test.ts` pada PostgreSQL disposable. Riwayat baseline,
+parity, serta batas evidence dicatat di
+[artefak refactor place-order](../../.scratch/place-order-refactor/ticket/implementation-evidence.md).
+
 ## Tanggung jawab per layer
 
 | Layer | Pemilik | Tidak boleh menjadi |

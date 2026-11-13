@@ -1,5 +1,7 @@
 # Testing
 
+Panduan manual: [Skenario positif transaksi client → admin: pickup dan delivery](skenario-positif-transaksi-manual.md), termasuk checklist field nominal dan contoh perhitungan.
+
 Unit and E2E test infrastructure for the marketplace monorepo.
 
 | Tool | Covers | Config |
@@ -956,3 +958,14 @@ and `reuseExistingServer: false` (servers are freshly started). The same
   pickup invalidation, swap comparison) dan regresi checkout/delivery mock.
 - Admin: `apps/admin/src/lib/discounts-administration.test.ts` (draft shipping
   hanya cap positif) dan `e2e/admin/discounts-admin-mock.spec.ts` (form/simulasi).
+
+### Checkout attempt (pra-order)
+
+- `e2e/store/checkout-review-mock.spec.ts` — lifecycle checkout baru: SO ditolak
+  tanpa order, ambiguitas ditahan, promotion hanya setelah SO + pembayaran siap,
+  replay key sama, pemulihan sweep, dan rollback lokal.
+- `e2e/admin/checkout-attempt-review-mock.spec.ts` — antrean review operator
+  menampilkan attempt pra-order tanpa link pesanan palsu dan mematuhi own-branch
+  scope.
+- `apps/store/src/features/checkout/checkout-attempt-repository.db.test.ts` —
+  reservation/promotion/rejection/recovery pada PostgreSQL disposable.

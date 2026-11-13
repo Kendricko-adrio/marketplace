@@ -24,7 +24,7 @@ For goods Rp100,000 + rates Rp20,000 + website PPN 11%:
 
 Local reservation and one durable SO create intent precede the once-only POST. Independent SO GET confirmation precedes Snap. Ambiguous remote outcomes are not blindly retried. Repayment uses stored order/order-item money and the existing SO/Snap link, never a new quote/address/master price.
 
-Authoritative Midtrans settlement is necessary but not sufficient for delivery eligibility. Jubelio invoice and payment must also be GET-verified. Verified delivery remains paid/processing, has no pickup code, sends no pickup-ready email, and bypasses pickup fulfillment/mirror. Ambiguous invoice/payment stays paid-but-blocked with a durable manual-review operation. Booking is a subsequent slice; placement/settlement never calls shipments/create.
+Authoritative Midtrans settlement is necessary but not sufficient for delivery eligibility. Jubelio invoice and payment must also be GET-verified. Verified delivery remains paid/processing and has no pickup code. It still gets the shared settlement-gated `delivery_ready` communication fact, which drives the `Siap Proses` channel target, one admin notification and the queued delivery-ready email (`docs/features/order-communications.md`); the pickup code/pickup email path is never used for delivery. Ambiguous invoice/payment stays paid-but-blocked with a durable manual-review operation. Booking is a subsequent slice; placement/settlement never calls shipments/create.
 
 ## Dua ledger kontrak berversi (gate `1`)
 

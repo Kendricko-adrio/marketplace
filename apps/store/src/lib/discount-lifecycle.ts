@@ -20,6 +20,11 @@ import {
   discountRedemptions,
 } from "@/db";
 
+import type { ProviderOperationOwner } from "@/features/checkout/checkout-attempt";
+export type RedemptionOwnerInput =
+  | { orderId: string; owner?: never }
+  | { owner: ProviderOperationOwner; orderId?: never };
+
 export type RedemptionTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
 export interface RedemptionIdentity {
@@ -32,9 +37,10 @@ export interface RedemptionIdentity {
 
 /** Discovery via unlocked read; caller harus re-read di dalam transaksi. */
 export async function findRedemptionForOrder(
-  orderId: string,
-  database = db
+  orderId: string | ProviderOperationOwner,
+  database: Pick<typeof db, "select"> = db
 ): Promise<RedemptionIdentity | null> {
+  const owner = typeof orderId === "string" ? { kind: "order" as const, orderId } : orderId;
   const [row] = await database
     .select({
       id: discountRedemptions.id,
@@ -44,7 +50,8 @@ export async function findRedemptionForOrder(
       status: discountRedemptions.status,
     })
     .from(discountRedemptions)
-    .where(eq(discountRedemptions.orderId, orderId))
+    .where(owner.kind === "attempt" ? eq(discountRedemptions.checkoutAttemptId, owner.attemptId)
+      : eq(discountRedemptions.orderId, owner.orderId))
     .limit(1);
   return (row as RedemptionIdentity | undefined) ?? null;
 }
@@ -174,13 +181,13 @@ export async function consumeReservedRedemption(
  */
 export async function releaseReservedRedemption(
   tx: RedemptionTx,
-  input: {
+  input: RedemptionOwnerInput & {
     identity: Pick<RedemptionIdentity, "offerId" | "clientId" | "benefitAmount">;
-    orderId: string;
     source: string;
     reason: string;
   }
 ): Promise<boolean> {
+  const owner = input.owner ?? { kind: "order" as const, orderId: input.orderId };
   const now = new Date();
   const [updated] = await tx
     .update(discountRedemptions)
@@ -193,7 +200,8 @@ export async function releaseReservedRedemption(
     })
     .where(
       and(
-        eq(discountRedemptions.orderId, input.orderId),
+        owner.kind === "attempt" ? eq(discountRedemptions.checkoutAttemptId, owner.attemptId)
+          : eq(discountRedemptions.orderId, owner.orderId),
         eq(discountRedemptions.status, "reserved")
       )
     )

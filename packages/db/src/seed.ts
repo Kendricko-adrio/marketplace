@@ -9,8 +9,10 @@ import bcrypt from "bcryptjs";
 import { assertSeedEnvironmentSafe } from "./seed-safety";
 import { seedCleanupEntries } from "./seed-cleanup";
 import { resolveSeedPlan } from "./seed-mode";
+import { hqBranchSeedRow } from "./seed-hq";
 import {
   discountContractSystemConfigSeedRows,
+  jubelioSalesTaxSystemConfigSeedRows,
   discountImportSystemConfigSeedRows,
   shipmentSystemConfigSeedRows,
 } from "./seed-system-config";
@@ -285,6 +287,11 @@ async function seed() {
     // =====================
     // ADMIN USERS
     // =====================
+    // HQ dimiliki aplikasi dan selalu tersedia pada kedua mode seed.
+    // Tidak masuk branchIds: tidak mendapat stok atau contoh transaksi demo.
+    console.log("🏢 Creating local HQ branch...");
+    await db.insert(schema.branches).values(hqBranchSeedRow);
+
     console.log("👤 Creating admin users...");
     const adminId = generateId();
     const hqId = generateId();
@@ -304,6 +311,7 @@ async function seed() {
       {
         id: hqId,
         name: "HQ Manager",
+        branchId: hqBranchSeedRow.id,
         username: "hqmanager",
         displayUsername: "hqmanager",
         email: "hq@store.com",
@@ -1030,13 +1038,12 @@ async function seed() {
     // ASSIGN BRANCHES TO ADMIN USERS
     // =====================
     console.log("🔗 Assigning branches to admin users...");
-    // Every non-Owner Admin User always has exactly one Home Branch. HQ's
-    // all-branch reach comes from its all_branches grants, not from a null
-    // branch — the Home Branch only pins own-branch scope.
+    // Admin demo memakai cabang toko; hqmanager tetap di HQ lokal.
+    // Akses lintas cabang HQ berasal dari grant all_branches pada role.
     await db
       .update(schema.users)
       .set({ branchId: branchIds[0] })
-      .where(inArray(schema.users.id, [adminId, hqId]));
+      .where(eq(schema.users.id, adminId));
 
     console.log("📦 Seeding branch stocks per variant...");
     for (const branchId of branchIds) {
@@ -1425,7 +1432,7 @@ async function seed() {
       })
     );
     } else {
-      console.log("📦 Skipping catalog, branches, and stock (managed by Jubelio import)...");
+      console.log("📦 Skipping catalog, store branches, and stock (managed by Jubelio import); local HQ retained...");
     }
 
     // =====================
@@ -1958,6 +1965,50 @@ async function seed() {
     }
 
     // =====================
+    // SAMPLE ORDER COMMUNICATIONS (spec penyelarasan status/notifikasi/email)
+    // =====================
+    // Inert by construction: the job is already `sent` with its attempt
+    // recorded, so the cron worker never re-sends. The seeder never calls SMTP
+    // or a provider write.
+    console.log("📨 Creating sample order communication rows (inert)...");
+    const communicationOrders = await db
+      .select({
+        id: schema.orders.id,
+        fulfillmentMethod: schema.orders.fulfillmentMethod,
+      })
+      .from(schema.orders)
+      .where(eq(schema.orders.paymentStatus, "paid"))
+      .limit(2);
+    for (const communicationOrder of communicationOrders) {
+      const eventId = generateId();
+      const kind =
+        communicationOrder.fulfillmentMethod === "pickup"
+          ? "pickup_ready"
+          : "delivery_ready";
+      const stamp = new Date();
+      await db.insert(schema.orderCommunicationEvents).values({
+        id: eventId,
+        orderId: communicationOrder.id,
+        kind,
+        source: "seed",
+        occurredAt: stamp,
+        receivedAt: stamp,
+        emailJobCreatedAt: stamp,
+        notificationCreatedAt: kind === "delivery_ready" ? stamp : null,
+      });
+      await db.insert(schema.orderEmailJobs).values({
+        id: generateId(),
+        orderId: communicationOrder.id,
+        kind,
+        eventId,
+        status: "sent",
+        attemptCount: 1,
+        nextAttemptAt: stamp,
+        sentAt: stamp,
+      });
+    }
+
+    // =====================
     // SAMPLE CART (multi-branch — items from different branches)
     // =====================
     console.log("🛒 Creating sample cart (multi-branch)...");
@@ -2315,6 +2366,7 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
       ...shipmentSystemConfigSeedRows,
       ...discountImportSystemConfigSeedRows,
       ...discountContractSystemConfigSeedRows,
+      ...jubelioSalesTaxSystemConfigSeedRows,
       {
         key: "tax.ppnRatePercent",
         value: "11",
@@ -2361,6 +2413,8 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
       id: demoDiscountOfferRevisionId,
       offerId: demoDiscountOfferId,
       revisionNo: 1,
+      // Baseline legacy tetap dipakai sampai endpoint/UI editor terpadu cutover.
+      draftConfiguration: null,
       name: "Diskon Rp25.000 Sepatu Pilihan (draft)",
       currency: "IDR",
       minSubtotal: "0",
@@ -2989,6 +3043,117 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
     }
     }
 
+
+    // Fixture state editor terpadu (spec editor diskon §9.2): draft parsial,
+    // Offer published yang masih punya draft berbeda (badge "Ada draft"), dan
+    // Offer dijeda. Semua memakai snapshot draftConfiguration yang sama dengan
+    // editor; gate rollout tetap 0.
+    {
+      const snapshot = (overrides: Record<string, unknown>) => ({
+        draftSchemaVersion: 1 as const, name: null, currency: "IDR" as const,
+        minSubtotal: null, startAt: null, endAt: null, benefit: null,
+        capacity: { quotaCount: null, budgetAmount: null, perClientLimit: null },
+        codeChanges: { proposedCodes: [], states: [] }, ...overrides,
+      });
+      const fixtures = [
+        { name: "Draft Demo Belum Lengkap", state: "draft" as const, published: false,
+          configuration: snapshot({ name: "Draft Demo Belum Lengkap" }) },
+        { name: "Promo Demo Dengan Draft Baru", state: "enabled" as const, published: true,
+          configuration: snapshot({ name: "Promo Demo Dengan Draft Baru", minSubtotal: "0",
+            benefit: { kind: "fixed_goods", paramsVersion: 1, fixedAmount: "15000" },
+            capacity: { quotaCount: 40, budgetAmount: "800000", perClientLimit: 1 } }) },
+        { name: "Promo Demo Dijeda", state: "paused" as const, published: true,
+          configuration: snapshot({ name: "Promo Demo Dijeda", minSubtotal: "0",
+            benefit: { kind: "fixed_goods", paramsVersion: 1, fixedAmount: "10000" },
+            capacity: { quotaCount: 20, budgetAmount: "400000", perClientLimit: 1 } }) },
+      ];
+      for (const fixture of fixtures) {
+        const offerId = generateId();
+        const liveRevisionId = generateId();
+        const draftRevisionId = generateId();
+        const now = new Date();
+        await db.insert(schema.discountOffers).values({
+          // Insert sebagai draft dulu; check constraint live menuntut pointer
+          // revision + kapasitas, jadi state live di-set setelah revision dibuat.
+          id: offerId, key: generateId(), activationKind: "public", state: "draft",
+          // FK ownership: pointer live diisi setelah revision dibuat.
+          currentRevisionId: null,
+          version: fixture.published ? 2 : 1, draftVersion: fixture.published ? 2 : 1,
+          quotaCount: null,
+          budgetAmount: null,
+          perClientLimit: 1,
+          policyVersion: 1, actorId: hqId, actorIdentity: hqId, createdAt: now, updatedAt: now,
+        });
+        if (fixture.published) {
+          await db.insert(schema.discountOfferRevisions).values({
+            id: liveRevisionId, offerId, revisionNo: 1, name: fixture.name, currency: "IDR",
+            minSubtotal: "0", startAt: null, endAt: null, schemaVersion: 1, engineVersion: 1,
+            draftVersion: 1, publishedAt: now, actorId: hqId, actorIdentity: hqId,
+            createdAt: now, updatedAt: now,
+          });
+          await db.insert(schema.discountBenefits).values({
+            id: generateId(), revisionId: liveRevisionId, kind: "fixed_goods", scope: "goods",
+            fixedAmount: "10000", paramsVersion: 1, createdAt: now,
+          });
+          // Draft berbeda dari live: editor menampilkan badge Ada draft.
+          await db.insert(schema.discountOfferRevisions).values({
+            id: draftRevisionId, offerId, revisionNo: 2, name: null, currency: null,
+            minSubtotal: null, startAt: null, endAt: null, schemaVersion: 1, engineVersion: 1,
+            draftVersion: 2, publishedAt: null, draftConfiguration: fixture.configuration,
+            actorId: hqId, actorIdentity: hqId, createdAt: now, updatedAt: now,
+          });
+          await db.update(schema.discountOffers)
+            .set({
+              state: fixture.state,
+              currentRevisionId: liveRevisionId,
+              quotaCount: fixture.configuration.capacity.quotaCount,
+              budgetAmount: fixture.configuration.capacity.budgetAmount,
+            })
+            .where(eq(schema.discountOffers.id, offerId));
+        } else {
+          await db.insert(schema.discountOfferRevisions).values({
+            id: draftRevisionId, offerId, revisionNo: 1, name: null, currency: null,
+            minSubtotal: null, startAt: null, endAt: null, schemaVersion: 1, engineVersion: 1,
+            draftVersion: 1, publishedAt: null, draftConfiguration: fixture.configuration,
+            actorId: hqId, actorIdentity: hqId, createdAt: now, updatedAt: now,
+          });
+        }
+        await db.insert(schema.discountOfferUsage).values({ offerId });
+      }
+    }
+
+    if (seedPlan.seedCatalogDependentFixtures) {
+      // Failed checkout evidence is retained without manufacturing a failed order.
+      const [attemptVariant] = await db.select({ id: schema.productVariants.id,
+        price: schema.productVariants.price, itemId: schema.productVariants.jubelioItemId,
+        name: schema.products.name }).from(schema.productVariants)
+        .innerJoin(schema.products, eq(schema.products.id, schema.productVariants.productId))
+        .orderBy(asc(schema.productVariants.id)).limit(1);
+      const [attemptBranch] = await db.select().from(schema.branches).where(eq(schema.branches.id, branchIds[0])).limit(1);
+      if (attemptVariant && attemptBranch) {
+        const anchor = new Date();
+        const reservedOrderId = generateId();
+        await db.insert(schema.checkoutAttempts).values({
+          id: generateId(), clientId: customer1Id, branchId: attemptBranch.id,
+          requestKey: generateId(), fingerprint: "a".repeat(64), reservedOrderId,
+          state: "rejected", failureCode: "SALES_ORDER_REJECTED", stockHoldState: "released",
+          paymentStartedAt: anchor, expiresAt: new Date(anchor.getTime() + 15 * 60_000),
+          snapshot: { version: 1,
+            order: { branchId: attemptBranch.id, contactPhone: "081234567890",
+              contactEmail: "john@example.com", subtotal: attemptVariant.price, total: attemptVariant.price },
+            items: [{ id: generateId(), variantId: attemptVariant.id,
+              productName: attemptVariant.name, price: attemptVariant.price, quantity: 1 }],
+            cart: [{ itemId: "seed-rejected-cart-item", cartId: "seed-rejected-cart",
+              variantId: attemptVariant.id, branchId: attemptBranch.id, quantity: 1, updatedAt: anchor.toISOString() }],
+            createRequest: { contactId: -1, customerName: "Demo checkout",
+              locationId: attemptBranch.jubelioLocationId ?? 1001, note: `SEED_REJECTED:${reservedOrderId}`,
+              refNo: reservedOrderId, items: [{ itemId: attemptVariant.itemId ?? 10001, quantity: 1,
+                price: Number(attemptVariant.price), discAmount: 0, taxAmount: 0, unit: "Buah", taxId: 1 }] },
+            addressToSave: null,
+          },
+        });
+      }
+    }
 
     console.log("✅ Seeding completed successfully!");
     console.log("");

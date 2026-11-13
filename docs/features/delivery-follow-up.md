@@ -34,7 +34,7 @@ The current attempt must match. Release atomically changes unknown → packed an
 
 `Selesaikan manual` requires a known, complete booked ledger and a nonblank reason, with either pre-completion `RETURNED`/`SHIPMENT_ISSUE`, physical handoff or verified `PICKED_UP`/`ON_DELIVERY` evidence. AWB alone, unknown booking, unpaid/unverified settlement and packing failure are not sufficient.
 
-The action sets completed while preserving paid, records `delivery_manual_reason/at/by`, and audits the resolution. It neither invents DELIVERED/POD nor creates a pickup code. Later tracking can enrich safe evidence but cannot reopen the order or create an open follow-up. Internal reasons/actor IDs are removed from customer order DTOs. No refund, stock adjustment, SO cancellation, email or communication-log feature is introduced.
+The action sets completed while preserving paid, records `delivery_manual_reason/at/by`, and audits the resolution. It neither invents DELIVERED/POD nor creates a pickup code. Later tracking can enrich safe evidence but cannot reopen the order or create an open follow-up. Internal reasons/actor IDs are removed from customer order DTOs. No refund, stock adjustment or SO cancellation is introduced. Manual completion records the `delivery_closed_manually` communication fact (same transaction) so the channel mirror projects `Selesai`; it never creates a "pesanan sudah sampai" email. A later VALID DELIVERED proof still produces exactly one such email without reopening the order.
 
 ## System-only settlement recovery
 

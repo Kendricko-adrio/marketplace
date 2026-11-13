@@ -160,7 +160,7 @@ async function seedOrderAndIntent(input: {
     orderId,
     type: input.type,
     ...(input.status ? { status: input.status } : {}),
-    reference: `OKCIR_SO_${input.type.toUpperCase()}:${orderId}:${operationId}`,
+    reference: `SO_${input.type.toUpperCase()}:${orderId}:${operationId}`,
     payload:
       input.type === "cancel"
         ? { type: "cancel", cancel: { salesOrderId: TEST_SO_ID } }
@@ -170,7 +170,7 @@ async function seedOrderAndIntent(input: {
               contactId: -1,
               customerName: "Ledger DB Test",
               locationId: 61,
-              note: `OKCIR_SO_CREATE:${orderId}:${operationId}`,
+              note: `SO_CREATE:${orderId}:${operationId}`,
               items: [
                 {
                   itemId: 101187,
@@ -332,7 +332,7 @@ describe.skipIf(!schemaState.ready)(
             id: `${TEST_ID_PREFIX}op-check-${Date.now()}`,
             orderId,
             type: "cancel",
-            reference: `OKCIR_SO_CANCEL:${orderId}:check`,
+            reference: `SO_CANCEL:${orderId}:check`,
             payload: { type: "cancel", cancel: { salesOrderId: TEST_SO_ID } },
           })
       ).rejects.toMatchObject({
@@ -355,14 +355,14 @@ describe.skipIf(!schemaState.ready)(
             id: `${TEST_ID_PREFIX}op-unique-2-${Date.now()}`,
             orderId,
             type: "create",
-            reference: `OKCIR_SO_CREATE:${orderId}:second-${Date.now()}`,
+            reference: `SO_CREATE:${orderId}:second-${Date.now()}`,
             payload: {
               type: "create",
               create: {
                 contactId: -1,
                 customerName: "Ledger DB Test",
                 locationId: 61,
-                note: `OKCIR_SO_CREATE:${orderId}:second`,
+                note: `SO_CREATE:${orderId}:second`,
                 items: [],
               },
             },
@@ -384,14 +384,14 @@ describe.skipIf(!schemaState.ready)(
       const second = await recordJubelioSalesIntent(d!, {
         orderId,
         type: "create",
-        reference: `OKCIR_SO_CREATE:${orderId}:${operationId}`,
+        reference: `SO_CREATE:${orderId}:${operationId}`,
         payload: {
           type: "create",
           create: {
             contactId: -1,
             customerName: "Ledger DB Test",
             locationId: 61,
-            note: `OKCIR_SO_CREATE:${orderId}:${operationId}`,
+            note: `SO_CREATE:${orderId}:${operationId}`,
             items: [
               {
                 itemId: 101187,
@@ -492,7 +492,7 @@ async function seedClaimedOperation(input: {
         contactId: -1,
         customerName: "Ledger DB Test",
         locationId: 61,
-        note: `OKCIR_SO_CREATE:${orderId}:${operationId}`,
+        note: `SO_CREATE:${orderId}:${operationId}`,
         items: [
           {
             itemId: 101187,
@@ -518,7 +518,7 @@ async function seedClaimedOperation(input: {
         contactId: -1,
         contactName: "Customer",
         paymentType: 0,
-        note: `OKCIR_SO_PAYMENT:${orderId}:${operationId}`,
+        note: `SO_PAYMENT:${orderId}:${operationId}`,
       },
     };
   }
@@ -526,7 +526,7 @@ async function seedClaimedOperation(input: {
     id: operationId,
     orderId,
     type: input.type,
-    reference: `OKCIR_SO_${input.type.toUpperCase()}:${orderId}:${operationId}`,
+    reference: `SO_${input.type.toUpperCase()}:${orderId}:${operationId}`,
     payload,
     ...(input.type === "create" ? {} : { salesOrderId: TEST_SO_ID }),
     ...(input.type === "payment" ? { invoiceId: TEST_INVOICE_ID } : {}),

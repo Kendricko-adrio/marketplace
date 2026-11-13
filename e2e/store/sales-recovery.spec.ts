@@ -27,7 +27,7 @@ test.beforeAll(async () => {
     `INSERT INTO jubelio_sales_operation
      (id, order_id, type, status, reference, payload, attempt_count, dispatched_at)
      VALUES ($1, $2, 'create', 'dispatched_unknown', $3, $4::jsonb, 1, '2020-01-01T00:00:00Z')`,
-    [OPERATION_ID, ORDER_ID, `OKCIR_SO_CREATE:${ORDER_ID}:${OPERATION_ID}`,
+    [OPERATION_ID, ORDER_ID, `SO_CREATE:${ORDER_ID}:${OPERATION_ID}`,
       JSON.stringify({ type: "create", create: { note: OPERATION_ID } })]
   );
 });

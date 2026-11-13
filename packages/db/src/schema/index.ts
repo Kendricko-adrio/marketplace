@@ -41,6 +41,10 @@ export * from "./discounts";
 // Notifications schema
 export * from "./notifications";
 
+// Order communications (spec penyelarasan status/notifikasi/email): durable
+// fakta komunikasi + antrean pekerjaan email per (order, kind).
+export * from "./order-communications";
+
 // Durable Jubelio stock reserve/release saga
 export * from "./jubelio-stock";
 
@@ -51,6 +55,10 @@ export * from "./jubelio-sales";
 // Durable per-order channel-status mirror projection (ticket #03 — Siap
 // Proses edit, crash-tolerant)
 export * from "./jubelio-channel";
+
+// Spec TX-02 — durable per-order payment session ledger (one durable claim
+// shared by legacy initial payment and repayment)
+export * from "./payment-sessions";
 
 // Manual Markdown price changes (ticket 03: staged batch/row, immutable
 // revision, one current pointer per variant)

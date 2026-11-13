@@ -1,22 +1,15 @@
 import { CheckCircle2, Clock3, ShoppingBag, UsersRound } from "lucide-react";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { getCustomers } from "@/lib/customers";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { getCustomerSummary } from "@/features/customers/customer-list-repository";
 import { CustomerTable } from "./customer-table";
 
 export default async function CustomersPage() {
-  const customers = await getCustomers();
-  const onboarded = customers.filter(
-    (customer) => customer.onboardingCompleted
-  ).length;
-  const totalOrders = customers.reduce(
-    (total, customer) => total + customer.orderCount,
-    0
-  );
+  const { registered, onboarded, pending, totalOrders } = await getCustomerSummary();
 
   const summary = [
     {
       label: "Registered customers",
-      value: customers.length,
+      value: registered,
       icon: UsersRound,
       tone: "bg-sky-50 text-sky-700",
     },
@@ -28,7 +21,7 @@ export default async function CustomersPage() {
     },
     {
       label: "Pending onboarding",
-      value: customers.length - onboarded,
+      value: pending,
       icon: Clock3,
       tone: "bg-amber-50 text-amber-700",
     },
@@ -70,14 +63,14 @@ export default async function CustomersPage() {
       </div>
 
       <Card>
-        <CardHeader className="border-b">
-          <h3 className="text-lg font-semibold">Customer List</h3>
-          <p className="text-sm text-muted-foreground">
-            Profile data is collected from registration and onboarding.
-          </p>
+        <CardHeader className="pb-3">
+          <CardTitle>Daftar Customer</CardTitle>
+          <CardDescription>
+            Lihat profil customer dan riwayat pembelian.
+          </CardDescription>
         </CardHeader>
-        <CardContent className="p-6">
-          <CustomerTable customers={customers} />
+        <CardContent>
+          <CustomerTable />
         </CardContent>
       </Card>
     </div>

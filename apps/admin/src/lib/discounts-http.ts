@@ -41,10 +41,19 @@ class DiscountsEnvelopeLogError extends Error {
 export function discountErrorResponse(
   status: number,
   code: string,
-  message: string
+  message: string,
+  fieldErrors?: { path: string; message: string }[]
 ): NextResponse {
   return NextResponse.json(
-    { success: false, error: message, code, requestId: getRequestId() },
+    {
+      success: false,
+      error: message,
+      code,
+      requestId: getRequestId(),
+      // Field-level issues allow the editor to map an error onto the exact
+      // field/tab. Internal SQL/provider text is never placed here.
+      ...(fieldErrors?.length ? { fieldErrors } : {}),
+    },
     { status, headers: DISCOUNTS_NO_STORE }
   );
 }
@@ -75,7 +84,8 @@ export function discountFailureResponse(
     return discountErrorResponse(
       described.status,
       described.code,
-      described.message
+      described.message,
+      described.fieldErrors
     );
   }
   log.error(

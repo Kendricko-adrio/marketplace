@@ -18,7 +18,11 @@ const h = vi.hoisted(() => {
 vi.mock("@/db", () => {
   const ORDERS = "orders-table";
   const OPS = "ops-table";
+  // Delivery gate kini commit + mencatat fakta komunikasi dalam SATU
+  // transaksi (spec penyelarasan status/notifikasi/email).
   const makeDb = () => ({
+    transaction: async (callback: (tx: unknown) => Promise<unknown>) =>
+      callback(makeDb()),
     select: () => ({
       from: (table: unknown) => {
         return {
@@ -67,6 +71,29 @@ const channelMirror = vi.hoisted(() => ({
 vi.mock("./jubelio-channel-mirror", () => ({
   reconcileJubelioChannelStatusForOrder: channelMirror.reconcileJubelioChannelStatusForOrder,
 }));
+
+vi.mock(
+  "@marketplace/db/src/order-communications/order-communication-repository",
+  () => ({
+    recordOrderCommunicationEvent: vi.fn(async () => ({
+      eventId: "settlement-event",
+      created: true,
+    })),
+  })
+);
+
+vi.mock(
+  "@/features/order-communications/project-order-communications-service",
+  () => ({
+    projectOrderCommunications: vi.fn(async () => ({
+      projected: 0,
+      recoveredEvents: 0,
+      emailJobsCreated: 0,
+      notificationsCreated: 0,
+      channelMirrorAttempted: 0,
+    })),
+  })
+);
 
 import { settleJubelioSalesOrder } from "./jubelio-sales-settlement";
 import {

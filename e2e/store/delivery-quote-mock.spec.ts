@@ -7,7 +7,7 @@
  * Proven contract (spec Ready "Harga dan UX quote", acceptance 03):
  * - The checkout offers the two methods — "Ambil di cabang" / "Kirim ke
  *   alamat" (proposed labels). Choosing delivery reveals an address selector
- *   and the "Periksa ongkir" trigger.
+ *   and automatic quotes, with "Perbarui ongkir" beside the picker title.
  * - The ONLY service from the mock (rate-normal) renders as "JNE REG Fixture"
  *   and the money uses the vendor `rates` — independent case: controlled
  *   Rp100.000 item, mock rates Rp20.000 (final_rates Rp10.000 as a trap) →
@@ -41,6 +41,7 @@ import { Pool } from "pg";
 import bcrypt from "bcryptjs";
 import dotenv from "dotenv";
 import { TEST_USERS } from "../config";
+import { pickSelectOption } from "../support/combobox";
 dotenv.config({ path: ".env" });
 
 // ---------------------------------------------------------------------------
@@ -85,7 +86,7 @@ function requireIsolatedMockRun(): void {
 const OPTION_DELIVERY = "Kirim ke alamat";
 const OPTION_PICKUP = "Ambil di cabang";
 const ADDRESS_SELECT_LABEL = "Alamat Pengiriman";
-const CHECK_ONGKIR = /Periksa ongkir/;
+const CHECK_ONGKIR = /Perbarui ongkir/;
 const RETRY_LABEL = /Coba lagi/;
 const SERVICE_LABEL = "JNE REG Fixture";
 
@@ -525,6 +526,49 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       }
     });
 
+    test(`shipping refresh lives beside the picker title and clears stale selection (${viewport.width}px)`, async () => {
+      test.setTimeout(90_000);
+      const add = await johnContext.request.post("/api/cart/items", {
+        data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
+      });
+      expect(add.ok()).toBe(true);
+      const page = await johnContext.newPage();
+      await page.setViewportSize(viewport);
+      try {
+        await page.goto("/cart");
+        await page.getByRole("checkbox").first().check();
+        await page.getByRole("button", { name: "Checkout" }).click();
+        await page.waitForURL("**/checkout");
+        await pickDeliveryMethodAndAddress(page, ADDRESS_STREETS[0]);
+        const picker = page.getByRole("group", { name: "Pilih pengiriman", exact: true });
+        const refresh = picker.getByRole("button", { name: "Perbarui ongkir", exact: true });
+        await expect(refresh).toBeVisible();
+        await picker.getByRole("radio", { name: /JNE REG Fixture/ }).check();
+        await expect(page.getByRole("button", { name: "Periksa ongkir", exact: true })).toHaveCount(0);
+        await expect(page.getByText("Layanan pengiriman sudah dipilih. Klik Lanjut untuk melanjutkan ke pembayaran.", { exact: true })).toHaveCount(0);
+        const title = await picker.locator("legend").boundingBox();
+        const button = await refresh.boundingBox();
+        expect(button!.x).toBeGreaterThan(title!.x);
+        expect(button!.y).toBeLessThan(title!.y + title!.height);
+        expect(button!.width).toBeGreaterThanOrEqual(24);
+        expect(button!.height).toBeGreaterThanOrEqual(24);
+        await delayQuoteResponses(page, 1_200);
+        await refresh.focus();
+        const response = page.waitForResponse("**/api/checkout/delivery-quote");
+        await page.keyboard.press("Enter");
+        await expect(page.getByText(/Memeriksa ongkir ke/)).toBeVisible();
+        await expect(page.getByRole("button", { name: "Lanjut", exact: true })).toBeDisabled();
+        expect((await response).ok()).toBe(true);
+        await expect(refresh).toBeVisible();
+        await expect(picker.getByRole("radio", { checked: true })).toHaveCount(0);
+        await picker.getByRole("radio", { name: /JNE REG Fixture/ }).check();
+        await expect(page.getByRole("button", { name: "Lanjut", exact: true })).toBeEnabled();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      } finally {
+        await page.close();
+      }
+    });
+
     test(`fulfillment cards separate titles from descriptions (${viewport.width}px)`, async () => {
       test.setTimeout(60_000);
       const add = await johnContext!.request.post("/api/cart/items", {
@@ -869,10 +913,14 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       await page.getByLabel("Nama Penerima").fill("Penerima Pertama");
       await page.getByLabel("Telepon Penerima").fill("081300000009");
       await page.getByLabel("Alamat Lengkap").fill("Jl. Tujuan Pertama No. 10");
+      // Label field wajib kini berakhir dengan bintang penanda (`required`), jadi
+      // pencocokan label memakai substring, bukan teks penuh. Picker wilayah
+      // memakai `Select` shared, jadi opsinya dipilih lewat popover (bukan
+      // `selectOption` native).
       for (const [label, option] of [
         ["Provinsi", "Fixture Province"], ["Kota/Kabupaten", "Fixture City"],
         ["Kecamatan", "Fixture District"], ["Kelurahan/Area", "Fixture Area"],
-      ]) await page.getByLabel(label, { exact: true }).selectOption({ label: option });
+      ]) await pickSelectOption(page, label, option);
       await page.getByRole("button", { name: "Gunakan alamat ini" }).click();
       await expect(page.getByRole("heading", { name: "Alamat baru", exact: true })).toHaveCount(0);
       await expect(page.getByText(SERVICE_LABEL)).toBeVisible({ timeout: 20_000 });
@@ -914,13 +962,35 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       await expect(dialog.getByRole("heading", { name: "Alamat baru", exact: true })).toBeVisible();
       const apply = dialog.getByRole("button", { name: "Gunakan alamat ini" });
       await expect(apply).toBeDisabled();
+      // Penanda wajib: setiap field wajib membawa bintang + legenda, dan kontrak
+      // wajibnya tetap diumumkan lewat kontrolnya (nama aksesibel tetap bersih
+      // karena bintang `aria-hidden`). Field teks memakai atribut `required`
+      // native; picker wilayah kini `Select` shared (trigger `role=combobox`),
+      // jadi status wajibnya diekspos sebagai `aria-required` pada trigger —
+      // kontrol native tidak lagi tersedia di sana. Kode Pos sengaja tanpa
+      // bintang: terkunci dan terisi otomatis dari Kelurahan/Area.
+      await expect(dialog.getByText("* Wajib diisi", { exact: true })).toBeVisible();
+      for (const label of ["Nama Penerima", "Telepon Penerima", "Alamat Lengkap"]) {
+        await expect(dialog.getByLabel(label)).toHaveAttribute("required", "");
+      }
+      for (const label of ["Provinsi", "Kota/Kabupaten", "Kecamatan", "Kelurahan/Area"]) {
+        await expect(dialog.getByLabel(label)).toHaveAttribute("aria-required", "true");
+      }
+      for (const label of [
+        "Nama Penerima", "Telepon Penerima", "Provinsi", "Kota/Kabupaten",
+        "Kecamatan", "Kelurahan/Area", "Alamat Lengkap",
+      ]) {
+        await expect(dialog.locator("label", { hasText: label }).first()).toContainText("*");
+      }
+      await expect(dialog.getByRole("textbox", { name: "Nama Penerima", exact: true })).toBeVisible();
+      await expect(dialog.locator("label", { hasText: "Kode Pos" })).not.toContainText("*");
       await page.getByLabel("Nama Penerima").fill("Penerima Modal");
       await page.getByLabel("Telepon Penerima").fill("081300000009");
       await page.getByLabel("Alamat Lengkap").fill("Jl. Modal Baru No. 10");
       for (const [label, option] of [
         ["Provinsi", "Fixture Province"], ["Kota/Kabupaten", "Fixture City"],
         ["Kecamatan", "Fixture District"], ["Kelurahan/Area", "Fixture Area"],
-      ]) await page.getByLabel(label, { exact: true }).selectOption({ label: option });
+      ]) await pickSelectOption(page, label, option);
       await expect(apply).toBeEnabled();
       // Draft only: nothing is quoted and no service list appears yet.
       expect(quoteRequests).toHaveLength(0);
@@ -971,7 +1041,7 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       ["Provinsi", "Fixture Province"], ["Kota/Kabupaten", "Fixture City"],
       ["Kecamatan", "Fixture District"], ["Kelurahan/Area", "Fixture Area"],
     ]) {
-      await page.getByLabel(label, { exact: true }).selectOption({ label: option });
+      await pickSelectOption(page, label, option);
     }
     await page.getByLabel("Simpan alamat", { exact: true }).check();
     await page.getByLabel("Jadikan alamat utama").check();
@@ -1128,12 +1198,7 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     // Address change → stale selection dead, pending requote holds the flow.
     await delayQuoteResponses(page, 1_200);
     await pickDeliveryMethodAndAddress(page, ADDRESS_STREETS[1]);
-    // The requote may fire automatically on the change or wait for the
-    // still-offered trigger — both land in the delayed pending window.
-    const periksaAgain = page.getByRole("button", { name: CHECK_ONGKIR }).last();
-    if (await periksaAgain.isVisible().catch(() => false)) {
-      await periksaAgain.click();
-    }
+    // Address changes requote automatically; no manual trigger is needed.
     await expect(continueBtn).toBeDisabled({ timeout: 5_000 }); // during the pending quote
     await expect(picker.getByRole("radio", { checked: true })).toHaveCount(0, { timeout: 15_000 });
     await picker.getByRole("radio", { name: new RegExp(SERVICE_LABEL) }).check();
@@ -1204,10 +1269,6 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       (await mockControl("PUT", "/__control/shipment", { scenario: "rate-failure" })).status
     ).toBe("ok");
     await pickDeliveryMethodAndAddress(page, ADDRESS_STREETS[1]);
-    const periksaFailed = page.getByRole("button", { name: CHECK_ONGKIR }).last();
-    if (await periksaFailed.isVisible().catch(() => false)) {
-      await periksaFailed.click();
-    }
     await expect(page.getByRole("button", { name: RETRY_LABEL })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(ONGKIR_LABEL, { exact: true })).toHaveCount(0);
     // The pickup alternative stays selectable — never forced onto delivery.

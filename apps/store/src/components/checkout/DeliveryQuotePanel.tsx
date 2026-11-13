@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Loader2, Truck } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, RefreshCw, Truck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -33,7 +33,7 @@ import {
 
 // =========================================================
 // DeliveryQuotePanel — the checkout step-1 delivery block:
-// address combobox + "Periksa ongkir" + service list (vendor `rates`,
+// address combobox + refresh ongkir di header + service list (vendor `rates`,
 // never `final_rates`). Selected-service PPN/total live in the page summary.
 // The page hides, rather than unmounts, this panel during contact/review.
 //
@@ -129,15 +129,24 @@ function CheckoutRegion({ index, parentId, value, onPick }: {
     return () => controller.abort();
   }, [index, parentId, retry]);
   return <div className="space-y-1">
-    <Label htmlFor={`checkout-${regionFields[index]}`}>{regionLabels[index]}</Label>
-    <select id={`checkout-${regionFields[index]}`} className="h-10 w-full rounded-md border bg-background px-3 text-sm"
-      value={value} disabled={(index > 0 && !parentId) || error} onChange={(event) => {
-        const id = event.target.value;
-        onPick(id, options.find((row) => row.id === id)?.postalCode);
-      }}>
-      <option value="">Pilih {regionLabels[index]}</option>
-      {options.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
-    </select>
+    <Label id={`checkout-${regionFields[index]}-label`} htmlFor={`checkout-${regionFields[index]}`} required>{regionLabels[index]}</Label>
+    {/* Shared `Select` (bukan `<select>` native) supaya prompt kosong memakai
+        token `--placeholder` dan permukaannya `bg-field` seperti field lain di
+        dialog ini. Tanpa `required` native, status wajib diekspos lewat
+        `aria-required` pada trigger agar tetap diumumkan ke assistive tech. */}
+    <Select value={value} disabled={(index > 0 && !parentId) || error}
+      onValueChange={(id) => onPick(id, options.find((row) => row.id === id)?.postalCode)}>
+      <SelectTrigger
+        id={`checkout-${regionFields[index]}`}
+        aria-labelledby={`checkout-${regionFields[index]}-label`}
+        aria-required="true"
+      >
+        <SelectValue placeholder={`Pilih ${regionLabels[index]}`} />
+      </SelectTrigger>
+      <SelectContent>
+        {options.map((row) => <SelectItem key={row.id} value={row.id}>{row.name}</SelectItem>)}
+      </SelectContent>
+    </Select>
     {error && <Button type="button" variant="outline" size="sm" onClick={() => setRetry((n) => n + 1)}>Coba lagi wilayah</Button>}
   </div>;
 }
@@ -475,9 +484,26 @@ export default function DeliveryQuotePanel({
       {phase === "ready" && services !== null && (
         <div className="space-y-3">
           <fieldset className="min-w-0" aria-label="Pilih pengiriman">
-            <legend className="mb-1 flex items-center gap-2 text-base font-semibold">
-              <Truck className="h-4 w-4 text-primary" aria-hidden="true" />
-              Pilih pengiriman
+            <legend className="mb-1 flex w-full items-center justify-between gap-3 text-base font-semibold">
+              <span className="flex items-center gap-2">
+                <Truck className="h-4 w-4 text-primary" aria-hidden="true" />
+                Pilih pengiriman
+              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                className="shrink-0"
+                aria-label="Perbarui ongkir"
+                title="Perbarui ongkir"
+                disabled={!destination || itemIds.length === 0}
+                onClick={() => {
+                  if (!destination) return;
+                  void runQuote((generationRef.current += 1), destination);
+                }}
+              >
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              </Button>
             </legend>
             <p className="mb-2 text-xs text-muted-foreground">
               Diurutkan dari ongkir termurah{category !== "all" ? " di kategori ini" : ""}
@@ -602,32 +628,6 @@ export default function DeliveryQuotePanel({
         </div>
       )}
 
-      <div className="space-y-3 border-t pt-4">
-        <p className="text-sm text-muted-foreground" role="status">
-          {!destination
-            ? "Pilih alamat tersimpan atau gunakan alamat baru untuk melihat ongkir."
-            : selected
-              ? "Layanan pengiriman sudah dipilih. Klik Lanjut untuk melanjutkan ke pembayaran."
-              : "Pilih layanan pengiriman sebelum melanjutkan."}
-        </p>
-        <Button
-          type="button"
-          variant="outline"
-          className="w-full sm:w-auto"
-          onClick={() => {
-            if (!destination) return;
-            generationRef.current += 1;
-            void runQuote(generationRef.current, destination);
-          }}
-          disabled={phase === "loading" || !destination || itemIds.length === 0}
-        >
-          {phase === "loading" ? (
-            <><Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> Memeriksa ongkir…</>
-          ) : (
-            "Periksa ongkir"
-          )}
-        </Button>
-      </div>
       <Dialog open={addressModalOpen} onOpenChange={setAddressModalOpen}>
         <DialogContent id={newAddressDialogId} className="max-h-[90dvh] gap-0 overflow-hidden p-0 sm:max-w-2xl">
           <div className="flex max-h-[90dvh] min-h-0 flex-col">
@@ -639,9 +639,15 @@ export default function DeliveryQuotePanel({
           </DialogHeader>
           {/* Body scrolls; aksi utama tetap terlihat di footer (mobile 390px). */}
           <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
+            {/* Legenda bintang: penanda wajib harus punya arti tertulis, bukan
+                hanya konvensi warna/simbol. Kode Pos tidak bertanda bintang
+                karena terkunci dan terisi otomatis dari Kelurahan/Area. */}
+            <p className="mb-3 text-xs text-muted-foreground">
+              <span aria-hidden="true">*</span> Wajib diisi
+            </p>
             <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2"><Label htmlFor="checkout-recipient">Nama Penerima</Label><Input id="checkout-recipient" autoComplete="shipping name" value={draftAddress.recipientName} onChange={(e) => setDraftAddress((prev) => ({ ...prev, recipientName: e.target.value }))} /></div>
-            <div className="space-y-2"><Label htmlFor="checkout-phone">Telepon Penerima</Label><Input id="checkout-phone" type="tel" autoComplete="shipping tel" value={draftAddress.phone} onChange={(e) => setDraftAddress((prev) => ({ ...prev, phone: e.target.value }))} /></div>
+            <div className="space-y-2"><Label htmlFor="checkout-recipient" required>Nama Penerima</Label><Input id="checkout-recipient" required autoComplete="shipping name" value={draftAddress.recipientName} onChange={(e) => setDraftAddress((prev) => ({ ...prev, recipientName: e.target.value }))} /></div>
+            <div className="space-y-2"><Label htmlFor="checkout-phone" required>Telepon Penerima</Label><Input id="checkout-phone" required type="tel" autoComplete="shipping tel" value={draftAddress.phone} onChange={(e) => setDraftAddress((prev) => ({ ...prev, phone: e.target.value }))} /></div>
             {regionFields.map((field, index) => <CheckoutRegion key={`${field}:${index > 0 ? draftAddress[regionFields[index - 1]] : "root"}`}
               index={index} value={draftAddress[field]} parentId={index > 0 ? draftAddress[regionFields[index - 1]] : undefined}
               onPick={(id, postalCode) => setDraftAddress((prev) => {
@@ -650,7 +656,7 @@ export default function DeliveryQuotePanel({
                 return next;
               })} />)}
             <div className="space-y-2"><Label htmlFor="checkout-postal">Kode Pos</Label><ReadOnlyInput id="checkout-postal" value={draftAddress.postalCode} hint="Terisi otomatis dari Kelurahan/Area." /></div>
-            <div className="space-y-2 sm:col-span-2"><Label htmlFor="checkout-street">Alamat Lengkap</Label><Input id="checkout-street" value={draftAddress.fullAddress} placeholder="Jalan, nomor rumah, unit, dan patokan" onChange={(e) => setDraftAddress((prev) => ({ ...prev, fullAddress: e.target.value }))} /></div>
+            <div className="space-y-2 sm:col-span-2"><Label htmlFor="checkout-street" required>Alamat Lengkap</Label><Input id="checkout-street" required value={draftAddress.fullAddress} placeholder="Jalan, nomor rumah, unit, dan patokan" onChange={(e) => setDraftAddress((prev) => ({ ...prev, fullAddress: e.target.value }))} /></div>
             <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={draftSaveAddress} onChange={(e) => {
               setDraftSaveAddress(e.target.checked);
               if (!e.target.checked) setDraftAddress((prev) => ({ ...prev, isDefault: false }));

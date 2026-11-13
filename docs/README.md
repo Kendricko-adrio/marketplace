@@ -74,16 +74,19 @@ ADRs dan referensi arsitektur permanen tetap berada di `docs/`.
 | Internal architecture | `docs/architecture/README.md` |
 | Testing | `docs/testing/README.md` |
 | Agent tooling (MCP servers, Context7) | `docs/agents/mcp-tooling.md` |
+| Domain docs (glossary, ADR, cara mengonsumsinya) | [`docs/agents/domain.md`](agents/domain.md) |
 | Home delivery lifecycle | [`docs/features/home-delivery.md`](features/home-delivery.md) |
 | Delivery follow-up | [`docs/features/delivery-follow-up.md`](features/delivery-follow-up.md) |
+| Komunikasi order (status, notifikasi admin, email + retry) | [`docs/features/order-communications.md`](features/order-communications.md) |
 | Delivery handoff and tracking | [`docs/features/delivery-tracking.md`](features/delivery-tracking.md) |
 | Delivery packing and booking | [`docs/features/delivery-fulfillment.md`](features/delivery-fulfillment.md) |
 | Guided admin delivery workflow | [`docs/features/admin-delivery-workflow.md`](features/admin-delivery-workflow.md) |
 | Delivery orders and settlement | [`docs/features/delivery-orders.md`](features/delivery-orders.md) |
 | Delivery checkout quotes | [`docs/features/delivery-quotes.md`](features/delivery-quotes.md) |
 | Versioned checkout pricing (money snapshot, PPN goods-only, provider payable) | [`docs/features/versioned-checkout-pricing.md`](features/versioned-checkout-pricing.md) |
-| Discount Offer administration (public fixed-goods lifecycle, review, publish, capacity) | [`docs/features/discount-administration.md`](features/discount-administration.md) |
+| Administrasi Offer diskon; fondasi service draft terpadu tersedia, cutover endpoint/UI belum selesai | [`docs/features/discount-administration.md`](features/discount-administration.md) |
 | Promo checkout pickup/delivery (kode promo, kupon, review pembayaran, subsidi ongkir, lifecycle Redemption) | [`docs/features/discount-redemption.md`](features/discount-redemption.md) |
 | Manual Markdown price changes (per-SKU target, projection, apply/history, provider whole-line discount) | [`docs/features/markdown-pricing.md`](features/markdown-pricing.md) |
+| Direktori Customer admin (pagination, pencarian, summary global) | [`docs/features/admin-customers.md`](features/admin-customers.md) |
 | Mandatory verified branch Shipment regions | [`docs/features/branch-shipping-regions.md`](features/branch-shipping-regions.md) |
 | Client address book, branch shipping origin and parcel master | [`docs/features/client-addresses.md`](features/client-addresses.md) |

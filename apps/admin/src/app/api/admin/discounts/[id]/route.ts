@@ -2,10 +2,7 @@ import { NextRequest } from "next/server";
 
 import { guard } from "@/lib/rbac/guard";
 import { createModuleLogger, withRequestContext } from "@/lib/logger";
-import {
-  getDiscountOfferDetail,
-  DiscountAdministrationError,
-} from "@/lib/discounts-administration";
+import { getDiscountEditorDetail } from "@/features/discounts/discount-configuration-repository";
 import {
   discountFailureResponse,
   discountSuccessResponse,
@@ -13,22 +10,15 @@ import {
 } from "@/lib/discounts-http";
 
 // =========================================================
-// /api/admin/discounts/[id]
-//   GET — safe Offer detail (live + draft + usage)        [discounts:view]
+// GET /api/admin/discounts/[id]                          [discounts:view]
 // =========================================================
-// Read-only projection of the server-side identity: id, state, activation kind,
-// versions, the nullable current revision pointer, the immutable live revision,
-// the single unpublished draft revision (with its benefit) and the usage
-// projection. It never exposes a customer code (a public Offer has none), never
-// calls a provider, and never echoes a Current Policy supplied by the browser.
-// An unknown id is 404; the response is never cached.
+// Editor read model: canonical live projection plus the ONE draft snapshot
+// (`draftConfiguration`) that Pengaturan and Kode share. Literal codes are only
+// included for an actor holding both discounts:view and discounts:edit; a
+// viewer receives masked labels and no code proposals. No provider call, no
+// cache.
 export const dynamic = "force-dynamic";
 
-/**
- * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
- * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
- * (`withRequestContext` di export handler membuka scope tersebut).
- */
 const log = createModuleLogger("admin-discount-detail");
 
 type RouteContext = { params: Promise<{ id: string }> };
@@ -43,22 +33,9 @@ async function discountDetail(
 
   try {
     const { id } = await params;
-    const detail = await getDiscountOfferDetail(
-      id,
-      requireActorId(ctx.user.id)
-    );
-    if (!detail) {
-      log.warn(
-        `discounts detail ditolak: offer tidak ditemukan (offer ${id}, outcome denied)`
-      );
-      return discountFailureResponse(
-        new DiscountAdministrationError(404, "NOT_FOUND", "Offer not found"),
-        "discounts detail ditolak"
-      );
-    }
-
+    const detail = await getDiscountEditorDetail(id, requireActorId(ctx.user.id));
     log.info(
-      `discounts detail (offer ${detail.id}, state ${detail.state}, currentRevisionId ${detail.currentRevisionId ?? "none"}, version ${detail.version}, draftVersion ${detail.draftVersion}, outcome success)`
+      `discounts detail (offer ${detail.id}, state ${detail.state}, source ${detail.configurationSource}, version ${detail.version}, draftVersion ${detail.draftVersion}, outcome success)`
     );
     return discountSuccessResponse(detail);
   } catch (error) {
@@ -66,5 +43,4 @@ async function discountDetail(
   }
 }
 
-/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
 export const GET = withRequestContext(discountDetail, "admin-discount-detail");

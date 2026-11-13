@@ -474,7 +474,7 @@ test.describe("storefront cart & checkout", () => {
         [
           crypto.randomUUID(),
           orderId,
-          `OKCIR_SO_CANCEL:${orderId}:e2e`,
+          `SO_CANCEL:${orderId}:e2e`,
           JSON.stringify({ type: "cancel", cancel: { salesOrderId } }),
           salesOrderId,
         ]

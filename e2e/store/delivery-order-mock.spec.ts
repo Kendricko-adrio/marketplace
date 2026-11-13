@@ -52,9 +52,10 @@
 import { test, expect, type BrowserContext, type Page } from "@playwright/test";
 import crypto from "node:crypto";
 import { Pool } from "pg";
-import { deleteRetainedOrderFixtures } from "../../packages/db/src/testing/retained-order-fixtures";
+import { deleteRetainedOrderFixtures, deleteUnpromotedCheckoutAttempts } from "../../packages/db/src/testing/retained-order-fixtures";
 import dotenv from "dotenv";
 import { TEST_USERS } from "../config";
+import { pickSelectOption } from "../support/combobox";
 dotenv.config({ path: ".env" });
 
 // ---------------------------------------------------------------------------
@@ -337,6 +338,8 @@ async function countOrders(): Promise<number> {
 async function deleteOrder(orderId: string): Promise<void> {
   if (!orderId) return;
   await deleteRetainedOrderFixtures(pool!, [orderId]);
+  const owner = await pool!.query<{ id: string }>("SELECT id FROM client WHERE email=$1", [ACCOUNT_EMAIL]);
+  await deleteUnpromotedCheckoutAttempts(pool!, owner.rows.map((row) => row.id));
 }
 
 // ---------------------------------------------------------------------------
@@ -578,7 +581,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     for (const [label, option] of [
       ["Provinsi", "Fixture Province"], ["Kota/Kabupaten", "Fixture City"],
       ["Kecamatan", "Fixture District"], ["Kelurahan/Area", "Fixture Area"],
-    ]) await page.getByLabel(label, { exact: true }).selectOption({ label: option });
+    ]) await pickSelectOption(page, label, option);
     // Alamat baru baru dipakai setelah modal dikonfirmasi.
     await page.getByRole("button", { name: "Gunakan alamat ini" }).click();
     await expect(page.getByText("JNE REG Fixture")).toBeVisible({ timeout: 20_000 });
@@ -620,7 +623,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     for (const [label, option] of [
       ["Provinsi", "Fixture Province"], ["Kota/Kabupaten", "Fixture City"],
       ["Kecamatan", "Fixture District"], ["Kelurahan/Area", "Fixture Area"],
-    ]) await page.getByLabel(label, { exact: true }).selectOption({ label: option });
+    ]) await pickSelectOption(page, label, option);
     await page.getByLabel("Simpan alamat", { exact: true }).check();
     await page.getByLabel("Jadikan alamat utama").check();
     await page.getByRole("button", { name: "Gunakan alamat ini" }).click();

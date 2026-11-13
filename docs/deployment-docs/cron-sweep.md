@@ -29,6 +29,11 @@ Saat customer place-order, Sales Order dibuat di Jubelio dan stok di-hold
 secara lokal (`branch_stock.pending_remote_stock`). Jika customer tidak bayar
 sampai TTL habis (`orders.expires_at`), SO harus dibatalkan. Path utama:
 webhook `expire` dari Midtrans. **Safety-net**: cron `sweep-reservations`.
+Sejak plan `checkout-attempt-before-order`, sweep juga memulihkan
+`checkout_attempt` pra-order: klaim intent SO yang belum pernah dikirim,
+menyelesaikan promotion lokal yang tertunda, dan meng-*abort* reservation
+kedaluwarsa yang belum mengirim apa pun. Tidak ada POST ulang untuk operasi yang
+mungkin sudah terkirim.
 
 Endpoint: `POST /api/cron/sweep-reservations`, auth via header `X-Cron-Secret`
 (nilai = `CRON_SECRET` di `.env`). Endpoint **idempoten** — aman dijalankan

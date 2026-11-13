@@ -34,6 +34,10 @@ vi.mock("@/db", async () => {
         if (table === "system_config") return [];
         if (table === "cart") return [{ id: "cart", userId: "client" }];
         if (table === "cart_item") return items();
+        if (table === "product_variant") return items().map((item) => ({
+          variantId: item.variantId, sourceUnitPrice: "1000",
+          storedTargetUnitPrice: null, markdownRevisionId: null, revisionVariantId: null,
+        }));
         if (table === "branch") return [{ id: "branch", status: "aktif", jubelioLocationId: 7, operatingHours: { tuesday: { open: "09:00", close: "17:00" } } }];
         if (table === "branch_stock") return [{
           available: state.available[index], pending: state.pending[index], onOrder: 0,
@@ -111,10 +115,20 @@ async function validateCart() {
 }
 async function readCart() {
   const { GET } = await import("../../cart/route");
-  return (await (await GET(new NextRequest("http://localhost/api/cart"))).json()).data;
+  const response = await GET(new NextRequest("http://localhost/api/cart"));
+  expect(response.status).toBe(200);
+  return (await response.json()).data;
 }
 
 describe("cart Checkout button stock validation HTTP contract", () => {
+  it("serves the saved cart with source prices before stock validation", async () => {
+    const cart = await readCart();
+    expect(cart).toMatchObject({ subtotal: 18000, items: [
+      { id: "item-0", quantity: 10, variant: { price: "1000", sourcePrice: "1000" } },
+      { id: "item-1", quantity: 8, variant: { price: "1000", sourcePrice: "1000" } },
+    ] });
+  });
+
   it("blocks entering checkout with 31 units when live sellable stock is 20 and saves quantity 20", async () => {
     state.quantities = [31, 2]; state.available = [20, 5];
     const response = await validateCart();

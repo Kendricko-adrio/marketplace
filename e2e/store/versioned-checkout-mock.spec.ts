@@ -330,6 +330,27 @@ test("gate1 pickup persists immutable pricing through real Snap creation, detail
   await page.getByRole("option", { name: "10:00" }).click();
   await page.getByLabel("Nomor Telepon *").fill("081234567890");
   await page.getByLabel("Email *").fill(contactEmail);
+  // Observe even a transient feedback panel before navigation, not just the
+  // destination page (where a checkout flash would already have disappeared).
+  const checkoutFeedback: string[] = [];
+  await page.exposeFunction("recordCheckoutFeedback", (message: string) => {
+    checkoutFeedback.push(message);
+  });
+  await page.evaluate(() => {
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          const panel = node.matches('[data-testid="checkout-attempt-feedback"]')
+            ? node : node.querySelector('[data-testid="checkout-attempt-feedback"]');
+          if (panel) {
+            void (window as unknown as { recordCheckoutFeedback: (message: string) => Promise<void> })
+              .recordCheckoutFeedback(panel.textContent ?? "");
+          }
+        }
+      }
+    }).observe(document.documentElement, { childList: true, subtree: true });
+  });
   await page.getByRole("button", { name: "Lanjut" }).click();
   await page.getByText(/Saya telah memeriksa pesanan/).click();
   // Register the passthrough observer BEFORE the click: the real response is
@@ -340,6 +361,7 @@ test("gate1 pickup persists immutable pricing through real Snap creation, detail
   expect(placed.ok, placed.text).toBe(true);
   const result = JSON.parse(placed.text) as { orderId: string; redirectUrl: string };
   await expect(page.getByRole("heading", { name: "Pembayaran fixture" })).toBeVisible();
+  expect(checkoutFeedback, "successful checkout must not flash an error panel").toEqual([]);
   const detailResponse = await context.request.get(`/api/orders/${result.orderId}`);
   expect(detailResponse.ok()).toBe(true);
   const detail = (await detailResponse.json()).data;

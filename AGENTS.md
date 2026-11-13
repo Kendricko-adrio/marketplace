@@ -420,6 +420,23 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   what changes under each option. Recommend an option with a reason when the
   evidence supports it. Do not ask the user for facts the agent can verify in
   the repo; ask only for preferences, requirements, or decisions the user owns.
+- **Every `ask_user_question` question must carry concrete context.** Never
+  assume the user knows which flow, file, button, action, or process the agent
+  means. In each question's `question` field, first identify the relevant
+  flow/page (and file path when useful), the actor and their button/action,
+  and the resulting process or behavior; then ask the decision. Explain what
+  the answer will affect. Prior chat context, a short header, or option
+  descriptions alone are not a substitute: each question must be understandable
+  on its own. For non-UI questions, name the relevant artifact/process, trigger,
+  and consequence instead; do not invent a button or customer flow. Clearly
+  distinguish verified current behavior from proposed behavior.
+  Example: "In the checkout flow, when a customer clicks 'Apply voucher', the
+  system validates the code before updating the order total. If the code is
+  invalid, should checkout remain available without the discount, or should
+  the customer have to remove the code first?"
+  File-oriented template: "In `<file path>`, when `<actor>` performs
+  `<action>`, `<verified behavior / explicitly proposed process>` occurs.
+  This decision affects `<impact>`. `<question>`?"
 - When reporting work, state what changed, why, where to inspect it, and what
   verification ran (or why it could not run). If blocked or uncertain, say so
   explicitly and give the next actionable step.

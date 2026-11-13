@@ -16,6 +16,9 @@ export function CheckoutAttemptFeedback({
   onCheckStatus: () => void;
   onReviewAgain: () => void;
 }) {
+  // A successful attempt is navigating away, not an error requiring recovery.
+  if (result.state === "promoted") return null;
+
   const canRetry = result.retryAllowed;
   const uncertain = result.state === "manual_review" || result.state === "processing" ||
     result.state === "compensating" || result.state === "preparing";

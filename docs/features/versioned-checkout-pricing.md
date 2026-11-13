@@ -438,6 +438,21 @@ itu order gagal yang lama tidak lagi dibuat untuk checkout baru; kegagalan
 tercatat sebagai attempt `rejected`/`manual_review`. Lihat
 [jubelio-sales-orders.md](jubelio-sales-orders.md#checkout-attempt-sebelum-order-plan-checkout-attempt-before-order).
 
+### Feedback checkout berhasil
+
+Saat attempt berstatus `promoted`, panel `CheckoutAttemptFeedback` tidak
+ditampilkan agar tidak ada kedipan kotak merah sebelum redirect ke Midtrans
+atau halaman pesanan. Status gagal dan belum pasti tetap menampilkan pesan
+serta tindakan pemulihannya. Berlaku juga saat pemeriksaan ulang status.
+Proses backend dan tujuan redirect tidak berubah.
+
+Regression coverage: `apps/store/src/components/checkout/CheckoutAttemptFeedback.test.tsx`
+dan `e2e/store/versioned-checkout-mock.spec.ts` (mengamati panel sementara sebelum
+navigasi). Context7 checkpoint: `/reactjs/react.dev` — `return null` tidak
+merender elemen dan `renderToStaticMarkup` menghasilkan HTML untuk unit test;
+`/microsoft/playwright` — `page.evaluate` menjalankan observer di halaman dan
+callback diekspos melalui `page.exposeFunction` untuk mencatat panel sementara.
+
 ## 12. Kontrak provider3 — PPN checkout dicatat pada SO/invoice/payment
 
 Sejak ticket

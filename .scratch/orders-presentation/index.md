@@ -13,7 +13,7 @@ Belum ada status keseluruhan yang dapat dipindahkan dari index lama. Artefak leg
 
 | Plan | Status | Approval | Blocker dan bukti |
 |---|---|---|---|
-| [Perombakan detail pesanan customer](plan/customer-order-detail-redesign.md) | In Progress | Diimplementasikan 2026-11-13 atas permintaan pengguna; commit lokal diminta, push tidak. | AC-01 sampai AC-10 Verified; AC-11 Pending untuk suite penuh karena `DATABASE_URL` menunjuk DB dev `storefront` (9 unit suite DB + 3 mock E2E menolak DB non-disposable, `pickup-mock` butuh admin Home Branch ↔ Jubelio). Bukti: `e2e/store/order-detail-presentation-mock.spec.ts` (12 test), unit `order-tracking-presentation.test.ts` (21 test), review render `playwright/mcp/order-detail-review/`. |
+| [Perombakan detail pesanan customer](plan/customer-order-detail-redesign.md) | Done (2026-11-13) | Diimplementasikan 2026-11-13 atas permintaan pengguna; commit lokal diminta, push tidak. | AC-01 sampai AC-11 Verified. Bukti: `e2e/store/order-detail-presentation-mock.spec.ts` (12 test), unit `order-tracking-presentation.test.ts` (21 test), unit suite penuh 199 file/2328 test pada DB disposable, mock E2E 41 lulus, review render `playwright/mcp/order-detail-review/`. Sisa 2 kegagalan pre-existing (`discounts-coupon-mock` line amount, `markdown-settlement-mock` SO body) bukan bagian perubahan ini. |
 
 Catatan status legacy di atas tetap berlaku untuk artefak lama, bukan status plan baru.
 

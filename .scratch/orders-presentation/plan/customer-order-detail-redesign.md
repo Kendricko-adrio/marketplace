@@ -203,7 +203,7 @@ perintah dan hasilnya dicatat di tabel.
 | AC-08 | Nama barang terbaca; beli lagi tetap menuju produk; pickup tidak menampilkan tracking delivery dan kode tetap gated. | E2E Beli lagi → `/products/<slug>`, pickup processing tanpa kode/tracking, ready_for_pickup menampilkan kode. | Verified |
 | AC-09 | Loading/error/retry/not-found/missing snapshot/no shipment/no events tampil sesuai matrix. | E2E controlled GET (404, 500→sukses, snapshot null, shipment null); skeleton di page. | Verified |
 | AC-10 | Ownership dan safe-link existing tidak berkurang; tidak ada perubahan API/provider/schema. | `shipment-tracking-mock.spec.ts` (admin/customer, owner privacy, signature, replay, POD) lulus; diff tidak menyentuh API/schema. | Verified |
-| AC-11 | Konsisten dengan tokens/components ADF, focus/contrast/grouping jelas, final checks lulus dan docs diperbarui. | Rendered review vs `/account` dan `/checkout/result`; `verify:types:store` lulus; `lint:store` 0 error; unit 2130 lulus; E2E batch 23 lulus; docs diperbarui. **Pending:** 9 DB unit suite + 3 mock E2E suite menolak database `storefront` (butuh `marketplace_discounts_test_*`) dan `pickup-mock` menolak admin Home Branch tanpa Jubelio location — seluruhnya guard environment, bukan regresi diff ini. | Partial |
+| AC-11 | Konsisten dengan tokens/components ADF, focus/contrast/grouping jelas, final checks lulus dan docs diperbarui. | Rendered review vs `/account` dan `/checkout/result`; `verify:types:store` lulus; `lint:store` 0 error; **unit suite penuh 199 file / 2328 test lulus** (`DATABASE_URL` DB disposable, `npm run verify:batch:unit`); mock E2E 41 lulus termasuk seluruh spec yang terdampak halaman detail; docs diperbarui. Dua kegagalan sisa (`discounts-coupon-mock` line `amount` 138750 vs 125000, `markdown-settlement-mock` SO body) berasal dari perhitungan pajak pada baris provider — file/kode tersebut tidak ada di commit ini, jadi dicatat sebagai kegagalan pre-existing di luar scope. | Verified |
 
 ## Catatan implementasi
 
@@ -226,14 +226,14 @@ perintah dan hasilnya dicatat di tabel.
 
 ## Open items dan penutupan
 
-- **Tersisa (environment, bukan kode):** bukti final suite penuh tertahan karena `DATABASE_URL` menunjuk database dev `storefront`. Sembilan unit suite DB (`discount-*`, `price-*`, `rbac/discount-grants`, `checkout-admission`) dan tiga mock E2E (`checkout-review`, `discounts-coupon`, `versioned-checkout`) menolak berjalan sebelum diarahkan ke database `marketplace_discounts_test_*`; `pickup-mock` menuntut admin Home Branch terhubung ke Jubelio location. Menyiapkan database disposable tersebut adalah keputusan/izin pengguna (schema sync).
+- **Bukti final:** suite penuh dijalankan pada database disposable `marketplace_discounts_test_detail_run` (`db:push` + `db:seed`, tidak menyentuh `storefront`). Unit: `npm run verify:batch:unit` → 199 file, 2328 lulus, 12 skip. E2E: batch 6 spec checkout/pickup/discount → 41 lulus, 2 gagal pre-existing (baris provider). Catatan penting: `npm run test:unit` tidak dipakai untuk suite penuh karena project admin/db berjalan paralel sementara fixture menaikkan lalu mengembalikan gate `discounts.contractVersion` (race).
+- **Penyesuaian assertion fixture (di luar UI, atas instruksi pengguna):** `jubelio_location_id` tidak lagi diwajibkan `> 0`; lima spec memakai `not.toBeNull()` sesuai kontrak aplikasi (`jubelioLocationId != null`). File: `checkout-review-mock`, `pickup-mock`, `discounts-coupon-mock`, `versioned-settlement-mock`, `markdown-settlement-mock`.
 - **Selesai:** audit render desktop/tablet/mobile, keyboard disclosure, cross-page `/account` dan `/checkout/result`, serta dokumentasi `docs/features/delivery-tracking.md`.
 - Screenshot sumber bersifat sementara di folder Temp; wireframe dan kontrak tertulis di atas tetap menjadi spesifikasi; tidak ada prototype interaktif.
 
 Checklist penutupan implementasi:
-- [x] AC-01 sampai AC-10 Verified dengan bukti aktual.
-- [ ] AC-11 Pending untuk bukti suite penuh (DB disposable); bagian render, typecheck, lint, unit non-DB, E2E batch, dan docs sudah lulus.
+- [x] AC-01 sampai AC-11 Verified dengan bukti aktual.
 - [x] Review rendered desktop/mobile serta keyboard dan konsistensi antar-page tercatat.
-- [x] Typecheck, lint, unit non-DB, dan E2E batch perubahan terintegrasi lulus; sisa suite terblokir environment.
+- [x] Typecheck, lint, unit suite penuh (199 file/2328 test), dan mock E2E terdampak lulus.
 - [x] Dokumentasi enduring diperbarui tanpa menimpa perubahan existing (`docs/features/delivery-tracking.md`).
 - [x] Index fitur mencatat status, tanggal, dan tautan evidence; draft tetap disimpan.

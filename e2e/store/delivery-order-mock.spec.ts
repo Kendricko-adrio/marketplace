@@ -844,7 +844,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     expect(repayAfter.ok(), `repayment after drift failed: ${await repayAfter.text()}`).toBe(true);
     expect((await repayAfter.json()).redirectUrl).toBe(placed.redirectUrl);
     await page.goto(`/account/orders/${orderId}`);
-    await expect(page.getByText("Pengiriman ke Alamat", { exact: true })).toBeVisible();
+    await expect(page.getByText("Alamat pengiriman", { exact: true })).toBeVisible();
     await expect(page.getByText(ADDRESS_STREETS[0], { exact: true })).toBeVisible();
     await expect(page.getByText("Pengambilan", { exact: true })).toHaveCount(0);
 

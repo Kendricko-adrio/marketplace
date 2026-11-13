@@ -459,7 +459,7 @@ test.describe("mock-only shipment tracking (ticket 06)", () => {
     const page = await customerContext!.newPage();
     await page.goto(`/account/orders/${ORDER_ID}`);
     await expect(page.getByText(AWB, { exact: true }).first()).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByLabel("Status pesanan")).toHaveText("Completed");
+    await expect(page.getByLabel("Status pesanan")).toHaveText("Pesanan selesai");
     await expect(page.getByText('Ready for Pickup', { exact: true })).toHaveCount(0);
 
     // The PRIVACY probe: a DIFFERENT customer can never read this order —
@@ -483,8 +483,8 @@ test.describe("mock-only shipment tracking (ticket 06)", () => {
     const sent = await customerContext!.request.post(`${STORE_BASE_URL}${WEBHOOK_PATH}`, { data: raw, headers: { 'content-type': 'application/json', 'x-jubelio-signature': signEvent(raw, process.env.JUBELIO_SHIPMENT_WEBHOOK_SECRET!) } });
     expect(sent.status()).toBe(200);
     const page = await customerContext!.newPage(); await page.goto(`/account/orders/${ORDER_ID}`);
-    await expect(page.getByRole('link', { name: 'Buka bukti serah terima' })).toHaveAttribute('href', url);
-    await expect(page.getByLabel('Status pesanan')).toHaveText('Completed');
+    await expect(page.getByRole('link', { name: /Lihat bukti pengiriman/ })).toHaveAttribute('href', url);
+    await expect(page.getByLabel('Status pesanan')).toHaveText('Pesanan selesai');
     const bad = raw.replace(url, 'javascript:alert(1)');
     await customerContext!.request.post(`${STORE_BASE_URL}${WEBHOOK_PATH}`, { data: bad, headers: { 'content-type': 'application/json', 'x-jubelio-signature': signEvent(bad, process.env.JUBELIO_SHIPMENT_WEBHOOK_SECRET!) } });
     const dto = (await (await customerContext!.request.get(`/api/orders/${ORDER_ID}`)).json()).data.shipment;

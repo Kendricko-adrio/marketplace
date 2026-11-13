@@ -538,7 +538,7 @@ test("gate1 delivery keeps PPN on goods only and the provider payable on net goo
 
     // ===== Store detail: delivery summary + the snapshot total, no fee row =====
     await page.goto(`${storeUrl}/account/orders/${result.orderId}`);
-    await expect(page.getByText("Pengiriman ke Alamat", { exact: true })).toBeVisible();
+    await expect(page.getByText("Alamat pengiriman", { exact: true })).toBeVisible();
     await expect(page.getByText("Rp 196.500", { exact: true }).first()).toBeVisible();
     await expect(page.getByText(/Biaya (Layanan|layanan)/)).toHaveCount(0);
 

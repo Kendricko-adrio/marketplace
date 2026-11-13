@@ -164,6 +164,8 @@ const midtransStatuses = new Map<
   }
 >();
 const requests: Array<{ method: string; path: string; body: unknown }> = [];
+/** Controlled expire behaviour: success (407), business 412, or transport failure. */
+let midtransExpireScenario: "success" | "conflict" | "failure" = "success";
 let nextAdjustmentId = 1;
 let shipmentSequence = 6000;
 const shipmentRecords = new Map<number, Record<string, unknown>>();
@@ -241,6 +243,7 @@ export function resetMockState(): void {
   invoices.clear();
   payments.clear();
   midtransStatuses.clear();
+  midtransExpireScenario = "success";
   taxRecords = [...defaultTaxRecords];
   requests.length = 0;
   contacts.length = 0;
@@ -328,6 +331,40 @@ export const jubelioMockServer = createServer(async (request, response) => {
       transaction_id: configured.transactionId,
       status_code: "200",
       status_message: "Success, transaction found",
+    });
+  }
+  if (method === "PUT" && url.pathname === "/__control/midtrans-expire") {
+    const wanted = String(body.scenario || "success");
+    if (!["success", "conflict", "failure"].includes(wanted)) {
+      return json(response, 400, { error: "invalid expire scenario" });
+    }
+    midtransExpireScenario = wanted as "success" | "conflict" | "failure";
+    return json(response, 200, { status: "ok", scenario: midtransExpireScenario });
+  }
+  // Controlled Core API expire boundary (`POST /v2/{order_id}/expire`).
+  const midtransExpire = url.pathname.match(/^\/v2\/([^/]+)\/expire$/);
+  if (method === "POST" && midtransExpire) {
+    const orderId = decodeURIComponent(midtransExpire[1]);
+    if (midtransExpireScenario === "failure") {
+      // Transport/provider failure proves nothing about the transaction state.
+      return json(response, 503, { status_code: "503" });
+    }
+    if (midtransExpireScenario === "conflict") {
+      return json(response, 200, {
+        status_code: "412",
+        status_message: "Merchant cannot modify the status of the transaction",
+      });
+    }
+    const configured = midtransStatuses.get(orderId);
+    if (!configured) return json(response, 404, { status_code: "404" });
+    configured.transactionStatus = "expire";
+    return json(response, 200, {
+      status_code: "407",
+      status_message: "Success, transaction has expired",
+      order_id: orderId,
+      transaction_status: "expire",
+      gross_amount: configured.grossAmount,
+      transaction_id: configured.transactionId,
     });
   }
   if (method === "POST" && url.pathname === "/__control/contacts/ensure") {

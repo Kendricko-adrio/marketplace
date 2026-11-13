@@ -140,6 +140,76 @@ describe("local Midtrans status boundary", () => {
       transaction_id: "57d5293c-e65f-4a29-95e4-5959c3fa335b",
     });
   });
+
+  it("expires a configured pending transaction and reports the business 407 answer", async () => {
+    resetMockState();
+    await fetch(`${baseUrl}/__control/midtrans-status`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        orderId: "order-expire-1",
+        transactionStatus: "pending",
+        grossAmount: "100000.00",
+      }),
+    });
+
+    const expired = await fetch(`${baseUrl}/v2/order-expire-1/expire`, {
+      method: "POST",
+      headers: { authorization: "Basic test" },
+    });
+
+    expect(expired.status).toBe(200);
+    await expect(expired.json()).resolves.toMatchObject({
+      status_code: "407",
+      order_id: "order-expire-1",
+      transaction_status: "expire",
+      gross_amount: "100000.00",
+    });
+    const status = await fetch(`${baseUrl}/v2/order-expire-1/status`, {
+      headers: { authorization: "Basic test" },
+    });
+    await expect(status.json()).resolves.toMatchObject({ transaction_status: "expire" });
+  });
+
+  it("can answer the expire conflict (HTTP 200 status_code 412) and a transport failure", async () => {
+    resetMockState();
+    await fetch(`${baseUrl}/__control/midtrans-status`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        orderId: "order-expire-2",
+        transactionStatus: "settlement",
+        grossAmount: "100000.00",
+      }),
+    });
+    await fetch(`${baseUrl}/__control/midtrans-expire`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scenario: "conflict" }),
+    });
+    const conflict = await fetch(`${baseUrl}/v2/order-expire-2/expire`, {
+      method: "POST",
+      headers: { authorization: "Basic test" },
+    });
+    expect(conflict.status).toBe(200);
+    await expect(conflict.json()).resolves.toMatchObject({ status_code: "412" });
+
+    await fetch(`${baseUrl}/__control/midtrans-expire`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scenario: "failure" }),
+    });
+    const failure = await fetch(`${baseUrl}/v2/order-expire-2/expire`, {
+      method: "POST",
+      headers: { authorization: "Basic test" },
+    });
+    expect(failure.status).toBe(503);
+    // The failure never mutated the authoritative status.
+    const status = await fetch(`${baseUrl}/v2/order-expire-2/status`, {
+      headers: { authorization: "Basic test" },
+    });
+    await expect(status.json()).resolves.toMatchObject({ transaction_status: "settlement" });
+  });
 });
 
 describe("Jubelio-compatible stock adjustment API", () => {

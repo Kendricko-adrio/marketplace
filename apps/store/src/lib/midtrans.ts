@@ -456,30 +456,3 @@ export async function getMidtransTransactionStatus(
 
   return (await res.json()) as MidtransTransactionStatus;
 }
-
-/**
- * Best-effort attempt to expire a pending Midtrans transaction.
- * Used by the sweep cron when a pending_payment order's reservation TTL has
- * elapsed but no `expire` webhook has arrived yet. Safe to call on a
- * transaction that is already expired/settled — a Midtrans 400 in that case is
- * logged and swallowed (we proceed to fail the order locally regardless).
- *
- * Uses the Snap client's `transaction.expire(orderId)` helper.
- */
-export async function expireMidtransTransaction(
-  orderId: string
-): Promise<void> {
-  try {
-    const snap = getSnapClient();
-    await snap.transaction.expire(orderId);
-  } catch (error) {
-    const err = error as { message?: string; httpStatusCode?: number };
-    // 400 "Transaction status has expired"/"already settled" etc. is expected
-    // when the sweep races the Midtrans scheduler or the webhook. Log and move on.
-    console.warn("Midtrans expire call failed (best-effort, ignoring):", {
-      orderId,
-      message: err.message,
-      httpStatusCode: err.httpStatusCode,
-    });
-  }
-}

@@ -1,16 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { orders } from "@/db";
-import { eq, and, lt } from "drizzle-orm";
-import {
-  getMidtransTransactionStatus,
-  expireMidtransTransaction,
-} from "@/lib/midtrans";
-import {
-  claimAndFailOrder,
-  claimPaidOrder,
-} from "@/lib/order-finalize";
-import { settleJubelioSalesOrder } from "@/lib/jubelio-sales-settlement";
 import { reconcileChannelStatusMirrorForSweep } from "@/lib/jubelio-channel-mirror";
 import { reconcileConfirmedSalesOrderHolds } from "@/lib/jubelio-sales-lifecycle";
 import { resumeUndispatchedCheckoutCreates } from "@/lib/checkout-recovery";
@@ -19,6 +8,8 @@ import {
   reconcileJubelioSalesOperations,
   reconcileSettlements,
 } from "@/lib/jubelio-sales-settlement";
+import { listDuePendingPaymentOrders } from "@/features/orders/transaction-recovery-repository";
+import { reconcilePendingPayment } from "@/features/payments/reconcile-pending-payment-service";
 import { createModuleLogger, withRequestContext } from "@/lib/logger";
 
 /**
@@ -105,6 +96,9 @@ async function sweepReservations(request: NextRequest): Promise<Response> {
   let finalized = 0;
   let failed = 0;
   let scanned = 0;
+  let held = 0;
+  let review = 0;
+  let errors = 0;
   const jubelioSalesReview = { scanned: 0, marked: 0, failed: 0 };
   let settlementReview = { scanned: 0, fulfilled: 0, review: 0, pending: 0 };
   let channelMirrorReview = {
@@ -173,96 +167,32 @@ async function sweepReservations(request: NextRequest): Promise<Response> {
       );
     }
 
-    // 3. Stale pending_payment orders (uses idx_orders_status_expires).
-    const stale = await db
-      .select()
-      .from(orders)
-      .where(
-        and(
-          eq(orders.status, "pending_payment"),
-          lt(orders.expiresAt, new Date())
-        )
-      )
-      .limit(100);
+    // 3. Stale pending_payment orders: evidence-based payment reconciliation
+    //    (TX-01). The use case performs at most ONE expire request, re-verifies
+    //    with a fresh GET after a conflict/unknown answer, and never fails an
+    //    order from a timeout, HTTP error or non-terminal status. Bounded and
+    //    stable by (expires_at, id); one poison order cannot stop the batch.
+    const dueOrders = await listDuePendingPaymentOrders({ now: new Date(), limit: 50 });
+    scanned = dueOrders.length;
 
-    scanned = stale.length;
-
-    for (const order of stale) {
+    for (const dueOrder of dueOrders) {
       try {
-        // Re-verify with Midtrans OUTSIDE any tx (don't hold locks across HTTP).
-        let status: string = "unknown";
-        let fraud: string | undefined;
-        let paymentType: string | undefined;
-        let transactionId: string | undefined;
-        try {
-          const res = await getMidtransTransactionStatus(order.id);
-          if (res) {
-            status = res.transaction_status;
-            fraud = res.fraud_status;
-            paymentType =
-              typeof res.payment_type === "string" && res.payment_type
-                ? res.payment_type
-                : undefined;
-            transactionId =
-              typeof res.transaction_id === "string" && res.transaction_id
-                ? res.transaction_id
-                : undefined;
-          } else {
-            // 404 — transaction never registered at Midtrans.
-            status = "not_found";
-          }
-        } catch {
-          log.error(
-            `Order ${order.id}: Midtrans status check failed`,
-            new RouteLogError("Midtrans status check failed")
-          );
-          // Don't fail the order on a transient Midtrans error — leave it for
-          // the next sweep run. Avoids wrongly failing a paid-but-unreachable
-          // order.
-          continue;
-        }
-
-        const isSettled =
-          status === "settlement" ||
-          (status === "capture" && fraud === "accept");
-
-        if (isSettled) {
-          // A success webhook was likely missed — finalize as paid through
-          // the settlement pipeline (never ready_for_pickup before the
-          // invoice + payment are verified).
-          const claimed = await claimPaidOrder(order.id, {
-            paymentType,
-            transactionId,
-          });
-          if (claimed.claimed) {
-            const settlement = await settleJubelioSalesOrder(order.id);
-            if (settlement.status === "fulfilled") finalized++;
-            else if (settlement.status === "manual_review") {
-              // `settlement.message` memuat detail provider: hanya fakta bisnis
-              // (order + outcome) yang masuk log.
-              log.warn(`Order ${order.id}: sweep settlement needs manual review`);
-            }
-          }
-        } else {
-          // pending / expire / deny / cancel / not_found — expire + fail the
-          // order (the failure path cancels the SO pre-invoice).
-          if (status === "pending") {
-            await expireMidtransTransaction(order.id);
-          }
-          const reason =
-            status === "not_found"
-              ? "Payment expired — order timed out (sweep; not found at Midtrans)"
-              : "Payment expired — order timed out (sweep)";
-          const result = await claimAndFailOrder(order.id, reason, status, {
-            paymentType,
-            transactionId,
-          });
-          if (result.claimed) failed++;
+        const result = await reconcilePendingPayment({ orderId: dueOrder.id });
+        if (result.kind === "paid") {
+          if (result.settled) finalized++;
+        } else if (result.kind === "expired") {
+          failed++;
+        } else if (result.kind === "deferred") {
+          held++;
+        } else if (result.kind === "manual_review") {
+          review++;
+          log.warn(`Order ${dueOrder.id}: payment reconciliation needs manual review`);
         }
       } catch {
+        errors++;
         log.error(
-          `Order ${order.id}: reservation sweep order processing failed`,
-          new RouteLogError("reservation sweep order processing failed")
+          `Order ${dueOrder.id}: payment reconciliation failed`,
+          new RouteLogError("payment reconciliation failed")
         );
       }
     }
@@ -306,7 +236,7 @@ async function sweepReservations(request: NextRequest): Promise<Response> {
     }
 
     log.info(
-      `reservation sweep completed: scanned ${scanned}, finalized ${finalized}, failed ${failed}, ` +
+      `reservation sweep completed: scanned ${scanned}, finalized ${finalized}, failed ${failed}, held ${held}, review ${review}, errors ${errors}, ` +
         `salesReview {scanned ${jubelioSalesReview.scanned}, marked ${jubelioSalesReview.marked}, failed ${jubelioSalesReview.failed}}, ` +
         `settlement {scanned ${settlementReview.scanned}, fulfilled ${settlementReview.fulfilled}, review ${settlementReview.review}, pending ${settlementReview.pending}}, ` +
         `channelMirror {possiblySent ${channelMirrorReview.possiblySentScanned}, recovered ${channelMirrorReview.recovered}, investigated ${channelMirrorReview.investigated}, stillUnknown ${channelMirrorReview.stillUnknown}, pendingTerminalAborted ${channelMirrorReview.pendingTerminalAborted}, missedDispatched ${channelMirrorReview.missedDispatched}, missedFailed ${channelMirrorReview.missedFailed}, failed ${channelMirrorReview.failed}`
@@ -316,6 +246,9 @@ async function sweepReservations(request: NextRequest): Promise<Response> {
       scanned,
       finalized,
       failed,
+      held,
+      review,
+      errors,
       jubelioSync: { scanned: 0, applied: 0, failed: 0, pending: 0 },
       jubelioSalesReview,
       settlementReview,

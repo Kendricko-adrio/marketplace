@@ -11,12 +11,9 @@ import { sendEmail } from "@/lib/email";
 import {
   pickupReadyEmailHTML,
   pickupReadyEmailText,
-  paymentFailedEmailHTML,
-  paymentFailedEmailText,
 } from "@/lib/email-templates-order";
 import { createModuleLogger } from "@/lib/logger";
 import { generatePickupCode } from "@/lib/pickup-code";
-import { dispatchJubelioSalesCancel } from "@/lib/jubelio-sales-lifecycle";
 import { projectOrderCommunications } from "@/features/order-communications/project-order-communications-service";
 import { recordOrderCommunicationEvent } from "@marketplace/db/src/order-communications/order-communication-repository";
 import {
@@ -25,6 +22,11 @@ import {
   lockRedemptionOwners,
   recordLatePaidReview,
 } from "@/lib/discount-lifecycle";
+import { failOrderWithEvidence } from "@/features/orders/fail-order-service";
+import {
+  blockPaidOrderFulfillment,
+  readOrderTotal,
+} from "@/features/orders/failure-obligation-repository";
 
 export { generatePickupCode } from "@/lib/pickup-code";
 
@@ -242,12 +244,7 @@ export async function blockOrderFulfillment(
   orderId: string,
   reason: string
 ): Promise<void> {
-  await db
-    .update(orders)
-    .set({ fulfillmentBlockedReason: reason, updatedAt: new Date() })
-    .where(
-      and(eq(orders.id, orderId), eq(orders.paymentStatus, "paid"))
-    );
+  await blockPaidOrderFulfillment(orderId, reason);
 }
 
 /**
@@ -464,9 +461,12 @@ export async function claimAndFinalizePaidOrder(
 }
 
 /**
- * Atomically claim a pending_payment order as failed, then cancel its Sales
- * Order pre-invoice. The local hold is released ONLY after a confirmed cancel;
- * an ambiguous cancel keeps the hold and routes to manual review.
+ * Compatibility wrapper: provider-derived failure status → durable evidence.
+ *
+ * Only an authoritative provider `expire` is durable failure evidence here. A
+ * timeout, duplicate-response, generic 4xx or the legacy `initialization_error`
+ * marker is NOT proof that no payment session exists (spec TX-01 §7.2, TX-02
+ * §8.2, TX-05 §10.3), so it never fails the order through this entry point.
  */
 export async function claimAndFailOrder(
   orderId: string,
@@ -474,154 +474,26 @@ export async function claimAndFailOrder(
   midtransStatus: string,
   paymentAttributes?: PaymentAttributes
 ): Promise<FinalizeResult> {
-  const claimed = await db.transaction(async (tx) => {
-    const res = await tx
-      .update(orders)
-      .set({
-        status: "failed_payment",
-        paymentStatus: "failed",
-        paymentFailureReason: reason,
-        midtransFailureStatus: midtransStatus,
-        ...(paymentAttributes?.paymentType
-          ? { paymentMethod: paymentAttributes.paymentType }
-          : {}),
-        ...(paymentAttributes?.transactionId
-          ? { midtransTransactionId: paymentAttributes.transactionId }
-          : {}),
-        updatedAt: new Date(),
-      })
-      .where(
-        and(eq(orders.id, orderId), eq(orders.status, "pending_payment"))
-      )
-      .returning({
-        id: orders.id,
-        orderCommunicationVersion: orders.orderCommunicationVersion,
-      });
-    const row = res[0];
-    if (!row) return null;
-    if (row.orderCommunicationVersion >= 1) {
-      await recordOrderCommunicationEvent(tx, {
-        orderId,
-        kind: "payment_failed",
-        source: "payment_failure",
-        occurredAt: null,
-        receivedAt: new Date(),
-      });
-    }
-    return { orderCommunicationVersion: row.orderCommunicationVersion };
+  if (midtransStatus !== "expire") {
+    log.warn(
+      `Order ${orderId}: status ${midtransStatus} is not durable failure evidence — order stays pending_payment`
+    );
+    return { claimed: false };
+  }
+  const current = await readOrderTotal(orderId);
+  if (!current) return { claimed: false };
+  const outcome = await failOrderWithEvidence({
+    orderId,
+    reasonCode: reason,
+    paymentAttributes,
+    evidence: {
+      kind: "provider_expired",
+      reference: orderId,
+      amount: current.total,
+      verifiedAt: new Date(),
+    },
   });
-
-  if (!claimed) return { claimed: false };
-
-  // Pre-invoice cancel: never cancels once an invoice exists (the lifecycle
-  // refuses); the hold stays until a confirmed cancel or manual review.
-  try {
-    const outcome = await dispatchJubelioSalesCancel({
-      orderId,
-      reason,
-    });
-    log.info(
-      `Order ${orderId}: Sales-Order cancel dispatched on payment failure (status ${outcome.status})`
-    );
-    if (outcome.status === "manual_review") {
-      await blockOrderFulfillment(
-        orderId,
-        `Sales-Order cancel is unresolved after payment failure: ${outcome.message}`
-      );
-    }
-  } catch (cancelError) {
-    log.error(
-      `Order ${orderId}: Sales-Order cancel dispatch failed`,
-      safeDependencyErrorLog(cancelError)
-    );
-  }
-
-  // Send payment-failed email (best-effort, outside the tx).
-  //   - versi komunikasi 1 → job durable + retry; worker yang mengirim.
-  //   - versi 0 → jalur legacy existing dipertahankan.
-  if (claimed.orderCommunicationVersion >= 1) {
-    try {
-      const projection = await projectOrderCommunications({
-        limit: 1,
-        orderId,
-        mirror: false,
-      });
-      log.info(
-        `Order ${orderId}: payment-failed email queued (jobs ${projection.emailJobsCreated})`
-      );
-    } catch (projectionError) {
-      log.error(
-        `Order ${orderId}: payment-failed email queue projection failed`,
-        safeDependencyErrorLog(projectionError)
-      );
-    }
-  } else {
-  try {
-    const [itemsForEmail, orderRows] = await Promise.all([
-      db
-        .select({
-          productName: orderItems.productName,
-          variantInfo: orderItems.variantInfo,
-          price: orderItems.price,
-          quantity: orderItems.quantity,
-        })
-        .from(orderItems)
-        .where(eq(orderItems.orderId, orderId)),
-      db
-        .select({
-          id: orders.id,
-          contactEmail: orders.contactEmail,
-          total: orders.total,
-          subtotal: orders.subtotal,
-          serviceFee: orders.serviceFee,
-          ppnRate: orders.ppnRate,
-          ppnAmount: orders.ppnAmount,
-          pickupDate: orders.pickupDate,
-          pickupTime: orders.pickupTime,
-        })
-        .from(orders)
-        .where(eq(orders.id, orderId))
-        .limit(1),
-    ]);
-    const emailOrder = orderRows[0] ?? {
-      id: orderId,
-      contactEmail: "",
-      total: "0",
-      subtotal: "0",
-      serviceFee: "0",
-      ppnRate: "0",
-      ppnAmount: "0",
-      pickupDate: null,
-      pickupTime: null,
-    };
-    const html = paymentFailedEmailHTML({
-      order: emailOrder,
-      reason,
-      items: itemsForEmail,
-    });
-    const text = paymentFailedEmailText({
-      order: emailOrder,
-      reason,
-      items: itemsForEmail,
-    });
-    await sendEmail({
-      to: emailOrder.contactEmail,
-      subject: `Pembayaran Gagal — #${orderId.slice(0, 8).toUpperCase()}`,
-      html,
-      text,
-    });
-  } catch (emailError) {
-    log.error(
-      `Order ${orderId}: payment-failed email failed`,
-      safeDependencyErrorLog(emailError)
-    );
-  }
-  }
-
-  log.info(
-    `Order ${orderId}: order failed_payment (midtrans status ${midtransStatus})`
-  );
-  return { claimed: true };
+  return { claimed: outcome.kind === "failed" };
 }
 
 export type LateSettlementResult = {

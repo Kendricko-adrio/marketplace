@@ -6,9 +6,19 @@ import { loadBranch, loadCart, loadCartItems, loadAddress, holdBranchStock, load
 import { placeOrderLegacy, type PlaceOrderLegacyInput } from "./place-order-legacy-service";
 import { InsufficientStockError } from "./place-order-errors";
 
-const provider = vi.hoisted(() => ({ create: vi.fn(async () => ({ status: "confirmed" })) }));
+const provider = vi.hoisted(() => ({
+  create: vi.fn<(input: { orderId: string }) => Promise<{ status: string }>>(async () => ({ status: "confirmed" })),
+  // Spec TX-02: the durable payment claim requires a CONFIRMED Sales Order, so
+  // this fixture confirms the persisted create operation like the real
+  // lifecycle does after its independent GET.
+  confirm: async (orderId: string) => { void orderId; },
+}));
 vi.mock("@/lib/jubelio-sales-lifecycle", async (original) => ({
-  ...await original<typeof import("@/lib/jubelio-sales-lifecycle")>(), dispatchJubelioSalesCreate: provider.create,
+  ...await original<typeof import("@/lib/jubelio-sales-lifecycle")>(),
+  dispatchJubelioSalesCreate: async (input: { orderId: string }) => {
+    await provider.confirm(input.orderId);
+    return provider.create(input);
+  },
 }));
 
 const url = process.env.DATABASE_URL;
@@ -93,12 +103,21 @@ describe.skipIf(!enabled)("place-order legacy atomicity and concurrency (Postgre
     await pool.query("INSERT INTO branch_stock(branch_id,product_variant_id,stock,available_stock,provider_stock_synced_at) VALUES ('place-write-branch','place-write-variant',3,3,$1)", [anchor]);
   });
   const cleanupOrders = async () => {
+    // Spec TX-02: the order-owned payment session references the order with
+    // RESTRICT, so it is cleared BEFORE the order rows.
+    await pool.query("DELETE FROM order_payment_session WHERE order_id LIKE 'place-write-order-%'");
     await pool.query("DELETE FROM jubelio_sales_operation WHERE order_id LIKE 'place-write-order-%'");
     await pool.query("DELETE FROM order_item WHERE order_id LIKE 'place-write-order-%'");
     await pool.query("DELETE FROM orders WHERE id LIKE 'place-write-order-%'");
   };
   beforeEach(async () => {
     provider.create.mockClear();
+    provider.confirm = async (orderId: string) => {
+      await pool.query(
+        "UPDATE jubelio_sales_operation SET status='confirmed', sales_order_id=99001, confirmed_at=now(), updated_at=now() WHERE order_id=$1 AND type='create'",
+        [orderId]
+      );
+    };
     await cleanupOrders();
     await pool.query("UPDATE branch_stock SET pending_remote_stock=0, available_stock=3 WHERE branch_id='place-write-branch'");
     await pool.query("INSERT INTO cart_item(id,cart_id,variant_id,branch_id,quantity) VALUES ('place-write-item','place-write-cart','place-write-variant','place-write-branch',2) ON CONFLICT DO NOTHING");
@@ -123,7 +142,8 @@ describe.skipIf(!enabled)("place-order legacy atomicity and concurrency (Postgre
       orderId, createReference: `reference:${orderId}`, createRequest: { contactId: -1, customerName: "Customer", locationId: 1, note: `reference:${orderId}`, items: [{ itemId: 1, quantity: 2, price: 1000, discAmount: 0, taxAmount: 0, unit: "Buah", taxId: 1 }] },
       paymentStartedAt: anchor, expiresAt: new Date("2040-01-01T00:15:00Z"), ttlMinutes: 15, total: 2220,
       paymentItemDetails: [{ id: "variant", name: "Shoes", price: 1000, quantity: 2 }, { id: "PPN", name: "PPN 11%", price: 220, quantity: 1 }],
-      stockCheck: { observedAt: anchor }, createLegacyPayment: async () => ({ token: "fixture-token", redirectUrl: "https://payment.invalid" }),
+      stockCheck: { observedAt: anchor },
+      initializeCheckoutPayment: async () => ({ kind: "ready", token: "fixture-token", redirectUrl: "https://payment.invalid" }),
     };
   }
   it("rolls back order, items, hold and intent when the observation changes before hold", async () => {

@@ -7,7 +7,7 @@ import { requireOnboardedApiSession } from "@/lib/route-access";
 import { parsePlaceOrderBody, REPRICE_REQUIRED_MESSAGE } from "@/features/checkout/place-order-input";
 import { readCheckoutJson } from "@/lib/checkout-input";
 import { admitCheckoutRequest } from "@/lib/checkout-admission";
-import { createPayment, getMockPaymentResult } from "@/lib/midtrans";
+import { getMockPaymentResult } from "@/lib/midtrans";
 import { createModuleLogger, getRequestId, withRequestContext } from "@/lib/logger";
 import { findAcceptedCheckout, checkoutResultResponse, type CheckoutRecovery } from "@/lib/checkout-request";
 import { placeCheckout } from "@/features/checkout/place-order-service";
@@ -73,14 +73,6 @@ async function postPlaceOrder(request: NextRequest): Promise<Response> {
 
 async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
   log.info("place order requested");
-  const createLegacyPayment: typeof createPayment = (...args) => {
-    const mockRequested = process.env.NODE_ENV !== "production" &&
-      request.headers.get("x-e2e-payment-mock") === "true";
-    const mock = mockRequested
-      ? getMockPaymentResult(args[0], { MIDTRANS_E2E_MOCK: "true", NODE_ENV: "test" })
-      : null;
-    return mock ? Promise.resolve(mock) : createPayment(...args);
-  };
   // E2E-only payment seam shared by the creator and replay paths.
   const initializeCheckoutPayment = (paymentInput: Parameters<typeof createCheckoutPayment>[0]) => {
     const mockRequested = process.env.NODE_ENV !== "production" &&
@@ -116,7 +108,7 @@ async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
     }
 
     const outcome = await placeCheckoutOrder({ actor: session.user, input: parsed.data, isDelivery, recovery,
-      initializeCheckoutPayment, createLegacyPayment,
+      initializeCheckoutPayment,
       admit: (carriesManualCode) => admitCheckoutRequest({ clientId: session.user.id, kind: "place", headers: request.headers, carriesManualCode }),
     });
     return mapPlaceCheckoutOutcome(outcome);
@@ -158,6 +150,37 @@ function mapLegacyOutcome(result: Awaited<ReturnType<typeof placeOrderLegacy>>):
   if (result.kind === "legacy-failure") return mapLegacyPlaceOrderError(result.error, result.hasIdentity);
   if (result.kind === "legacy-sales-rejected") return NextResponse.json({ success: false, error: "Stock produk berubah atau tidak mencukupi. Silakan periksa keranjang Anda." }, { status: 409 });
   if (result.kind === "legacy-sales-pending") return NextResponse.json({ success: false, error: result.message }, { status: 503 });
+  // TX-02 §13.1: an UNKNOWN payment initialization names the owned order and
+  // never invites a replacement checkout. No redirect is promised.
+  if (result.kind === "legacy-payment-unknown") {
+    log.warn(`payment initialization unknown for order ${result.orderId} — recovery owns observation`);
+    return NextResponse.json(
+      {
+        success: false,
+        code: "PAYMENT_INITIALIZATION_UNKNOWN",
+        error:
+          "Status pembayaran belum dapat dipastikan. Periksa pesanan ini sebelum mencoba pembayaran lagi.",
+        orderId: result.orderId,
+        redirectUrl: null,
+        requestId: getRequestId(),
+      },
+      { status: 202, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+  if (result.kind === "legacy-payment-rejected") {
+    log.warn(`payment initialization rejected for order ${result.orderId}`);
+    return NextResponse.json(
+      {
+        success: false,
+        code: "PAYMENT_INITIALIZATION_REJECTED",
+        error: "Pembayaran belum dapat disiapkan. Pesanan belum dibuat. Periksa ulang pesanan lalu coba lagi.",
+        orderId: result.orderId,
+        retryAllowed: true,
+        requestId: getRequestId(),
+      },
+      { status: 502, headers: { "Cache-Control": "no-store" } }
+    );
+  }
   return NextResponse.json({ success: true, orderId: result.orderId, redirectUrl: result.redirectUrl, token: result.token });
 }
 

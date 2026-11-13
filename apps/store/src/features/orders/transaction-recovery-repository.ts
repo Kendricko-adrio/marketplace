@@ -1,5 +1,5 @@
 import { and, asc, eq, lt } from "drizzle-orm";
-import { db, orders } from "@/db";
+import { db, orderPaymentSessions, orders } from "@/db";
 
 /**
  * Persistence untuk pekerjaan recovery transaksi order (spec TX-04/TX-06).
@@ -19,6 +19,11 @@ export interface PendingPaymentWork {
   expiresAt: Date | null;
   /** A stored Snap redirect proves a session was created and possibly paid. */
   hasReadyRedirect: boolean;
+  /**
+   * Durable payment-session evidence: only a never-claimed intent is
+   * `never_sent`; a missing row is NEVER proof (spec §7.2/§8.1).
+   */
+  paymentEvidence: "never_sent" | "possibly_sent" | "unknown";
 }
 
 const PAYMENT_WORK_COLUMNS = {
@@ -28,6 +33,9 @@ const PAYMENT_WORK_COLUMNS = {
   total: orders.total,
   expiresAt: orders.expiresAt,
   snapRedirectUrl: orders.snapRedirectUrl,
+  sessionState: orderPaymentSessions.state,
+  sessionProvenance: orderPaymentSessions.provenance,
+  sessionClaimId: orderPaymentSessions.dispatchClaimId,
 } as const;
 
 function toWork(row: {
@@ -37,14 +45,32 @@ function toWork(row: {
   total: string;
   expiresAt: Date | null;
   snapRedirectUrl: string | null;
+  sessionState: string | null;
+  sessionProvenance: string | null;
+  sessionClaimId: string | null;
 }): PendingPaymentWork {
+  const hasReadyRedirect =
+    typeof row.snapRedirectUrl === "string" && row.snapRedirectUrl.trim().length > 0;
+  const paymentEvidence: PendingPaymentWork["paymentEvidence"] =
+    row.sessionClaimId != null
+      ? "possibly_sent"
+      : row.sessionState === "intent"
+        ? "never_sent"
+        : row.sessionProvenance === "legacy_unknown"
+          ? "unknown"
+          : row.sessionState != null
+            ? "possibly_sent"
+            : hasReadyRedirect
+              ? "possibly_sent"
+              : "unknown";
   return {
     id: row.id,
     status: row.status,
     paymentStatus: row.paymentStatus,
     total: row.total,
     expiresAt: row.expiresAt,
-    hasReadyRedirect: typeof row.snapRedirectUrl === "string" && row.snapRedirectUrl.trim().length > 0,
+    hasReadyRedirect,
+    paymentEvidence,
   };
 }
 
@@ -56,6 +82,7 @@ export async function loadPendingPaymentWork(
   const [row] = await database
     .select(PAYMENT_WORK_COLUMNS)
     .from(orders)
+    .leftJoin(orderPaymentSessions, eq(orderPaymentSessions.orderId, orders.id))
     .where(eq(orders.id, orderId))
     .limit(1);
   return row ? toWork(row) : null;

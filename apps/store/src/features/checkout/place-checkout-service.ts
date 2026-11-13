@@ -13,7 +13,6 @@ import {
 } from "@/lib/checkout-review";
 import { evaluatePromoAcknowledgements, type PromoAcknowledgements } from "@/lib/promo-replacement";
 import { pickupDateToInstant, validatePickupSlot } from "@/lib/pickup-validation";
-import { createPayment } from "@/lib/midtrans";
 import { getConfigNumber, getConfigString, getPpnRatePercent, getDiscountsContractVersion } from "@/lib/config";
 import { prepareCheckoutTax } from "@/features/checkout/prepare-checkout-tax-service";
 import type { ValidatedProviderTax } from "@marketplace/db/src/provider-tax";
@@ -38,7 +37,7 @@ import { checkoutIntentFingerprint, findAcceptedCheckout, type CheckoutRecovery 
 import type { CheckoutReviewPromo } from "@/lib/checkout-review";
 import { evaluatePromoSelection } from "@/features/checkout/place-order-promo";
 import { placeCheckout, replayCheckoutAttempt } from "@/features/checkout/place-order-service";
-import { createCheckoutPayment } from "@/lib/midtrans";
+import type { createCheckoutPayment } from "@/lib/midtrans";
 
 import type { PlaceOrderData } from "./place-order-input";
 
@@ -85,7 +84,6 @@ export async function isCheckoutPaused(): Promise<boolean> {
 export interface PlaceCheckoutOrderInput {
   actor: { id: string; name?: string | null }; input: PlaceOrderData; isDelivery: boolean; recovery: CheckoutRecovery;
   initializeCheckoutPayment: typeof createCheckoutPayment;
-  createLegacyPayment: typeof createPayment;
   admit: (carriesManualCode: boolean) => Promise<unknown>;
 }
 
@@ -95,7 +93,6 @@ export async function placeCheckoutOrder({
   isDelivery,
   recovery,
   initializeCheckoutPayment,
-  createLegacyPayment,
   admit,
 }: PlaceCheckoutOrderInput) {
   // Replay mendahului cart/master/config terbaru, termasuk pause dan expiry token.
@@ -529,7 +526,7 @@ export async function placeCheckoutOrder({
     total,
     paymentItemDetails,
     stockCheck,
-    createLegacyPayment,
+    initializeCheckoutPayment,
   });
 }
 

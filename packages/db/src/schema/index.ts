@@ -56,6 +56,10 @@ export * from "./jubelio-sales";
 // Proses edit, crash-tolerant)
 export * from "./jubelio-channel";
 
+// Spec TX-02 — durable per-order payment session ledger (one durable claim
+// shared by legacy initial payment and repayment)
+export * from "./payment-sessions";
+
 // Manual Markdown price changes (ticket 03: staged batch/row, immutable
 // revision, one current pointer per variant)
 export * from "./prices";

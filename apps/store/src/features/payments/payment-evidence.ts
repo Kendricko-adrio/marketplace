@@ -217,3 +217,15 @@ export function isSafeFailureEvidenceKind(kind: FailureEvidence["kind"]): boolea
     kind === "never_sent_expired"
   );
 }
+
+/**
+ * Outcome of ONE payment initialization dispatch (spec TX-02 §8.2).
+ *
+ * - `ready`              — a session exists and its redirect handle is durable.
+ * - `definitive_rejection` — allowlisted proof the provider created nothing.
+ * - `unknown`            — timeout/lost response/ambiguous answer; never a failure.
+ */
+export type PaymentInitializationOutcome =
+  | { kind: "ready"; token: string; redirectUrl: string }
+  | { kind: "definitive_rejection"; code: string }
+  | { kind: "unknown"; code: string };

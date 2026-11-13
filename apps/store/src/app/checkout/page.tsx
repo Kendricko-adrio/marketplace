@@ -1304,6 +1304,21 @@ export default function CheckoutPage() {
       });
       const data = await res.json();
       if (!data.success && handleStockAdjustment(data)) return;
+      if (
+        data.code === "PAYMENT_INITIALIZATION_UNKNOWN" &&
+        typeof data.orderId === "string" &&
+        data.orderId
+      ) {
+        // TX-02: the order exists but its payment session is unknown. Never
+        // invite a replacement checkout — open the owned order instead.
+        try {
+          window.sessionStorage.setItem("checkout:payment-unknown-order", data.orderId);
+        } catch {
+          /* storage unavailable: the order stays reachable from order history */
+        }
+        router.push(`/account/orders/${data.orderId}`);
+        return;
+      }
       if (!data.success) {
         toast.error(data.error || "Failed to place order.");
         return;

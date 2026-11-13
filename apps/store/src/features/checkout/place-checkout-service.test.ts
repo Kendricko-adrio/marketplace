@@ -15,7 +15,6 @@ function input(versioned = false): PlaceCheckoutOrderInput {
       ...(versioned ? { requestKey: "a1200000-0000-4000-8000-000000000023", reviewToken: `${Buffer.from(JSON.stringify({ fp: "a".repeat(64) })).toString("base64url")}.expired` } : {}) },
     admit: vi.fn(async () => undefined),
     initializeCheckoutPayment: vi.fn(async () => ({ kind: "ready" as const, token: "token", redirectUrl: "https://payment.invalid" })),
-    createLegacyPayment: vi.fn(async () => ({ token: "token", redirectUrl: "https://payment.invalid" })),
   };
 }
 beforeEach(() => {

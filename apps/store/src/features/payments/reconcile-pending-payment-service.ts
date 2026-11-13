@@ -137,9 +137,7 @@ export async function reconcilePendingPayment(
 
   const observation = await observe(gateway, work, input.orderId);
   const deadlinePassed = work.expiresAt ? work.expiresAt.getTime() <= now.getTime() : false;
-  const durablePaymentEvidence: DurablePaymentEvidence = work.hasReadyRedirect
-    ? "possibly_sent"
-    : "unknown";
+  const durablePaymentEvidence: DurablePaymentEvidence = work.paymentEvidence;
   const decision = decidePaymentReconciliation({
     observation,
     deadlinePassed,

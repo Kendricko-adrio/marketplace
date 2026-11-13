@@ -16,6 +16,7 @@ import { asc, eq, and } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { readOrderPricing } from "@/lib/versioned-pricing";
+import { readOwnedOrderPaymentRecovery } from "@/features/payments/order-payment-repository";
 
 /**
  * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
@@ -201,6 +202,14 @@ async function getOrderDetail(
         }
       : null;
 
+    // TX-02: additive, owner-scoped payment recovery projection. No token, no
+    // provider payload, no claim id — a read only (never initializes Snap).
+    const paymentRecovery = await readOwnedOrderPaymentRecovery({
+      orderId: orderData.id,
+      clientId: session.user.id,
+      now: new Date(),
+    });
+
     return NextResponse.json({
       success: true,
       data: {
@@ -215,6 +224,7 @@ async function getOrderDetail(
         pickupCode,
         branch: branchData,
         promo,
+        paymentRecovery,
         items: itemsWithImages,
         shipment: shipment
           ? {

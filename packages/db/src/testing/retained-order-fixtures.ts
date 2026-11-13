@@ -8,6 +8,11 @@ export async function deleteRetainedOrderFixtures(pool: Pool, orderIds: string[]
   await pool.query("DELETE FROM delivery_shipment WHERE order_id=ANY($1::text[])", [orderIds]);
   await pool.query("DELETE FROM jubelio_channel_status_intent WHERE order_id=ANY($1::text[])", [orderIds]);
   await pool.query("DELETE FROM jubelio_sales_operation WHERE order_id=ANY($1::text[])", [orderIds]);
+  // Spec TX-02 payment session ledger (guarded for pre-TX-02 disposable DBs).
+  const paymentSessions = await pool.query("SELECT to_regclass('public.order_payment_session') AS name");
+  if (paymentSessions.rows[0]?.name) {
+    await pool.query("DELETE FROM order_payment_session WHERE order_id=ANY($1::text[])", [orderIds]);
+  }
   // Redemption lifecycle (ticket 07): append-only events → allocations →
   // Redemption. The Redemption's order/client/Offer FKs are RESTRICT, so it
   // must go before `orders`. Guarded so a pre-07 disposable database can still

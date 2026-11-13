@@ -68,6 +68,15 @@ interface OrderDetail {
   total: string;
   createdAt: string;
   snapRedirectUrl: string | null;
+  /** TX-02: additive, owner-scoped payment recovery projection (read only). */
+  paymentRecovery: {
+    state: string;
+    message: string;
+    paymentAvailable: boolean;
+    canInitialize: boolean;
+    redirectUrl: string | null;
+    expiresAt: string | null;
+  } | null;
   // Ticket 04 — the fulfillment method + the immutable delivery snapshot.
   fulfillmentMethod: string;
   deliverySnapshot: DeliverySnapshotPayload | null;
@@ -708,6 +717,24 @@ export default function OrderDetailPage() {
                     </div>
                   </>
                 )}
+              {order.status === "pending_payment" &&
+                order.paymentRecovery &&
+                !order.paymentRecovery.paymentAvailable &&
+                !order.snapRedirectUrl && (
+                <>
+                  <Separator />
+                  <div role="status" className="space-y-2 pt-1">
+                    <p className="text-sm">{order.paymentRecovery.message}</p>
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => router.refresh()}
+                    >
+                      Periksa status pembayaran
+                    </Button>
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
 

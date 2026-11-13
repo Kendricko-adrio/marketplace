@@ -2,13 +2,13 @@ import { loadBranch } from "@/features/checkout/place-order-repository";
 import {
   InsufficientStockError,
   PromoReservationError,
-  RouteLogError,
   classifyPlaceOrderError,
 } from "@/features/checkout/place-order-errors";
 import { db } from "@/db";
 import { CheckoutReviewRequiredError } from "@/lib/checkout-review";
 import { pickupDateToInstant, validatePickupSlot } from "@/lib/pickup-validation";
-import { createPayment } from "@/lib/midtrans";
+import type { createCheckoutPayment } from "@/lib/midtrans";
+import type { CheckoutPaymentOutcome } from "@/features/checkout/checkout-attempt";
 import { PricingContractError, type PricingSnapshot } from "@/lib/versioned-pricing";
 import { mapOfferReasonToHttp, type PublicOfferCandidate } from "@/lib/discount-selection";
 import {
@@ -19,8 +19,11 @@ import {
 import { projectMarkdownPrice } from "@marketplace/db/src/markdown-pricing";
 import { buildPlacePaymentItemDetails } from "@/features/checkout/place-order-pricing";
 import { createModuleLogger } from "@/lib/logger";
-import { claimAndFailOrder } from "@/lib/order-finalize";
-import { initializeReservedOrderPayment } from "@/lib/payment-initialization";
+import {
+  initializeOrderPayment,
+  toInitializationOutcome,
+} from "@/features/payments/initialize-order-payment-service";
+import { recordOrderPaymentIntent } from "@/features/payments/order-payment-repository";
 import { loadRevalidatedNewDestination } from "@/lib/delivery-quote-data";
 import type { DeliverySnapshotPayload } from "@marketplace/db/src/schema";
 import type { OrderPricing } from "@/lib/order-pricing";
@@ -39,8 +42,6 @@ import {
   loadOrderBranch,
   releaseHoldsOnReject,
   failOrderOnReject,
-  persistPaymentRedirect,
-  deleteCheckedOutCartItem,
   insertOrder,
   insertOrderItem,
   insertCheckoutRequest,
@@ -75,7 +76,8 @@ export interface PlaceOrderLegacyInput {
   orderId: string; createReference: string; createRequest: JubelioSalesOrderCreateRequest;
   paymentStartedAt: Date; expiresAt: Date; ttlMinutes: number; total: number;
   paymentItemDetails: ReturnType<typeof buildPlacePaymentItemDetails>;
-  stockCheck: { observedAt: Date }; createLegacyPayment: typeof createPayment;
+  stockCheck: { observedAt: Date };
+  initializeCheckoutPayment: (input: Parameters<typeof createCheckoutPayment>[0]) => Promise<CheckoutPaymentOutcome>;
 }
 
 export async function placeOrderLegacy({
@@ -105,10 +107,9 @@ export async function placeOrderLegacy({
   paymentStartedAt,
   expiresAt,
   ttlMinutes,
-  total,
   paymentItemDetails,
   stockCheck,
-  createLegacyPayment,
+  initializeCheckoutPayment,
 }: PlaceOrderLegacyInput) {
   try {
     await runCheckoutTransaction(!!pricingSnapshot, async (tx, step) => {
@@ -345,6 +346,25 @@ export async function placeOrderLegacy({
         reference: createReference,
         payload: { type: "create", create: createRequest },
       }));
+      // Payment intent + exact cart selection: recorded in the SAME initial
+      // transaction as the order/items/SO intent, before any provider call.
+      // A fresh intent is therefore distinguishable from a lost historical row.
+      await step(() => recordOrderPaymentIntent(tx, {
+        orderId,
+        providerReference: orderId,
+        expectedAmount: pricing.total,
+        paymentStartedAt,
+        expiresAt,
+        cartSnapshot: selectedItems.map((item) => ({
+          cartId: cart.id,
+          itemId: item.cartItemId,
+          variantId: item.variantId,
+          branchId: item.branchId ?? branchId,
+          quantity: item.quantity,
+          updatedAt: stockCheck.observedAt.toISOString(),
+        })),
+        now: paymentStartedAt,
+      }));
       if (recovery.identity) {
         const identity = recovery.identity;
         await step(() => insertCheckoutRequest(tx, {
@@ -388,49 +408,55 @@ export async function placeOrderLegacy({
       return { kind: "legacy-sales-pending" as const, message };
     }
 
-    const initialized = await initializeReservedOrderPayment({
-      create: () => createLegacyPayment(orderId, total, {
-        first_name: actor.name || "Customer", email, phone,
-      }, paymentItemDetails, ttlMinutes, paymentStartedAt),
-      persist: async (paymentResult) => {
-        await db.transaction(async (tx) => {
-          await persistPaymentRedirect(tx, orderId, paymentResult.redirectUrl);
-
-          for (const itemId of selectedItemIds) {
-            await deleteCheckedOutCartItem(tx, itemId, cart.id);
-          }
-        });
-      },
-      compensate: async () => {
-        await claimAndFailOrder(
-          orderId,
-          "Payment initialization failed",
-          "initialization_error"
-        );
-        log.error(
-          `order ${orderId}: payment initialization failed; sales-order cancel dispatched`,
-          new RouteLogError("payment initialization failed")
-        );
-      },
-    });
-
-    const midtransResult = initialized.payment;
-    if (initialized.persistenceError) {
-      log.error(
-        `order ${orderId}: payment created but local metadata needs reconciliation`,
-        new RouteLogError("payment metadata persistence failed")
-      );
-    }
-
-    log.info(
-      `order placed successfully: order ${orderId}, total ${pricing.total}, ppn ${pricing.ppnAmount} @ ${pricing.ppnRatePercent}%, redirect ${midtransResult.redirectUrl ? "ada" : "kosong"}`
+    // ===== ONE shared durable payment workflow (TX-02) =====
+    // The claim is order-owned: legacy initial payment and repayment can never
+    // create two Snap sessions, and an UNKNOWN outcome never compensates.
+    const payment = await initializeOrderPayment(
+      { orderId, clientId: actor.id, source: "legacy_place" },
+      {
+        now: new Date(),
+        createSession: async (claim) => {
+          const outcome = await initializeCheckoutPayment({
+            orderId: claim.providerReference,
+            grossAmount: Math.round(Number(claim.expectedAmount)),
+            customerDetails: { first_name: actor.name || "Customer", email, phone },
+            itemDetails: paymentItemDetails,
+            expiryMinutes: ttlMinutes,
+            paymentStartedAt: claim.paymentStartedAt,
+          });
+          return toInitializationOutcome(outcome);
+        },
+      }
     );
-    if (recovery.identity) {
-      const accepted = await findAcceptedCheckout(recovery.identity);
-      if (!accepted) throw new Error("Accepted checkout tidak ditemukan setelah commit.");
-      return { kind: "accepted" as const, result: accepted, replay: false };
+
+    if (payment.kind === "ready") {
+      log.info(
+        `order placed successfully: order ${orderId}, total ${pricing.total}, ppn ${pricing.ppnAmount} @ ${pricing.ppnRatePercent}%, redirect ${payment.redirectUrl ? "ada" : "kosong"}`
+      );
+      if (recovery.identity) {
+        const accepted = await findAcceptedCheckout(recovery.identity);
+        if (!accepted) throw new Error("Accepted checkout tidak ditemukan setelah commit.");
+        return { kind: "accepted" as const, result: accepted, replay: false };
+      }
+      return {
+        kind: "legacy-success" as const,
+        orderId,
+        redirectUrl: payment.redirectUrl,
+        token: payment.token ?? undefined,
+      };
     }
-    return { kind: "legacy-success" as const, orderId, redirectUrl: midtransResult.redirectUrl, token: midtransResult.token };
+    if (payment.kind === "processing" || payment.kind === "manual_review") {
+      // Never invite a replacement order: the payment session may exist.
+      log.warn(`order ${orderId}: payment initialization outcome unknown (${payment.reason})`);
+      return { kind: "legacy-payment-unknown" as const, orderId };
+    }
+    if (payment.kind === "rejected") {
+      log.warn(`order ${orderId}: payment initialization definitively rejected`);
+      return { kind: "legacy-payment-rejected" as const, orderId };
+    }
+    // paid/expired/not_eligible without a session: the order already moved on.
+    log.warn(`order ${orderId}: payment initialization not applicable (${payment.kind})`);
+    return { kind: "legacy-payment-unknown" as const, orderId };
   } catch (checkoutError) {
     if (recovery.identity && (recovery.committed || checkoutError instanceof AcceptedCheckoutReplay)) {
       log.error(

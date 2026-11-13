@@ -18,6 +18,7 @@ function work(overrides: Partial<PendingPaymentWork> = {}): PendingPaymentWork {
     total: "111000",
     expiresAt: deadline,
     hasReadyRedirect: false,
+    paymentEvidence: "unknown",
     ...overrides,
   };
 }

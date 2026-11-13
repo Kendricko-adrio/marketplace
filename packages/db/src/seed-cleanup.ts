@@ -60,6 +60,9 @@ export const seedCleanupEntries: ReadonlyArray<
   ["jubelioStockOperations", schema.jubelioStockOperations],
   ["jubelioChannelStatusIntents", schema.jubelioChannelStatusIntents],
   ["jubelioSalesOperations", schema.jubelioSalesOperations],
+  // Spec TX-02: the order-owned payment session ledger references the order
+  // with RESTRICT, so it is cleared before `orders`.
+  ["orderPaymentSessions", schema.orderPaymentSessions],
   ['deliveryBookingReviews', schema.deliveryBookingReviews],
   ['deliveryTrackingEvents', schema.deliveryTrackingEvents],
   ["deliveryShipments", schema.deliveryShipments],

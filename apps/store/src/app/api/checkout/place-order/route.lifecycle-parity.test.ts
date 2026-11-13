@@ -81,6 +81,26 @@ vi.mock("@/lib/jubelio-sales-lifecycle", async (original) => ({
   dispatchJubelioSalesCreate: async () => { state.events.push("sales"); return { status: state.sales, message: "Rejected" }; },
 }));
 vi.mock("@/lib/order-finalize", () => ({ claimAndFailOrder: async () => { state.events.push("compensate"); } }));
+// Spec TX-02: the durable payment ledger is persistence. This boundary test
+// already doubles @/db, so the ledger seam is doubled too — assertion tetap
+// pada urutan/efek publik (intent sebelum provider, payment di luar tx).
+vi.mock("@/features/payments/order-payment-repository", () => ({
+  recordOrderPaymentIntent: async () => { state.events.push("payment-intent"); return { sessionId: "session" }; },
+  claimOrderPaymentInitialization: async () => {
+    state.events.push("payment-claim");
+    return { claimed: true, sessionId: "session", dispatchClaimId: "claim",
+      providerReference: "00000000-0000-4000-8000-000000000001", expectedAmount: "2220.00",
+      paymentStartedAt: new Date("2026-10-01T00:00:00Z"), expiresAt: new Date("2026-10-01T00:15:00Z"),
+      cartSnapshot: null };
+  },
+  recordOrderPaymentOutcome: async (input: { outcome: { kind: string; token?: string; redirectUrl?: string } }) => {
+    state.events.push("payment-outcome");
+    if (state.persistFails) return { kind: "unknown" };
+    if (input.outcome.kind === "ready") return { kind: "ready", redirectUrl: input.outcome.redirectUrl, token: input.outcome.token, cartLinesDeleted: 1 };
+    if (input.outcome.kind === "definitive_rejection") return { kind: "rejected" };
+    return { kind: "unknown" };
+  },
+}));
 vi.mock("@/lib/checkout-request", async (original) => ({
   ...await original<typeof import("@/lib/checkout-request")>(), findAcceptedCheckout: async () => {
     const { CheckoutRequestConflictError } = await original<typeof import("@/lib/checkout-request")>();
@@ -97,10 +117,16 @@ vi.mock("@/features/checkout/place-order-service", () => ({
 }));
 vi.mock("@/lib/midtrans", async (original) => ({
   ...await original<typeof import("@/lib/midtrans")>(),
-  createPayment: async (...args: unknown[]) => {
-    state.events.push("payment"); state.payments.push(args);
+  // Spec TX-02: the route's provider seam is createCheckoutPayment (the shared
+  // durable initialize workflow calls it). A thrown provider error is UNKNOWN.
+  createCheckoutPayment: async (input: {
+    orderId: string; grossAmount: number; customerDetails: unknown; itemDetails: unknown;
+    expiryMinutes: number; paymentStartedAt: Date;
+  }) => {
+    state.events.push("payment");
+    state.payments.push([input.orderId, input.grossAmount, input.customerDetails, input.itemDetails, input.expiryMinutes, input.paymentStartedAt]);
     if (state.paymentFails) throw new Error("Payment rejected");
-    return { token: "token", redirectUrl: "https://payment.invalid" };
+    return { kind: "ready", token: "token", redirectUrl: "https://payment.invalid" };
   },
 }));
 
@@ -254,7 +280,7 @@ describe("place-order legacy and attempt orchestration parity", () => {
     const response = await submit();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ success: true, orderId: "00000000-0000-4000-8000-000000000001", redirectUrl: "https://payment.invalid", token: "token" });
-    expect(state.events).toEqual(["transaction", "intent", "sales", "payment", "transaction", "delete:cart_item"]);
+    expect(state.events).toEqual(["transaction", "intent", "payment-intent", "sales", "payment-claim", "payment", "payment-outcome"]);
     expect(state.writes.find((write) => write.table === "orders")?.values).toMatchObject({ subtotal: "2000.00", ppnAmount: "220.00", total: "2220.00", fulfillmentMethod: "pickup", expiresAt: new Date("2026-10-01T00:15:00Z") });
     expect(state.payments[0]).toMatchObject([expect.any(String), 2220, { first_name: "Customer", email: "test@example.invalid", phone: "081234567890" }, expect.any(Array), 15, new Date("2026-10-01T00:00:00Z")]);
     expect(state.creates[0]).toMatchObject({ type: "create", payload: { create: { refNo: "00000000-0000-4000-8000-000000000001", note: "SO_CREATE:00000000-0000-4000-8000-000000000001:00000000-0000-4000-8000-000000000002", contactId: -1, locationId: 7, customerName: "Customer", items: [{ itemId: 101, quantity: 2, price: 1000, discAmount: 0, taxAmount: 0, unit: "Buah", taxId: 1 }] } } });
@@ -264,7 +290,7 @@ describe("place-order legacy and attempt orchestration parity", () => {
     const response = await submit();
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ success: false, error: "Stock produk berubah atau tidak mencukupi. Silakan periksa keranjang Anda." });
-    expect(state.events).toEqual(["transaction", "intent", "sales", "transaction"]);
+    expect(state.events).toEqual(["transaction", "intent", "payment-intent", "sales", "transaction"]);
     expect(state.writes.filter((write) => write.table === "orders").at(-1)?.values).toMatchObject({ status: "failed_payment", paymentStatus: "failed", midtransFailureStatus: "sales_order_rejected" });
   });
   it.each(["manual_review", "in_flight"])("keeps unknown legacy SO (%s) pending without payment", async (sales) => {
@@ -272,21 +298,31 @@ describe("place-order legacy and attempt orchestration parity", () => {
     const response = await submit();
     expect(response.status).toBe(503);
     expect(await response.json()).toEqual({ success: false, error: "Pesanan sedang diproses. Tim kami akan mengonfirmasi ketersediaan stok — silakan cek status pesanan atau hubungi kami." });
-    expect(state.events).toEqual(["transaction", "intent", "sales"]);
+    expect(state.events).toEqual(["transaction", "intent", "payment-intent", "sales"]);
   });
-  it("keeps legacy payment failure compensation and cart preservation", async () => {
+  it("reports an unknown legacy payment instead of compensating on a provider exception", async () => {
+    // Spec TX-02 §8.2: a thrown/lost provider response is UNKNOWN, never a
+    // definitive rejection, so no compensation and no Sales-Order cancel runs.
     state.paymentFails = true;
     const response = await submit();
-    expect(response.status).toBe(502);
-    expect(await response.json()).toEqual({ success: false, error: "Payment rejected" });
-    expect(state.events).toEqual(["transaction", "intent", "sales", "payment", "compensate"]);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({
+      success: false,
+      code: "PAYMENT_INITIALIZATION_UNKNOWN",
+      orderId: "00000000-0000-4000-8000-000000000001",
+      redirectUrl: null,
+    });
+    expect(state.events).toEqual(["transaction", "intent", "payment-intent", "sales", "payment-claim", "payment", "payment-outcome"]);
+    expect(state.events).not.toContain("compensate");
   });
-  it("returns an existing payment session when metadata persistence fails", async () => {
+  it("reports an unknown payment when the session handle cannot be persisted", async () => {
+    // AC10: a persistence failure is NOT a definitive rejection. The order stays
+    // owned by the customer and no compensation/SO cancel runs.
     state.persistFails = true;
     const response = await submit();
-    expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ success: true, token: "token", redirectUrl: "https://payment.invalid" });
-    expect(state.events).toEqual(["transaction", "intent", "sales", "payment"]);
+    expect(response.status).toBe(202);
+    expect(await response.json()).toMatchObject({ success: false, code: "PAYMENT_INITIALIZATION_UNKNOWN" });
+    expect(state.events).not.toContain("compensate");
   });
   it.each([
     { error: new PricingContractError("PRICING_INPUT_INVALID", "Source changed"), code: "CHECKOUT_REVIEW_REQUIRED", message: "Source changed", cache: null },

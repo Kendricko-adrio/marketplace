@@ -33,7 +33,8 @@ shared packages, dikelola menggunakan npm workspaces.
 
 Commands development mendukung Windows dan Linux dengan **Node.js 24 LTS + npm**,
 tanpa Bash/WSL atau konfigurasi `script-shell` khusus. Jalankan
-`npm run dev:all` untuk store, admin, dan Jubelio mock sekaligus.
+`npm run dev:all` untuk store dan admin sekaligus. Mock provider hanya dijalankan
+oleh automated test melalui fixture `e2e/fixtures/jubelio/`, bukan oleh script dev.
 
 Setiap script dev juga menyalin output prosesnya ke `logs/<app>.log` (ditimpa
 setiap run, di-ignore git). Lihat
@@ -54,8 +55,8 @@ setiap run, di-ignore git). Lihat
 | `db:bootstrap-owner` | One-time System Owner bootstrap CLI (see `docs/deployment-docs/rbac-owner-bootstrap.md`) |
 | `lint` / `lint:store` / `lint:admin` | ESLint |
 
-> **Note on dev logs:** every dev script also writes `logs/<app>.log`
-> (`jubelio-mock`, `store`, `admin`), overwritten on each run and git-ignored.
+> **Log development:** setiap script dev menulis `logs/<app>.log`
+> (`store`, `admin`), ditimpa setiap run dan di-ignore git.
 > See [`docs/features/logging.md`](docs/features/logging.md#capture-log-development-logs).
 
 > **Note on `db:push` vs `db:migrate`:** the dev DB is managed with `db:push`

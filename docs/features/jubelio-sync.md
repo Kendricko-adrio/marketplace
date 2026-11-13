@@ -178,7 +178,6 @@ the token and auto re-logins on 401. Env: `JUBELIO_EMAIL`, `JUBELIO_PASSWORD`,
 | `JUBELIO_SYNC_MAX_PRODUCTS` | cap products synced (empty = all) | empty |
 | `JUBELIO_SYNC_START_PAGE` | masters page to start/resume from | `1` |
 | `APP_ENV` | safety boundary for stock writes (`production` is the only live value) | `NODE_ENV` |
-| `JUBELIO_MOCK_API_BASE_URL` | stateful mock used by every non-production environment | `http://127.0.0.1:3002` |
 | `JUBELIO_STOCK_WRITES_ENABLED` | explicit production live-write kill switch | `false` |
 | `JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID` / `JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID` | Optional emergency overrides; normally resolved from Jubelio account mapping | empty |
 | `JUBELIO_STOCK_TIMEOUT_MS` | HTTP timeout; a POST timeout is treated as ambiguous | `8000` |

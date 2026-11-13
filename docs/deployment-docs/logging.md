@@ -152,8 +152,7 @@ journalctl -t staging-admin-1 --since today
 journalctl --since "24 hours ago" \
   -t staging-store-1 \
   -t staging-admin-1 \
-  -t staging-caddy-1 \
-  -t staging-jubelio-mock-1
+  -t staging-caddy-1
 
 # Export log store dalam jendela retensi host
 journalctl -t staging-store-1 --since "7 days ago" -o json \

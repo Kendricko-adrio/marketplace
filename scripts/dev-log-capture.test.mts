@@ -14,7 +14,6 @@ function project(source: string) {
   writeFileSync(join(cwd, "package.json"), JSON.stringify({ scripts: {
     "dev:admin:app": "node fixture.cjs",
     "dev:store:app": "node fixture.cjs",
-    "dev:jubelio-mock": "node fixture.cjs",
   } }));
   return cwd;
 }
@@ -25,8 +24,8 @@ afterEach(() => { for (const cwd of folders.splice(0)) rmSync(cwd, { recursive: 
 
 describe("runner capture development lintas platform", () => {
   it.each([
-    ["dev:all", ["admin", "store", "jubelio-mock"]],
-    ["dev:store", ["store", "jubelio-mock"]],
+    ["dev:all", ["admin", "store"]],
+    ["dev:store", ["store"]],
     ["dev:admin", ["admin"]],
   ] as const)("command npm %s berjalan tanpa utilitas Unix", (entry, apps) => {
     const actual = JSON.parse(readFileSync(resolve("package.json"), "utf8")).scripts;
@@ -40,6 +39,7 @@ describe("runner capture development lintas platform", () => {
     const result = spawnSync(process.execPath, [process.env.npm_execpath!, "run", "--silent", entry], { cwd, encoding: "utf8", timeout: 15000 });
     expect(result.status, result.stderr).toBe(0);
     for (const app of apps) expect(readFileSync(join(cwd, `logs/${app}.log`), "utf8").trim()).toBe("siap");
+    expect(() => readFileSync(join(cwd, "logs/jubelio-mock.log"))).toThrow();
   }, 20000);
   it("menulis baris log saat proses masih berjalan dan dapat dihentikan", async () => {
     const cwd = project('console.log("berjalan"); setInterval(() => {}, 1000);');
@@ -75,7 +75,13 @@ describe("runner capture development lintas platform", () => {
     }
   }, 15000);
 
-  it.each(["admin", "store", "jubelio-mock"])("menimpa log %s dan meneruskan exit code kegagalan", (app) => {
+  it("menolak menjalankan mock melalui runner development", () => {
+    const cwd = project('console.log("tidak boleh dijalankan");');
+    const result = run(cwd, "jubelio-mock");
+    expect(result.status).toBe(1);
+    expect(() => readFileSync(join(cwd, "logs/jubelio-mock.log"))).toThrow();
+  });
+  it.each(["admin", "store"])("menimpa log %s dan meneruskan exit code kegagalan", (app) => {
     const cwd = project('process.stdout.write("akhir"); process.exitCode = 7;');
     mkdirSync(join(cwd, "logs"));
     writeFileSync(join(cwd, `logs/${app}.log`), "log lama");

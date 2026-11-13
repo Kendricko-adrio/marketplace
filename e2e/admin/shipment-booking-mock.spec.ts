@@ -28,7 +28,7 @@
  *   POST /api/admin/orders/{id}/delivery/packing {}
  *   POST /api/admin/orders/{id}/delivery/book    {}
  *
- * MOCK seam (main implements in apps/jubelio-mock + the ADMIN mock config
+ * MOCK seam (e2e/fixtures/jubelio + the ADMIN mock config
  * with separate fake Shipment credentials + 500 ms timeout):
  *   PUT /__control/shipment {scenario: "booking-normal" |
  *     "booking-timeout-after-apply"}; POST /shipments/create with a Bearer

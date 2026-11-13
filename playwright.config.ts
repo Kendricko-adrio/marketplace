@@ -66,7 +66,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "npm run dev:jubelio-mock",
+      command: "node --import tsx e2e/fixtures/jubelio/server.ts",
       url: "http://localhost:3002/health",
       reuseExistingServer: !IS_CI,
       timeout: 120_000,

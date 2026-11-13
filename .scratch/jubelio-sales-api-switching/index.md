@@ -17,6 +17,10 @@ Plan Done yang dahulu sudah dihapus tidak direkonstruksi; outcome dan docs tetap
 
 ## Artefak
 
+### Verifikasi tooling Jubelio
+
+- [Penghapusan workspace mock dan isolasi fixture testing](ticket/mock-workspace-removal-verification.md) — scope percakapan disetujui user: kedua app dihapus, fixture testing dipertahankan, container staging dihapus dari konfigurasi. Focused tests/Compose/startup fixture pass; full unit DB, store generated typecheck, dan browser regression masih Pending. Tidak mengubah status plan produk existing atau konfigurasi akun Jubelio.
+
 ### plan
 
 - [plan/jubelio-sales-order-tax-spec.md](plan/jubelio-sales-order-tax-spec.md) — to-spec hasil grilling dan canary: keputusan produk, blueprint teknis/UX, versi order lama/baru, acceptance tests, dan batas aktivasi; complete spec disetujui pemilik 2026-10-26, implementasi belum dimulai.

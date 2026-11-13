@@ -10,8 +10,7 @@ export default defineConfig({
       "./apps/admin/vitest.config.mts",
       "./packages/db/vitest.config.mts",
       "./packages/logging/vitest.config.mts",
-      "./apps/jubelio-mock/vitest.config.mts",
-      "./apps/jubelio-webhook-simulator/vitest.config.mts",
+      "./e2e/fixtures/jubelio/vitest.config.mts",
       // Tooling repo (resolver conductor tiket), tanpa alias aplikasi/DB.
       "./scripts/vitest.config.mts",
     ],

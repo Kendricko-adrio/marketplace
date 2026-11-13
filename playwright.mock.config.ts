@@ -3,7 +3,7 @@
  *
  * This config is SELF-CONTAINED and ISOLATED from the shared live E2E config
  * (playwright.config.ts):
- * - It starts its OWN store/admin/jubelio-mock servers on dedicated ports
+ * - Starts dedicated store/admin servers and the e2e/fixtures/jubelio server
  *   and REJECTS reuse (`reuseExistingServer: false`): an occupied port fails
  *   the run loudly instead of silently reusing a shared live-traffic server.
  * - It overrides ALL provider bases to the loopback mock — the Jubelio stock
@@ -133,8 +133,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "npx tsx src/server.ts",
-      cwd: "apps/jubelio-mock",
+      command: "node --import tsx e2e/fixtures/jubelio/server.ts",
       url: `${MOCK_LOCAL_URL}/health`,
       reuseExistingServer: false,
       timeout: 120_000,

@@ -32,7 +32,7 @@
  *    (loopback-pinned, fail-closed, no live fallback). Until then the sales
  *    gateway stays disabled in this run, so place-order fails at the stock
  *    read / SO create below — that IS the expected red.
- * 2. Jubelio mock gaps (apps/jubelio-mock/src/server.ts): `POST
+ * 2. Jubelio mock gaps (e2e/fixtures/jubelio/server.ts): `POST
  *    /inventory/items/all-stocks/` must return a `locations[]` list with
  *    non-blank names and the documented `available = on_hand − on_order −
  *    reserved` series (checkout's authority `selectObservedStock` reads it);

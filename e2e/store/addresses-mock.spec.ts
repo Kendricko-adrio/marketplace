@@ -43,7 +43,7 @@
  * 3. The /account/addresses page (form + list + actions) does not exist yet.
  * 4. The shared `address` schema misses the Shipment region columns; the
  *    implementer adds them ONLY in packages/db/src/schema/ + `npm run db:push`.
- * 5. apps/jubelio-mock (loopback 127.0.0.1:3112) must serve the fixture region
+ * 5. e2e/fixtures/jubelio (loopback 127.0.0.1:3112) must serve the fixture region
  *    hierarchy above (and nothing else needs a new mock endpoint for this
  *    slice — no quote/order/booking interactions here).
  *

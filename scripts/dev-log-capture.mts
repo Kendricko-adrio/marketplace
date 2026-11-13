@@ -25,7 +25,6 @@ export async function stopProcessTree(pid: number, signal: NodeJS.Signals): Prom
 
 function main(): void {
   const scripts: Record<string, string> = {
-    "jubelio-mock": "dev:jubelio-mock",
     store: "dev:store:app",
     admin: "dev:admin:app",
   };

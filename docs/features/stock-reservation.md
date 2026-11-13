@@ -278,9 +278,11 @@ restart the store after changing it.
 
 ## Environment safety
 
-All environments except `APP_ENV=production` are forced to
-`JUBELIO_MOCK_API_BASE_URL`, even if `NODE_ENV=production` and a live URL is
-present. Live writes additionally require all of:
+Bagian adjustment di dokumen ini merupakan riwayat implementasi legacy.
+Checkout aktif memakai [Sales Order gateway](jubelio-sales-orders.md), tanpa
+fallback mock pada runtime normal. Mock hanya fixture automated test di
+`e2e/fixtures/jubelio/`; development/staging tidak menjalankan service mock.
+Pengaman production write tetap memerlukan:
 
 - `APP_ENV=production`
 - `NODE_ENV=production`
@@ -350,7 +352,11 @@ headers, passwords, tokens, cookies, and secrets are always redacted.
 
 ## Verification
 
-- Start `npm run dev:store`; this also starts the local mock on port 3002.
+- Skenario adjustment di bawah adalah referensi legacy, bukan acceptance
+  checkout Sales Order aktif. `npm run dev:store` tidak menjalankan mock.
+  Fixture `e2e/fixtures/jubelio/server.ts` dijalankan oleh harness Playwright;
+  gunakan [panduan testing](../testing/README.md#fixture-provider-khusus-automated-test)
+  untuk regression test offline, bukan mengarahkan skenario ini ke sandbox.
 - Place one unit from stock 10: mock/local on-hand becomes 9,
   `reserved_stock=1`, `pending_remote_stock=0`, then Midtrans is created.
 - Set mock scenario `insufficient-stock`: checkout shows a stock error and

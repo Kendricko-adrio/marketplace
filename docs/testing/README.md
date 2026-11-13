@@ -60,6 +60,24 @@ Referensi API yang dikonfirmasi melalui Context7: `/microsoft/playwright`
 `/microsoft/playwright-mcp`
 ([output-dir dan filename eksplisit](https://github.com/microsoft/playwright-mcp#configuration)).
 
+## Fixture provider khusus automated test
+
+Kedua workspace app `jubelio-mock` dan `jubelio-webhook-simulator` sudah dihapus.
+Server tiruan beserta unit test dipindahkan ke `e2e/fixtures/jubelio/`, bukan
+workspace aplikasi atau service deployment. `dev:store` dan `dev:all` tidak
+menjalankannya. Playwright tetap menjalankan fixture sebagai proses lokal untuk
+regression test, termasuk boundary pembayaran pada suite standar. Tidak ada test
+yang otomatis dialihkan ke sandbox Jubelio; suite standar yang memakai akun asli
+tetap memerlukan otorisasi write terpisah.
+
+```bash
+npm run verify:unit:slice -- e2e/fixtures/jubelio/server.test.ts scripts/jubelio-test-isolation.test.mts scripts/dev-log-capture.test.mts
+```
+
+Command CLI fixture: `node --import tsx e2e/fixtures/jubelio/server.ts` dari root.
+Ini entry point khusus test; bukan command dev atau deployment. Parameter port
+`JUBELIO_MOCK_PORT` dan host `JUBELIO_MOCK_HOST` tetap khusus fixture.
+
 ## Mock-only pickup lifecycle (delivery implementation ticket 01)
 
 Run `npx playwright test --config=playwright.mock.config.ts` against a disposable,
@@ -619,7 +637,7 @@ Batas bukti (jangan dikutip tanpa bagian ini):
 
 ## Prerequisites
 
-- **Focused SO gateway and stock-sync unit tests**: no database needed (`npm exec --workspace=apps/store -- vitest run src/lib/jubelio-sales-client.test.ts` and `npm exec --workspace=packages/db -- vitest run src/jubelio-sync.test.ts`). The Sales gateway tests stub the external HTTP boundary; they never start a mock server or contact Jubelio. The separate **legacy/candidate mock** tests are `npm exec --workspace=apps/jubelio-mock -- vitest run src/server.test.ts`; they are not used by the new Sales gateway. **The full `npm run test:unit` suite is not entirely infrastructure-free**: `apps/admin/src/lib/rbac/users-service-db.test.ts`, `packages/db/src/migrations/migration-0018-rehearsal.test.ts`, and `apps/store/src/lib/jubelio-sales-operations.db.test.ts` need local PostgreSQL. Without port 5432, the first two fail with `ECONNREFUSED`; the new ledger suite skips five race tests and **fails its explicit environment-blocker test**. The ledger claim is not DB-verified until those tests run against a prepared schema. Do not mistake that infrastructure failure for an SO regression.
+- **Focused SO gateway and stock-sync unit tests**: no database needed (`npm exec --workspace=apps/store -- vitest run src/lib/jubelio-sales-client.test.ts` and `npm exec --workspace=packages/db -- vitest run src/jubelio-sync.test.ts`). The Sales gateway tests stub the external HTTP boundary; they never start a mock server or contact Jubelio. Unit test fixture provider dijalankan dengan `npm run verify:unit:slice -- e2e/fixtures/jubelio/server.test.ts`; fixture tidak digunakan runtime normal Sales gateway. **The full `npm run test:unit` suite is not entirely infrastructure-free**: `apps/admin/src/lib/rbac/users-service-db.test.ts`, `packages/db/src/migrations/migration-0018-rehearsal.test.ts`, and `apps/store/src/lib/jubelio-sales-operations.db.test.ts` need local PostgreSQL. Without port 5432, the first two fail with `ECONNREFUSED`; the new ledger suite skips five race tests and **fails its explicit environment-blocker test**. The ledger claim is not DB-verified until those tests run against a prepared schema. Do not mistake that infrastructure failure for an SO regression.
 - **E2E tests**:
   - PostgreSQL up (`docker compose up -d`) with schema + seed applied:
     `npm run db:push && npm run db:seed`.
@@ -701,7 +719,7 @@ E2E_ADMIN_IDENTIFIER=... E2E_ADMIN_PASSWORD=...
 
 ```
 playwright.config.ts      # projects: setup, store, admin + webServer
-apps/jubelio-mock/        # stateful Jubelio mock (legacy adjustments + candidate Sales API)
+e2e/fixtures/jubelio/     # fixture API provider khusus automated test, bukan app workspace
 e2e/
   config.ts               # auth-state paths + TEST_USERS (env-overridable)
   auth.setup.ts           # logs in once per app, saves storageState
@@ -734,12 +752,12 @@ packages/db/vitest.config.ts
 
 ### E2E pitfalls (learned the hard way)
 
-- `npm run dev:store` starts both the storefront and Jubelio mock for the
-  **still-active legacy adjustment flow**. Playwright starts them as separate
-  managed processes. The Sales gateway outside
-  production fails closed unless explicitly opted into a pinned real
-  test-account host or the isolated loopback-only E2E seam above. Legacy non-production
-  stock writes still use the local mock.
+- `npm run dev:store` hanya menjalankan storefront. Playwright menjalankan
+  fixture provider secara terpisah dari `e2e/fixtures/jubelio/server.ts`.
+  Sales gateway di luar production gagal tertutup kecuali opt-in akun test
+  terisolasi terpenuhi atau seam E2E loopback-only di atas aktif. Runtime normal
+  tidak otomatis memakai mock; memiliki sandbox juga tidak berarti semua
+  pengaman write boleh dilewati.
 - Mock controls: `POST http://127.0.0.1:3002/__control/reset`, then
   `PUT /__control/scenario` with one of `success`, `insufficient-stock`,
   `server-error`, `rate-limit-once`, `unauthorized-once`,

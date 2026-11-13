@@ -377,8 +377,8 @@ Aplikasi tetap hanya menulis ke stdout (lihat [Catatan operasional](#catatan-ope
 
 | Script | File yang ditulis |
 |---|---|
-| `npm run dev:all` | `logs/jubelio-mock.log`, `logs/store.log`, `logs/admin.log` |
-| `npm run dev:store` (dan `npm run dev`) | `logs/jubelio-mock.log`, `logs/store.log` |
+| `npm run dev:all` | `logs/store.log`, `logs/admin.log` |
+| `npm run dev:store` (dan `npm run dev`) | `logs/store.log` |
 | `npm run dev:admin` | `logs/admin.log` |
 
 Sifat capture:
@@ -392,8 +392,8 @@ Sifat capture:
   terpotong antar-chunk; UTF-8 didekode oleh stream Node. Baris lengkap langsung
   ditulis ke file; potongan terakhir tanpa newline ditulis saat stream berakhir.
 - Terminal tetap menampilkan output yang sama; `concurrently` memberi prefiks nama
-  proses (`[store]`, `[admin]`, `[jubelio-mock]`) untuk `dev:all`/`dev:store`.
-  `dev:admin` langsung menjalankan runner tanpa prefiks. Prefiks tidak masuk file
+  proses (`[store]`, `[admin]`) untuk `dev:all`.
+  `dev:store` dan `dev:admin` langsung menjalankan runner tanpa prefiks. Prefiks tidak masuk file
   karena capture dilakukan sebelum output diteruskan ke `concurrently`.
 - Baris JSON envelope tetap utuh di file sehingga bisa langsung dipakai:
   `grep '"level":"error"' logs/store.log` atau

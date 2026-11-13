@@ -26,13 +26,14 @@ and stock-write account mapping below are historical, not active checkout
 settings; see [Jubelio Sales Orders](../features/jubelio-sales-orders.md)
 for the current runtime gates and settlement.
 
-Staging runs `jubelio-mock` as a private Compose service
-(`JUBELIO_MOCK_API_BASE_URL=http://jubelio-mock:3002`). Repo default untuk
-staging:
+Staging tidak lagi menjalankan container mock Jubelio. Service, dependency,
+URL mock, dan Dockerfile mock sudah dihapus dari konfigurasi repo. Fixture
+`e2e/fixtures/jubelio/` hanya dipakai automated test, bukan deployment.
+Penghapusan ini tidak mengubah akun, URL provider, mode, atau izin write existing.
+Contoh parameter legacy (bukan pengganti konfigurasi staging existing):
 
 ```env
 APP_ENV=staging
-JUBELIO_MOCK_API_BASE_URL=http://jubelio-mock:3002
 JUBELIO_STOCK_WRITES_ENABLED=false
 JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID=
 JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID=
@@ -51,8 +52,9 @@ JUBELIO_STOCK_QUEUE_TIMEOUT_MS=5000
 > mengurangi stok Jubelio **nyata**; perlakukan staging seperti production
 > untuk alur stok (uji data disposable jangan menyentuh alur checkout
 > stok). Gateway live tetap menuntut `NODE_ENV=production` + host HTTPS
-> `https://api2.jubelio.com` — keduanya terpenuhi. Mock tetap jalan sebagai
-> service untuk keperluan lain.
+> `https://api2.jubelio.com`. Konfigurasi repo staging tetap memakai mode dan
+> izin write tersebut; penghapusan mock tidak mengubahnya. Keadaan server
+> harus diverifikasi operator secara terpisah, bukan diasumsikan dari repo.
 
 Production sets `APP_ENV=production`, but live writes remain disabled until
 this explicit value is changed and the store container is restarted:
@@ -69,21 +71,21 @@ any check fails, checkout stops before Midtrans.
 
 ### A.2 Sales Order gateway (active checkout)
 
-`apps/store/src/lib/jubelio-sales-client.ts` has **no mock runtime** and is
-wired to every new checkout. In non-production it throws before any request unless the
-explicit `JUBELIO_SALES_TEST_ACCOUNT_ENABLED=true` opt-in is configured with
-`JUBELIO_API_BASE_URL=https://api2.jubelio.com` and real credentials belonging
-to an independently verified isolated test account. The production branch
-requires both `APP_ENV=production` and `NODE_ENV=production`, the explicit
-pinned URL and `JUBELIO_STOCK_WRITES_ENABLED=true`; the test-account flag
-cannot bypass the production branch. Do **not** add the test-account flag to
-production Compose. Staging Compose does not forward it; staging currently
-uses production-mode stock settings (see warning above), so do not mistake
-its running mock service for a Sales gateway safety boundary.
+`apps/store/src/lib/jubelio-sales-client.ts` menangani semua checkout baru dan
+tidak memakai mock pada runtime normal. Di luar production, request ditolak
+kecuali `JUBELIO_SALES_TEST_ACCOUNT_ENABLED=true` dengan URL eksplisit
+`JUBELIO_API_BASE_URL=https://api2.jubelio.com` dan kredensial akun test yang
+isolasinya telah dikonfirmasi. Jalur production tetap menuntut
+`APP_ENV=production`, `NODE_ENV=production`, URL tersebut, serta
+`JUBELIO_STOCK_WRITES_ENABLED=true`; flag akun test tidak dapat melewatinya.
+Jangan tambahkan flag akun test ke Compose production. Compose staging tidak
+meneruskannya dan tetap memakai pengaturan write mode production (lihat
+peringatan di atas). Fixture testing bukan pengaman koneksi staging.
 
-These configuration gates do not constitute go-live approval. Test-account
-isolation is by owner-confirmed credentials, not by the shared hostname. The
-mock still serves unrelated legacy consumers; the Sales gateway never calls it.
+Pengaman konfigurasi bukan approval go-live. Isolasi akun test harus dikonfirmasi
+pemilik akun, bukan disimpulkan dari hostname. Mock hanya tersedia melalui
+fixture automated test; seam Sales E2E bersifat loopback-only dan ditolak pada
+mode production. Tidak ada fallback dari koneksi Jubelio normal ke fixture.
 After migration 0022, bootstrap real Jubelio stock for the catalog:
 `branch_stock.provider_stock_synced_at` is NULL on legacy rows. Browsing uses
 last-known availability provisionally; every new checkout reads selected
@@ -151,7 +153,8 @@ backup. Follow the complete operator procedure in
 [stock-adjustment-rollout.md](stock-adjustment-rollout.md); do not enable the
 switch from an ad-hoc shell session.
 
-The stateful mock supports `success`, `insufficient-stock`, `server-error`,
+Fixture automated test (`e2e/fixtures/jubelio/server.ts`) mendukung
+`success`, `insufficient-stock`, `server-error`,
 `rate-limit-once`, `unauthorized-once`, `timeout-before-apply`,
 `timeout-after-apply`, and `malformed-success`. Control it with
 `PUT /__control/scenario` and reset it with `POST /__control/reset`.

@@ -51,7 +51,10 @@ setiap run, di-ignore git). Lihat
 | `db:push` | Apply schema to DB (see note below) |
 | `db:seed` | Seed sample data |
 | `db:reset` | Reset + reseed the DB |
-| `db:import-jubelio` | Full pull from Jubelio master data (see `docs/features/jubelio-sync.md`) |
+| `db:import-jubelio` | Pull Jubelio master data. Default = dev/filtered (cap/filter dipatuhi); `--full` = bootstrap production tanpa cap/filter dengan report durable |
+| `db:preflight:production` | Read-only preflight target/manifest/migration (`before-migrate` / `after-migrate`) |
+| `db:seed:production` | Seed referensi production non-destruktif (roles/grants fresh, HQ, system config, marker) |
+| `db:verify:production` | Verifikasi schema/referensi/Owner/import + daftar launch blockers (read-only) |
 | `db:bootstrap-owner` | One-time System Owner bootstrap CLI (see `docs/deployment-docs/rbac-owner-bootstrap.md`) |
 | `lint` / `lint:store` / `lint:admin` | ESLint |
 

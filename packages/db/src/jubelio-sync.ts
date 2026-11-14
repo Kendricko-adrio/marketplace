@@ -64,8 +64,44 @@ let tokenExpiresAt = 0;
 /** Max retry attempts for 429 / 5xx responses before giving up. */
 const MAX_RETRIES = Math.max(0, Number(process.env.JUBELIO_SYNC_MAX_RETRIES || 5));
 
+// Optional, explicitly configured client-side bounds for the production
+// bootstrap import. When neither env var is set, the shared webhook/admin sync
+// path keeps its previous behaviour (no timeout, no budget) — the bootstrap
+// service wires both. The budget counts every request, including login and
+// retries, so the importer does not rely on 429s as its only throttle.
+function readPositiveNumber(value: string | undefined): number | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+const REQUEST_TIMEOUT_MS = readPositiveNumber(process.env.JUBELIO_SYNC_TIMEOUT_MS);
+const REQUEST_BUDGET_PER_MINUTE = readPositiveNumber(
+  process.env.JUBELIO_SYNC_REQUESTS_PER_MINUTE
+);
+
+let budgetWindowStart = 0;
+let budgetCount = 0;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+async function awaitRequestBudget(): Promise<void> {
+  if (REQUEST_BUDGET_PER_MINUTE === null) return;
+  for (;;) {
+    const now = Date.now();
+    if (now - budgetWindowStart >= 60_000) {
+      budgetWindowStart = now;
+      budgetCount = 0;
+    }
+    if (budgetCount < REQUEST_BUDGET_PER_MINUTE) {
+      budgetCount += 1;
+      return;
+    }
+    await sleep(60_000 - (now - budgetWindowStart));
+  }
 }
 
 /** Exponential backoff with jitter (base 1s, cap 30s). */
@@ -82,10 +118,14 @@ async function login(): Promise<string> {
       "jubelio-sync: JUBELIO_EMAIL and JUBELIO_PASSWORD must be set"
     );
   }
+  await awaitRequestBudget();
   const res = await fetch(`${API_BASE}/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
+    ...(REQUEST_TIMEOUT_MS === null
+      ? {}
+      : { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }),
   });
   if (!res.ok) {
     throw new Error(`jubelio-sync: login failed (${res.status})`);
@@ -112,8 +152,12 @@ async function jubelioRequest(
   let token = await getToken();
   let relogged = false;
   for (let attempt = 0; ; attempt++) {
+    await awaitRequestBudget();
     const res = await fetch(`${API_BASE}${path}`, {
       ...init,
+      ...(init.signal === undefined && REQUEST_TIMEOUT_MS !== null
+        ? { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }
+        : {}),
       headers: {
         Authorization: token,
         ...(init.body ? { "Content-Type": "application/json" } : {}),

@@ -60,6 +60,7 @@ deployment/
 | 21 | [rbac-owner-bootstrap.md](rbac-owner-bootstrap.md) | One-time System Owner bootstrap CLI (RBAC) |
 | 22 | [discounts-cutover.md](discounts-cutover.md) | Cutover/rollout/rollback diskon: gate `discounts.contractVersion`, trusted IP + batas request proxy, UAT staging dan forward-fix |
 | 23 | [order-communications.md](order-communications.md) | Cron komunikasi order (proyeksi fakta + antrean email/retry) |
+| 24 | [first-production-deployment.md](first-production-deployment.md) | Bootstrap production pertama: preflight → migrate → seed referensi → Owner → full import Jubelio → verifier, recovery dan gate go-live |
 
 ## Quick start (staging)
 
@@ -89,14 +90,18 @@ docker compose -p staging --env-file .env --profile tools run --rm migrate
 
 ## Staging vs Production
 
-Saat ini project masih di **tahap staging**. Production belum di-deploy, tapi
-struktur folder sudah disiapkan. Perbedaan utama:
+Saat ini project masih di **tahap staging**. Struktur production sudah disiapkan
+termasuk service one-shot `bootstrap` (profile `tools`). **First production
+deployment tidak boleh memakai `up -d --build` penuh atau seed demo**; ikuti
+[first-production-deployment.md](first-production-deployment.md) dari database
+baru sampai gate go-live.
 
 | Aspek | Staging | Production |
 |-------|---------|------------|
 | Domain | `dev-store` / `dev-admin` | `store` / `admin` |
 | Midtrans | Sandbox (`IS_PRODUCTION=false`) | Live (`true`) |
-| Seed | Jalankan eksplisit hanya untuk data disposable | **Diblokir oleh seeder** |
+| Seed | Jalankan eksplisit hanya untuk data disposable | **Diblokir oleh seeder**; gunakan `bootstrap seed` (referensi non-destruktif) |
+| Bootstrap | migration + seed demo opsional | preflight → migrate → seed referensi → Owner → full import → verify |
 | DB | `qadfstore` (user `qmarketplace`) | `qadfstore_production` — belum dibuat |
 
 Lihat [environments.md](environments.md) untuk detail pemisahan environment.

@@ -18,6 +18,9 @@
     "db:check": "drizzle-kit check",
     "db:reset": "npx tsx src/reset.ts",
     "db:import-jubelio": "npx tsx src/import-jubelio.ts",
+    "db:preflight:production": "npx tsx src/production-bootstrap.ts preflight",
+    "db:seed:production": "npx tsx src/production-bootstrap.ts seed",
+    "db:verify:production": "npx tsx src/production-bootstrap.ts verify",
     "db:backfill-discount-drafts": "npx tsx src/backfill-discount-drafts.ts"
   },
   "dependencies": {

@@ -14,8 +14,16 @@ npm run db:bootstrap-owner -- \
   --name "System Owner" \
   --email owner@example.invalid \
   --username owner \
-  --password '<secure-password>'
+  --expected-database qadfstore_production \
+  --password-file /run/secrets/owner_password
 ```
+
+`--password-file` membaca secret UTF-8 dari file yang di-mount read-only;
+`RBAC_BOOTSTRAP_PASSWORD` tetap didukung untuk scripted run. `--password` di
+argv masih diterima tetapi tidak dipakai pada runbook production karena
+terlihat di shell history/process list. `--expected-database` adalah guard:
+CLI menolak (`PRODUCTION_TARGET_MISMATCH`, exit 2) bila `current_database()`
+berbeda, sebelum ada write.
 
 Behavior:
 
@@ -47,19 +55,24 @@ Behavior:
 ## Staging/production procedure
 
 Run inside the deployment container (where `DATABASE_URL` is configured) after
-the deployment migration has applied the RBAC schema:
+the deployment migration has applied the RBAC schema. Production bootstrap
+lengkap ada di [first-production-deployment.md](first-production-deployment.md):
 
 ```bash
-docker compose exec <admin-or-db-container> npm run db:bootstrap-owner -- \
-  --name "System Owner" --email <operator email> \
-  --username <operator> --password '<one-time secret>'
+cd deployment/production
+docker compose -p production --env-file .env --profile tools run --rm \
+  -v /home/ops/secrets/owner_password:/run/secrets/owner_password:ro \
+  bootstrap npx tsx src/bootstrap-owner.ts \
+    --name "System Owner" --email <operator email> \
+    --username <operator> --expected-database <production-db> \
+    --password-file /run/secrets/owner_password
 ```
 
 Secret handling:
 
-- Pass the password interactively or via a secret manager; prefer not to place
-  it in shell history. If a file is used, read it into the argument with
-  `--password "$(cat /run/secrets/owner_password)"`.
+- Gunakan `--password-file` dari secret manager/mount read-only; jangan
+  menaruh secret di argv, `.env`, image, atau log. Lepaskan mount setelah
+  Owner dibuat.
 - The generated credential is stored only as a bcrypt hash in
   `admin_account.password`.
 - Rotate the password immediately after first sign-in — the forced
@@ -70,6 +83,7 @@ Secret handling:
 
 ## Prerequisites
 
-- `admin_role` contains the `system_owner` Role (created by `db:seed` or the
-  deployment seed step). The CLI aborts if the Role is missing.
+- The CLI provisions the Initial Roles when they are missing (`ensureInitialRoles`),
+  so it works on a production database where `db:seed` never ran. Existing
+  Roles are left untouched.
 - Never ship default production credentials or add a bootstrap web endpoint.

@@ -6,6 +6,12 @@
 #   admin  — Next.js admin        (internal :3001, behind Caddy)
 #   caddy  — reverse proxy + auto-HTTPS (Let's Encrypt PRODUCTION)
 #   migrate — one-shot (profile: tools) — drizzle-kit migrate (JANGAN seed!)
+#   bootstrap — one-shot (profile: tools) — preflight/seed/verify production
+#               dari deployment/production/bootstrap.config.json (read-only)
+#
+# Bootstrap produksi TIDAK memakai `up -d --build` sebelum database siap.
+# Ikuti docs/deployment-docs/first-production-deployment.md (urutan lengkap,
+# exit code, kondisi STOP, dan recovery).
 #
 # Postgres berjalan BARE-METAL di VPS (di luar compose), diakses via
 # host.docker.internal yang di-map ke host gateway lewat extra_hosts.
@@ -99,6 +105,12 @@ services:
       JUBELIO_WEBHOOK_SECRET: ${JUBELIO_WEBHOOK_SECRET}
       JUBELIO_SYNC_CONCURRENCY: ${JUBELIO_SYNC_CONCURRENCY:-5}
       JUBELIO_SYNC_MAX_PRODUCTS: ${JUBELIO_SYNC_MAX_PRODUCTS:-}
+      # Sales-order settlement. Blank routes invoice payments to manual review
+      # (fail closed); must be a real production cash/bank account id.
+      JUBELIO_PAYMENT_ACCOUNT_ID: ${JUBELIO_PAYMENT_ACCOUNT_ID:-}
+      JUBELIO_PAYMENT_TYPE: ${JUBELIO_PAYMENT_TYPE:-}
+      JUBELIO_ITEM_UNIT: ${JUBELIO_ITEM_UNIT:-Buah}
+      JUBELIO_ITEM_TAX_ID: ${JUBELIO_ITEM_TAX_ID:-}
       # Explicit kill-switch: checkout fails closed while this is false.
       JUBELIO_STOCK_WRITES_ENABLED: ${JUBELIO_STOCK_WRITES_ENABLED:-false}
       JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID: ${JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID:-}
@@ -223,9 +235,60 @@ services:
     environment:
       <<: *pg-conn
       NODE_ENV: production
+      APP_ENV: production
     extra_hosts:
       - "host.docker.internal:host-gateway"
     # Safe default is migrate-only. seed.ts also refuses NODE_ENV=production.
+
+  # ---------------------------------------------------------------------------
+  # BOOTSTRAP — one-shot (profile: tools). Preflight/seed/verify production.
+  # Default command is a READ-ONLY before-migrate preflight; every mutation is
+  # an explicit invocation:
+  #   docker compose -p production --env-file .env --profile tools run --rm \
+  #     bootstrap seed --config /bootstrap/bootstrap.config.json
+  # Image tools yang sama; tidak ada depends_on ke store/admin/Caddy sehingga
+  # menjalankan tooling tidak pernah menyalakan aplikasi.
+  # ---------------------------------------------------------------------------
+  bootstrap:
+    profiles: ["tools"]
+    logging: *journald-logging
+    build:
+      context: ../..
+      dockerfile: deployment/common/migrate/Dockerfile
+    command:
+      - npx
+      - tsx
+      - src/production-bootstrap.ts
+      - preflight
+      - --config
+      - /bootstrap/bootstrap.config.json
+      - --phase
+      - before-migrate
+    environment:
+      <<: *pg-conn
+      NODE_ENV: production
+      APP_ENV: production
+      # Release identity recorded in reports/evidence.
+      APP_RELEASE: ${APP_RELEASE:-unspecified}
+      # Master-data READ credentials only. Payment/shipment write credentials
+      # are intentionally absent from this service.
+      JUBELIO_API_BASE_URL: ${JUBELIO_API_BASE_URL:-https://api2.jubelio.com}
+      JUBELIO_EMAIL: ${JUBELIO_EMAIL}
+      JUBELIO_PASSWORD: ${JUBELIO_PASSWORD}
+      # Bootstrap import bounds (tuning, bukan SLA). Budget menghitung semua
+      # request termasuk login/retry.
+      JUBELIO_SYNC_CONCURRENCY: ${JUBELIO_SYNC_CONCURRENCY:-2}
+      JUBELIO_SYNC_MAX_RETRIES: ${JUBELIO_SYNC_MAX_RETRIES:-5}
+      JUBELIO_SYNC_TIMEOUT_MS: ${JUBELIO_SYNC_TIMEOUT_MS:-30000}
+      JUBELIO_SYNC_REQUESTS_PER_MINUTE: ${JUBELIO_SYNC_REQUESTS_PER_MINUTE:-120}
+      # Must stay empty on bootstrap runs: a cap/start-page makes --full refuse.
+      JUBELIO_SYNC_MAX_PRODUCTS: ""
+      JUBELIO_SYNC_START_PAGE: ""
+    volumes:
+      - ./bootstrap.config.json:/bootstrap/bootstrap.config.json:ro
+      - ${BOOTSTRAP_REPORT_DIR:-/home/ops/log/marketplace-bootstrap/production}:/reports
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   uploads:        # shared by store + admin for /app/uploads

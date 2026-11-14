@@ -38,6 +38,36 @@ Aturan presentasi di `apps/store/src/lib/order-tracking-presentation.ts`:
 
 Sumber data tetap hanya GET `/api/orders/{id}` yang owner-scoped: tidak ada endpoint, provider call, mutasi status, atau nilai (ETA, lokasi, bukti) yang dikarang di UI.
 
+## Simulasi callback melalui Git Bash
+
+Script [`scripts/simulate-jubelio-shipment.sh`](../../scripts/simulate-jubelio-shipment.sh) khusus untuk order uji `170a6986-eaa9-49de-ab01-839775958c75`, AWB `MOCK-JS2420810000000005`, provider shipment ID `7`. Identitas ini berasal dari pemeriksaan DB read-only, bukan lookup otomatis setiap eksekusi. Jika DB di-reset atau shipment berubah, periksa ulang identitas sebelum memakai script.
+
+Prasyarat: Git Bash, Node.js 24, curl, storefront lokal yang sedang berjalan, serta `JUBELIO_SHIPMENT_WEBHOOK_SECRET` di `.env` root yang sama dengan konfigurasi server. Script tidak menjalankan aplikasi atau menghubungi API Jubelio.
+
+```bash
+# Jalankan dari root repo. Default hanya preview, tanpa request.
+bash scripts/simulate-jubelio-shipment.sh ON_DELIVERY
+
+# Kirim satu callback bertanda tangan ke storefront lokal.
+bash scripts/simulate-jubelio-shipment.sh ON_DELIVERY --send
+
+# Selesaikan order melalui bukti DELIVERED simulasi (terminal).
+bash scripts/simulate-jubelio-shipment.sh DELIVERED --send
+
+# Opsi konfigurasi; --url hanya menerima base URL loopback.
+bash scripts/simulate-jubelio-shipment.sh PICKED_UP --url http://localhost:3000 --env-file .env --date '2026-11-14T00:00:00Z' --detail 'Paket diambil kurir uji'
+```
+
+Semua nilai `latest_status` terdokumentasi didukung: `WAITING`, `CONFIRMED_BY_COURIER`, `ON_THE_WAY_PICK_UP`, `PICKED_UP`, `ON_DELIVERY`, `ON_HOLD`, `DELIVERED`, `RETURNED`, `CANCELED`, `SHIPMENT_ISSUE` ([referensi Jubelio](../jubelio-api/shipment-v1.8.md)). `tracking.status` di script memakai placeholder yang sama dengan normalized status, bukan klaim kode asli kurir; aplikasi memakai `latest_status` sebagai sumber lifecycle.
+
+**Dampak:** `--send` dapat mengubah DB, audit, timeline, dan fakta komunikasi/notifikasi/email sesuai flow aplikasi. `DELIVERED` dapat mengubah order menjadi `completed` tanpa POD atau serah-terima manual. `CANCELED` hanya menyimulasikan laporan kurir, bukan mengirim permintaan cancel ke Jubelio. Jangan menguji seluruh status berurutan dengan asumsi semua akan diterapkan: progres tidak boleh mundur, status yang sama dapat diabaikan, dan order completed tidak dibuka kembali. Gunakan order terpisah untuk skenario yang saling bertentangan.
+
+Tanggal default adalah waktu sekarang. Snapshot DB saat pemeriksaan memiliki `latest_event_at` `2026-11-13T15:40:54.841Z`; jika jam komputer lebih lama, gunakan `--date` yang lebih baru untuk pengujian progres. Sesuaikan lagi dengan event terbaru setelah mengirim simulasi.
+
+Response HTTP 200 belum berarti status diterapkan: periksa `status` response (`applied`, `recorded`, `duplicate`, atau `ignored`). Error HTTP/koneksi membuat script keluar nonzero; tidak ada retry atau redirect otomatis. Secret dan signature tidak ditampilkan; jangan gunakan `bash -x`. Preview menampilkan payload identitas teknis tanpa secret.
+
+Pengujian CLI tanpa DB/provider nyata: `node --test scripts/simulate-jubelio-shipment.test.mjs`. Test menggunakan server HTTP loopback palsu untuk memeriksa body, HMAC, preview tanpa request, seluruh status, validasi input, dan exit code error HTTP. Ini bukan bukti callback telah diterapkan pada order asli.
+
 ## Verification
 
 `shipment-tracking.test.ts` uses an independent OpenSSL-computed HMAC fixture and PostgreSQL for handoff, known-AWB identity, progress, pre-completion issues, replay/ignored history, concurrent callbacks, safe links and terminal protection. `shipment-tracking-mock.spec.ts` covers admin/customer HTTP/UI, foreign actors, owner privacy, signature rejection, completion, replay and late safe/unsafe POD. `order-tracking-presentation.test.ts` menguji label status, penyembunyian detail simulator, dan pembalikan timeline tanpa menyentuh UI; `order-detail-presentation-mock.spec.ts` menguji halaman detail customer (status, urutan mobile/desktop, disclosure, salin, tautan, pembayaran, pickup, error/retry, snapshot/resi kosong) lewat route interception deterministik tanpa mutasi DB atau provider. Migration 0031 adds global external identity uniqueness, timestamps and receipt history; seed cleanup clears events before shipments. Real tenant callback registration/testing is an optional owner-operated activation step, not claimed by these mock checks.

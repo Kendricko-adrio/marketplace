@@ -987,3 +987,41 @@ and `reuseExistingServer: false` (servers are freshly started). The same
   scope.
 - `apps/store/src/features/checkout/checkout-attempt-repository.db.test.ts` —
   reservation/promotion/rejection/recovery pada PostgreSQL disposable.
+
+## Bootstrap production pertama (disposable)
+
+Tiga suite DB baru memakai `TEST_DATABASE_URL` (bukan `DATABASE_URL` milik DB
+development) dan membuat/menghapus database scratch sendiri dengan role
+non-superuser:
+
+- `packages/db/src/migrations/fresh-production-rehearsal.test.ts` — replay
+  migration release dengan `drizzle-kit migrate` nyata, dua kali (run kedua
+  no-op) + schema contract.
+- `packages/db/src/production-bootstrap/production-bootstrap-cli.db.test.ts` —
+  CLI preflight/seed/verify/Owner (target mismatch, atomic seed, rerun sentinel,
+  file secret Owner, exit code).
+- `packages/db/src/production-bootstrap/full-import-cli.db.test.ts` — fixture
+  HTTP loopback 201 product group / 202 SKU / 404 pasangan stok, drift,
+  observasi stok hilang, import parsial + rerun tanpa duplikasi.
+
+Kontrak keamanan: nama database pada `TEST_DATABASE_URL` harus terlihat seperti
+database test (mis. `marketplace_bootstrap_test`); bila tidak, helper menolak
+sebelum create/drop. Tanpa env itu seluruh suite di-skip — bukan dijalankan ke DB
+development.
+
+```bash
+TEST_DATABASE_URL="postgresql://postgres:postgres@localhost:5432/marketplace_bootstrap_test" \
+  npm run verify:unit:slice -- \
+    packages/db/src/migrations/fresh-production-rehearsal.test.ts \
+    packages/db/src/production-bootstrap/production-bootstrap-cli.db.test.ts \
+    packages/db/src/production-bootstrap/full-import-cli.db.test.ts
+```
+
+`TEST_DATABASE_URL` harus memakai role yang boleh `CREATE ROLE`/`CREATE
+DATABASE` (admin cluster disposable), karena harness membuat role non-superuser
+per scratch database agar guard privilege preflight ikut teruji.
+
+Smoke Playwright bootstrap menggunakan `E2E_BOOTSTRAP_SMOKE=true` plus
+`E2E_BOOTSTRAP_OWNER`/`E2E_BOOTSTRAP_OWNER_PASSWORD` pada database yang sudah
+di-bootstrap; tanpa env itu spec di-skip. Detail runbook:
+`docs/deployment-docs/first-production-deployment.md`.

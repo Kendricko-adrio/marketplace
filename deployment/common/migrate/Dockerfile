@@ -28,6 +28,10 @@ COPY packages/db ./packages/db
 
 WORKDIR /app/packages/db
 
+# Production reference data is NOT seeded by this default command. Use the
+# dedicated bootstrap service/command (preflight -> seed -> verify); see
+# docs/deployment-docs/first-production-deployment.md.
+#
 # Seeding is always explicit and seed.ts refuses NODE_ENV=production:
 #   docker compose --profile tools run --rm migrate npx tsx src/seed.ts
 #

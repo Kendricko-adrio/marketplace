@@ -420,6 +420,33 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
   what changes under each option. Recommend an option with a reason when the
   evidence supports it. Do not ask the user for facts the agent can verify in
   the repo; ask only for preferences, requirements, or decisions the user owns.
+- **Introduce every question with plain-language context.** This applies to
+  all questions, including clarification, planning, grilling, and document/spec
+  reviews, whether asked through a tool or in chat. Before the actual question,
+  explain the relevant part of the code, flow, or document; what happens or is
+  proposed; and the concern or consideration that makes a decision necessary.
+  Do not jump straight to an isolated question or assume the user remembers
+  earlier context. Use language the user can understand: avoid unfamiliar
+  jargon and acronyms, or briefly explain them before using them. A file path
+  or code identifier alone is not an explanation of the behavior.
+  - **Code/flow template:** "In <feature or code section>, <explain the flow>.
+    When <actor> performs <action, enters input, or triggers a condition>,
+    <current or proposed behavior occurs>. <consideration and impact>.
+    <question>?"
+  - **Document/grilling template:** "In <document path and section>, the
+    spec describes <context or proposed behavior>. However, <consideration,
+    ambiguity, risk, or edge case>. <question>?" Verify the document's content
+    first and distinguish what it actually says from the agent's interpretation.
+  - **Business-flow questions must include a concrete example** in the question
+    itself: a realistic actor, input/action or condition, and the resulting
+    outcome or how the options change it. For example: "The checkout spec says
+    a voucher reduces the order total, but does not explain what happens when
+    the customer changes the cart. For example, a customer applies a voucher
+    requiring a Rp100,000 minimum, then removes an item so the cart is worth
+    Rp80,000. Should the voucher be removed automatically with an explanation,
+    or should checkout be blocked until the customer changes the cart or
+    removes the voucher?" Keep the introduction and example focused, but never
+    omit the context merely to shorten the question.
 - **Every `ask_user_question` question must carry concrete context.** Never
   assume the user knows which flow, file, button, action, or process the agent
   means. In each question's `question` field, first identify the relevant

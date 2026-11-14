@@ -166,7 +166,19 @@ Fixture automated test (`e2e/fixtures/jubelio/server.ts`) mendukung
 npm run db:import-jubelio
 # untuk testing cepat, cap jumlah produk:
 JUBELIO_SYNC_MAX_PRODUCTS=20 npm run db:import-jubelio
+
+# production bootstrap: semua halaman, tanpa cap/filter, report durable
+npm run db:import-jubelio -- --full \
+  --expected-database <production-db> \
+  --report-file /home/ops/log/marketplace-bootstrap/production/import.json
 ```
+
+Mode `--full` menolak `--item-name`, `JUBELIO_SYNC_MAX_PRODUCTS` berisi, dan
+`JUBELIO_SYNC_START_PAGE` selain 1; menjalankan advisory lock sesi; lalu
+menulis report yang hanya berstatus `complete` setelah rekonsiliasi ID group/
+SKU dan coverage stok lulus. Exit `4` berarti `FULL_IMPORT_INCOMPLETE` —
+ulangi full import dari halaman 1 setelah penyebabnya diperbaiki. Urutan
+production lengkap: [first-production-deployment.md](first-production-deployment.md).
 
 Mempaginasi `/inventory/items/masters` (~38rb produk), enrich per produk via
 `/inventory/catalog/{id}`, fetch stok per-location via `/inventory/items/all-stocks/`,

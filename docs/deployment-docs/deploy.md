@@ -91,6 +91,12 @@ docker compose -p staging --env-file .env --profile tools run --rm --env-from-fi
 Default container hanya menjalankan `npx drizzle-kit migrate`. Seed tidak lagi
 digabungkan ke migration; production juga memiliki guard di dalam seeder.
 
+> **Production first deployment TIDAK memakai alur seed di atas.** Ikuti
+> [first-production-deployment.md](first-production-deployment.md): preflight →
+> migrate → seed referensi non-destruktif (`bootstrap seed`) → satu Owner →
+> full import Jubelio (`--full`) → verifier. `db:seed`/`db:reset` hanya untuk
+> database disposable.
+
 Output yang diharapkan (staging):
 ```
 🌱 Seeding database in <demo|jubelio> mode...
@@ -108,7 +114,7 @@ Output yang diharapkan (staging):
 
 | Error | Sebab | Solusi |
 |-------|-------|--------|
-| `relation already exists` | Schema sudah ada (mungkin dari `db:push` sebelumnya, atau `migrate` sudah jalan sekali) | Jalankan seed saja: `... run --rm migrate npx tsx src/seed.ts` |
+| `relation already exists` | Schema sudah ada (mungkin dari `db:push` sebelumnya, atau `migrate` sudah jalan sekali) | Jangan seed di production. Jalankan preflight `after-migrate`; bila journal tidak dapat dipertanggungjawabkan → STOP dan audit (lihat runbook production) |
 | `database is up to date` | Tidak ada migration baru | Aman. Jalankan seed saja (staging) atau tidak perlu apa-apa (production) |
 | `No migrations found` | File `packages/db/drizzle/*.sql` tidak ter-copy ke image Docker | Pastikan migration files di-commit ke git (cek: `git ls-files packages/db/drizzle/`) |
 | `password authentication failed` | `DATABASE_URL` salah / user-DB mismatch | Cek `.env`: `DATABASE_URL` harus match user+DB yang dibuat di `psql` (lihat [postgresql.md](postgresql.md)) |

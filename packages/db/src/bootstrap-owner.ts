@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 dotenv.config({ path: "../../.env" });
+import { readFile } from "node:fs/promises";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq, sql } from "drizzle-orm";
 import { Pool } from "pg";
@@ -65,6 +66,10 @@ async function main() {
       argvPassword: args.password,
       passwordFile: args.passwordFile,
       envPassword: process.env.RBAC_BOOTSTRAP_PASSWORD,
+      // Real caller wiring: the helper needs a reader to open the mounted
+      // secret file. Unit tests fake this dependency; this public CLI is the
+      // seam that proves the file channel actually works.
+      readFile: (path) => readFile(path, "utf8"),
     });
   } catch (error) {
     log("error", "invalid_input", {
@@ -89,6 +94,19 @@ async function main() {
   const db = drizzle(pool);
 
   try {
+    if (args.expectedDatabase) {
+      const current = await db.execute<{ database: string }>(
+        sql`select current_database() as database`
+      );
+      const database = current.rows[0]?.database;
+      if (database !== args.expectedDatabase) {
+        log("error", "refused", { code: "PRODUCTION_TARGET_MISMATCH" });
+        console.error("Bootstrap refused: PRODUCTION_TARGET_MISMATCH");
+        process.exitCode = 2;
+        return;
+      }
+    }
+
     const result = await db.transaction(async (tx) => {
       // Transaction-level serialization for concurrent first-Owner attempts.
       await tx.execute(
@@ -158,7 +176,11 @@ async function main() {
     log("error", "failed", {
       error: error instanceof Error ? error.message : String(error),
     });
-    console.error("Bootstrap failed:", error);
+    // Never echo the raw thrown object: it can carry a DSN or provider payload.
+    console.error(
+      "Bootstrap failed:",
+      error instanceof Error ? error.message : "unexpected error"
+    );
     process.exitCode = 3;
   } finally {
     await pool.end();

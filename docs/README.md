@@ -17,6 +17,10 @@ which category it belongs to, then place it in the matching folder:
 | `docs/<vendor>-api/` | **Third-party API** references the project uses (OpenAPI spec + explaining README), e.g. `docs/jubelio-api/`. |
 | `docs/architecture/` | **Internal codebase reference**: structure, DB, auth, middleware (index: `docs/architecture/README.md`). |
 
+Production first deployment dimulai dari
+[`deployment-docs/first-production-deployment.md`](deployment-docs/first-production-deployment.md)
+(preflight → migrate → seed referensi → Owner → full import → verifier).
+
 ## Deciding the Folder (agent-authorized)
 
 - **Our own API endpoint** (new or changed route) → `docs/api-reference.md`,

@@ -21,7 +21,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
+import { getStatusToneClassName } from "@marketplace/ui/src/lib/status-styles";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
 import {
@@ -187,25 +189,6 @@ const STATUS_LABELS: Record<string, string> = {
   completed: "Completed",
   cancelled: "Cancelled",
   failed_payment: "Payment Failed",
-};
-
-const STATUS_BADGES: Record<string, string> = {
-  pending_payment:
-    "bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-100",
-  processing: "bg-blue-100 text-blue-700 border-blue-200 hover:bg-blue-100",
-  ready_for_pickup:
-    "bg-violet-100 text-violet-700 border-violet-200 hover:bg-violet-100",
-  completed: "bg-green-100 text-green-700 border-green-200 hover:bg-green-100",
-  cancelled: "bg-red-100 text-red-700 border-red-200 hover:bg-red-100",
-  failed_payment:
-    "bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-100",
-};
-
-const PAYMENT_BADGES: Record<string, string> = {
-  pending:
-    "bg-amber-100 text-amber-700 border-amber-200 hover:bg-amber-100",
-  paid: "bg-emerald-100 text-emerald-700 border-emerald-200 hover:bg-emerald-100",
-  failed: "bg-red-100 text-red-700 border-red-200 hover:bg-red-100",
 };
 
 export default function AdminOrderDetailPage() {
@@ -536,13 +519,13 @@ export default function AdminOrderDetailPage() {
               Customer Pick Up
             </Button>
           )}
-          {isDeliveryOrder && order.workflow && <Badge className="border-teal-200 bg-teal-50 text-teal-900">{order.workflow.stage.label}</Badge>}
-          <Badge aria-label="Status pesanan" className={STATUS_BADGES[order.status]}>
+          {isDeliveryOrder && order.workflow && <StatusBadge tone={getStatusTone("delivery-stage", order.workflow.stage.label)}>{order.workflow.stage.label}</StatusBadge>}
+          <StatusBadge tone={getStatusTone("order", order.status)} aria-label="Status pesanan">
             {STATUS_LABELS[order.status] || order.status}
-          </Badge>
-          <Badge className={PAYMENT_BADGES[order.paymentStatus]}>
+          </StatusBadge>
+          <StatusBadge tone={getStatusTone("payment", order.paymentStatus)}>
             {order.paymentStatus}
-          </Badge>
+          </StatusBadge>
         </div>
       </div>
 
@@ -1058,7 +1041,7 @@ export default function AdminOrderDetailPage() {
         <details open={!isDeliveryOrder} className="rounded-lg border p-3"><summary className="cursor-pointer font-medium">Diagnostik stok Jubelio</summary>
         <Card className={
           order.stockOperations.some((operation) => operation.status === "manual_review")
-            ? "overflow-hidden border-red-300 bg-red-50/40"
+            ? `overflow-hidden ${getStatusToneClassName("progress")}`
             : "overflow-hidden"
         }>
           <CardContent className="p-0">
@@ -1083,14 +1066,12 @@ export default function AdminOrderDetailPage() {
                         <span className="font-mono text-xs font-bold uppercase tracking-wider">
                           {operation.type}
                         </span>
-                        <Badge
-                          className={needsReview
-                            ? "border-red-300 bg-red-100 text-red-800 hover:bg-red-100"
-                            : "border-slate-200 bg-slate-100 text-slate-700 hover:bg-slate-100"}
+                        <StatusBadge
+                          tone={getStatusTone("stock-operation", operation.status)}
                         >
-                          {needsReview && <TriangleAlert className="mr-1 h-3 w-3" />}
+                          {needsReview && <TriangleAlert className="mr-1 h-3 w-3" aria-hidden />}
                           {operation.status.replaceAll("_", " ")}
-                        </Badge>
+                        </StatusBadge>
                       </div>
                       {operation.lastError && !isDeliveryOrder && (
                         <p className="mt-2 text-sm text-red-800">{operation.lastError}</p>

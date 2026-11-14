@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Loader2, Search } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -172,16 +173,14 @@ export function CustomerTable() {
                         : "—"}
                     </TableCell>
                     <TableCell>
-                      <Badge
-                        variant="outline"
-                        className={
-                          customer.onboardingCompleted
-                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                            : "border-amber-200 bg-amber-50 text-amber-700"
-                        }
+                      <StatusBadge
+                        tone={getStatusTone(
+                          "onboarding",
+                          customer.onboardingCompleted ? "completed" : "pending"
+                        )}
                       >
                         {customer.onboardingCompleted ? "Selesai" : "Belum selesai"}
-                      </Badge>
+                      </StatusBadge>
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {formatCustomerDate(customer.createdAt)}

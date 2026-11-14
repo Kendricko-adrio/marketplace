@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useSession, authClient } from "@/lib/auth-client";
 import type { User as AuthUser } from "@/lib/auth";
@@ -54,14 +56,17 @@ interface Order {
   items: OrderItem[];
 }
 
-const statusMap: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
-  pending_payment: { label: "Pending Payment", variant: "outline" },
-  processing: { label: "Processing", variant: "secondary" },
-  ready_for_pickup: { label: "Ready for Pickup", variant: "default" },
-  completed: { label: "Completed", variant: "default" },
-  cancelled: { label: "Cancelled", variant: "destructive" },
-  failed_payment: { label: "Payment Failed", variant: "destructive" },
+const ORDER_STATUS_LABELS: Record<string, string> = {
+  pending_payment: "Pending Payment",
+  processing: "Processing",
+  ready_for_pickup: "Ready for Pickup",
+  completed: "Completed",
+  cancelled: "Cancelled",
+  failed_payment: "Payment Failed",
 };
+
+/** Status asing/kosong tidak pernah ditampilkan sebagai identifier mentah. */
+const UNKNOWN_ORDER_STATUS_LABEL = "Status pesanan belum tersedia";
 
 function formatDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString("id-ID", {
@@ -319,10 +324,10 @@ export default function AccountPage() {
               {!loading && !error && orders.length > 0 && (
                 <div className="space-y-4">
                   {orders.map((order) => {
-                    const status = statusMap[order.status] ?? {
-                      label: order.status,
-                      variant: "secondary" as const,
-                    };
+                    const statusLabel =
+                      ORDER_STATUS_LABELS[order.status] ??
+                      UNKNOWN_ORDER_STATUS_LABEL;
+                    const statusTone = getStatusTone("order", order.status);
                     const firstItem = order.items[0];
                     const otherCount = order.items.length - 1;
 
@@ -337,7 +342,7 @@ export default function AccountPage() {
                               {order.id.slice(0, 8)}...
                             </span>
                           </div>
-                          <Badge variant={status.variant}>{status.label}</Badge>
+                          <StatusBadge tone={statusTone}>{statusLabel}</StatusBadge>
                         </CardHeader>
                         <CardContent className="p-6">
                           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">

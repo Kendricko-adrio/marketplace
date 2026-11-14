@@ -90,3 +90,4 @@ ADRs dan referensi arsitektur permanen tetap berada di `docs/`.
 | Direktori Customer admin (pagination, pencarian, summary global) | [`docs/features/admin-customers.md`](features/admin-customers.md) |
 | Mandatory verified branch Shipment regions | [`docs/features/branch-shipping-regions.md`](features/branch-shipping-regions.md) |
 | Client address book, branch shipping origin and parcel master | [`docs/features/client-addresses.md`](features/client-addresses.md) |
+| Warna status semantik store & admin (token, resolver domain, `StatusBadge`, aggregate import/bulk) | [`docs/features/status-colors.md`](features/status-colors.md) |

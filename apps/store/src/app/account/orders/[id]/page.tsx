@@ -18,7 +18,12 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import {
+  getStatusTone,
+  type StatusTone,
+} from "@marketplace/ui/src/lib/status-presentation";
+import { getStatusToneClassName } from "@marketplace/ui/src/lib/status-styles";
 import { OrderFulfillmentPanel } from "@/components/orders/OrderFulfillmentPanel";
 import { OrderPaymentSummary } from "@/components/orders/OrderPaymentSummary";
 import type { OrderDetail } from "@/components/orders/order-detail-types";
@@ -30,25 +35,16 @@ import {
 } from "@/components/orders/order-detail-format";
 import { useCopyFeedback } from "@/components/orders/use-copy-feedback";
 
-const ORDER_STATUS: Record<
-  string,
-  {
-    label: string;
-    variant: "default" | "secondary" | "destructive" | "outline";
-  }
-> = {
-  pending_payment: { label: "Menunggu pembayaran", variant: "outline" },
-  processing: { label: "Pesanan diproses", variant: "secondary" },
-  ready_for_pickup: { label: "Siap diambil", variant: "default" },
-  completed: { label: "Pesanan selesai", variant: "default" },
-  cancelled: { label: "Pesanan dibatalkan", variant: "destructive" },
-  failed_payment: { label: "Pembayaran gagal", variant: "destructive" },
+const ORDER_STATUS_LABELS: Record<string, string> = {
+  pending_payment: "Menunggu pembayaran",
+  processing: "Pesanan diproses",
+  ready_for_pickup: "Siap diambil",
+  completed: "Pesanan selesai",
+  cancelled: "Pesanan dibatalkan",
+  failed_payment: "Pembayaran gagal",
 };
 
-const UNKNOWN_STATUS = {
-  label: "Status pesanan belum tersedia",
-  variant: "outline" as const,
-};
+const UNKNOWN_STATUS_LABEL = "Status pesanan belum tersedia";
 
 const LOAD_ERROR_MESSAGE =
   "Detail pesanan belum dapat dimuat. Silakan coba lagi.";
@@ -172,7 +168,9 @@ export default function OrderDetailPage() {
     );
   }
 
-  const status = ORDER_STATUS[order.status] ?? UNKNOWN_STATUS;
+  const statusLabel =
+    ORDER_STATUS_LABELS[order.status] ?? UNKNOWN_STATUS_LABEL;
+  const statusToneKey: StatusTone = getStatusTone("order", order.status);
   const isBlocked =
     order.paymentStatus === "paid" && Boolean(order.fulfillmentBlockedReason);
   const isFailedPayment = order.status === "failed_payment";
@@ -198,11 +196,9 @@ export default function OrderDetailPage() {
                 ? Truck
                 : Package;
 
-  const statusTone = isBlocked
-    ? "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-200"
-    : isCancelled || isFailedPayment
-      ? "bg-destructive/10 text-destructive"
-      : "bg-primary/10 text-primary";
+  const statusTone = getStatusToneClassName(
+    isBlocked ? "progress" : statusToneKey
+  );
 
   // Waktu pembaruan pengiriman: hanya dari DTO (deliveredAt / event terakhir).
   const shipmentUpdateAt = order.shipment
@@ -229,13 +225,13 @@ export default function OrderDetailPage() {
             Dibuat {formatDateTime(order.createdAt)}
           </p>
         </div>
-        <Badge
-          variant={status.variant}
+        <StatusBadge
+          tone={isBlocked ? "progress" : statusToneKey}
           className="text-sm"
           aria-label="Status pesanan"
         >
-          {status.label}
-        </Badge>
+          {statusLabel}
+        </StatusBadge>
       </div>
 
       <div className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
@@ -282,7 +278,7 @@ export default function OrderDetailPage() {
             >
               {isBlocked
                 ? "Pembayaran diterima, pesanan menunggu verifikasi"
-                : status.label}
+                : statusLabel}
             </p>
             {isBlocked && (
               <p className="text-sm text-amber-900 dark:text-amber-100">

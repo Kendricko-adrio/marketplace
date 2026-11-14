@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, Tag } from "lucide-react";
 import type { AvailableOfferDto } from "@/lib/discount-availability";
@@ -24,7 +24,7 @@ export function PromoSelector({ active, invalidated, disabled, onOpen, onClear, 
         <div className="min-w-0">
           <h3 className="text-sm font-semibold">Promo</h3>
           {active && !invalidated ? <>
-            <div className="mt-1 flex flex-wrap items-center gap-2 break-words text-sm font-medium"><span>{active.name}</span> <Badge variant="secondary">Dipakai</Badge></div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 break-words text-sm font-medium"><span>{active.name}</span> <StatusBadge tone="success">Dipakai</StatusBadge></div>
             <p className="mt-1 text-xs text-muted-foreground">Potongan Rp {BigInt(active.benefitAmount).toLocaleString("id-ID")}</p>
           </> : <p className="mt-1 text-xs text-muted-foreground">Pilih promo atau masukkan kode</p>}
         </div>

@@ -40,6 +40,35 @@
     --chart-3: 183 23% 48%;
     --chart-4: 180 2% 95%;
     --chart-5: 197 37% 24%;
+
+    /* Warna status semantik — opaque agar kontras teks dapat diukur dari
+       computed style hasil render. Nilai light/dark WAJIB identik di
+       apps/store/src/app/globals.css dan apps/admin/src/app/globals.css;
+       kelas pemakaiannya dipusatkan di packages/ui/src/lib/status-styles.ts. */
+    --status-waiting-background: #FFF7ED;
+    --status-waiting-foreground: #9A3412;
+    --status-waiting-border: #FED7AA;
+    --status-progress-background: #FEF3C7;
+    --status-progress-foreground: #92400E;
+    --status-progress-border: #FDE68A;
+    --status-ready-background: #F0FDFA;
+    --status-ready-foreground: #115E59;
+    --status-ready-border: #99F6E4;
+    --status-info-background: #EFF6FF;
+    --status-info-foreground: #1E40AF;
+    --status-info-border: #BFDBFE;
+    --status-success-background: #ECFDF5;
+    --status-success-foreground: #065F46;
+    --status-success-border: #A7F3D0;
+    --status-error-background: #FEF2F2;
+    --status-error-foreground: #991B1B;
+    --status-error-border: #FECACA;
+    --status-cancelled-background: #FFF1F2;
+    --status-cancelled-foreground: #9F1239;
+    --status-cancelled-border: #FECDD3;
+    --status-neutral-background: #F1F5F9;
+    --status-neutral-foreground: #334155;
+    --status-neutral-border: #CBD5E1;
   }
 
   .dark {
@@ -63,6 +92,35 @@
     --field: 197 50% 18%;
     --input: 197 20% 40%;
     --placeholder: 190 10% 52%; /* #788D91 — ≈3.6:1 on the dark --field */
+
+    /* Warna status semantik — opaque agar kontras teks dapat diukur dari
+       computed style hasil render. Nilai light/dark WAJIB identik di
+       apps/store/src/app/globals.css dan apps/admin/src/app/globals.css;
+       kelas pemakaiannya dipusatkan di packages/ui/src/lib/status-styles.ts. */
+    --status-waiting-background: #431407;
+    --status-waiting-foreground: #FED7AA;
+    --status-waiting-border: #9A3412;
+    --status-progress-background: #451A03;
+    --status-progress-foreground: #FDE68A;
+    --status-progress-border: #92400E;
+    --status-ready-background: #042F2E;
+    --status-ready-foreground: #99F6E4;
+    --status-ready-border: #115E59;
+    --status-info-background: #172554;
+    --status-info-foreground: #BFDBFE;
+    --status-info-border: #1E40AF;
+    --status-success-background: #022C22;
+    --status-success-foreground: #A7F3D0;
+    --status-success-border: #065F46;
+    --status-error-background: #450A0A;
+    --status-error-foreground: #FECACA;
+    --status-error-border: #991B1B;
+    --status-cancelled-background: #4C0519;
+    --status-cancelled-foreground: #FECDD3;
+    --status-cancelled-border: #9F1239;
+    --status-neutral-background: #0F172A;
+    --status-neutral-foreground: #CBD5E1;
+    --status-neutral-border: #475569;
     --ring: 197 58% 27%;
   }
 

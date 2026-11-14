@@ -23,7 +23,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import {
   Card,
   CardContent,
@@ -187,13 +188,14 @@ export default function AdminPagesPage() {
                         </code>
                       </TableCell>
                       <TableCell>
-                        {page.isPublished ? (
-                          <Badge className="bg-green-500 hover:bg-green-600">
-                            Dipublikasi
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary">Draft</Badge>
-                        )}
+                        <StatusBadge
+                          tone={getStatusTone(
+                            "cms-page",
+                            page.isPublished ? "published" : "draft"
+                          )}
+                        >
+                          {page.isPublished ? "Dipublikasi" : "Draft"}
+                        </StatusBadge>
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {page.displayOrder}

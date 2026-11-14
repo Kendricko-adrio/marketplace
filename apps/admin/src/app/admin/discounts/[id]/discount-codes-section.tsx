@@ -3,7 +3,8 @@
 import { Plus, Trash2 } from "lucide-react";
 
 import { canonicalizePromoCode } from "@marketplace/db/src/discount-code";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -155,9 +156,9 @@ export function DiscountCodesSection(props: {
                           {canSeeLiterals && code.code ? code.code : code.maskedCode}
                         </TableCell>
                         <TableCell>
-                          <Badge variant={code.state === "active" ? "default" : "secondary"}>
+                          <StatusBadge tone={getStatusTone("discount-code", code.state)}>
                             {CODE_STATE_LABEL[code.state as CodeStateTarget["state"]] ?? code.state}
-                          </Badge>
+                          </StatusBadge>
                         </TableCell>
                         <TableCell>
                           <Select

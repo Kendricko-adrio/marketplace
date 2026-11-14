@@ -3,6 +3,8 @@
 import type { RefObject } from "react";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { getPriceBatchTone } from "@marketplace/ui/src/lib/status-presentation";
+import { getStatusToneClassName } from "@marketplace/ui/src/lib/status-styles";
 import {
   Dialog,
   DialogContent,
@@ -368,7 +370,8 @@ export function PriceChangeDialog(props: Props) {
               <div
                 data-testid="bulk-status"
                 role="status"
-                className={`rounded-md border p-3 text-sm ${halt || status?.tone === "error" ? "border-destructive/40 text-destructive" : "bg-muted/40"}`}
+                className={`rounded-md border p-3 text-sm ${getStatusToneClassName(getPriceBatchTone(batch))}`}
+                data-status-tone={getPriceBatchTone(batch)}
               >
                 <p>{status?.text}</p>
                 {halt && <p>{halt}</p>}

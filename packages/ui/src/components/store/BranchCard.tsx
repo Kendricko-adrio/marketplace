@@ -1,5 +1,5 @@
 import { MapPin, Clock, ExternalLink, BadgeCheck } from "lucide-react";
-import { Badge } from "../ui/badge";
+import { StatusBadge } from "../ui/status-badge";
 import { Button } from "../ui/button";
 import type { Branch, OperatingHours, DayHours } from "./types";
 
@@ -48,9 +48,9 @@ export default function BranchCard({
               </p>
             </div>
           </div>
-          <Badge variant="default" className="gap-1">
-            <BadgeCheck className="h-3 w-3" /> Buka
-          </Badge>
+          <StatusBadge tone="success" className="gap-1">
+            <BadgeCheck className="h-3 w-3" aria-hidden /> Buka
+          </StatusBadge>
         </div>
       </div>
 

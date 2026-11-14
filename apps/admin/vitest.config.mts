@@ -23,6 +23,9 @@ export default defineConfig({
         import.meta.dirname,
         "../../packages/logging/src/index.ts"
       ),
+      // Shared status resolver via subpath: modul murni tanpa menarik barrel
+      // @marketplace/ui (yang meng-export komponen Next/Render).
+      "@marketplace/ui/src": path.resolve(import.meta.dirname, "../../packages/ui/src"),
       "@marketplace/ui": path.resolve(import.meta.dirname, "../../packages/ui/src"),
     },
   },

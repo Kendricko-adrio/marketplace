@@ -17,6 +17,8 @@ import { useAuth } from "@/providers/auth-provider";
 import { SYSTEM_OWNER_KEY } from "@marketplace/db/src/rbac/catalog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import {
   Card,
   CardContent,
@@ -40,15 +42,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import type { NotificationListItem } from "@/lib/notifications";
-
-const STATUS_BADGES: Record<string, string> = {
-  pending_payment: "bg-amber-100 text-amber-700",
-  processing: "bg-blue-100 text-blue-700",
-  ready_for_pickup: "bg-violet-100 text-violet-700",
-  completed: "bg-green-100 text-green-700",
-  cancelled: "bg-red-100 text-red-700",
-  failed_payment: "bg-orange-100 text-orange-700",
-};
 
 const STATUS_LABELS: Record<string, string> = {
   pending_payment: "Pending Payment",
@@ -306,9 +299,9 @@ export default function NotificationsPage() {
                       </TableCell>
                       <TableCell>
                         {n.order ? (
-                          <Badge className={STATUS_BADGES[n.order.status]}>
+                          <StatusBadge tone={getStatusTone("order", n.order.status)}>
                             {STATUS_LABELS[n.order.status] || n.order.status}
-                          </Badge>
+                          </StatusBadge>
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
                         )}

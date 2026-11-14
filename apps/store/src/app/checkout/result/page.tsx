@@ -11,6 +11,7 @@ import {
   Loader2,
   Package,
 } from "lucide-react";
+import { getStatusToneClassName } from "@marketplace/ui/src/lib/status-styles";
 
 function ResultContent() {
   const searchParams = useSearchParams();
@@ -32,8 +33,11 @@ function ResultContent() {
       {orderStatus === "success" && (
         <Card>
           <CardContent className="p-8 text-center">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
-              <CheckCircle2 className="h-8 w-8 text-green-600" />
+            <div
+              className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border ${getStatusToneClassName("success")}`}
+              data-status-tone="success"
+            >
+              <CheckCircle2 className="h-8 w-8" aria-hidden />
             </div>
             <h1 className="text-2xl font-bold mb-2">Pembayaran Berhasil!</h1>
             <p className="text-muted-foreground mb-6">
@@ -69,8 +73,11 @@ function ResultContent() {
       {orderStatus === "pending" && (
         <Card>
           <CardContent className="p-8 text-center">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-amber-100">
-              <Clock className="h-8 w-8 text-amber-600" />
+            <div
+              className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border ${getStatusToneClassName("waiting")}`}
+              data-status-tone="waiting"
+            >
+              <Clock className="h-8 w-8" aria-hidden />
             </div>
             <h1 className="text-2xl font-bold mb-2">Menunggu Pembayaran</h1>
             <p className="text-muted-foreground mb-6">
@@ -92,8 +99,11 @@ function ResultContent() {
       {orderStatus === "cancel" && (
         <Card>
           <CardContent className="p-8 text-center">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-destructive/10">
-              <XCircle className="h-8 w-8 text-destructive" />
+            <div
+              className={`mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full border ${getStatusToneClassName("error")}`}
+              data-status-tone="error"
+            >
+              <XCircle className="h-8 w-8" aria-hidden />
             </div>
             <h1 className="text-2xl font-bold mb-2">Pembayaran Gagal</h1>
             <p className="text-muted-foreground mb-6">

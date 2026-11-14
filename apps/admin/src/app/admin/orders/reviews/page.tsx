@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, ShieldQuestion, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import {
   Card,
   CardContent,
@@ -171,9 +173,9 @@ export default function SalesReviewQueuePage() {
                 <div key={attempt.attemptId} className="rounded border p-3 text-sm">
                   <div className="flex flex-wrap items-center gap-2">
                     <Badge variant="secondary">Checkout belum selesai</Badge>
-                    <span className="font-medium">
+                    <StatusBadge tone={getStatusTone("checkout-attempt", attempt.state)}>
                       {ATTEMPT_STATE_LABEL[attempt.state] ?? attempt.state}
-                    </span>
+                    </StatusBadge>
                     <span className="text-muted-foreground">
                       Tahap: {ATTEMPT_STAGE_LABEL[attempt.stage]}
                     </span>
@@ -221,7 +223,8 @@ export default function SalesReviewQueuePage() {
                   className="rounded-lg border p-4 text-sm space-y-2"
                 >
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge variant="destructive">{TYPE_LABEL[op.type] ?? op.type}</Badge>
+                    <Badge variant="secondary">{TYPE_LABEL[op.type] ?? op.type}</Badge>
+                    <StatusBadge tone="progress">Perlu pemeriksaan</StatusBadge>
                     <span className="font-mono text-xs text-muted-foreground">
                       {op.reference}
                     </span>
@@ -290,8 +293,12 @@ export default function SalesReviewQueuePage() {
                     >
                       {order.orderId.slice(0, 8).toUpperCase()}
                     </a>
-                    <Badge variant="outline">paid</Badge>
-                    <Badge variant="outline">{order.status}</Badge>
+                    <StatusBadge tone={getStatusTone("payment", order.paymentStatus)}>
+                      paid
+                    </StatusBadge>
+                    <StatusBadge tone={getStatusTone("order", order.status)}>
+                      {order.status}
+                    </StatusBadge>
                     {order.paymentMethod && (
                       <Badge variant="secondary">{order.paymentMethod}</Badge>
                     )}

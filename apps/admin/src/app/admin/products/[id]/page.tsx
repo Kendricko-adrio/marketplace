@@ -6,7 +6,8 @@ import Link from "next/link";
 import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import {
   Card,
   CardContent,
@@ -126,12 +127,6 @@ export default function ProductDetailPage() {
     }
   }
 
-  const statusBadge: Record<string, "default" | "destructive" | "secondary"> = {
-    aktif: "default",
-    habis: "destructive",
-    arsip: "secondary",
-  };
-
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -212,9 +207,12 @@ export default function ProductDetailPage() {
           <CardHeader>
             <div className="flex items-center justify-between gap-2">
               <CardTitle>{product.name}</CardTitle>
-              <Badge variant={statusBadge[product.status] ?? "secondary"} className="capitalize">
+              <StatusBadge
+                tone={getStatusTone("product", product.status)}
+                className="capitalize"
+              >
                 {product.status}
-              </Badge>
+              </StatusBadge>
             </div>
             <CardDescription>{product.slug}</CardDescription>
           </CardHeader>
@@ -316,14 +314,12 @@ export default function ProductDetailPage() {
                     <div key={branch.id} className="space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <h4 className="text-sm font-semibold">{branch.name}</h4>
-                        <Badge
-                          variant={
-                            branch.status === "aktif" ? "default" : "secondary"
-                          }
+                        <StatusBadge
+                          tone={getStatusTone("branch", branch.status)}
                           className="capitalize"
                         >
                           {branch.status}
-                        </Badge>
+                        </StatusBadge>
                         <span className="text-xs text-muted-foreground">
                           {branch.city} · {branch.code}
                         </span>

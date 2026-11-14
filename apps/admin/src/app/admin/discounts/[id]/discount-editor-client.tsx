@@ -7,6 +7,8 @@ import { ArrowLeft, ChevronDown, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
@@ -525,19 +527,9 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
           </Link>
           <h1 className="text-2xl font-bold text-foreground">{heading}</h1>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-            <Badge
-              variant={
-                detail.state === "enabled"
-                  ? "default"
-                  : detail.state === "archived"
-                    ? "destructive"
-                    : detail.state === "paused"
-                      ? "outline"
-                      : "secondary"
-              }
-            >
+            <StatusBadge tone={getStatusTone("offer", detail.state)}>
               {STATE_LABEL[detail.state]}
-            </Badge>
+            </StatusBadge>
             <span>{detail.activationKind === "public" ? "Kupon publik" : "Kode promo"}</span>
             {hasDraftChange ? <Badge variant="secondary">Ada draft</Badge> : null}
           </div>

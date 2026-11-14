@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Loader2, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import {
   HomepageSectionRenderer,
   type HomepageSectionData,
@@ -182,7 +183,9 @@ export default function HomepagePreviewPage() {
 function InactiveBadge() {
   return (
     <div className="absolute top-2 right-2 z-20">
-      <Badge variant="destructive">Nonaktif</Badge>
+      <StatusBadge tone={getStatusTone("homepage-content", "inactive")}>
+        Nonaktif
+      </StatusBadge>
     </div>
   );
 }

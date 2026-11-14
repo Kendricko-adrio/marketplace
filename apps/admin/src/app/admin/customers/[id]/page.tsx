@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   ArrowUpRight,
   CalendarDays,
-  CheckCircle2,
   Mail,
   Phone,
   ReceiptText,
@@ -12,7 +11,8 @@ import {
   UserRound,
 } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
@@ -36,15 +36,6 @@ const STATUS_LABELS: Record<string, string> = {
   completed: "Completed",
   cancelled: "Cancelled",
   failed_payment: "Payment Failed",
-};
-
-const STATUS_STYLES: Record<string, string> = {
-  pending_payment: "border-amber-200 bg-amber-50 text-amber-700",
-  processing: "border-blue-200 bg-blue-50 text-blue-700",
-  ready_for_pickup: "border-violet-200 bg-violet-50 text-violet-700",
-  completed: "border-emerald-200 bg-emerald-50 text-emerald-700",
-  cancelled: "border-red-200 bg-red-50 text-red-700",
-  failed_payment: "border-orange-200 bg-orange-50 text-orange-700",
 };
 
 const GENDER_LABELS: Record<string, string> = {
@@ -115,18 +106,16 @@ export default async function CustomerDetailPage({
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-primary">
                 Customer profile
               </p>
-              <Badge
-                variant="outline"
-                className={
-                  customer.onboardingCompleted
-                    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                    : "border-amber-200 bg-amber-50 text-amber-700"
-                }
+              <StatusBadge
+                tone={getStatusTone(
+                  "onboarding",
+                  customer.onboardingCompleted ? "completed" : "pending"
+                )}
               >
                 {customer.onboardingCompleted
                   ? "Onboarding completed"
                   : "Onboarding pending"}
-              </Badge>
+              </StatusBadge>
             </div>
             <h2 className="text-3xl font-bold tracking-tight">
               {customer.name}
@@ -179,14 +168,16 @@ export default async function CustomerDetailPage({
               </div>
             ))}
             <div className="border-t pt-5">
-              <div className="flex items-center justify-between text-sm">
+              <div className="flex items-center justify-between gap-3 text-sm">
                 <span className="text-muted-foreground">Email verified</span>
-                <span className="flex items-center gap-1.5 font-medium">
-                  {customer.emailVerified && (
-                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                <StatusBadge
+                  tone={getStatusTone(
+                    "email-verification",
+                    customer.emailVerified ? "verified" : "unverified"
                   )}
+                >
                   {customer.emailVerified ? "Verified" : "Not verified"}
-                </span>
+                </StatusBadge>
               </div>
               <div className="mt-3 flex items-center justify-between text-sm">
                 <span className="text-muted-foreground">Last updated</span>
@@ -256,12 +247,9 @@ export default async function CustomerDetailPage({
                         {formatRupiah(order.total)}
                       </TableCell>
                       <TableCell>
-                        <Badge
-                          variant="outline"
-                          className={STATUS_STYLES[order.status]}
-                        >
+                        <StatusBadge tone={getStatusTone("order", order.status)}>
                           {STATUS_LABELS[order.status] ?? order.status}
-                        </Badge>
+                        </StatusBadge>
                       </TableCell>
                       <TableCell>
                         <Button asChild variant="ghost" size="icon">

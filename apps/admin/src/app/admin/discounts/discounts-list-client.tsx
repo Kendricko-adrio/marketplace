@@ -5,6 +5,8 @@ import Link from "next/link";
 import { Loader2, Plus } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -226,9 +228,9 @@ export function DiscountsListClient() {
                     <TableCell className="min-w-40">{benefitLabel(offer)}</TableCell>
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-1">
-                        <Badge variant={offer.state === "enabled" ? "default" : "outline"}>
+                        <StatusBadge tone={getStatusTone("offer", offer.state)}>
                           {STATE_LABEL[offer.state] ?? offer.state}
-                        </Badge>
+                        </StatusBadge>
                         {offer.liveRevision && offer.draftRevisionId ? (
                           <Badge variant="secondary">Ada draft</Badge>
                         ) : null}

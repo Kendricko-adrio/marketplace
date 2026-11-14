@@ -1,5 +1,7 @@
 import { CheckCircle2, Clock3, ShoppingBag, UsersRound } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
+import { getStatusToneClassName } from "@marketplace/ui/src/lib/status-styles";
 import { getCustomerSummary } from "@/features/customers/customer-list-repository";
 import { CustomerTable } from "./customer-table";
 
@@ -17,13 +19,15 @@ export default async function CustomersPage() {
       label: "Onboarding completed",
       value: onboarded,
       icon: CheckCircle2,
-      tone: "bg-emerald-50 text-emerald-700",
+      tone: getStatusToneClassName(getStatusTone("onboarding", "completed")),
+      statusTone: getStatusTone("onboarding", "completed"),
     },
     {
       label: "Pending onboarding",
       value: pending,
       icon: Clock3,
-      tone: "bg-amber-50 text-amber-700",
+      tone: getStatusToneClassName(getStatusTone("onboarding", "pending")),
+      statusTone: getStatusTone("onboarding", "pending"),
     },
     {
       label: "Total orders",
@@ -47,15 +51,18 @@ export default async function CustomersPage() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {summary.map(({ label, value, icon: Icon, tone }) => (
+        {summary.map(({ label, value, icon: Icon, tone, statusTone }) => (
           <Card key={label} className="overflow-hidden">
             <CardContent className="flex items-center justify-between p-5">
               <div>
                 <p className="text-sm text-muted-foreground">{label}</p>
                 <p className="mt-1 text-2xl font-bold tabular-nums">{value}</p>
               </div>
-              <div className={`rounded-xl p-3 ${tone}`}>
-                <Icon className="h-5 w-5" />
+              <div
+                className={`rounded-xl p-3 ${tone}`}
+                data-status-tone={statusTone}
+              >
+                <Icon className="h-5 w-5" aria-hidden />
               </div>
             </CardContent>
           </Card>

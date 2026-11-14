@@ -12,7 +12,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import {
   Card,
   CardContent,
@@ -81,15 +82,6 @@ export default function AdminProductsPage() {
   useEffect(() => {
     void fetchProducts();
   }, [fetchProducts]);
-
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, "default" | "destructive" | "secondary"> = {
-      aktif: "default",
-      habis: "destructive",
-      arsip: "secondary",
-    };
-    return variants[status] || "secondary";
-  };
 
   const filteredProducts = products;
 
@@ -186,12 +178,12 @@ export default function AdminProductsPage() {
                             )}
                           </TableCell>
                           <TableCell className="text-center">
-                            <Badge
-                              variant={getStatusBadge(product.status)}
+                            <StatusBadge
+                              tone={getStatusTone("product", product.status)}
                               className="capitalize"
                             >
                               {product.status}
-                            </Badge>
+                            </StatusBadge>
                           </TableCell>
                           <TableCell className="text-right">
                             <Link href={`/admin/products/${product.id}`}>

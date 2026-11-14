@@ -5,6 +5,12 @@ import { Download, FileSpreadsheet, Loader2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusToneClassName } from "@marketplace/ui/src/lib/status-styles";
+import {
+  getPriceBatchTone,
+  getStatusTone,
+} from "@marketplace/ui/src/lib/status-presentation";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -310,11 +316,12 @@ export function PriceChangeExcelClient({ onBatchChange, onApplied }: { onBatchCh
               id="excel-results"
               tabIndex={-1}
               data-testid="excel-batch-summary"
-              className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/30 p-4"
+              data-status-tone={getPriceBatchTone(batch)}
+              className={`flex flex-wrap items-center gap-3 rounded-md border p-4 ${getStatusToneClassName(getPriceBatchTone(batch))}`}
             >
-              <Badge variant={status?.tone === "error" ? "destructive" : "secondary"}>
+              <StatusBadge tone={getPriceBatchTone(batch)}>
                 {status?.text}
-              </Badge>
+              </StatusBadge>
               <span className="text-xs text-muted-foreground">
                 {batch.rowCount} baris · {batch.appliedCount} diterapkan ·{" "}
                 {batch.unchangedCount} tanpa perubahan · {batch.failedCount} gagal ·{" "}
@@ -412,17 +419,9 @@ export function PriceChangeExcelClient({ onBatchChange, onApplied }: { onBatchCh
                       <TableCell className="text-xs tabular-nums">{inputLabel(row)}</TableCell>
                       <TableCell className="tabular-nums">{targetLabel(row)}</TableCell>
                       <TableCell>
-                        <Badge
-                          variant={
-                            row.state === "failed"
-                              ? "destructive"
-                              : row.state === "applied"
-                                ? "default"
-                                : "outline"
-                          }
-                        >
+                        <StatusBadge tone={getStatusTone("price-row", row.state)}>
                           {row.state}
-                        </Badge>
+                        </StatusBadge>
                       </TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {rowReason(row)}

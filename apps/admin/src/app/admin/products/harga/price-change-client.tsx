@@ -10,6 +10,8 @@ import {
 import { Download, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -756,16 +758,17 @@ export function PriceChangeClient() {
                             )}
                           </TableCell>
                           <TableCell>
-                            <Badge
-                              variant={
-                                row.basePrice === null ||
-                                (row.storedTarget !== null &&
-                                  !row.markdownActive)
-                                  ? "destructive"
+                            <StatusBadge
+                              tone={getStatusTone(
+                                "markdown",
+                                row.basePrice === null
+                                  ? "invalid_source"
                                   : row.markdownActive
-                                    ? "secondary"
-                                    : "outline"
-                              }
+                                    ? "active"
+                                    : row.storedTarget !== null
+                                      ? "inactive_target"
+                                      : "absent"
+                              )}
                               className="whitespace-nowrap"
                             >
                               {row.basePrice === null
@@ -775,7 +778,7 @@ export function PriceChangeClient() {
                                   : row.storedTarget !== null
                                     ? "Target nonaktif"
                                     : "Tanpa markdown"}
-                            </Badge>
+                            </StatusBadge>
                           </TableCell>
                           <TableCell>
                             <div className="flex justify-end gap-1">

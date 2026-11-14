@@ -12,6 +12,8 @@ import {
   Wallet,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import {
   Card,
   CardContent,
@@ -244,9 +246,9 @@ export default function AnalyticsDashboard() {
                   key={row.status}
                   className="flex items-center justify-between text-sm"
                 >
-                  <span className="text-muted-foreground">
+                  <StatusBadge tone={getStatusTone("order", row.status)}>
                     {statusLabel(row.status)}
-                  </span>
+                  </StatusBadge>
                   <span className="font-medium tabular-nums">
                     {row.count.toLocaleString("id-ID")}
                   </span>
@@ -278,7 +280,11 @@ export default function AnalyticsDashboard() {
                     <TableCell className="font-medium">
                       {order.customer}
                     </TableCell>
-                    <TableCell>{statusLabel(order.status)}</TableCell>
+                    <TableCell>
+                      <StatusBadge tone={getStatusTone("order", order.status)}>
+                        {statusLabel(order.status)}
+                      </StatusBadge>
+                    </TableCell>
                     <TableCell className="text-muted-foreground">
                       {formatDateTime(order.createdAt)}
                     </TableCell>

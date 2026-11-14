@@ -22,7 +22,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -101,14 +102,6 @@ export default function AdminBranchesPage() {
   useEffect(() => {
     void fetchBranches();
   }, [fetchBranches]);
-
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, "default" | "destructive" | "secondary"> = {
-      aktif: "default",
-      nonaktif: "secondary",
-    };
-    return variants[status] || "secondary";
-  };
 
   async function handleDelete() {
     if (!deleteTarget) return;
@@ -210,12 +203,12 @@ export default function AdminBranchesPage() {
                             {branch.address}
                           </TableCell>
                           <TableCell className="text-center">
-                            <Badge
-                              variant={getStatusBadge(branch.status)}
+                            <StatusBadge
+                              tone={getStatusTone("branch", branch.status)}
                               className="capitalize"
                             >
                               {branch.status}
-                            </Badge>
+                            </StatusBadge>
                           </TableCell>
                           <TableCell className="text-right">
                             <DropdownMenu>

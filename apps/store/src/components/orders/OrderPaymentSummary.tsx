@@ -1,7 +1,8 @@
 "use client";
 
 import { CreditCard } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -9,14 +10,19 @@ import { formatPaymentMethodLabel } from "@/lib/payment-method-label";
 import type { OrderDetail } from "./order-detail-types";
 import { formatRupiah } from "./order-detail-format";
 
-const PAYMENT_STATUS: Record<
-  string,
-  { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
-> = {
-  pending: { label: "Menunggu", variant: "outline" },
-  paid: { label: "Lunas", variant: "default" },
-  failed: { label: "Gagal", variant: "destructive" },
+const PAYMENT_STATUS_LABELS: Record<string, string> = {
+  pending: "Menunggu",
+  paid: "Lunas",
+  failed: "Gagal",
 };
+
+/** Redemption promo bukan status pembayaran; nilai asing tidak diklaim reserved. */
+const PROMO_STATUS_LABELS: Record<string, string> = {
+  reserved: "Direservasi sampai batas pembayaran",
+  consumed: "Dipakai (lunas)",
+  released: "Dibatalkan (kapasitas dilepas)",
+};
+const UNKNOWN_PROMO_STATUS_LABEL = "Status promo belum tersedia";
 
 /**
  * Satu kelompok pembayaran: metode, status, rincian biaya, total, dan aksi
@@ -32,10 +38,7 @@ export function OrderPaymentSummary({
   onPay: () => void;
   onCheckPayment: () => void;
 }) {
-  const payStatus = PAYMENT_STATUS[order.paymentStatus] ?? {
-    label: order.paymentStatus,
-    variant: "outline" as const,
-  };
+  const payStatusLabel = PAYMENT_STATUS_LABELS[order.paymentStatus];
 
   const isPendingPayment = order.status === "pending_payment";
   const canPay = isPendingPayment && Boolean(order.snapRedirectUrl);
@@ -63,7 +66,9 @@ export function OrderPaymentSummary({
         </div>
         <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
           <span className="text-muted-foreground">Status</span>
-          <Badge variant={payStatus.variant}>{payStatus.label}</Badge>
+          <StatusBadge tone={getStatusTone("payment", order.paymentStatus)}>
+            {payStatusLabel ?? "Status pembayaran belum tersedia"}
+          </StatusBadge>
         </div>
 
         <Separator />
@@ -83,15 +88,15 @@ export function OrderPaymentSummary({
           </div>
         )}
         {order.promo && (
-          <div className="flex justify-between gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
             <span className="text-muted-foreground">Status promo</span>
-            <span className="text-right">
-              {order.promo.status === "consumed"
-                ? "Dipakai (lunas)"
-                : order.promo.status === "released"
-                  ? "Dibatalkan (kapasitas dilepas)"
-                  : "Direservasi sampai batas pembayaran"}
-            </span>
+            <StatusBadge
+              tone={getStatusTone("redemption", order.promo.status)}
+              className="text-right"
+            >
+              {PROMO_STATUS_LABELS[order.promo.status] ??
+                UNKNOWN_PROMO_STATUS_LABEL}
+            </StatusBadge>
           </div>
         )}
         <div className="flex justify-between gap-4">

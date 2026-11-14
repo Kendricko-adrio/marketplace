@@ -24,6 +24,18 @@ export * from "./components/ui/tabs";
 export * from "./components/ui/textarea";
 export * from "./components/ui/sonner";
 export * from "./components/ui/confirm-dialog";
+export * from "./components/ui/status-badge";
+
+export {
+  getStatusTone,
+  getPriceBatchTone,
+} from "./lib/status-presentation";
+export type {
+  PriceBatchOutcome,
+  StatusDomain,
+  StatusTone,
+} from "./lib/status-presentation";
+export { getStatusToneClassName } from "./lib/status-styles";
 
 export { default as ProductCard } from "./components/store/ProductCard";
 export { default as BranchCard } from "./components/store/BranchCard";

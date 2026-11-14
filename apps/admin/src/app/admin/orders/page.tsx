@@ -6,7 +6,8 @@ import Link from "next/link";
 import { useAuth } from "@/providers/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { DELIVERY_STAGE_LABELS, type DeliveryStage } from "@/lib/delivery-workflow";
 
@@ -103,8 +104,8 @@ function OrdersList() {
               <TableCell><span className="font-mono font-semibold">#{row.id.slice(0, 8)}</span><div className="mt-1 text-xs text-muted-foreground">{new Date(row.createdAt).toLocaleDateString("id-ID")}</div></TableCell>
               <TableCell>{row.customer.name}</TableCell>
               <TableCell>{row.branch?.name ?? "Belum tersedia"}</TableCell>
-              <TableCell><Badge variant="outline">{row.paymentStatus}</Badge></TableCell>
-              <TableCell><Badge variant="outline">{row.stage?.label ?? STATUS[row.status as keyof typeof STATUS] ?? row.status}</Badge>{row.stockNeedsReview && <span className="block text-xs text-amber-800">Stock review</span>}</TableCell>
+              <TableCell><StatusBadge tone={getStatusTone("payment", row.paymentStatus)}>{row.paymentStatus}</StatusBadge></TableCell>
+              <TableCell><StatusBadge tone={row.stage ? getStatusTone("delivery-stage", row.stage.label) : getStatusTone("order", row.status)}>{row.stage?.label ?? STATUS[row.status as keyof typeof STATUS] ?? row.status}</StatusBadge>{row.stockNeedsReview && <StatusBadge tone="progress" className="mt-1 block w-fit">Stock review</StatusBadge>}</TableCell>
               <TableCell className="max-w-64">{row.stage?.guidance ?? (row.status === "ready_for_pickup" ? "Verifikasi pickup setelah customer hadir." : "Lihat detail pesanan.")}</TableCell>
               <TableCell><Link aria-disabled={isPending || loading} onClick={(event) => { if (isPending || loading) event.preventDefault(); }} className="text-teal-800 underline focus-visible:outline-2" href={`/admin/orders/${row.id}?returnTo=${encodeURIComponent(currentUrl)}`}>Lihat detail</Link>{row.fulfillmentMethod === "pickup" && row.status === "ready_for_pickup" && hasPermission("orders", "edit") && <Link className="block text-teal-800 underline" href={`/admin/orders/${row.id}?verify=1&returnTo=${encodeURIComponent(currentUrl)}`}>Verifikasi Pickup</Link>}</TableCell>
             </TableRow>

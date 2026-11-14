@@ -3,6 +3,8 @@ import Image from "next/image";
 import { ShoppingCart } from "lucide-react";
 import { Card, CardContent } from "../ui/card";
 import { Badge } from "../ui/badge";
+import { StatusBadge } from "../ui/status-badge";
+import { getStatusTone } from "../../lib/status-presentation";
 
 interface ProductCardProps {
   /** Product slug — used for the detail-page link (never the raw id, which is
@@ -59,14 +61,20 @@ export default function ProductCard({
         </Badge>
       )}
       {outOfStock && (
-        <Badge className="absolute top-2 left-2 bg-muted text-muted-foreground">
+        <StatusBadge
+          tone={getStatusTone("stock-visibility", "unavailable")}
+          className="absolute top-2 left-2"
+        >
           Stok Belum Tersedia
-        </Badge>
+        </StatusBadge>
       )}
       {stockUnconfirmed && !outOfStock && (
-        <Badge className="absolute top-2 left-2 bg-muted text-muted-foreground">
+        <StatusBadge
+          tone={getStatusTone("stock-visibility", "unconfirmed")}
+          className="absolute top-2 left-2"
+        >
           Cek stok saat bayar
-        </Badge>
+        </StatusBadge>
       )}
     </>
   );

@@ -12,6 +12,8 @@ import {
   Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -119,9 +121,12 @@ export function OrderFulfillmentPanel({
                   <PackageCheck className="h-5 w-5" aria-hidden />
                 </div>
                 <div className="min-w-0 space-y-1">
-                  <p className="text-base font-semibold">
+                  <StatusBadge
+                    tone={getStatusTone("tracking", shipment.latestStatus)}
+                    className="text-base"
+                  >
                     {getTrackingStatusLabel(shipment.latestStatus)}
-                  </p>
+                  </StatusBadge>
                   {shipment.delivered && shipment.deliveredAt && (
                     <p className="text-muted-foreground">
                       Diterima {formatTrackingTime(shipment.deliveredAt)}
@@ -165,7 +170,11 @@ export function OrderFulfillmentPanel({
                               >
                                 {formatTrackingTime(event.at)}
                               </time>
-                              <p className="font-medium">{label}</p>
+                              <StatusBadge
+                                tone={getStatusTone("tracking", event.status)}
+                              >
+                                {label}
+                              </StatusBadge>
                               {isLatest && (
                                 <span className="inline-flex items-center gap-1 text-xs font-medium text-primary">
                                   <Check className="h-3 w-3" aria-hidden />

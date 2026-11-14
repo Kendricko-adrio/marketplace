@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import {
   Card,
   CardContent,
@@ -142,12 +144,12 @@ export function RolesListClient() {
                         {role.name}
                       </Link>
                       {role.archived && (
-                        <Badge
-                          variant="outline"
-                          className="ml-2 gap-1 text-muted-foreground"
+                        <StatusBadge
+                          tone={getStatusTone("role", "archived")}
+                          className="ml-2 gap-1"
                         >
-                          <Archive className="h-3 w-3" /> Arsip
-                        </Badge>
+                          <Archive className="h-3 w-3" aria-hidden /> Arsip
+                        </StatusBadge>
                       )}
                       {role.description && (
                         <p className="text-xs text-muted-foreground">

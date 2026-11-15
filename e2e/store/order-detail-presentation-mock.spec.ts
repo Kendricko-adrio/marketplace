@@ -23,9 +23,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { TEST_USERS } from "../config";
 
-const ORDER_ID = "order-detail-presentation-1";
-const LONG_ORDER_ID = "ORD-2026-11-0001-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const AWB = "E2EDETAILAWB0000000000000000000001";
+const LONG_ORDER_ID = "ORD-2026-11-0001-ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const TRACKING_URL = "https://track.example.test/E2EDETAILAWB0001";
 const POD_URL = "https://pod.example.test/proof-of-delivery-1";
 const PRODUCT_SLUG = "serum-pelembab";
@@ -221,7 +220,7 @@ async function stubClipboard(page: Page, mode: "success" | "reject" = "success")
 async function openOrder(
   page: Page,
   reply: Reply | (() => Reply),
-  orderId = ORDER_ID
+  orderId = LONG_ORDER_ID
 ) {
   // Fungsi reply dipakai agar state bisa diubah antar aksi (mis. retry) tanpa
   // bergantung pada jumlah request — dev mode React menjalankan effect dua kali.
@@ -674,4 +673,197 @@ test("error, not-found, retry, missing snapshot and missing resi follow the stat
   await expect(
     noEvents.getByText("Menunggu kurir", { exact: true }).first()
   ).toBeVisible();
+});
+
+// ---------------------------------------------------------------------------
+// Fase 2 (plan audit-findings-phase-2): prioritas mobile, loading terlihat,
+// pemeriksaan status, next action, dan arsip kode pickup selesai
+// ---------------------------------------------------------------------------
+
+test("mobile menaruh pembayaran dan alamat sebelum daftar barang", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openOrder(page, ok(order()));
+
+  const payment = page.getByRole("heading", { name: "Pembayaran", exact: true });
+  const tracking = page.getByRole("region", { name: "Lacak paket" });
+  const items = page.getByRole("heading", { name: /Barang pesanan/ });
+
+  const boxes = await Promise.all(
+    [payment, tracking, items].map(async (locator) => (await locator.boundingBox())!)
+  );
+  expect(boxes[0].y).toBeLessThan(boxes[1].y);
+  expect(boxes[1].y).toBeLessThan(boxes[2].y);
+  // Total dan aksi tetap sebelum daftar barang panjang.
+  expect((await page.getByText("Rp 314.130", { exact: true }).first().boundingBox())!.y)
+    .toBeLessThan(boxes[2].y);
+});
+
+test("loading awal terlihat, bukan warna yang sama dengan background", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/orders/**", async (route) => {
+    await gate;
+    await route.fulfill({ json: { success: true, data: order() } });
+  });
+  await page.goto(`/account/orders/${LONG_ORDER_ID}`);
+
+  await expect(page.getByText("Memuat detail pesanan…", { exact: true })).toBeVisible();
+  const distinct = await page.evaluate(() => {
+    const bar = document.querySelector(".animate-pulse .bg-border");
+    if (!bar) return null;
+    const barBg = getComputedStyle(bar).backgroundColor;
+    const pageBg = getComputedStyle(document.body).backgroundColor;
+    return { barBg, pageBg, differs: barBg !== pageBg };
+  });
+  expect(distinct?.differs, "skeleton harus beda dari background").toBe(true);
+  release();
+  await expect(page.getByRole("heading", { name: "Detail Pesanan" })).toBeVisible();
+});
+
+test("pemeriksaan status menjelaskan unchanged lalu updated tanpa memuat ulang halaman", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  let paymentStatus = "pending";
+  await openOrder(page, () =>
+    ok(
+      order({
+        status: "pending_payment",
+        paymentStatus,
+        fulfillmentMethod: "pickup",
+        deliverySnapshot: null,
+        shipment: null,
+        pickupCode: null,
+      })
+    )
+  );
+
+  const check = page.getByRole("button", { name: "Periksa status pembayaran" });
+  await check.click();
+  await expect(
+    page.getByText("Status belum berubah. Silakan periksa lagi nanti.", { exact: true })
+  ).toBeVisible();
+
+  paymentStatus = "paid";
+  await check.click();
+  await expect(
+    page.getByText("Status pesanan diperbarui.", { exact: true })
+  ).toBeVisible();
+  await expect(page.getByText("Lunas", { exact: true })).toBeVisible();
+  // Detail tetap di layar (bukan skeleton penuh) dan fokus tombol bertahan.
+  await expect(page.getByRole("heading", { name: "Detail Pesanan" })).toBeVisible();
+  await expect(check).toBeFocused();
+});
+
+test("gagal/batal menuju riwayat, status asing menawarkan pemeriksaan", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await openOrder(
+    page,
+    ok(order({ status: "failed_payment", paymentStatus: "failed", paymentFailureReason: "Kartu ditolak." }))
+  );
+  await expect(page.getByRole("button", { name: "Lihat Pesanan Saya" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Beli lagi" })).toBeVisible();
+  // Klaim kewajiban/refund tidak dibuat.
+  await expect(page.getByText(/buat pesanan baru/i)).toHaveCount(0);
+
+  await page.unroute("**/api/orders/**");
+  await openOrder(page, ok(order({ status: "awaiting_review", paymentStatus: "pending" })));
+  await expect(page.getByLabel("Status pesanan")).toHaveText(
+    "Status pesanan belum tersedia"
+  );
+  await expect(page.getByRole("button", { name: "Periksa status", exact: true })).toBeVisible();
+});
+
+test("pickup selesai menyembunyikan instruksi aktif dan kode tersimpan sebagai arsip", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openOrder(
+    page,
+    ok(
+      order({
+        status: "completed",
+        paymentStatus: "paid",
+        fulfillmentMethod: "pickup",
+        deliverySnapshot: null,
+        shipment: null,
+        pickupCode: "PKP-9911",
+      })
+    )
+  );
+
+  await expect(
+    page.getByText("Tunjukkan kode ini kepada staf cabang saat pengambilan.", {
+      exact: false,
+    })
+  ).toHaveCount(0);
+  await expect(page.getByText("PKP-9911", { exact: true })).toHaveCount(0);
+
+  const toggle = page.getByRole("button", { name: "Lihat kode pengambilan" });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await toggle.focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("region", { name: "Arsip kode pengambilan" })
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Salin kode" }).click();
+  await expect(page.getByText("Kode disalin", { exact: true })).toBeVisible();
+
+  // Tanpa kode: status selesai tanpa disclosure kosong.
+  await page.unroute("**/api/orders/**");
+  await openOrder(
+    page,
+    ok(
+      order({
+        status: "completed",
+        paymentStatus: "paid",
+        fulfillmentMethod: "pickup",
+        deliverySnapshot: null,
+        shipment: null,
+        pickupCode: null,
+      })
+    )
+  );
+  await expect(page.getByRole("button", { name: /kode pengambilan/ })).toHaveCount(0);
+});
+
+test("pending delivery tanpa shipment tidak menampilkan tracking kosong tetapi alamat tetap ada", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openOrder(
+    page,
+    ok(
+      order({
+        status: "pending_payment",
+        paymentStatus: "pending",
+        shipment: null,
+        snapRedirectUrl: "https://snap.example.test/pay-2",
+        paymentRecovery: {
+          state: "ready",
+          message: "Lanjutkan pembayaran sebelum batas waktu.",
+          paymentAvailable: true,
+          canInitialize: true,
+          redirectUrl: "https://snap.example.test/pay-2",
+          expiresAt: "2045-01-02T12:00:00Z",
+        },
+      })
+    )
+  );
+
+  await expect(page.getByRole("region", { name: "Lacak paket" })).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Alamat pengiriman" })).toBeVisible();
+  await expect(page.getByText("Nadia Pertiwi", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Bayar sekarang" })).toBeVisible();
+  // Deadline hanya dari DTO yang sah.
+  await expect(page.getByText(/Batas pembayaran:/)).toBeVisible();
 });

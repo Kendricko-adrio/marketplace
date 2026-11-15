@@ -334,8 +334,10 @@ consume/release tepat sekali, late-paid review tanpa reacquire kapasitas, dan
 rollback penuh. `discount-lifecycle-flow.db.test.ts` membuktikan jalur public
 `claimPaidOrder`/confirmed cancel/definitive rejection/late settlement.
 `discounts-coupon-mock.spec.ts` mencakup picker + disabled reason, total review
-(138750), place order (Redemption reserved + allocation + provider
-`disc_amount` 25000/amount 125000), order detail, dan paid-but-blocked. Sejak
+(138750), place order (Redemption reserved + allocation + provider line
+kontrak provider3 `disc_amount` 25000/`tax_amount` 13750/`amount` 138750 dengan
+`grand_total` 138750, sementara `net_line_amount` tersimpan tetap 125000), order
+detail, dan paid-but-blocked. Sejak
 ticket 08 spec yang sama juga membuktikan:
 
 - penggantian Coupon 25000→10000 membuka dialog total lama 138750 / baru 155400 /
@@ -684,6 +686,15 @@ tickets does not re-run the whole repository after every slice.
 Rules that keep this honest:
 
 - L1 always receives **explicit file paths**. Passing no path runs every project.
+- **DB suites share the global `discounts.contractVersion` gate.** `npm run test:unit`
+  (parallel per file) can therefore go red on admin DB tests
+  (`discounts-administration`, `price-changes-administration`,
+  `price-workbook-administration`) with `DISCOUNTS_INACTIVE` even though the code
+  is correct: another file toggled the gate. Run DB suites serially
+  (`npm run verify:batch:unit`) against a disposable
+  `marketplace_discounts_test_*` database before treating a failure as real. Bukti
+  2026-11-15: paralel 5 failed/2427 passed → serial **2432 passed, 25 skipped, 0 failed**
+  di DB yang sama.
 - `verify:batch:e2e` intersects the CLI path filter with
   [`playwright.mock.config.ts`](../../playwright.mock.config.ts) `testMatch`, so a new
   mock spec that is not listed there never runs. Add it in the same change that
@@ -979,6 +990,13 @@ and `reuseExistingServer: false` (servers are freshly started). The same
 
 ### Checkout attempt (pra-order)
 
+- `e2e/store/checkout-density-mock.spec.ts` — UI-only checkout/review/result:
+  legenda `* Wajib diisi` + `required`/`aria-required`, error per field dan fokus
+  field invalid pertama, penerjemahan pesan slot pickup, perilaku `InfoHint`
+  (hover/click/Enter/Escape + fokus kembali, target 24×24), kartu cabang dan
+  disclaimer pickup pada 390/320 px, review tanpa blok payment gateway, serta
+  hasil pembayaran netral (ID utuh, tanpa fetch verifikasi). Fixture cart,
+  branch, quote/preview di-mock; tidak ada mutasi DB atau provider.
 - `e2e/store/checkout-review-mock.spec.ts` — lifecycle checkout baru: SO ditolak
   tanpa order, ambiguitas ditahan, promotion hanya setelah SO + pembayaran siap,
   replay key sama, pemulihan sweep, dan rollback lokal.

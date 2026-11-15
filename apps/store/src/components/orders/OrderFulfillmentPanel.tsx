@@ -34,9 +34,16 @@ const INITIAL_EVENT_COUNT = 4;
 export function OrderFulfillmentPanel({
   shipment,
   deliverySnapshot,
+  showTracking = true,
 }: {
   shipment: OrderDetail["shipment"];
   deliverySnapshot: OrderDetail["deliverySnapshot"];
+  /**
+   * Pending payment tanpa shipment: tracking kosong ditunda, tetapi alamat dan
+   * fallback snapshot tetap dirender. Shipment nyata tetap tampil setelah
+   * pembayaran — isinya tidak dibuang hanya karena status pending.
+   */
+  showTracking?: boolean;
 }) {
   const [showAllEvents, setShowAllEvents] = useState(false);
   const { feedback, copy } = useCopyFeedback();
@@ -49,7 +56,10 @@ export function OrderFulfillmentPanel({
 
   return (
     <div className="flex flex-col gap-6 lg:grid lg:grid-cols-3 lg:items-start">
-      {/* Mobile: tracking dulu, lalu alamat. Desktop: alamat kiri, tracking kanan. */}
+      {/* Mobile: tracking dulu, lalu alamat. Desktop: alamat kiri, tracking kanan.
+          Tracking disembunyikan hanya ketika belum ada pengiriman sama sekali
+          (pending payment); alamat tetap menjadi milik panel ini. */}
+      {showTracking && (
       <Card
         className="order-1 lg:order-2 lg:col-span-2"
         role="region"
@@ -233,9 +243,10 @@ export function OrderFulfillmentPanel({
           )}
         </CardContent>
       </Card>
+      )}
 
       <Card
-        className="order-2 lg:order-1 lg:col-span-1"
+        className={`order-2 lg:order-1 lg:col-span-1${showTracking ? "" : " lg:col-span-3"}`}
         role="region"
         aria-label="Alamat pengiriman"
       >

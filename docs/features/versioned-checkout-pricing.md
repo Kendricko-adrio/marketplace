@@ -361,6 +361,35 @@ pada `Bayar Sekarang` memeriksa request tersimpan dengan key yang sama, bukan
 membuat checkout baru. Recovery saat reload dan feedback status definitif dari
 server tetap dipertahankan.
 
+**Pemeriksaan status = read-only (fase 2).** `GET
+/api/checkout/requests/{requestKey}` hanya membaca proyeksi attempt/order. Bila
+lookup `404`, halaman **tidak lagi** memanggil `place-order` sebagai fallback:
+request key dan isian tetap tersimpan, dan pelanggan melihat pesan “Hasil
+checkout belum ditemukan. Periksa lagi atau hubungi bantuan.” bersama tombol
+pemeriksaan yang sama. Submit eksplisit lewat `Bayar Sekarang` tidak berubah
+menjadi retry otomatis. Hasil pemeriksaan dilaporkan sebagai state presentasi
+lokal `checking`/`unchanged`/`updated`/`error` (`CheckoutAttemptFeedback`),
+dibandingkan pada field yang relevan bagi pelanggan — `state`, `orderId`,
+`paymentAvailable`, `retryAllowed`, dan `message` — sehingga perubahan
+`requestId`/`attemptId` saja tidak memunculkan “Status checkout diperbarui.”
+Attempt `preparing`/`processing`/`compensating`/`manual_review` memakai tone
+info/attention (bukan destructive) dengan aksi utama “Periksa status checkout”;
+hanya `rejected` yang definitif dan memakai tone destructive. Setiap
+gagal-submit jaringan kini menampilkan satu alert inline yang dapat difokuskan
+(`tabIndex={-1}` + fokus programatik) tepat di atas aksi bayar, bukan hanya
+toast.
+
+**Promo gugur dan total turun (fase 2).** State gugur menampilkan alasan aman
+server ditambah total sebelum/sesudah yang comparable, mis.
+“Promo tidak berlaku. Total naik Rp22.200 menjadi Rp166.500.” (fixture
+Rp144.300 → Rp166.500), serta aksi **Lanjut tanpa promo** yang sudah ada. Bila
+promo baru **menurunkan** total, halaman menampilkan satu baris inline di dekat
+total (“Total turun Rp5.550 menjadi Rp138.750.” pada fixture Rp144.300 →
+Rp138.750) tanpa dialog atau toast tambahan; snapshot hanya dibandingkan bila
+review sebelumnya masih sah, sehingga perubahan keranjang tidak menghasilkan
+klaim penghematan palsu. Backend ranking/pagination promo (10 per halaman)
+tidak berubah.
+
 **Admission.** `POST /api/checkout/preview` dan `POST /api/checkout/place-order`
 memakai counter PostgreSQL `discount_request_window` (bukan Map in-process):
 preview 60/account dan 300/IP per 60 detik; place order 10/account dan 60/IP.
@@ -437,6 +466,34 @@ tersedia, dari snapshot itu — bukan hasil hitung ulang master terbaru. Karena
 itu order gagal yang lama tidak lagi dibuat untuk checkout baru; kegagalan
 tercatat sebagai attempt `rejected`/`manual_review`. Lihat
 [jubelio-sales-orders.md](jubelio-sales-orders.md#checkout-attempt-sebelum-order-plan-checkout-attempt-before-order).
+
+### Kepadatan copy review dan presentasi hasil yang belum diverifikasi
+
+Review pembayaran memakai intro singkat ("Periksa pesanan, lalu lanjut ke
+pembayaran."), tanpa blok identitas payment gateway maupun daftar metode
+pembayaran. Pengingat pickup di review menjadi satu baris netral dengan detail
+di `InfoHint`, dan checkbox pickup dipersingkat tanpa menghilangkan komitmen
+memeriksa pesanan maupun menyebutkan nomor telepon/email saat mengambil. Total,
+subtotal, PPN, ongkir/subsidi, promo, dan persetujuan tidak berubah; hanya
+presentasinya yang diringkas. Penjelasan sekunder (aturan cabang, estimasi
+pickup, isi email pickup, asal nomor penerima) memakai shared `InfoHint` dari
+`packages/ui/src/components/ui/info-hint.tsx` — tombol 24×24 yang terbuka lewat
+hover, click/tap, Enter/Space, dengan Escape menutup dan mengembalikan fokus.
+Informasi wajib, biaya, status, dan konsekuensi tetap terlihat tanpa hover.
+
+Halaman hasil (`apps/store/src/app/checkout/result/page.tsx`) tidak memakai
+`transaction_status` sebagai bukti apa pun. Bila `order_id` ada, halaman
+menampilkan heading "Periksa status pembayaran", ikon/tone netral, copy belum
+terverifikasi, ID utuh (`break-all`), primary **Lihat Detail Pesanan** ke pesanan
+itu, dan secondary **Belanja Lagi**. Tanpa `order_id`, heading "Pesanan belum
+dapat ditentukan" dengan primary **Lihat Pesanan Saya** ke `/account`; tidak ada
+link detail kosong. Tidak ada fetch/polling atau perubahan status backend dari
+halaman ini; status sebenarnya tetap dibaca dari detail pesanan.
+
+Coverage: `e2e/store/checkout-density-mock.spec.ts` (required/error/fokus,
+penerjemahan pesan slot, perilaku `InfoHint`, kartu cabang 390/320 px, review
+tanpa gateway, hasil netral + ID utuh), `e2e/store/status-colors-mock.spec.ts`
+(tone hasil netral), dan `e2e/store/delivery-quote-mock.spec.ts` (hint kontak).
 
 ### Feedback checkout berhasil
 

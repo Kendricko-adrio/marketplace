@@ -77,6 +77,7 @@ export function PromoSelectionDialog(props: PromoSelectionDialogProps) {
   return (
     <Dialog open={props.open} onOpenChange={close}>
       <DialogContent className="flex max-h-[90dvh] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-2xl"
+        closeButtonSize="comfortable"
         onCloseAutoFocus={event => { event.preventDefault(); document.getElementById("promo-picker-trigger")?.focus(); }}>
         <DialogHeader className="shrink-0 border-b p-4 pr-10 text-left sm:p-6">
           <DialogTitle>{increase ? "Total pesanan naik" : "Pilih promo"}</DialogTitle>
@@ -99,7 +100,7 @@ export function PromoSelectionDialog(props: PromoSelectionDialogProps) {
             <Label htmlFor="manual-promo-code">Kode promo</Label>
             <form className="flex gap-2" onSubmit={event => { event.preventDefault(); if (!pending && code.trim().length >= 3) void checkCode(); }}>
               <Input id="manual-promo-code" value={code} autoComplete="off" spellCheck={false} maxLength={64}
-                placeholder="Masukkan kode promo" className="min-w-0 font-mono uppercase"
+                placeholder="Masukkan kode promo" className="checkout-prompt min-w-0 font-mono uppercase"
                 disabled={pending !== null}
                 onChange={event => {
                   setCode(event.target.value); setCodeValid(false); setMessage(null);

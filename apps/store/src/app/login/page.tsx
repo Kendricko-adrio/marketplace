@@ -120,11 +120,15 @@ function LoginForm() {
     document.cookie = "client.onboarding=; path=/; max-age=0";
 
     try {
-      // New Google users go to onboarding; returning users go home.
-      // (Middleware will still gate home if onboarding isn't done.)
+      // Returning Google users finish at the onboarding sync route with the
+      // same safe internal callback the email flow uses, so a customer who
+      // signed in from an order/result page returns to that same page.
+      // New users still go through onboarding first (the sync route sends
+      // them there and the gate stays mandatory).
+      const syncCallback = `/api/onboarding/sync?callbackUrl=${encodeURIComponent(callbackUrl)}`;
       await signIn.social({
         provider: "google",
-        callbackURL: "/api/onboarding/sync",
+        callbackURL: syncCallback,
         newUserCallbackURL: "/onboarding",
       });
     } catch (err) {

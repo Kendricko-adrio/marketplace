@@ -33,6 +33,11 @@
        ≈3.6:1 stays clearly secondary, still perceivable, and keeps a margin
        above the 3:1 non-text cue floor. */
     --placeholder: 207 10% 52%; /* #788691 */
+    /* Prompt aktif di permukaan checkout (lihat .checkout-prompt di bawah).
+       OPAK supaya rasio kontrasnya dapat diukur dari computed style; ≈5,3:1 di
+       atas --field dan tetap terpisah dari nilai asli (≈16:1). Ini token lokal
+       store; --placeholder global dan admin tidak berubah. */
+    --checkout-prompt: #5a6b78;
     --ring: 197 58% 27%;
     --radius: 0.5rem;
     --chart-1: 199 42% 9%;
@@ -92,6 +97,8 @@
     --field: 197 50% 18%;
     --input: 197 20% 40%;
     --placeholder: 190 10% 52%; /* #788D91 — ≈3.6:1 on the dark --field */
+    /* Versi dark untuk prompt checkout: ≈5,9:1 di atas --field dark. */
+    --checkout-prompt: #a8b4bc;
 
     /* Warna status semantik — opaque agar kontras teks dapat diukur dari
        computed style hasil render. Nilai light/dark WAJIB identik di
@@ -131,4 +138,31 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/*
+ * Prompt aktif di checkout.
+ *
+ * Token global `--placeholder` sengaja tetap ≈3,6:1 supaya field kosong tidak
+ * terbaca sebagai field terisi (lihat komentar token di atas dan spec
+ * form-field-contrast). Di checkout, teks petunjuk pada field yang aktif
+ * dihitung sebagai teks biasa sehingga target AA adalah 4,5:1; karena itu
+ * permukaan checkout memakai override LOKAL store, bukan perubahan token
+ * global (admin dan surface lain tidak berubah).
+ *
+ * Unlayered agar menang atas utility `placeholder:text-placeholder` /
+ * `data-[placeholder]:text-placeholder` tanpa menaikkan specificity token.
+ */
+/* Specificity sengaja lebih tinggi dari utility `placeholder:text-placeholder`
+   (0,1,1) dan `data-[placeholder]:text-placeholder` (0,2,0) supaya hasilnya tidak
+   bergantung pada urutan chunk CSS Turbopack; tetap tanpa `!important`. */
+input.checkout-prompt::placeholder,
+textarea.checkout-prompt::placeholder {
+  color: var(--checkout-prompt);
+  opacity: 1;
+}
+
+button.checkout-prompt[data-placeholder],
+input.checkout-prompt[data-placeholder] {
+  color: var(--checkout-prompt);
 }

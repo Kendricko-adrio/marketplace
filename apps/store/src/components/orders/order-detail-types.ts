@@ -56,6 +56,19 @@ export interface OrderPaymentRecovery {
   expiresAt: string | null;
 }
 
+/**
+ * State presentasi pemeriksaan status pembayaran di halaman detail. Ini murni
+ * status UI lokal (bukan field API/attempt baru): `checking` selama GET
+ * berjalan, `unchanged`/`updated` membandingkan field yang relevan bagi
+ * customer, dan `error` berarti hasil belum dapat dipastikan.
+ */
+export type PaymentCheckState =
+  | "idle"
+  | "checking"
+  | "unchanged"
+  | "updated"
+  | "error";
+
 export interface OrderDetail {
   id: string;
   userId: string;

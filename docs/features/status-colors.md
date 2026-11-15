@@ -182,6 +182,19 @@ benar-benar memakai treatment tone tersebut.
 email, container feedback import/bulk, ikon ringkasan customer). Karena
 foreground ikut di-set, ikon di dalamnya mewarisi `currentColor`.
 
+Halaman hasil `/checkout/result` memakai helper ini dengan tone yang diturunkan
+**dari DTO pesanan**, bukan dari nilai query gateway (lihat
+[`order-flow.md`](order-flow.md) langkah 5): `paid` → `success`, `paid` +
+`fulfillmentBlockedReason` → `progress`, `pending` pada order non-terminal →
+`waiting`, `failed` → `error`, `cancelled` (pembayaran bukan paid/failed) →
+`cancelled`, kombinasi asing/kontradiktif serta kegagalan baca → `neutral`, dan
+`paid` + `blocked` tetap `progress` untuk dimensi fulfillment. Query
+`transaction_status=settlement|deny|…` tidak pernah mengubah tone, sehingga
+“Pembayaran Berhasil!” palsu tidak bisa muncul dari URL. Spec
+`e2e/store/status-colors-mock.spec.ts` dan
+`e2e/store/checkout-result-status-mock.spec.ts` menegakkan kontrak ini lewat
+route interception deterministik.
+
 ### 5.3 Aggregate import/bulk
 
 ```ts

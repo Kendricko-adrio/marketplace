@@ -357,6 +357,8 @@ test("detail pesanan memisahkan order, pembayaran, promo, dan tracking yang suda
     detailOrder({
       promo: {
         name: "Promo Hemat",
+        // AC-12 (plan improve-checkout-copy-density, D3): angka acuan promo
+        // barang yang sama di seluruh spec mock store.
         benefitAmount: "20000",
         status: "consumed",
         consumedAt: "2026-11-01T03:00:00Z",
@@ -422,7 +424,7 @@ test("pembayaran lunas tetap success walau status order dan promo masih menunggu
       paymentStatus: "pending",
       promo: {
         name: "Promo Reservasi",
-        benefitAmount: "15000",
+        benefitAmount: "20000",
         status: "reserved",
         consumedAt: null,
         releasedAt: null,
@@ -450,7 +452,7 @@ test("status promo asing tidak diklaim reserved dan order selesai bukan bukti ba
       paymentStatus: "paid",
       promo: {
         name: "Promo Masa Depan",
-        benefitAmount: "10000",
+        benefitAmount: "20000",
         status: "awaiting_future_state",
         consumedAt: null,
         releasedAt: null,
@@ -504,41 +506,63 @@ test("status order asing memakai label aman dan tone netral", async ({ page }) =
 });
 
 // ---------------------------------------------------------------------------
-// AC05 — hasil checkout memakai tone semantik
+// AC05 — hasil checkout memakai tone dari DTO terverifikasi
 // ---------------------------------------------------------------------------
 
-test("hasil checkout memakai tone success/waiting/error dengan copy existing", async ({
+test("hasil checkout memakai tone dari DTO dan bukan dari query", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
+  const orderId = "sc-result-1";
 
-  await page.goto("/checkout/result?order_id=sc-result-1&transaction_status=settlement");
-  await expect(
-    page.getByRole("heading", { name: "Pembayaran Berhasil!" })
-  ).toBeVisible();
-  await expectStatusTone(
-    page.locator('[data-status-tone="success"]').first(),
-    "success"
-  );
+  // Query gateway bukan bukti sukses/pending/gagal: DTO owner-scoped yang
+  // menentukan, dan tone mengikuti makna status tersebut.
+  await page.route("**/api/orders/**", async (route) => {
+    await route.fulfill({
+      json: {
+        success: true,
+        data: {
+          id: orderId,
+          status: "pending_payment",
+          paymentStatus: "pending",
+          fulfillmentBlockedReason: null,
+        },
+      },
+    });
+  });
 
-  await page.goto("/checkout/result?order_id=sc-result-1&transaction_status=pending");
-  await expect(
-    page.getByRole("heading", { name: "Menunggu Pembayaran" })
-  ).toBeVisible();
-  await expectStatusTone(
-    page.locator('[data-status-tone="waiting"]').first(),
-    "waiting"
-  );
+  for (const status of [
+    "settlement",
+    "capture",
+    "pending",
+    "deny",
+    "cancel",
+    "unknown-value",
+  ]) {
+    await page.goto(`/checkout/result?order_id=${orderId}&transaction_status=${status}`);
+    await expect(
+      page.getByRole("heading", { name: "Menunggu pembayaran" })
+    ).toBeVisible();
+    await expectStatusTone(
+      page.locator('[data-status-tone="waiting"]').first(),
+      "waiting"
+    );
+    await expect(page.getByText("Pembayaran Berhasil!", { exact: false })).toHaveCount(0);
+    await expect(page.getByText("Pembayaran Gagal", { exact: false })).toHaveCount(0);
+  }
 
-  // Tanpa order id = kondisi gagal existing (bukan status server baru).
+  // Tanpa order id = pesanan belum dapat ditentukan, bukan klaim gagal.
+  await page.unroute("**/api/orders/**");
   await page.goto("/checkout/result");
   await expect(
-    page.getByRole("heading", { name: "Pembayaran Gagal" })
+    page.getByRole("heading", { name: "Pesanan belum dapat ditentukan" })
   ).toBeVisible();
   await expectStatusTone(
-    page.locator('[data-status-tone="error"]').first(),
-    "error"
+    page.locator('[data-status-tone="neutral"]').first(),
+    "neutral"
   );
+  await expect(page.getByRole("link", { name: /Lihat Pesanan Saya/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Lihat Detail Pesanan/ })).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------

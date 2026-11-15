@@ -136,9 +136,25 @@ tinted summary panel while retaining the branch name and city at a glance.
    (`apps/store/src/app/checkout/page.tsx`) redirects the customer straight to
    the Midtrans Snap page (`window.location.href = data.redirectUrl`); no
    polling. After payment, Midtrans redirects back to the checkout result page
-   (`apps/store/src/app/checkout/result/page.tsx`), which derives the outcome
-   directly from Snap's query params (`transaction_status` → success /
-   pending / cancel).
+   (`apps/store/src/app/checkout/result/page.tsx`). That page now **verifies**
+   the order instead of guessing: with `order_id` it issues one owner-scoped
+   read-only `GET /api/orders/{id}` and derives the presentation from the DTO
+   (`paid` → "Pembayaran diterima", `paid` + `fulfillmentBlockedReason` →
+   "Pembayaran diterima, pesanan menunggu verifikasi", `pending` dengan order
+   non-terminal → "Menunggu pembayaran", `failed` → "Pembayaran gagal",
+   cancelled dengan pembayaran bukan paid/failed → "Pesanan dibatalkan",
+   kombinasi asing/kontradiktif → "Status pembayaran belum dapat dipastikan").
+   Snap's `transaction_status`/`status_code` query values are **ignored**: they
+   are never treated as proof of settlement or failure. A verified `paid` stays
+   paid even when the order is cancelled or blocked. Read failures stay honest:
+   404 → "Pesanan tidak ditemukan" (no ownership disclosure), 401 → "Masuk untuk
+   memeriksa pesanan" with a login-return callback that keeps `order_id`, 403 →
+   "Akses pesanan belum tersedia", and network/5xx/invalid envelope or a DTO
+   whose `id` does not match → "Status pembayaran belum dapat diperiksa" with a
+   **Coba lagi** that re-reads the same order. Without an `order_id` the page
+   shows "Pesanan belum dapat ditentukan" and never picks the latest order. No
+   payment session, provider retry, or replacement order is ever created from
+   this page.
 6. **Order-status endpoint (not consumed by UI)** — `GET
    /api/checkout/order-status?orderId=…`
    (`apps/store/src/app/api/checkout/order-status/route.ts`) exists: read-only

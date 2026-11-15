@@ -15,9 +15,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
+import { InfoHint } from "@/components/ui/info-hint";
 import { ReadOnlyInput } from "@/components/ui/read-only-input";
 import {
+  AlertCircle,
   ArrowLeft,
   ArrowRight,
   Check,
@@ -26,12 +27,11 @@ import {
   Loader2,
   MapPin,
   Calendar,
-  TriangleAlert,
 } from "lucide-react";
 import { useSession } from "@/lib/auth-client";
 import { useCart } from "@/providers/cart-provider";
 import DeliveryQuotePanel, { type DeliveryAddressPreview } from "@/components/checkout/DeliveryQuotePanel";
-import { CheckoutAttemptFeedback } from "@/components/checkout/CheckoutAttemptFeedback";
+import { CheckoutAttemptFeedback, type CheckoutCheckState } from "@/components/checkout/CheckoutAttemptFeedback";
 import { CheckoutTaxFeedback } from "@/components/checkout/CheckoutTaxFeedback";
 import type { CheckoutAttemptResult } from "@/features/checkout/checkout-attempt";
 import { PromoSelector, type AvailableOffer, type PromoInvalidation } from "@/components/checkout/PromoSelector";
@@ -46,6 +46,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { DeliveryQuoteService } from "@/lib/delivery-quote";
+import { formatDeliveryEta } from "@/lib/delivery-options";
 import {
   getDayHours,
   generateTimeSlots,
@@ -180,6 +181,66 @@ interface BranchWithHours {
   operatingHours: OperatingHours;
 }
 
+/** Error per field step 1 pickup; kunci kecil dan hanya untuk field wajib. */
+type PickupFieldErrors = Partial<
+  Record<"date" | "time" | "phone" | "email", string>
+>;
+
+/**
+ * Penolakan slot dari server dipetakan ke field + bahasa Indonesia. Pesan
+ * jaringan/asing tidak pernah tampil mentah ke customer.
+ */
+/**
+ * Sidik jari field attempt yang ditampilkan. Perubahan requestId/attemptId saja
+ * bukan perubahan status bagi customer, jadi tidak boleh memunculkan pesan
+ * "diperbarui" palsu.
+ */
+function attemptSignature(attempt: CheckoutAttemptResult): string {
+  return JSON.stringify([
+    attempt.state,
+    attempt.orderId,
+    attempt.paymentAvailable,
+    attempt.retryAllowed,
+    attempt.message,
+  ]);
+}
+
+function mapPickupSlotError(raw: string | undefined): {
+  field: "date" | "time";
+  message: string;
+} {
+  const range = raw?.match(/^Pickup time must be between (\d{2}:\d{2}) and (\d{2}:\d{2})/);
+  if (range) {
+    return {
+      field: "time",
+      message: `Waktu pickup harus antara ${range[1]} dan ${range[2]}.`,
+    };
+  }
+  switch (raw) {
+    case "Pickup date is required.":
+      return { field: "date", message: "Pilih tanggal pickup." };
+    case "Pickup time is required.":
+      return { field: "time", message: "Pilih jam pickup." };
+    case "Invalid pickup date.":
+      return { field: "date", message: "Tanggal pickup tidak valid. Pilih tanggal lain." };
+    case "Invalid pickup time.":
+      return { field: "time", message: "Jam pickup tidak valid. Pilih jam lain." };
+    case "Pickup date cannot be in the past.":
+      return { field: "date", message: "Tanggal pickup sudah lewat. Pilih tanggal lain." };
+    case "Pickup date and time must be in the future.":
+      return { field: "time", message: "Tanggal dan jam pickup harus di masa depan." };
+    case "Branch is closed on the selected day.":
+      return { field: "date", message: "Cabang tutup pada tanggal ini. Pilih tanggal lain." };
+    case "Branch is not available":
+      return { field: "date", message: "Cabang ini belum tersedia untuk pickup." };
+    default:
+      return {
+        field: "time",
+        message: "Slot pickup belum dapat diverifikasi. Coba lagi.",
+      };
+  }
+}
+
 export default function CheckoutPage() {
   const router = useRouter();
   const { data: session, isPending: sessionPending } = useSession();
@@ -202,6 +263,7 @@ export default function CheckoutPage() {
   // Step 2 — Contact
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
+  // Delivery tetap memakai satu pesan kontak; pickup memakai `fieldErrors`.
   const [contactError, setContactError] = useState("");
 
   // Step 2 — Coupon publik pickup (ticket 07). Read-only list; the server
@@ -224,6 +286,8 @@ export default function CheckoutPage() {
   const [appliedManualCode, setAppliedManualCode] = useState<AppliedManualCode | null>(null);
   const appliedManualCodeRef = useRef<AppliedManualCode | null>(null);
   const [promoInvalidation, setPromoInvalidation] = useState<PromoInvalidation | null>(null);
+  // Delta total turun dari promo yang baru diterapkan: snapshot comparable saja.
+  const [promoDelta, setPromoDelta] = useState<{ amount: number; total: number } | null>(null);
   const [promoPendingOfferId, setPromoPendingOfferId] = useState<string | null>(null);
   const [promoReplacement, setPromoReplacement] = useState<{
     data: CheckoutPreviewData;
@@ -260,7 +324,13 @@ export default function CheckoutPage() {
   // Step 1 — Pickup
   const [pickupDate, setPickupDate] = useState("");
   const [pickupTime, setPickupTime] = useState("");
-  const [pickupError, setPickupError] = useState("");
+  // Error per field (tanggal/jam/telepon/email) supaya perbaikannya dekat
+  // dengan kontrolnya; kontak memakai pesan yang sama untuk pickup.
+  const [fieldErrors, setFieldErrors] = useState<PickupFieldErrors>({});
+  const pickupDateRef = useRef<HTMLInputElement>(null);
+  const pickupTimeRef = useRef<HTMLButtonElement>(null);
+  const phoneRef = useRef<HTMLInputElement>(null);
+  const emailRef = useRef<HTMLInputElement>(null);
   // Only the latest validation of unchanged fulfillment inputs may advance.
   const pickupValidationGeneration = useRef(0);
 
@@ -270,6 +340,13 @@ export default function CheckoutPage() {
   const [reviewing, setReviewing] = useState(false);
   const [pendingRequest, setPendingRequest] = useState<PendingCheckout | null>(null);
   const [attemptFeedback, setAttemptFeedback] = useState<CheckoutAttemptResult | null>(null);
+  // Pemeriksaan status checkout adalah lookup read-only request yang sama.
+  const [checkState, setCheckState] = useState<CheckoutCheckState>("idle");
+  const [lookupNotice, setLookupNotice] = useState<string | null>(null);
+  // Satu feedback submit inline yang terlihat dan dapat difokuskan.
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const submitErrorRef = useRef<HTMLDivElement>(null);
+  const attemptSnapshot = useRef<string | null>(null);
   // Preflight pajak BUKAN attempt durable: pesan/copy saja, tanpa state order.
   const [taxFeedback, setTaxFeedback] = useState<string | null>(null);
   const requestInFlight = useRef(false);
@@ -403,6 +480,12 @@ export default function CheckoutPage() {
     return branchIds.size === 1 ? Array.from(branchIds)[0] : null;
   }, [selectedItems]);
 
+  // Feedback submit utama harus ditemukan juga oleh pengguna keyboard/screen
+  // reader: pindahkan fokus ke pesan yang baru muncul, bukan ke toast.
+  useEffect(() => {
+    if (submitError) submitErrorRef.current?.focus();
+  }, [submitError]);
+
   // Fetch full branch details (with operating hours) once the selected
   // items are loaded. The cart page already enforces single-branch selection.
   useEffect(() => {
@@ -454,8 +537,17 @@ export default function CheckoutPage() {
       if (active && active === selectedOfferIdRef.current) {
         setSelectedPublicOffer(data.selectedOffer);
         if (data.selectedOfferUnavailable || (data.selectedOffer && !data.selectedOffer.eligible)) {
-          setPromoInvalidation({ offerId: active, message: data.selectedOffer?.reasonMessage ?? "Promo ini sudah tidak tersedia untuk pesanan kamu." });
-        } else setPromoInvalidation(null);
+          setPromoInvalidation({
+            offerId: active,
+            message: data.selectedOffer?.reasonMessage ?? "Promo ini sudah tidak tersedia untuk pesanan kamu.",
+            previousTotal: review?.pricing.total ?? null,
+          });
+        } else if (data.selectedOffer?.eligible) {
+          // Promo kembali tersedia untuk konteks ini: state gugur lama boleh hilang.
+          // Respons tanpa informasi pilihan (selectedOffer null) TIDAK menghapus
+          // state gugur yang baru di-set oleh penolakan authoritative.
+          setPromoInvalidation(null);
+        }
       }
     } catch {
       if (generation === promoListGeneration.current) setPromoError("Promo belum dapat dimuat.");
@@ -489,27 +581,34 @@ export default function CheckoutPage() {
   const validateContact = (): boolean => {
     const trimmedPhone = phone.trim();
     const phoneDigits = trimmedPhone.replace(/\D/g, "");
+    const errors: PickupFieldErrors = {};
     if (
       !trimmedPhone ||
       phoneDigits.length < 8 ||
       phoneDigits.length > 15 ||
       trimmedPhone.length > 20
     ) {
-      setContactError(
-        "Masukkan nomor telepon yang valid (8–15 angka)."
-      );
-      return false;
+      errors.phone = "Masukkan nomor telepon yang valid (8–15 angka).";
     }
     const trimmedEmail = email.trim();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
-      setContactError(
-        "Masukkan alamat email yang valid."
-      );
+      errors.email = "Masukkan alamat email yang valid.";
+    }
+    setFieldErrors((previous) => ({
+      date: previous.date,
+      time: previous.time,
+      ...errors,
+    }));
+    if (errors.phone) {
+      phoneRef.current?.focus();
+      return false;
+    }
+    if (errors.email) {
+      emailRef.current?.focus();
       return false;
     }
     setPhone(trimmedPhone);
     setEmail(trimmedEmail);
-    setContactError("");
     return true;
   };
 
@@ -607,26 +706,32 @@ export default function CheckoutPage() {
   const needsRereview = cart?.pricingContractVersion === 1 && review == null;
 
   // Pickup validation — the server also revalidates at order placement.
+  // Kontrak wajib mengikuti atribut required/aria-required; error yang sama
+  // tampil dekat field masing-masing lalu fokus pindah ke field invalid pertama.
   const validatePickup = (): boolean => {
+    const errors: PickupFieldErrors = {};
+    let focusDate = false;
+    // Tanggal adalah prasyarat jam: jangan menampilkan error pada kontrol
+    // jam yang masih disabled saat tanggal belum dipilih.
     if (!pickupDate) {
-      setPickupError("Please select a pickup date.");
+      errors.date = "Pilih tanggal pickup.";
+    } else if (!dayHours) {
+      // Pesan tutup-cabang sudah tampil di bawah field tanggal.
+      focusDate = true;
+    } else if (!pickupTime) {
+      errors.time = "Pilih jam pickup.";
+    } else if (!timeSlots.includes(pickupTime)) {
+      errors.time = `Waktu pickup harus antara ${dayHours.open} dan ${dayHours.close}.`;
+    }
+    setFieldErrors(errors);
+    if (errors.date || focusDate) {
+      pickupDateRef.current?.focus();
       return false;
     }
-    if (!pickupTime) {
-      setPickupError("Please select a pickup time.");
+    if (errors.time) {
+      pickupTimeRef.current?.focus();
       return false;
     }
-    if (!dayHours) {
-      setPickupError("Branch is closed on the selected day.");
-      return false;
-    }
-    if (!timeSlots.includes(pickupTime)) {
-      setPickupError(
-        `Pickup time must be between ${dayHours.open} and ${dayHours.close}.`
-      );
-      return false;
-    }
-    setPickupError("");
     return true;
   };
 
@@ -660,11 +765,19 @@ export default function CheckoutPage() {
         if (!validateContact()) return;
         await goToPayment();
       } else {
-        setPickupError(data.error || "Invalid pickup slot.");
+        const mapped = mapPickupSlotError(data.error);
+        setFieldErrors({ [mapped.field]: mapped.message });
+        (mapped.field === "date"
+          ? pickupDateRef.current
+          : pickupTimeRef.current
+        )?.focus();
       }
     } catch {
       if (generation !== pickupValidationGeneration.current) return;
-      setPickupError("Failed to validate pickup slot. Please try again.");
+      setFieldErrors({
+        time: "Slot pickup belum dapat diverifikasi. Coba lagi.",
+      });
+      pickupTimeRef.current?.focus();
     }
   };
 
@@ -732,6 +845,15 @@ export default function CheckoutPage() {
     intent: Record<string, unknown>,
     selection: PromoSelection
   ) {
+    const previousTotal = review && !promoInvalidation ? Number(review.pricing.total) : null;
+    const nextTotal = Number(data.pricing.total);
+    // Delta hanya untuk snapshot comparable (review sebelumnya yang masih sah):
+    // total turun dijelaskan inline, bukan dengan dialog baru.
+    setPromoDelta(
+      previousTotal !== null && Number.isFinite(previousTotal) && Number.isFinite(nextTotal) && nextTotal < previousTotal
+        ? { amount: previousTotal - nextTotal, total: nextTotal }
+        : null
+    );
     setReview({
       reviewToken: data.reviewToken,
       expiresAt: data.expiresAt,
@@ -822,6 +944,7 @@ export default function CheckoutPage() {
             setPromoInvalidation({
               offerId: invalidPrevious.promo.offerId,
               message: invalidPrevious.message || result.error || "Promo tidak lagi berlaku.",
+              previousTotal: review?.pricing.total ?? null,
             });
           }
           void loadPromos();
@@ -864,7 +987,11 @@ export default function CheckoutPage() {
           return { kind: "context_changed", message: "Pesanan berubah. Pilih promo kembali." };
         }
         if (result.data?.previous?.status === "invalid" && result.data.previous.promo?.offerId) {
-          setPromoInvalidation({ offerId: result.data.previous.promo.offerId, message: result.data.previous.message || "Promo tidak lagi berlaku." });
+          setPromoInvalidation({
+            offerId: result.data.previous.promo.offerId,
+            message: result.data.previous.message || "Promo tidak lagi berlaku.",
+            previousTotal: review?.pricing.total ?? null,
+          });
         }
         if (String(result.code).startsWith("PROMO_")) void loadPromos(promoData?.page ?? 1);
         return { kind: "error", message: result.code === "RATE_LIMITED"
@@ -1025,6 +1152,7 @@ export default function CheckoutPage() {
   }
 
   async function submitVersioned(record: PendingCheckout) {
+    setSubmitError(null);
     try {
       const response = await fetch("/api/checkout/place-order", {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(record.body),
@@ -1056,10 +1184,9 @@ export default function CheckoutPage() {
           setConfirmed(false);
           setReview(null);
           setStep(2);
-          toast.error(attempt.message);
           return;
         }
-        toast.error(attempt.message);
+        if (attempt.state === "promoted") return;
         return;
       }
       if (result.success && result.data?.orderId) {
@@ -1097,13 +1224,24 @@ export default function CheckoutPage() {
         setReview(null);
         setConfirmed(false);
         setStep(2);
+        // Catatan penurunan total sebelumnya tidak boleh bertahan: total sudah
+        // kembali ke harga tanpa promo, jadi klaim penghematan lama akan palsu.
+        setPromoDelta(null);
         // Alasan aman dari server tetap ditampilkan sebagai state gugur; promo
         // tidak diganti otomatis dan order tanpa promo tidak dibuat diam-diam.
-        if (selectedOfferIdRef.current || appliedManualCodeRef.current) {
+        // Identitas promo diambil dari ref pilihan, lalu dari review yang barusan
+        // ditolak (closure) supaya state gugur tidak hilang saat ref sudah bersih.
+        const invalidatedOfferId =
+          selectedOfferIdRef.current ??
+          appliedManualCodeRef.current?.offerId ??
+          (review?.promo && review.promo.kind !== "none"
+            ? review.promo.offerId
+            : null);
+        if (invalidatedOfferId) {
           setPromoInvalidation({
-            offerId:
-              selectedOfferIdRef.current ?? appliedManualCodeRef.current!.offerId,
+            offerId: invalidatedOfferId,
             message: result.error || "Promo tidak lagi berlaku untuk pesanan ini.",
+            previousTotal: review?.pricing.total ?? null,
           });
         }
         void loadPromos();
@@ -1111,34 +1249,51 @@ export default function CheckoutPage() {
       toast.error(result.error || "Status checkout belum dapat dipastikan. Periksa pesanan yang sama.");
     } catch {
       // Jangan ganti key/intent setelah response hilang. Panel recovery tetap tersedia.
-      toast.error("Koneksi terputus. Periksa status pesanan sebelum mencoba lagi.");
+      setSubmitError("Koneksi terputus. Periksa status pesanan sebelum mencoba lagi.");
     }
   }
 
   async function recoverPendingRequest() {
     if (!pendingRequest || requestInFlight.current) return;
     requestInFlight.current = true; setSubmitting(true);
+    setCheckState("checking");
+    setLookupNotice(null);
     try {
       const response = await fetch(`/api/checkout/requests/${pendingRequest.requestKey}`, { cache: "no-store" });
-      const result = await response.json();
-      const attempt: CheckoutAttemptResult | undefined = result.data?.version === 2 ? result.data : undefined;
+      const result = await response.json().catch(() => null);
+      const attempt: CheckoutAttemptResult | undefined = result?.data?.version === 2 ? result.data : undefined;
       if (attempt) {
+        const previous = attemptSnapshot.current;
+        const next = attemptSignature(attempt);
+        attemptSnapshot.current = next;
         setAttemptFeedback(attempt);
         if (attempt.state === "promoted" && attempt.orderId) {
+          setCheckState("updated");
           clearPendingRequest(); refreshCart();
           if (attempt.paymentAvailable && attempt.redirectUrl) window.location.href = attempt.redirectUrl;
           else router.push(`/account/orders/${attempt.orderId}`);
           return;
         }
+        setCheckState(previous !== null && previous !== next ? "updated" : previous === null ? "idle" : "unchanged");
         if (attempt.retryAllowed) clearPendingRequest();
         return;
       }
-      if (result.success && result.data?.orderId) {
+      if (result?.success && result.data?.orderId) {
+        setCheckState("updated");
         clearPendingRequest(); router.push(`/account/orders/${result.data.orderId}`); refreshCart(); return;
       }
-      if (response.status === 404) await submitVersioned(pendingRequest);
-      else toast.error("Status pesanan belum dapat dibaca. Coba periksa kembali.");
-    } catch { toast.error("Koneksi belum tersedia. Request checkout tetap tersimpan."); }
+      if (response.status === 404) {
+        // Pemeriksaan TIDAK memanggil place-order. Request/isian dipertahankan
+        // dan customer mendapat langkah lanjut yang jujur.
+        setCheckState("idle");
+        setLookupNotice("Hasil checkout belum ditemukan. Periksa lagi atau hubungi bantuan.");
+        return;
+      }
+      setCheckState("error");
+    } catch {
+      setCheckState("error");
+      setLookupNotice("Koneksi belum tersedia. Request checkout tetap tersimpan.");
+    }
     finally { requestInFlight.current = false; setSubmitting(false); }
   }
 
@@ -1355,9 +1510,25 @@ export default function CheckoutPage() {
       <Card><CardContent className="space-y-4 pt-6">
         <h1 className="text-2xl font-bold">Periksa status pesanan</h1>
         <p>Request checkout tersimpan. Kami akan mencari pesanan yang sama, tanpa membuat pesanan atau pembayaran pengganti otomatis.</p>
-        <Button onClick={recoverPendingRequest} disabled={submitting}>
-          {submitting ? "Memeriksa pesanan…" : "Periksa pesanan"}
-        </Button>
+        {attemptFeedback ? (
+          <CheckoutAttemptFeedback
+            result={attemptFeedback}
+            busy={submitting}
+            checkState={checkState}
+            onCheckStatus={() => void recoverPendingRequest()}
+            onReviewAgain={() => router.push("/cart")}
+          />
+        ) : (
+          <Button onClick={recoverPendingRequest} disabled={submitting} aria-busy={submitting} className="gap-2">
+            {submitting ? <><Loader2 className="h-4 w-4 animate-spin" aria-hidden /> Memeriksa pesanan…</> : "Periksa pesanan"}
+          </Button>
+        )}
+        {lookupNotice && (
+          <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
+            {lookupNotice}
+          </p>
+        )}
+        {!attemptFeedback && <Button variant="outline" onClick={() => router.push("/cart")}>Kembali ke keranjang</Button>}
       </CardContent></Card>
     </div>;
   }
@@ -1398,13 +1569,13 @@ export default function CheckoutPage() {
       <div className="mb-8">
         <div className="flex items-center justify-between">
           {[
-            { num: 1, label: "Cara Pengiriman", icon: MapPin },
-            { num: 2, label: "Bayar & Pesan", icon: CreditCard },
+            { num: 1, label: "Cara Pengiriman", shortLabel: "Pengiriman", icon: MapPin },
+            { num: 2, label: "Bayar & Pesan", shortLabel: "Bayar", icon: CreditCard },
           ].map((s, i) => (
-            <div key={s.num} className="flex items-center flex-1 last:flex-none">
-              <div className="flex items-center gap-2">
+            <div key={s.num} className="flex min-w-0 items-center flex-1 last:flex-none">
+              <div className="flex min-w-0 items-center gap-2">
                 <div
-                  className={`flex h-9 w-9 items-center justify-center rounded-full border-2 text-sm font-medium ${
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border-2 text-sm font-medium ${
                     step >= s.num
                       ? "border-primary bg-primary text-primary-foreground"
                       : "border-muted text-muted-foreground"
@@ -1417,7 +1588,14 @@ export default function CheckoutPage() {
                   )}
                 </div>
                 <span
-                  className={`text-sm font-medium hidden sm:inline ${
+                  className={`min-w-0 break-words text-xs font-medium sm:hidden ${
+                    step >= s.num ? "text-foreground" : "text-muted-foreground"
+                  }`}
+                >
+                  {s.shortLabel}
+                </span>
+                <span
+                  className={`hidden min-w-0 break-words text-sm font-medium sm:inline ${
                     step >= s.num ? "text-foreground" : "text-muted-foreground"
                   }`}
                 >
@@ -1446,9 +1624,12 @@ export default function CheckoutPage() {
                 <h2 className="text-xl font-bold mb-1">Cara Pengiriman</h2>
                 <p className="text-sm text-muted-foreground mb-4">
                   {fulfillmentMethod === "delivery"
-                    ? "Pilih alamat pengiriman, lalu periksa ongkir untuk melihat layanan yang tersedia."
-                    : "Pilih perkiraan tanggal dan waktu kedatangan Anda untuk mengambil pesanan."}
+                    ? "Pilih alamat, lalu periksa ongkir."
+                    : "Pilih tanggal dan jam pickup."}
                 </p>
+                {fulfillmentMethod === "pickup" && (
+                  <p className="mb-4 text-xs text-muted-foreground">* Wajib diisi</p>
+                )}
 
                 {/* Selected items summary (read-only) */}
                 <div className="mb-6 rounded-lg border bg-muted/30 p-4">
@@ -1461,7 +1642,7 @@ export default function CheckoutPage() {
                   </div>
                   <div className="space-y-1.5">
                     {selectedItems.map((item) => (
-                      <div key={item.id} className="flex justify-between text-sm">
+                      <div key={item.id} className="flex flex-wrap justify-between gap-x-3 text-sm">
                         <span className="text-muted-foreground line-clamp-1 pr-2">
                           {item.product.name} ×{item.quantity}
                         </span>
@@ -1551,34 +1732,50 @@ export default function CheckoutPage() {
                   <div className="flex items-start gap-3">
                     <MapPin className="mt-0.5 h-5 w-5 flex-shrink-0 text-primary" />
                     <div className="min-w-0 flex-1">
-                      <div className="font-semibold">{branch?.name ?? "-"}</div>
-                      <div className="text-sm text-muted-foreground">
+                      <div className="font-semibold break-words">{branch?.name ?? "-"}</div>
+                      <div className="text-sm text-muted-foreground break-words">
                         {branch?.address ?? "-"}
                         {branch?.city ? `, ${branch.city}` : ""}
                       </div>
                     </div>
-                    <Badge variant="secondary" className="ml-3 shrink-0 whitespace-nowrap">
-                      Cabang Terpilih
-                    </Badge>
+                    <InfoHint label="Tentang cabang pickup" className="-mr-1 -mt-1">
+                      Cabang mengikuti barang yang dipilih. Satu checkout hanya
+                      untuk satu cabang.
+                    </InfoHint>
                   </div>
                 </div>
 
                 <div className="space-y-4">
                   <div>
                     <Label htmlFor="pickupDate" className="flex items-center gap-2 mb-1.5">
-                      <Calendar className="h-4 w-4" /> Tanggal Pickup *
+                      <Calendar className="h-4 w-4" aria-hidden="true" /> Tanggal Pickup *
                     </Label>
                     <Input
                       id="pickupDate"
+                      ref={pickupDateRef}
                       type="date"
                       min={todayStr}
+                      required
+                      aria-required="true"
+                      aria-invalid={fieldErrors.date ? true : undefined}
+                      aria-describedby={fieldErrors.date ? "pickupDate-error" : undefined}
                       value={pickupDate}
                       onChange={(e) => {
                         pickupValidationGeneration.current += 1;
                         setPickupDate(e.target.value);
                         setPickupTime(""); // reset time when date changes
+                        setFieldErrors((previous) => ({
+                          ...previous,
+                          date: undefined,
+                          time: undefined,
+                        }));
                       }}
                     />
+                    {fieldErrors.date && (
+                      <p id="pickupDate-error" className="mt-1 text-sm text-destructive">
+                        {fieldErrors.date}
+                      </p>
+                    )}
                     {selectedDate && !dayHours && (
                       <p className="mt-1 text-sm text-destructive">
                         Cabang tutup pada tanggal ini. Pilih tanggal lain.
@@ -1587,8 +1784,8 @@ export default function CheckoutPage() {
                   </div>
 
                   <div>
-                    <Label className="flex items-center gap-2 mb-1.5">
-                      <Clock className="h-4 w-4" /> Waktu Pickup *
+                    <Label htmlFor="pickupTime" className="flex items-center gap-2 mb-1.5">
+                      <Clock className="h-4 w-4" aria-hidden="true" /> Waktu Pickup *
                     </Label>
                     {pickupDate && dayHours ? (
                       <Select
@@ -1596,9 +1793,27 @@ export default function CheckoutPage() {
                         onValueChange={(value) => {
                           pickupValidationGeneration.current += 1;
                           setPickupTime(value);
+                          setFieldErrors((previous) => ({
+                            ...previous,
+                            time: undefined,
+                          }));
                         }}
                       >
-                        <SelectTrigger>
+                        <SelectTrigger
+                          id="pickupTime"
+                          ref={pickupTimeRef}
+                          aria-required="true"
+                          className="checkout-prompt"
+                          aria-invalid={fieldErrors.time ? true : undefined}
+                          aria-describedby={
+                            [
+                              fieldErrors.time ? "pickupTime-error" : null,
+                              "pickupTime-hint",
+                            ]
+                              .filter(Boolean)
+                              .join(" ") || undefined
+                          }
+                        >
                           <SelectValue placeholder="Pilih waktu" />
                         </SelectTrigger>
                         <SelectContent>
@@ -1611,14 +1826,31 @@ export default function CheckoutPage() {
                       </Select>
                     ) : (
                       <Select value="" disabled>
-                        <SelectTrigger>
+                        <SelectTrigger
+                          id="pickupTime"
+                          aria-required="true"
+                          className="checkout-prompt"
+                          aria-describedby={
+                            [
+                              fieldErrors.time ? "pickupTime-error" : null,
+                              "pickupTime-hint",
+                            ]
+                              .filter(Boolean)
+                              .join(" ") || undefined
+                          }
+                        >
                           <SelectValue placeholder="Pilih tanggal dahulu" />
                         </SelectTrigger>
                         <SelectContent />
                       </Select>
                     )}
+                    {fieldErrors.time && (
+                      <p id="pickupTime-error" className="mt-1 text-sm text-destructive">
+                        {fieldErrors.time}
+                      </p>
+                    )}
                     {pickupDate && dayHours && (
-                      <p className="mt-1 text-xs text-muted-foreground">
+                      <p id="pickupTime-hint" className="mt-1 text-xs text-muted-foreground">
                         Jam operasional: {dayHours.open} - {dayHours.close}
                       </p>
                     )}
@@ -1636,26 +1868,19 @@ export default function CheckoutPage() {
                     </div>
                   )}
 
-                  {/* Pickup estimate disclaimer (warning-styled) */}
-                  <div className="flex items-start gap-3 rounded-lg border border-amber-200 border-l-4 border-l-amber-500 bg-amber-50 p-4 dark:border-amber-800 dark:border-l-amber-500 dark:bg-amber-950/50">
-                    <TriangleAlert className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                    <p className="text-sm leading-relaxed text-amber-900 dark:text-amber-100">
-                      <span className="font-semibold">
-                        Tanggal dan waktu pickup hanya estimasi
-                      </span>{" "}
-                      — bukan janji temu yang mengikat. Tujuannya agar tim
-                      toko mengetahui perkiraan kedatangan Anda dan dapat
-                      menyiapkan pesanan lebih awal. Pastikan email dan nomor
-                      telepon Anda aktif agar toko dapat menghubungi Anda bila
-                      diperlukan.
+                  {/* Pickup estimate disclaimer (neutral, bukan warning) */}
+                  <div className="flex items-start gap-2 rounded-lg border bg-muted/30 p-3">
+                    <p className="flex-1 text-sm leading-relaxed text-muted-foreground">
+                      Tanggal dan jam pickup hanya estimasi, bukan janji temu.
                     </p>
+                    <InfoHint label="Tentang estimasi pickup">
+                      Toko memakai tanggal dan jam ini untuk menyiapkan
+                      pesanan. Pastikan email dan nomor telepon aktif agar toko
+                      dapat menghubungi kamu.
+                    </InfoHint>
                   </div>
                 </div>
                   </>
-                )}
-
-                {fulfillmentMethod === "pickup" && pickupError && (
-                  <p className="mt-4 text-sm text-destructive">{pickupError}</p>
                 )}
 
                 {/* Kontak pemesan tinggal di langkah ini: pickup diisi di sini,
@@ -1665,8 +1890,8 @@ export default function CheckoutPage() {
                     <h3 id="checkout-contact-title" className="text-base font-semibold">Kontak Pemesan</h3>
                     <p className="mt-1 text-sm text-muted-foreground">
                       {fulfillmentMethod === "pickup"
-                        ? "Isi nomor telepon dan email yang aktif untuk pesanan dan pengambilan di cabang."
-                        : "Email akun dipakai untuk konfirmasi pesanan dan pembayaran. Pengiriman memakai nama dan nomor penerima pada alamat di atas."}
+                        ? "Untuk pesanan dan pengambilan di cabang."
+                        : "Email akun untuk konfirmasi. Pengiriman memakai nama dan nomor penerima pada alamat di atas."}
                     </p>
                   </div>
 
@@ -1676,44 +1901,99 @@ export default function CheckoutPage() {
                         <Label htmlFor="phone" className="mb-1.5 block">Nomor Telepon *</Label>
                         <Input
                           id="phone"
+                          ref={phoneRef}
+                          className="checkout-prompt"
                           type="tel"
                           autoComplete="tel"
                           placeholder="081234567890"
+                          required
+                          aria-required="true"
+                          aria-invalid={fieldErrors.phone ? true : undefined}
+                          aria-describedby={
+                            [
+                              "phone-hint",
+                              fieldErrors.phone ? "phone-error" : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" ")
+                          }
                           value={phone}
                           onChange={(e) => setPhone(e.target.value)}
                         />
-                        <p className="mt-1.5 text-xs text-muted-foreground">Nomor aktif yang bisa dihubungi toko.</p>
+                        <p id="phone-hint" className="mt-1.5 text-xs text-muted-foreground">Aktif dan bisa dihubungi.</p>
+                        {fieldErrors.phone && (
+                          <p id="phone-error" className="mt-1 text-sm text-destructive">{fieldErrors.phone}</p>
+                        )}
                       </div>
                       <div>
                         <Label htmlFor="email" className="mb-1.5 block">Email *</Label>
                         <Input
                           id="email"
+                          ref={emailRef}
+                          className="checkout-prompt"
                           type="email"
                           autoComplete="email"
                           placeholder="anda@email.com"
+                          required
+                          aria-required="true"
+                          aria-invalid={fieldErrors.email ? true : undefined}
+                          aria-describedby={
+                            [
+                              "email-hint",
+                              fieldErrors.email ? "email-error" : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" ")
+                          }
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
                         />
-                        <p className="mt-1.5 text-xs text-muted-foreground">Kode pickup dikirim ke email ini setelah pesanan siap diambil.</p>
+                        <div className="mt-1.5 flex items-start gap-1">
+                          <p id="email-hint" className="text-xs text-muted-foreground">Untuk konfirmasi dan kode pickup.</p>
+                          <InfoHint label="Tentang email pickup" className="-my-1">
+                            Kode pickup dikirim ke email ini setelah pesanan
+                            siap. Email juga dipakai untuk konfirmasi pesanan
+                            dan pembayaran.
+                          </InfoHint>
+                        </div>
+                        {fieldErrors.email && (
+                          <p id="email-error" className="mt-1 text-sm text-destructive">{fieldErrors.email}</p>
+                        )}
                       </div>
                     </div>
                   ) : (
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div>
                         <span className="mb-1.5 block text-sm font-medium">Nomor Telepon Penerima</span>
-                        <ReadOnlyInput
-                          id="contactPhone"
-                          value={deliveryAddressPreview?.phone ?? ""}
-                          hint="Mengikuti nomor telepon pada alamat penerima di atas."
-                        />
+                        <div className="flex items-start gap-1">
+                          <div className="min-w-0 flex-1">
+                            <ReadOnlyInput
+                              id="contactPhone"
+                              value={deliveryAddressPreview?.phone ?? ""}
+                              hint="Dari alamat penerima."
+                            />
+                          </div>
+                          <InfoHint label="Tentang nomor penerima" className="mt-2">
+                            Nomor mengikuti alamat pengiriman yang dipilih. Ubah
+                            nomor di Buku Alamat atau gunakan alamat baru.
+                          </InfoHint>
+                        </div>
                       </div>
                       <div>
                         <span className="mb-1.5 block text-sm font-medium">Email Akun</span>
-                        <ReadOnlyInput
-                          id="contactEmail"
-                          value={email || sessionUser?.email || ""}
-                          hint="Email akun dipakai untuk konfirmasi pesanan dan pembayaran."
-                        />
+                        <div className="flex items-start gap-1">
+                          <div className="min-w-0 flex-1">
+                            <ReadOnlyInput
+                              id="contactEmail"
+                              value={email || sessionUser?.email || ""}
+                              hint="Untuk konfirmasi pesanan."
+                            />
+                          </div>
+                          <InfoHint label="Tentang email akun" className="mt-2">
+                            Email akun dipakai untuk konfirmasi pesanan dan
+                            pembayaran.
+                          </InfoHint>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -1793,8 +2073,7 @@ export default function CheckoutPage() {
                 )}
                 <h2 className="text-xl font-bold mb-1">Pembayaran</h2>
                 <p className="text-sm text-muted-foreground mb-6">
-                  Periksa pesanan Anda, lalu konfirmasi untuk melanjutkan ke
-                  pembayaran via Midtrans.
+                  Periksa pesanan, lalu lanjut ke pembayaran.
                 </p>
 
                 {/* Order summary */}
@@ -1832,7 +2111,7 @@ export default function CheckoutPage() {
                           · Qty {item.quantity}
                         </div>
                       </div>
-                      <div className="col-start-2 whitespace-nowrap text-sm font-medium sm:shrink-0">
+                      <div className="col-start-2 min-w-0 break-words text-sm font-medium">
                         Rp{" "}
                         {(
                           parseFloat(item.variant.price) * item.quantity
@@ -1869,7 +2148,9 @@ export default function CheckoutPage() {
                       </dt>
                       <dd className="break-words font-medium">
                         {fulfillmentMethod === "delivery"
-                          ? deliveryService?.name ?? "-"
+                          ? deliveryService
+                            ? `${deliveryService.name} · ${formatDeliveryEta(deliveryService.validEta)}`
+                            : "-"
                           : `${formatDateLabel(pickupDate)} · ${pickupTime}`}
                       </dd>
                     </div>
@@ -1898,6 +2179,7 @@ export default function CheckoutPage() {
                         ? { name: appliedManualCode.code, benefitAmount: review?.promo.benefitAmount ?? String(review?.pricing.discount ?? "0") }
                         : appliedPromo}
                       invalidated={promoInvalidation}
+                      invalidationTotals={promoInvalidation?.previousTotal ? { before: Number(promoInvalidation.previousTotal), after: total } : null}
                       disabled={submitting || promoPendingOfferId !== null}
                       onOpen={() => changePromoOpen(true)}
                       onClear={() => void handleSelectOffer(null)}
@@ -1916,69 +2198,53 @@ export default function CheckoutPage() {
                     />}
                   </>
                 )}
-                <div className="mb-6 flex items-center gap-3 rounded-lg border border-primary/20 bg-primary/5 p-4">
-                  <CreditCard className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
-                  <div>
-                    <div className="font-semibold">Pembayaran via Midtrans</div>
-                    <div className="text-xs text-muted-foreground">
-                      Pilih QRIS, GoPay, VA, atau kartu setelah klik Bayar Sekarang.
-                    </div>
-                  </div>
-                </div>
-
-                {/* Pickup reminders (warning-styled — pickup only) */}
+                {/* Pickup reminder — satu baris netral + detail di InfoHint. */}
                 {fulfillmentMethod === "pickup" && (
-                <div className="mb-6 rounded-lg border border-amber-200 border-l-4 border-l-amber-500 bg-amber-50 p-4 dark:border-amber-800 dark:border-l-amber-500 dark:bg-amber-950/50">
-                  <div className="flex items-start gap-2.5">
-                    <TriangleAlert className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                    <p className="text-sm font-medium leading-relaxed text-amber-900 dark:text-amber-100">
-                      Sebutkan nomor telepon dan email yang kamu isi kepada staf
-                      toko saat Anda datang mengambil pesanan.
+                  <div className="mb-6 flex items-start gap-2 rounded-lg border bg-muted/30 p-3">
+                    <p className="flex-1 text-sm text-muted-foreground">
+                      Pickup hanya estimasi. Saat mengambil, sebutkan nomor
+                      telepon dan email pesanan.
                     </p>
+                    <InfoHint label="Tentang estimasi pickup">
+                      Toko memakai tanggal dan jam ini untuk menyiapkan
+                      pesanan; ini bukan janji temu.
+                    </InfoHint>
                   </div>
-                  <div className="mt-2.5 flex items-start gap-2.5 border-t border-amber-200 pt-2.5 dark:border-amber-800">
-                    <Clock className="mt-0.5 h-4 w-4 flex-shrink-0 text-amber-600 dark:text-amber-400" />
-                    <p className="text-sm font-medium leading-relaxed text-amber-900 dark:text-amber-100">
-                      Tanggal dan waktu pickup bersifat estimasi — hanya untuk
-                      memberi tahu toko kapan Anda berencana datang.
-                    </p>
-                  </div>
-                </div>
                 )}
 
                 {/* Price breakdown: original shipping minus subsidy exactly once. */}
                 <section aria-labelledby="payment-breakdown-title" className="mb-6 space-y-3 rounded-lg bg-muted/50 p-4 sm:p-5">
                   <h3 id="payment-breakdown-title" className="mb-4 font-semibold">Rincian Pembayaran</h3>
-                  <div className="flex justify-between text-sm">
+                  <div className="flex flex-wrap justify-between gap-x-3 text-sm">
                     <span className="text-muted-foreground">
                       Subtotal ({selectedItems.length} barang)
                     </span>
                     <span>Rp {subtotal.toLocaleString("id-ID")}</span>
                   </div>
                   {Number(pricing.discount) > 0 && (
-                    <div className="flex justify-between text-sm">
+                    <div className="flex flex-wrap justify-between gap-x-3 text-sm">
                       <span className="text-muted-foreground">Diskon promo</span>
                       <span className="text-green-600">
                         - Rp {Number(pricing.discount).toLocaleString("id-ID")}
                       </span>
                     </div>
                   )}
-                  <div className="flex justify-between text-sm">
+                  <div className="flex flex-wrap justify-between gap-x-3 text-sm">
                     <span className="text-muted-foreground">PPN ({pricing.ppnRatePercent}%)</span>
                     <span>Rp {Number(pricing.ppnAmount).toLocaleString("id-ID")}</span>
                   </div>
-                  <div className="flex justify-between gap-4 text-sm">
+                  <div className="flex flex-wrap justify-between gap-x-3 text-sm">
                     <span className="text-muted-foreground">Ongkos Kirim</span>
                     {fulfillmentMethod === "delivery" && deliveryService ? (
                       <span className="shrink-0">
                         Rp {Number(pricing.shippingBeforeSubsidy ?? deliveryService.shippingCost).toLocaleString("id-ID")}
                       </span>
                     ) : (
-                      <span className="shrink-0">Gratis (Pickup)</span>
+                      <span className="min-w-0 break-words">Gratis (Pickup)</span>
                     )}
                   </div>
                   {Number(pricing.shippingSubsidy ?? 0) > 0 && (
-                    <div className="flex justify-between text-sm">
+                    <div className="flex flex-wrap justify-between gap-x-3 text-sm">
                       <span className="text-muted-foreground">Subsidi ongkir</span>
                       <span className="text-green-600">
                         - Rp {Number(pricing.shippingSubsidy).toLocaleString("id-ID")}
@@ -1988,34 +2254,55 @@ export default function CheckoutPage() {
                   {/* A zero service fee is not a charge: the row only exists when
                       the approved pricing actually carries one (legacy rows). */}
                   {Number(pricing.serviceFee) > 0 && (
-                    <div className="flex justify-between text-sm">
+                    <div className="flex flex-wrap justify-between gap-x-3 text-sm">
                       <span className="text-muted-foreground">Biaya Layanan</span>
                       <span>Rp {Number(pricing.serviceFee).toLocaleString("id-ID")}</span>
                     </div>
                   )}
                   <hr className="border-t border-dashed border-muted-foreground/30 my-2" />
-                  <div className="flex justify-between font-bold">
+                  <div className="flex flex-wrap justify-between gap-x-3 font-bold">
                     <span>Total Bayar</span>
                     <span className="text-primary">
                       Rp {total.toLocaleString("id-ID")}
                     </span>
                   </div>
+                  {promoDelta && (
+                    <p role="status" className="text-sm font-medium text-green-700 dark:text-green-400">
+                      Total turun Rp{promoDelta.amount.toLocaleString("id-ID")} menjadi Rp{promoDelta.total.toLocaleString("id-ID")}.
+                    </p>
+                  )}
                 </section>
 
-                {/* Confirmation checkbox */}
-                <label className="flex items-start gap-3 mb-6 cursor-pointer">
+                {/* Confirmation checkbox: label + kebijakan sebagai link
+                    terpisah agar membuka tab baru tanpa men-toggle checkbox. */}
+                <div className="mb-6 flex items-start gap-3">
                   <input
+                    id="checkout-confirm"
                     type="checkbox"
                     checked={confirmed}
                     onChange={(e) => setConfirmed(e.target.checked)}
                     className="mt-1 h-4 w-4 rounded border-input"
                   />
-                  <span className="text-sm text-muted-foreground">
-                    {fulfillmentMethod === "delivery"
-                      ? "Saya telah memeriksa alamat penerima, layanan pengiriman dan total pesanan, serta menyetujui syarat & ketentuan."
-                      : "Saya telah memeriksa pesanan dan menyetujui syarat & ketentuan. Saya akan mengambil pesanan di cabang terpilih sesuai estimasi waktu yang saya tentukan, dan saya bersedia menyebutkan email serta nomor telepon saya saat pengambilan pesanan di toko."}
-                  </span>
-                </label>
+                  <div className="text-sm text-muted-foreground">
+                    <label htmlFor="checkout-confirm" className="cursor-pointer">
+                      {fulfillmentMethod === "delivery"
+                        ? "Saya telah memeriksa alamat penerima, layanan pengiriman dan total pesanan, serta menyetujui"
+                        : "Saya telah memeriksa pesanan dan menyetujui"}
+                    </label>{" "}
+                    <a
+                      href="/pages/terms"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label="Syarat & ketentuan (terbuka di tab baru)"
+                      className="font-medium text-primary underline underline-offset-2 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    >
+                      Syarat &amp; ketentuan
+                    </a>
+                    {fulfillmentMethod === "pickup"
+                      ? ". Saat mengambil, saya akan menyebutkan nomor telepon dan email pesanan."
+                      : "."}
+                  </div>
+                </div>
 
                 {taxFeedback ? (
                   <CheckoutTaxFeedback
@@ -2029,10 +2316,41 @@ export default function CheckoutPage() {
                   <CheckoutAttemptFeedback
                     result={attemptFeedback}
                     busy={submitting}
+                    checkState={checkState}
                     onCheckStatus={() => void recoverPendingRequest()}
-                    onReviewAgain={() => { setAttemptFeedback(null); setConfirmed(false); setReview(null); setStep(1); }}
+                    onReviewAgain={() => { setAttemptFeedback(null); setSubmitError(null); setCheckState("idle"); setConfirmed(false); setReview(null); setStep(1); }}
                   />
                 ) : null}
+                {lookupNotice && (
+                  <p role="alert" className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
+                    {lookupNotice}
+                  </p>
+                )}
+                {submitError && (
+                  <div
+                    ref={submitErrorRef}
+                    role="alert"
+                    tabIndex={-1}
+                    className="mb-4 rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <p className="flex items-start gap-2 font-medium text-destructive">
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+                      {submitError}
+                    </p>
+                    {pendingRequest && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="mt-3"
+                        disabled={submitting}
+                        onClick={() => void recoverPendingRequest()}
+                      >
+                        Periksa status checkout
+                      </Button>
+                    )}
+                  </div>
+                )}
                 <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
                   <Button variant="outline" disabled={submitting || promoPendingOfferId != null} onClick={() => {
                     setConfirmed(false);
@@ -2072,7 +2390,7 @@ export default function CheckoutPage() {
           if (!open) setPromoReplacement(null);
         }}
       >
-        <DialogContent>
+        <DialogContent closeButtonSize="comfortable">
           <DialogHeader>
             <DialogTitle>Total pesanan naik</DialogTitle>
             <DialogDescription>

@@ -1,9 +1,6 @@
 import { db, footerConfig, DEFAULT_FOOTER_CONFIG } from "@/db";
-import {
-  FloatingWhatsappButton,
-  Footer,
-  type FooterConfigData,
-} from "@marketplace/ui";
+import { Footer, type FooterConfigData } from "@marketplace/ui";
+import { StoreWhatsappHelp } from "@/components/StoreWhatsappHelp";
 import { getEnabledWhatsappUrl } from "@/lib/footer-whatsapp";
 
 // Force dynamic so the footer is always fetched fresh on every request.
@@ -34,8 +31,11 @@ export default async function FooterWrapper() {
 
   return (
     <>
+      {/* Bantuan dirender SEBELUM footer: di bawah `lg` pada checkout dan
+          detail pesanan bentuknya link biasa, di tempat lain tombol mengambang
+          yang sama seperti sebelumnya. */}
+      {whatsappUrl && <StoreWhatsappHelp href={whatsappUrl} />}
       <Footer config={effectiveConfig} />
-      {whatsappUrl && <FloatingWhatsappButton href={whatsappUrl} />}
     </>
   );
 }

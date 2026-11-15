@@ -134,7 +134,7 @@ export default function Header() {
             >
               <ShoppingCart className="h-6 w-6" />
               {itemCount > 0 && (
-                <span className="absolute -bottom-0.5 -right-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-bold leading-none text-white ring-2 ring-primary">
+                <span className="absolute -bottom-0.5 -right-0.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-700 px-1 text-[10px] font-bold leading-none text-white ring-2 ring-primary">
                   {itemCount > 10 ? "10+" : itemCount}
                 </span>
               )}
@@ -157,7 +157,7 @@ export default function Header() {
                       src={user.image || undefined}
                       alt={user.name}
                     />
-                    <AvatarFallback className="bg-white/20 text-white">
+                    <AvatarFallback className="bg-secondary text-white ring-1 ring-white/30">
                       {getInitials(user.name)}
                     </AvatarFallback>
                   </Avatar>

@@ -291,6 +291,20 @@ test.beforeAll(async ({ browser }) => {
   );
   expect(stock.rowCount, "fixture branch_stock must insert").toBe(1);
 
+  // Mock provider mulai tanpa stok. Pasangan (location 900001, item 900001)
+  // harus di-ensure agar `/api/cart/validate-checkout` tidak menolak 503
+  // (`observation_missing_or_invalid`) sebelum halaman checkout dibuka.
+  expect(
+    (
+      await mockControl("POST", "/__control/stocks/ensure", {
+        locationId: 900001,
+        itemId: 900001,
+        onHand: 10,
+        sellPrice: 100000,
+      })
+    ).status
+  ).toBe("ok");
+
   johnContext = await browser.newContext({ baseURL: STORE_BASE_URL });
   await httpSignIn(
     johnContext,
@@ -378,7 +392,7 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       await expect(page.getByText("Barang yang akan di-checkout", { exact: true })).toBeVisible();
       // Kontak pemesan hidup di langkah ini; tidak ada langkah "Kontak" terpisah.
       await expect(page.getByRole("heading", { name: "Kontak Pemesan", exact: true })).toBeVisible();
-      await expect(page.getByText("Kode pickup dikirim ke email ini setelah pesanan siap diambil.", { exact: true })).toBeVisible();
+      await expect(page.getByText("Untuk konfirmasi dan kode pickup.", { exact: true })).toBeVisible();
       await expect(page.getByRole("button", { name: "Isi dari Profil" })).toBeVisible();
       const date = new Date();
       date.setDate(date.getDate() + 1);
@@ -457,7 +471,15 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       await page.getByRole("radio", { name: /JNE REG Fixture/ }).check();
       await page.getByRole("button", { name: "Lanjut", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
-      await expect(page.getByText("E2E Quote Penerima 1", { exact: true })).toBeVisible();
+      // Step 2 menampilkan penerima pada kartu Penerima Pengiriman. Dropdown
+      // alamat juga memuat nama penerima (fase 2), jadi locator dicakup ke
+      // elemen paragraf pada review, bukan teks bebas di seluruh halaman.
+      await expect(
+        page
+          .getByRole("paragraph")
+          .filter({ hasText: "E2E Quote Penerima 1" })
+          .first()
+      ).toBeVisible();
     } finally {
       releaseValidation();
       await page.close();
@@ -519,7 +541,7 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
         await page.getByLabel("Email *").fill(TEST_USERS.store.email);
         await next.click();
         await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
-        await expect(page.getByText("Sebutkan nomor telepon dan email yang kamu isi kepada staf", { exact: false })).toBeVisible();
+        await expect(page.getByText("Pickup hanya estimasi. Saat mengambil, sebutkan nomor telepon dan email pesanan.", { exact: false })).toBeVisible();
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       } finally {
         await page.close();

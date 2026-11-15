@@ -27,13 +27,15 @@ Dasar riset beserta referensi primer: [Riset UX untuk pedoman design agent](../.
 
 UI yang lolos typecheck dan bisa diklik oleh Playwright belum tentu memiliki UX baik. Jangan menambah paragraf untuk menutupi kontrol atau alur yang tidak jelas.
 
+Contoh kegagalan dan pelajaran untuk memilih struktur UI: [Cross-check checkout dan pembayaran](../../../.scratch/checkout-simplification/research/cross-check-audit-ux-checkout-pembayaran.md). Terapkan prinsip tugas, hierarki, kepadatan, responsive, dan lifecycle di bawah sejak merancang UI; bukan hanya saat mengaudit hasil akhir.
+
 ## 3. Sebelum coding frontend
 
 Buat catatan singkat — di percakapan untuk perubahan kecil, di artefak spec/plan untuk perubahan nontrivial; gunakan keputusan yang sudah disepakati dan jangan menambah dokumen/approval seremonial untuk perubahan kecil:
 
 - **Tugas:** siapa pengguna, apa yang ingin diselesaikan, kondisi awal, dan hasil sukses.
 - **Referensi:** cari halaman/pattern sejenis yang telah disepakati dan periksa komponen shared beserta token di konteks render sebenarnya. Jangan bertanya kepada pengguna tentang fakta yang bisa dicari di repo.
-- **Hierarki:** tentukan informasi utama, primary action, grouping, dan tindakan sekunder. Untuk perubahan nontrivial, masukkan sketsa/susunan, state matrix, dan label final ke artefak spec/plan yang disetujui (lihat `development-workflow` bagian 2) sehingga dapat direview sebelum implementasi; untuk perubahan kecil satu sesi, catatan di percakapan cukup.
+- **Hierarki berdasarkan tugas dan status:** tentukan apa yang perlu diselesaikan pengguna pada state saat ini, lalu dahulukan informasi dan tindakan untuk menyelesaikannya. Tunda bagian yang belum relevan tanpa menyembunyikan data penting untuk keputusan. Contoh: pada pesanan menunggu pembayaran, prioritaskan total dan tindakan bayar, bukan panel tracking kosong “Resi belum tersedia”. Tentukan grouping dan tindakan sekunder; untuk perubahan nontrivial, masukkan sketsa/susunan, state matrix, dan label final ke artefak spec/plan yang disetujui (lihat `development-workflow` bagian 2); untuk perubahan kecil satu sesi, catatan di percakapan cukup.
 - **Content inventory:** klasifikasikan copy menjadi perlu sekarang, pencegah kesalahan penting, bantuan tambahan, atau duplikasi yang dapat digabung/dihapus.
 - **State:** identifikasi idle, selected, keyboard focus, loading, empty, sukses, error, disabled, permission-restricted, dan unsaved state yang relevan. Untuk perubahan nontrivial, state matrix beserta copy/label final masuk ke artefak spec/plan, bukan hanya slice notes; state yang belum diputuskan dicatat sebagai open item.
 - **Batas scope:** perubahan flow, makna status, syarat bisnis, atau bahasa visual yang belum disepakati harus ditanyakan dahulu. Jangan melakukan redesign lintas halaman diam-diam.
@@ -91,10 +93,11 @@ Contoh: tabs pada Diskon dan Harga boleh memiliki label berbeda, tetapi tinggi, 
 
 ### C. Copy ringkas, bantuan kontekstual
 
-- Utamakan judul bermakna, data, status, dan tindakan. Hapus pengulangan informasi tanpa menghilangkan perbedaan bisnis yang penting.
+- **UI default ringkas, tetapi cukup untuk mengambil keputusan.** Utamakan judul bermakna, data, status, instruksi singkat, dan konsekuensi penting. Jelaskan satu hal satu kali pada tempat paling relevan; jangan mengulang paragraf yang sama di hint, warning, ringkasan, dan checkbox. Pemeriksaan ulang data pada review atau persetujuan yang memang diperlukan tetap dipertahankan; ringkas bantuan berulang, bukan menghapus makna atau data keputusan.
 - Label action menjelaskan hasil, misalnya “Simpan draft” atau “Publish promo”, bukan “OK”.
 - Gunakan bahasa pekerjaan pengguna, bukan otomatis menampilkan istilah internal database/API. Pertahankan istilah teknis yang memang dikenal pengguna.
 - Hint field singkat dan dekat dengan field; jangan menumpuk aturan lintas fitur di setiap header/form.
+- **Warning bukan dekorasi untuk semua penjelasan.** Gunakan warning untuk risiko atau kondisi yang benar-benar memerlukan perhatian/tindakan; informasi rutin memakai hint atau teks netral. Warna kuat membantu menentukan prioritas, bukan membuat seluruh halaman terasa bermasalah. Contoh: caveat normal “Tanggal dan jam pickup hanya estimasi, bukan janji temu” tetap terlihat sebagai teks netral, bukan warning kuning besar; detail tambahan boleh dibuka sesuai kebutuhan.
 - Bantuan tambahan boleh masuk disclosure berlabel jelas. Informasi yang dibutuhkan mayoritas pengguna, syarat penting, risiko biaya, atau konsekuensi tindakan tidak boleh disembunyikan di tooltip/hover/disclosure.
 - Jangan memendekkan copy dengan mengubah makna uang, waktu, batas penggunaan, atau lifecycle. Validasi makna terhadap aturan bisnis.
 
@@ -103,15 +106,17 @@ Contoh: di dekat “Simpan draft”, jelaskan singkat bahwa promo belum aktif. D
 ### D. Spacing dan pattern mengikuti makna
 
 - Label dan hint lebih dekat ke input terkait daripada ke field berikutnya. Jarak antarseksi lebih besar daripada jarak di dalam kelompok.
-- Kelompokkan field berdasarkan tugas, bukan sekadar memenuhi grid. Gunakan heading, whitespace, divider, atau surface seperlunya.
+- **Card untuk kelompok tugas, bukan setiap potongan informasi.** Kelompokkan field/data berdasarkan tugas, bukan sekadar memenuhi grid atau membungkus setiap label dalam card. Di dalam kelompok, gunakan typography, whitespace, dan divider. Informasi utama dan primary action harus lebih dominan daripada bantuan; jangan memberi semua blok border, warna, atau emphasis yang sama. Contoh: kontak dan detail fulfillment bisa disusun sebagai section review yang ringkas, sementara reminder tidak perlu menjadi card pesaing total pembayaran. Jangan menetapkan jumlah card universal; pilih struktur berdasarkan hubungan informasi.
 - Ikuti spacing scale design system; angka 4/8/16/24/32 px bukan standar UX universal dan tidak boleh menggantikan token yang sudah disepakati.
 - Tabs untuk bagian terkait yang perlu ditukar cepat tanpa dibaca sekaligus. Jangan memakai tabs untuk menyembunyikan urutan wajib atau informasi yang perlu dibandingkan bersamaan.
-- Periksa viewport dan theme yang didukung dalam scope: tidak ada kontrol penting terpotong, label bertabrakan, atau hubungan kelompok hilang. Hindari overflow halaman; tabel lebar boleh memakai region scroll yang jelas bila sesuai pattern.
+- **Mobile adalah komposisi tersendiri, bukan desktop yang diperkecil.** Atur ulang susunan, wrapping, metadata, dan posisi action berdasarkan ruang serta prioritas tugas. Nama, alamat, nominal, label step, dan kontrol penting tidak boleh dikorbankan untuk mempertahankan susunan desktop. Contoh: badge sekunder tidak boleh mempersempit nama cabang; opsi alamat panjang dapat dibagi menjadi penerima dan alamat yang wrap; floating action tidak boleh menutup CTA.
+- Periksa viewport dan theme yang didukung dalam scope: tidak ada kontrol penting terpotong, label bertabrakan, atau hubungan kelompok hilang. Periksa juga dropdown/modal terbuka, bukan hanya halaman default. Hindari overflow halaman; tabel lebar boleh memakai region scroll yang jelas bila sesuai pattern.
 
 ### E. Feedback, error, dan keselamatan tindakan
 
 - Satu primary action dominan untuk konteks tugas; tindakan sekunder tidak berebut emphasis.
-- Pengguna tahu apakah tindakan sedang berjalan, berhasil, gagal, atau masih memiliki perubahan belum tersimpan. Cegah submit ganda sesuai pola aplikasi.
+- **Setiap state punya tampilan dan tindakan yang tepat.** Rancang loading, pending, error, dan selesai sebagai pengalaman yang berbeda: pengguna tahu apa yang terjadi dan tindakan berikutnya melalui teks, visual, serta CTA yang selaras. Heading, paragraf, ikon, warna, dan label action harus menyampaikan status serta tingkat kepastian yang sama. Contoh: “masih diproses” bukan kegagalan merah; tombol yang melakukan lookup berlabel “Periksa status”, bukan “Bayar sekarang”; pesanan selesai tidak lagi memberi instruksi pickup aktif. Perubahan yang belum tersimpan juga harus jelas bagi pengguna. Cegah submit ganda sesuai pola aplikasi.
+- Loading harus benar-benar terlihat, bukan sekadar komponen yang ada di kode atau teks `sr-only`. Gunakan indikator visual atau skeleton yang dapat dibedakan dari background aktual, sambil mempertahankan feedback aksesibel. Jangan membiarkan halaman tampak kosong karena warna skeleton dan background sama.
 - Error menjelaskan masalah dan langkah pemulihan, dekat dengan konteksnya; pertahankan input pengguna saat gagal bila aman.
 - Bila tindakan tidak tersedia, sampaikan alasan yang relevan. Jangan mengandalkan tombol disabled tanpa penjelasan saat pengguna perlu tahu cara melanjutkan.
 - Konfirmasi proporsional untuk akibat serius; jangan menambah dialog pada setiap klik. Jangan mengubah aturan backend demi menyederhanakan tampilan.
@@ -148,7 +153,7 @@ Agent utama bertanggung jawab menjalankan verifikasi. Implementer yang didelegas
 
 Sebelum pekerjaan frontend dinyatakan selesai, agent utama wajib:
 
-1. **Review hasil render:** periksa halaman di browser pada viewport/theme yang relevan, lalu bandingkan dengan rancangan UX yang disetujui (state matrix, label/copy, reuse map); membaca JSX atau mengecek class saja tidak cukup.
+1. **Review hasil render:** periksa halaman di browser pada viewport/theme yang relevan, lalu bandingkan dengan rancangan UX yang disetujui (state matrix, label/copy, reuse map); membaca JSX atau mengecek class saja tidak cukup. Nilai apakah susunan mengikuti tugas/status, card dan emphasis membantu scanning, bantuan tidak menenggelamkan data/action, mobile disusun sesuai ruang, dan setiap state terlihat serta memiliki CTA yang tepat.
 2. **Bandingkan antar-page:** gunakan halaman/pattern referensi sejenis pada kondisi yang sama. Periksa typography, spacing, warna, ukuran kontrol, posisi tindakan, serta selected/focus/error treatment. Untuk shared changes, periksa consumer yang terdampak.
 3. **Jalankan task:** mulai dari kondisi awal, lakukan tindakan utama, lalu periksa status dan hasilnya. Periksa state relevan yang telah diidentifikasi dan keyboard behavior kontrol yang diubah.
 4. **Tests dan checks:** gunakan `tdd`, tambahkan/update Playwright coverage perilaku user-visible sesuai `AGENTS.md`, lalu jalankan verification ladder yang relevan. Ikuti izin terpisah untuk legacy E2E. Jika Playwright gagal, diagnosis dari laporan Markdown; jangan membuka screenshot attachment kegagalan.

@@ -1878,10 +1878,13 @@ test.describe("mock-only checkout tax preflight (spec PPN)", () => {
         error: CHECKOUT_TAX_UNAVAILABLE_COPY,
       });
       expect(typeof body.requestId).toBe("string");
-      // Payload customer tidak boleh membawa detail internal master.
-      expect(JSON.stringify(body)).not.toContain("12.00");
-      expect(JSON.stringify(body)).not.toContain("-2");
-      expect(JSON.stringify(body)).not.toContain("PPN Pengeluaran");
+      // Payload customer tidak boleh membawa detail internal master. `requestId`
+      // adalah UUID acak yang bisa memuat "-2" secara kebetulan, jadi pemeriksaan
+      // kebocoran dilakukan pada field selain requestId.
+      const { requestId: _requestId, ...leakable } = body as Record<string, unknown>;
+      expect(JSON.stringify(leakable)).not.toContain("12.00");
+      expect(JSON.stringify(leakable)).not.toContain("-2");
+      expect(JSON.stringify(leakable)).not.toContain("PPN Pengeluaran");
 
       // Hanya lookup master read-only; tidak ada penulisan bisnis/provider.
       expect(businessWrites(await getMockRequests())).toEqual([]);

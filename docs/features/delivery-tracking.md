@@ -1,0 +1,79 @@
+# Delivery handoff and tracking
+
+## Physical handoff
+
+`POST /api/admin/orders/{id}/delivery/handoff` records physical handoff once, with actor/time and `SHIPMENT_HANDOFF` audit. It requires `orders:edit`, the current active admin's exact Home Branch, verified-paid/unblocked delivery and a known booked AWB. Global/owner visibility is not permission to act at another branch. Repeated handoff is idempotent while eligible. Completed orders cannot receive a new handoff. AWB and PICKED_UP do not complete an order.
+
+## Read-only reconciliation
+
+`POST /api/admin/orders/{id}/delivery/reconcile` takes `{}` and GETs only the stored known AWB. No network call holds a DB transaction; authorization/identity are rechecked under lock afterward. Returned AWB, Shipment ID and supplied order reference must match before changes. A missing billed cost after booking also gets one reactive known-AWB lookup; lookup failure leaves the booking successful and billed cost unknown, never repeats create. One attempt is within the spec's maximum three GET attempts; 4xx is never retried.
+
+Reconciliation records applicable observations in the same timeline as callbacks. Approved rates and booking price stay frozen; actual billed price can be updated without charging the customer. After completion, safe links/billing are informational only—no late status or issue reopens the order. There is no tracking cron or browser polling.
+
+## Dedicated signed callback
+
+`POST /api/webhooks/jubelio-shipment` requires server-only `JUBELIO_SHIPMENT_WEBHOOK_SECRET`, distinct from API and Omnichannel credentials. Missing configuration returns 503. Header `x-jubelio-signature` is hex HMAC-SHA256: key = secret, message = exact UTF-8 raw body + secret. Verification is constant-time before JSON parsing/mutation; body size is capped before crypto. See [Shipment v1.8](../jubelio-api/shipment-v1.8.md), webhook example pp. 20–21.
+
+Known unique AWB/Shipment ID/order reference is matched; callbacks never adopt an unknown AWB or create shipments. Extra fields are tolerated. `latest_status` is normalized status, not the carrier's `tracking.status` (e.g. D09/CNCL). Unknown/mismatched, duplicate, older and post-completion events cannot change lifecycle. Raw fingerprints dedupe receipts; ignored known-shipment receipts remain diagnostic, not customer timeline events. Order locking and fresh ledger reads prevent concurrent progress regression.
+
+Normal progress is monotonic. ON_HOLD, RETURNED, CANCELED and SHIPMENT_ISSUE remain visible pre-completion; known older provider dates are rejected. GET or later timestamped evidence can resolve an exception. Dates without an explicit timezone are not invented as carrier timestamps. Received time remains available. Verified DELIVERED completes paid delivery even without POD or a manual handoff stamp. Late PICKED_UP/SHIPMENT_ISSUE never reopen completed orders.
+
+Example: signed PICKED_UP keeps paid/processing; signed matching DELIVERED completes with no pickup code. An identical replay adds no receipt/effect. A later issue receipt is ignored after completion rather than creating a new case.
+
+## Visibility and safe links
+
+Customer `/api/orders/{id}` remains client-owned; other customers get 404. Tracking DTO exposes only AWB/link/status, applied timeline and safe POD—not booking costs, admin actors or stored provider requests. Links appear only when available, permit HTTP(S) without userinfo, and are anchors (no remote image fetch). Later safe POD can enrich completed delivery without changing status. Admin diagnostics require orders:view/Branch Scope. Logs never include raw callback bodies, signatures, tokens, addresses or signed POD URLs.
+
+## Tampilan tracking di halaman detail pesanan customer
+
+Halaman `/account/orders/{id}` menampilkan status order lebih dahulu, lalu (untuk delivery) panel `Lacak paket` dan `Alamat pengiriman` berdampingan di desktop; di bawah breakpoint `lg` panel tracking tampil sebelum alamat. Stepper generik sudah dihapus: bukti progres paket adalah timeline event, bukan langkah milestone yang tidak didukung data. Status order, status pembayaran, dan status paket tetap tiga hal berbeda; status paket memakai `delivered`/`latestStatus`, bukan `order.status`.
+
+**Urutan mobile (fase 2).** Di bawah `lg` halaman dibaca sebagai satu kolom dengan urutan DOM yang sama: status → pembayaran (rincian biaya, total, aksi) → alamat/pickup → daftar barang. Grid desktop memakai penempatan eksplisit (`lg:col-start-*`/`lg:row-start-*`), jadi susunan multi-kolom lama (barang di kiri, pickup/pembayaran di sidebar kanan, panel fulfillment selebar halaman di atas) tidak berubah. Pesanan `pending_payment` tanpa `shipment` menyembunyikan panel tracking kosong (`showTracking=false`) tetapi tetap menampilkan alamat dan fallback snapshot; shipment nyata tetap tampil setelah pembayaran.
+
+**Loading dan pemeriksaan status.** Loading awal menampilkan teks `Memuat detail pesanan…` + spinner dan skeleton ber-warna `bg-border` (bukan `bg-muted` yang setara `--background`), jadi benar-benar terlihat. Tombol `Periksa status pembayaran` melakukan GET pesanan yang sama tanpa POST dan tanpa skeleton penuh: detail, isian, dan fokus tombol dipertahankan, lalu hasilnya dilaporkan sebagai `Memeriksa status…` → `Status belum berubah. Silakan periksa lagi nanti.` / `Status pesanan diperbarui.` / `Status belum dapat diperiksa. Coba lagi.` Perbandingan memakai field yang dibaca pelanggan (status order/pembayaran, blocked reason, availability/URL/deadline recovery, shipment, ringkasan uang, promo), sehingga perubahan metadata teknis tidak memunculkan “diperbarui” palsu. Deadline (`Batas pembayaran: …`) hanya dirender bila DTO memberi `expiresAt` yang sah pada konteks pembayaran, dan `paymentAvailable` menjadi guard link bayar ketika proyeksi recovery tersedia. Metode pembayaran kosong tampil sebagai `Belum dipilih`.
+
+**Langkah lanjut per status.** `failed_payment`/`cancelled` menampilkan aksi utama `Lihat Pesanan Saya` (riwayat) sementara `Beli lagi` tetap per item dan tetap membuka halaman produk, tanpa reorder otomatis, klaim refund, atau kewajiban transaksi baru. Status order asing tetap berlabel `Status pesanan belum tersedia` dengan aksi `Periksa status` (GET yang sama), bukan tone failed. Pickup `ready_for_pickup` mempertahankan instruksi aktif + **Kode Pickup Anda** + `Salin kode`; pickup `completed` tidak lagi memberi instruksi pengambilan, dan kode hanya tersedia lewat disclosure tertutup `Lihat kode pengambilan` berisi `Arsip kode pengambilan` + `Salin kode` (disclosure tidak dirender bila kode kosong).
+
+Aturan presentasi di `apps/store/src/lib/order-tracking-presentation.ts`:
+
+- Timeline adalah salinan terbalik dari urutan API, sehingga event terbaru tampil dahulu. Urutannya tidak direkonstruksi dari timestamp provider (bisa kosong/tidak berurutan), dan waktu tiap event tetap waktu event dari DTO; waktu kosong/tidak valid menjadi `Waktu tidak tersedia`.
+- Empat event ditampilkan awal. Jika ada lebih, tombol `Lihat semua riwayat` (dengan `aria-expanded`) membuka seluruh riwayat yang sudah dimuat lalu berubah menjadi `Tampilkan lebih sedikit`. Tidak ada request polling atau pagination jaringan.
+- Kode status dinormalisasi menjadi label customer (`WAITING` → `Menunggu kurir`, `ON_THE_WAY_PICK_UP`/`ON_THE_WAY_PICKUP` → `Kurir menuju lokasi pengambilan`, `ON_DELIVERY` → `Dalam pengantaran`, `DELIVERED` → `Paket telah diterima`, dan seterusnya). Status kosong/asing menjadi heading netral `Pembaruan pengiriman`; kode internal tidak pernah menjadi judul.
+- Detail event dari marker simulator repo (`Simulasi webhook Jubelio:`) disembunyikan; detail kurir informatif lain tetap ditampilkan sebagai teks biasa.
+- Resi, tautan kurir, dan bukti pengiriman adalah kontrol yang terlihat sebagai tombol/link sebelum hover. Tombol salin memakai live region (`ID disalin`, `Resi disalin`, `Kode disalin`, atau `Gagal menyalin. Silakan salin secara manual.`), dan tautan luar membuka tab baru dengan keterangan aksesibel.
+
+Sumber data tetap hanya GET `/api/orders/{id}` yang owner-scoped: tidak ada endpoint, provider call, mutasi status, atau nilai (ETA, lokasi, bukti) yang dikarang di UI.
+
+## Simulasi callback melalui Git Bash
+
+Script [`scripts/simulate-jubelio-shipment.sh`](../../scripts/simulate-jubelio-shipment.sh) khusus untuk order uji `170a6986-eaa9-49de-ab01-839775958c75`, AWB `MOCK-JS2420810000000005`, provider shipment ID `7`. Identitas ini berasal dari pemeriksaan DB read-only, bukan lookup otomatis setiap eksekusi. Jika DB di-reset atau shipment berubah, periksa ulang identitas sebelum memakai script.
+
+Prasyarat: Git Bash, Node.js 24, curl, storefront lokal yang sedang berjalan, serta `JUBELIO_SHIPMENT_WEBHOOK_SECRET` di `.env` root yang sama dengan konfigurasi server. Script tidak menjalankan aplikasi atau menghubungi API Jubelio.
+
+```bash
+# Jalankan dari root repo. Default hanya preview, tanpa request.
+bash scripts/simulate-jubelio-shipment.sh ON_DELIVERY
+
+# Kirim satu callback bertanda tangan ke storefront lokal.
+bash scripts/simulate-jubelio-shipment.sh ON_DELIVERY --send
+
+# Selesaikan order melalui bukti DELIVERED simulasi (terminal).
+bash scripts/simulate-jubelio-shipment.sh DELIVERED --send
+
+# Opsi konfigurasi; --url hanya menerima base URL loopback.
+bash scripts/simulate-jubelio-shipment.sh PICKED_UP --url http://localhost:3000 --env-file .env --date '2026-11-14T00:00:00Z' --detail 'Paket diambil kurir uji'
+```
+
+Semua nilai `latest_status` terdokumentasi didukung: `WAITING`, `CONFIRMED_BY_COURIER`, `ON_THE_WAY_PICK_UP`, `PICKED_UP`, `ON_DELIVERY`, `ON_HOLD`, `DELIVERED`, `RETURNED`, `CANCELED`, `SHIPMENT_ISSUE` ([referensi Jubelio](../jubelio-api/shipment-v1.8.md)). `tracking.status` di script memakai placeholder yang sama dengan normalized status, bukan klaim kode asli kurir; aplikasi memakai `latest_status` sebagai sumber lifecycle.
+
+**Dampak:** `--send` dapat mengubah DB, audit, timeline, dan fakta komunikasi/notifikasi/email sesuai flow aplikasi. `DELIVERED` dapat mengubah order menjadi `completed` tanpa POD atau serah-terima manual. `CANCELED` hanya menyimulasikan laporan kurir, bukan mengirim permintaan cancel ke Jubelio. Jangan menguji seluruh status berurutan dengan asumsi semua akan diterapkan: progres tidak boleh mundur, status yang sama dapat diabaikan, dan order completed tidak dibuka kembali. Gunakan order terpisah untuk skenario yang saling bertentangan.
+
+Tanggal default adalah waktu sekarang. Snapshot DB saat pemeriksaan memiliki `latest_event_at` `2026-11-13T15:40:54.841Z`; jika jam komputer lebih lama, gunakan `--date` yang lebih baru untuk pengujian progres. Sesuaikan lagi dengan event terbaru setelah mengirim simulasi.
+
+Response HTTP 200 belum berarti status diterapkan: periksa `status` response (`applied`, `recorded`, `duplicate`, atau `ignored`). Error HTTP/koneksi membuat script keluar nonzero; tidak ada retry atau redirect otomatis. Secret dan signature tidak ditampilkan; jangan gunakan `bash -x`. Preview menampilkan payload identitas teknis tanpa secret.
+
+Pengujian CLI tanpa DB/provider nyata: `node --test scripts/simulate-jubelio-shipment.test.mjs`. Test menggunakan server HTTP loopback palsu untuk memeriksa body, HMAC, preview tanpa request, seluruh status, validasi input, dan exit code error HTTP. Ini bukan bukti callback telah diterapkan pada order asli.
+
+## Verification
+
+`shipment-tracking.test.ts` uses an independent OpenSSL-computed HMAC fixture and PostgreSQL for handoff, known-AWB identity, progress, pre-completion issues, replay/ignored history, concurrent callbacks, safe links and terminal protection. `shipment-tracking-mock.spec.ts` covers admin/customer HTTP/UI, foreign actors, owner privacy, signature rejection, completion, replay and late safe/unsafe POD. `order-tracking-presentation.test.ts` menguji label status, penyembunyian detail simulator, dan pembalikan timeline tanpa menyentuh UI; `order-detail-presentation-mock.spec.ts` menguji halaman detail customer (status, urutan mobile/desktop, disclosure, salin, tautan, pembayaran, pickup, error/retry, snapshot/resi kosong, plus fase 2: urutan mobile bayar→alamat→barang, loading yang terlihat, checking/unchanged/updated, next action gagal/batal/asing, tracking ditunda untuk pending, dan arsip kode pickup selesai) lewat route interception deterministik tanpa mutasi DB atau provider. Migration 0031 adds global external identity uniqueness, timestamps and receipt history; seed cleanup clears events before shipments. Real tenant callback registration/testing is an optional owner-operated activation step, not claimed by these mock checks.

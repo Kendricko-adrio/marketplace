@@ -16,6 +16,7 @@ const IS_CI = !!process.env.CI;
  */
 export default defineConfig({
   testDir: "./e2e",
+  outputDir: "playwright/results/default",
   fullyParallel: true,
   forbidOnly: IS_CI,
   retries: IS_CI ? 2 : 0,
@@ -24,8 +25,8 @@ export default defineConfig({
   // turning compiler file locks into application failures.
   workers: IS_CI ? 1 : 4,
   reporter: IS_CI
-    ? [["dot"], ["html", { open: "never" }]]
-    : [["list"], ["html", { open: "on-failure" }]],
+    ? [["dot"], ["html", { outputFolder: "playwright/reports/default", open: "never" }]]
+    : [["list"], ["html", { outputFolder: "playwright/reports/default", open: "on-failure" }]],
   use: {
     // Next.js dev servers compile on first request — allow for that.
     navigationTimeout: 60_000,
@@ -65,7 +66,7 @@ export default defineConfig({
   ],
   webServer: [
     {
-      command: "npm run dev:jubelio-mock",
+      command: "node --import tsx e2e/fixtures/jubelio/server.ts",
       url: "http://localhost:3002/health",
       reuseExistingServer: !IS_CI,
       timeout: 120_000,

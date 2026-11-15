@@ -17,17 +17,30 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 //   converges idempotently;
 // - when the seam does not finalize (store did not complete the order) the
 //   stable 502 is returned with nothing mutated.
+//
+// Logging: the route uses one module-scoped facade logger, so assertions read
+// the SAME stub the module created and the business facts (order id, http
+// status, store status, outcome) come from the `message`. The caught value and
+// the store response body are never logged — only a static error projection.
 
 import { createFakeDb, type FakeDb } from "@/test-support/fake-db";
 import {
   guardAllow,
   guardMock,
   jsonRequest,
-  loggerModuleMock,
-  makeLogger,
+  type RouteModuleLogger,
 } from "@/test-support/route-test";
 
 const state = vi.hoisted(() => ({ current: null as FakeDb | null }));
+
+/**
+ * Stub module logger yang dipakai route. `vi.hoisted` menjaga container ini
+ * sudah ada saat factory mock dievaluasi (import `./route` berjalan lebih dulu
+ * daripada body file test).
+ */
+const captured = vi.hoisted(() => ({
+  moduleLog: null as RouteModuleLogger | null,
+}));
 
 vi.mock("@/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/db")>();
@@ -47,13 +60,28 @@ vi.mock("@/lib/rbac/guard", async () => {
   };
 });
 
-vi.mock("@/lib/logger", () => loggerModuleMock());
+vi.mock("@/lib/logger", async () => {
+  const helpers = await import("@/test-support/route-test");
+  // Route membuat logger sekali di module scope; satu stub dibagikan supaya
+  // assertion membaca event yang benar-benar ditulis route.
+  const shared = helpers.makeModuleLogger();
+  captured.moduleLog = shared;
+  return {
+    ...(await helpers.loggerModuleMock()),
+    createModuleLogger: () => shared,
+  };
+});
 
 const fetchMock = vi.fn();
 
 import { POST } from "./route";
 
-const logger = makeLogger();
+/** Stub module logger milik route (dibuat saat `./route` diimpor). */
+function moduleLog(): RouteModuleLogger {
+  const value = captured.moduleLog;
+  if (!value) throw new Error("module logger route belum dibuat");
+  return value;
+}
 
 const orderRow = {
   id: "o-1",
@@ -80,11 +108,14 @@ function auditInserts(fake: FakeDb) {
 
 beforeEach(() => {
   guardMock.mockReset();
-  guardAllow(logger, { homeBranchId: "b-1" });
+  guardAllow({ homeBranchId: "b-1" });
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   vi.stubEnv("STORE_INTERNAL_URL", "http://store-internal");
   vi.stubEnv("BETTER_AUTH_SECRET", "test-secret");
+  moduleLog().info.mockClear();
+  moduleLog().warn.mockClear();
+  moduleLog().error.mockClear();
 });
 
 afterEach(() => {
@@ -129,9 +160,10 @@ describe("POST /api/admin/orders/[id]/verify-pickup", () => {
       entityId: "o-1",
     });
     expect(fake.committed).toBe(true);
-    expect(logger.info).toHaveBeenCalledWith(
-      "verify-pickup.completed",
-      expect.objectContaining({ outcome: "success", reconciled: false })
+    expect(moduleLog().info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "verify-pickup selesai (order o-1, userId admin-1, reconciled false, outcome success)"
+      )
     );
   });
 
@@ -150,9 +182,13 @@ describe("POST /api/admin/orders/[id]/verify-pickup", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ success: true });
-    expect(logger.warn).toHaveBeenCalledWith(
-      "verify-pickup.order_complete_unreachable",
-      expect.objectContaining({ outcome: "error" })
+    // The thrown value is never logged; only the static projection goes in the
+    // `error` field while the business fact stays in the message.
+    expect(moduleLog().warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "verify-pickup: order-complete tidak dapat dihubungi (order o-1, outcome error)"
+      ),
+      expect.any(Error)
     );
 
     // Convergence happened in the seam's one transaction; no separate writes.
@@ -162,9 +198,10 @@ describe("POST /api/admin/orders/[id]/verify-pickup", () => {
     expect(auditInserts(fake)).toHaveLength(1);
     expect(auditInserts(fake)[0].isTx).toBe(true);
     expect(fake.committed).toBe(true);
-    expect(logger.info).toHaveBeenCalledWith(
-      "verify-pickup.completed",
-      expect.objectContaining({ outcome: "success", reconciled: true })
+    expect(moduleLog().info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "verify-pickup selesai (order o-1, userId admin-1, reconciled true, outcome success)"
+      )
     );
   });
 
@@ -185,9 +222,11 @@ describe("POST /api/admin/orders/[id]/verify-pickup", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ success: true });
-    expect(logger.error).toHaveBeenCalledWith(
-      "verify-pickup.order_complete_failed",
-      expect.objectContaining({ outcome: "error", httpStatus: 500 })
+    expect(moduleLog().error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "verify-pickup: order-complete menolak (order o-1, httpStatus 500, outcome error)"
+      ),
+      expect.any(Error)
     );
 
     const updates = fake.ops.filter((op) => op.kind === "update");
@@ -218,9 +257,11 @@ describe("POST /api/admin/orders/[id]/verify-pickup", () => {
     // No attempt reset and no audit — the verification stays retryable.
     expect(fake.ops.filter((op) => op.kind === "update")).toHaveLength(0);
     expect(fake.ops.filter((op) => op.kind === "insert")).toHaveLength(0);
-    expect(logger.error).toHaveBeenCalledWith(
-      "verify-pickup.completion_not_finalized",
-      expect.objectContaining({ outcome: "error", storeStatus: "ready_for_pickup" })
+    expect(moduleLog().error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "verify-pickup: completion tidak final (order o-1, externalOk false, httpStatus none, storeStatus ready_for_pickup, outcome error)"
+      ),
+      expect.any(Error)
     );
   });
 

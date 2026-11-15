@@ -14,7 +14,26 @@ import {
 } from "@/db";
 import { eq, and, asc, inArray, desc, ilike, or, gte, lte, sql } from "drizzle-orm";
 import { withPermission } from "@/lib/rbac/route-guards";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import type { ProductFilterConfig, CarouselContent } from "@/db";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-homepage-preview-all");
+
+/**
+ * Proyeksi teknis statis untuk jalur kegagalan tak terduga. Nilai yang
+ * tertangkap (kemungkinan memuat SQL) tidak pernah masuk log; kontrak HTTP
+ * tetap sama.
+ */
+class HomepagePreviewAllLogError extends Error {
+  constructor() {
+    super("admin homepage preview-all: gagal memuat seluruh section");
+    this.name = "HomepagePreviewAllLogError";
+  }
+}
 
 /**
  * Returns ALL homepage sections (active and inactive) with the same data
@@ -26,7 +45,7 @@ import type { ProductFilterConfig, CarouselContent } from "@/db";
  * cannot be used (even via a proxy) to preview inactive sections. This
  * endpoint fills that gap by querying the DB directly on the admin side.
  */
-export const GET = withPermission(async () => {
+async function previewAllHomepageSections(): Promise<Response> {
   try {
     const sections = await db
       .select()
@@ -223,14 +242,22 @@ export const GET = withPermission(async () => {
     });
 
     return NextResponse.json({ success: true, data });
-  } catch (error) {
-    console.error("Error fetching all homepage sections for preview:", error);
+  } catch {
+    log.error(
+      "Seluruh section homepage gagal dimuat untuk preview (outcome error)",
+      new HomepagePreviewAllLogError()
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch homepage sections" },
       { status: 500 }
     );
   }
-}, "homepage", "view");
+}
+
+export const GET = withRequestContext(
+  withPermission(previewAllHomepageSections, "homepage", "view"),
+  "admin-homepage-preview-all"
+);
 
 /**
  * Resolve carousel products for "filter" mode. Mirrors the logic in the

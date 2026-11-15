@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+import { sellableVariantSql, sellableProductSql } from "@/lib/storefront-stock";
 import { db } from "@/db";
 import {
   homepageSections,
@@ -11,9 +13,34 @@ import {
   brands,
   genders,
   branches,
+  variantPriceCurrent,
+  variantPriceRevisions,
 } from "@/db";
 import { eq, and, asc, inArray, desc, ilike, or, gte, lte, sql } from "drizzle-orm";
 import type { ProductFilterConfig, CarouselContent } from "@/db";
+import {
+  effectivePriceSql,
+  markdownActiveSql,
+  projectRow,
+} from "@/lib/variant-price-projection";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("homepage");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Next/provider
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 type ProductRow = (typeof products)["$inferSelect"];
 
@@ -30,18 +57,40 @@ async function resolveFilterModeProducts(
   name: string;
   slug: string;
   price: string;
+  sourcePrice: string;
+  markdownActive: boolean;
   basePrice: string;
   image: string | null;
   collection: string | null;
   gender: string | null;
 }[]> {
-  // Cheapest variant net price per product (join, no N+1).
+  // Cheapest variant EFFECTIVE price per product (Markdown applied only while
+  // the target is below the variant's current source). Joined, no N+1.
   const minPriceSq = db
     .select({
       productId: productVariants.productId,
-      minPrice: sql<string>`min(${productVariants.price})`.as("minPrice"),
+      minPrice: sql<string>`min(${effectivePriceSql(
+        productVariants.price,
+        variantPriceRevisions.targetUnitPrice
+      )})`.as("minPrice"),
+      hasMarkdown: sql<boolean>`bool_or(${markdownActiveSql(
+        productVariants.price,
+        variantPriceRevisions.targetUnitPrice
+      )})`.as("hasMarkdown"),
     })
     .from(productVariants)
+    .leftJoin(
+      variantPriceCurrent,
+      eq(variantPriceCurrent.variantId, productVariants.id)
+    )
+    .leftJoin(
+      variantPriceRevisions,
+      and(
+        eq(variantPriceRevisions.id, variantPriceCurrent.revisionId),
+        eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
+      )
+    )
+    .where(sellableVariantSql())
     .groupBy(productVariants.productId)
     .as("vp");
 
@@ -56,8 +105,9 @@ async function resolveFilterModeProducts(
     );
   }
   if (filter.hasDiscount) {
-    // Discount = RRP (base_price) above the cheapest variant net price.
-    conditions.push(sql`${products.basePrice} > ${minPriceSq.minPrice}`);
+    // "Diskon" means an ACTIVE Markdown on a relevant variant — never the
+    // legacy RRP (product.base_price) above the cheapest variant.
+    conditions.push(sql`${minPriceSq.hasMarkdown}`);
   }
   if (filter.minPrice) conditions.push(gte(minPriceSq.minPrice, filter.minPrice));
   if (filter.maxPrice) conditions.push(lte(minPriceSq.minPrice, filter.maxPrice));
@@ -171,13 +221,71 @@ async function hydrateProducts(
   }
   const variantMap = new Map(defaultVariants.map((v) => [v.productId, v]));
 
+  // Cheapest EFFECTIVE variant + its own source (bounded to one homepage page).
+  const variantRows = await db
+    .select({
+      id: productVariants.id,
+      productId: productVariants.productId,
+      price: productVariants.price,
+      targetUnitPrice: variantPriceRevisions.targetUnitPrice,
+      markdownRevisionId: variantPriceRevisions.id,
+      revisionVariantId: variantPriceRevisions.variantId,
+    })
+    .from(productVariants)
+    .leftJoin(
+      variantPriceCurrent,
+      eq(variantPriceCurrent.variantId, productVariants.id)
+    )
+    .leftJoin(
+      variantPriceRevisions,
+      and(
+        eq(variantPriceRevisions.id, variantPriceCurrent.revisionId),
+        eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
+      )
+    )
+    .where(and(inArray(productVariants.productId, ids), sellableVariantSql()));
+  type DisplayPrice = {
+    effective: bigint;
+    source: bigint;
+    active: boolean;
+    variantId: string;
+  };
+  const displayByProduct = new Map<string, DisplayPrice>();
+  for (const row of variantRows) {
+    const projection = projectRow({
+      variantId: row.id,
+      sourceUnitPrice: row.price,
+      storedTargetUnitPrice: row.targetUnitPrice,
+      markdownRevisionId:
+        row.revisionVariantId === null ? null : row.markdownRevisionId,
+    });
+    const candidate: DisplayPrice = {
+      effective: BigInt(projection.effectiveUnitPrice),
+      source: BigInt(projection.sourceUnitPrice),
+      active: projection.markdownActive,
+      variantId: row.id,
+    };
+    const current = displayByProduct.get(row.productId);
+    if (
+      !current ||
+      candidate.effective < current.effective ||
+      (candidate.effective === current.effective &&
+        candidate.variantId < current.variantId)
+    ) {
+      displayByProduct.set(row.productId, candidate);
+    }
+  }
+
   return rows.map((r) => {
     const variant = variantMap.get(r.id);
+    const display = displayByProduct.get(r.id);
     return {
       id: r.id,
       name: r.name,
       slug: r.slug,
-      price: r.price ?? r.basePrice,
+      price: display ? display.effective.toString() : (r.price ?? r.basePrice),
+      sourcePrice: display ? display.source.toString() : (r.price ?? r.basePrice),
+      markdownActive: display?.active ?? false,
       basePrice: r.basePrice,
       // Prefer product-level thumbnail (Jubelio CDN); fall back to variant image.
       image: r.thumbnail ?? (variant ? imageMap.get(variant.id) ?? null : null),
@@ -187,7 +295,8 @@ async function hydrateProducts(
   });
 }
 
-export async function GET() {
+/** HTTP adapter: section homepage aktif + produk terpilih, map ke status/body existing. */
+async function getHomepage(): Promise<Response> {
   try {
     const sections = await db
       .select()
@@ -196,6 +305,7 @@ export async function GET() {
       .orderBy(asc(homepageSections.displayOrder));
 
     if (sections.length === 0) {
+      log.info("homepage loaded: 0 section");
       return NextResponse.json({ success: true, data: [] });
     }
 
@@ -257,22 +367,59 @@ export async function GET() {
       const productRows = await db
         .select()
         .from(products)
-        .where(inArray(products.id, allProductIds));
+        .where(and(inArray(products.id, allProductIds), eq(products.status, "aktif"), sellableProductSql()));
       for (const p of productRows) productMap.set(p.id, p);
 
-      // Fetch all variants for these products to compute the cheapest variant
-      // net price per product. Image still comes from the default variant.
+      // Fetch all variants for these products with their Markdown projection to
+      // compute the cheapest EFFECTIVE price + its own source per product. Image
+      // still comes from the default variant.
       const allVariants = await db
-        .select()
+        .select({
+          id: productVariants.id,
+          productId: productVariants.productId,
+          price: productVariants.price,
+          isDefault: productVariants.isDefault,
+          targetUnitPrice: variantPriceRevisions.targetUnitPrice,
+          markdownRevisionId: variantPriceRevisions.id,
+          revisionVariantId: variantPriceRevisions.variantId,
+        })
         .from(productVariants)
-        .where(inArray(productVariants.productId, allProductIds));
+        .leftJoin(
+          variantPriceCurrent,
+          eq(variantPriceCurrent.variantId, productVariants.id)
+        )
+        .leftJoin(
+          variantPriceRevisions,
+          and(
+            eq(variantPriceRevisions.id, variantPriceCurrent.revisionId),
+            eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
+          )
+        )
+        .where(and(inArray(productVariants.productId, allProductIds), sellableVariantSql()))
+        .orderBy(asc(productVariants.id));
 
-      const minPriceMap = new Map<string, string>();
+      type DisplayPrice = { effective: string; source: string; active: boolean };
+      const minPriceMap = new Map<string, DisplayPrice>();
       const defaultVariantMap = new Map<string, (typeof allVariants)[number]>();
       for (const v of allVariants) {
+        const projection = projectRow({
+          variantId: v.id,
+          sourceUnitPrice: v.price,
+          storedTargetUnitPrice: v.targetUnitPrice,
+          markdownRevisionId:
+            v.revisionVariantId === null ? null : v.markdownRevisionId,
+        });
+        const candidate: DisplayPrice = {
+          effective: projection.effectiveUnitPrice,
+          source: projection.sourceUnitPrice,
+          active: projection.markdownActive,
+        };
         const cur = minPriceMap.get(v.productId);
-        if (cur === undefined || parseFloat(v.price) < parseFloat(cur)) {
-          minPriceMap.set(v.productId, v.price);
+        if (
+          cur === undefined ||
+          BigInt(candidate.effective) < BigInt(cur.effective)
+        ) {
+          minPriceMap.set(v.productId, candidate);
         }
         if (v.isDefault) defaultVariantMap.set(v.productId, v);
       }
@@ -299,8 +446,13 @@ export async function GET() {
         // default variant's first variant-level image for legacy products.
         (p as unknown as { _image?: string | null })._image =
           p.thumbnail ?? (variant ? imageMap.get(variant.id) ?? null : null);
+        const display = minPriceMap.get(p.id);
         (p as unknown as { _price?: string })._price =
-          minPriceMap.get(p.id) ?? p.basePrice;
+          display?.effective ?? p.basePrice;
+        (p as unknown as { _sourcePrice?: string })._sourcePrice =
+          display?.source ?? p.basePrice;
+        (p as unknown as { _markdownActive?: boolean })._markdownActive =
+          display?.active ?? false;
       }
 
       // Resolve gender names for the manual-mode products (productRow only has
@@ -348,6 +500,8 @@ export async function GET() {
               name: p.name,
               slug: p.slug,
               price: p.price,
+              sourcePrice: p.sourcePrice,
+              markdownActive: p.markdownActive,
               basePrice: p.basePrice,
               image: p.image,
               collection: p.collection,
@@ -362,11 +516,17 @@ export async function GET() {
             if (!p) return null;
             const img = (p as unknown as { _image?: string | null })._image ?? null;
             const price = (p as unknown as { _price?: string })._price ?? p.basePrice;
+            const sourcePrice =
+              (p as unknown as { _sourcePrice?: string })._sourcePrice ?? price;
+            const markdownActive =
+              (p as unknown as { _markdownActive?: boolean })._markdownActive ?? false;
             return {
               id: p.id,
               name: p.name,
               slug: p.slug,
               price: price,
+              sourcePrice,
+              markdownActive,
               basePrice: p.basePrice,
               image: img,
               collection: p.collection,
@@ -382,12 +542,16 @@ export async function GET() {
       return section;
     });
 
+    log.info(`homepage loaded: ${data.length} section`);
     return NextResponse.json({ success: true, data });
-  } catch (error) {
-    console.error("Error fetching homepage sections:", error);
+  } catch {
+    log.error("homepage load failed", new RouteLogError("homepage load failed"));
     return NextResponse.json(
       { success: false, error: "Failed to fetch homepage sections" },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(getHomepage, "homepage");

@@ -161,11 +161,10 @@ test.describe("storefront product listing", () => {
     );
   });
 
-  test("out-of-stock cards are greyed out with a Stok Habis badge", async ({
+  test("out-of-stock products are hidden from search", async ({
     page,
   }) => {
-    // The seeder leaves "AirRunner Pro Running Shoes" with zero stock in every
-    // branch — its card must be greyed out (opacity) with a disabled link.
+    // Produk fixture tanpa stok tidak ditawarkan di storefront.
     await page.goto("/products?search=airrunner");
 
     const card = page
@@ -173,22 +172,14 @@ test.describe("storefront product listing", () => {
         hasText: "AirRunner Pro Running Shoes",
       })
       .first();
-    await expect(card).toBeVisible();
-    await expect(card.getByText("Stok Habis")).toBeVisible();
-    // Greyed out: no navigation links inside the card.
-    await expect(card.locator("a")).toHaveCount(0);
-    // And the card root carries the opacity-50 class.
-    await expect(card).toHaveClass(/opacity-50/);
+    await expect(card).toHaveCount(0);
+    await expect(page.getByText("Tidak ada produk yang ditemukan.")).toBeVisible();
   });
 
-  test("out-of-stock products always sort below in-stock ones", async ({
+  test("every sort excludes out-of-stock products", async ({
     page,
   }) => {
-    // The list endpoint applies a tier-1 ORDER BY "has sellable stock DESC"
-    // above the user's chosen sort, so every out-of-stock item must appear
-    // after every in-stock item in the full result set. Verified at the public
-    // API seam (the same response the grid consumes) for both the default
-    // (newest) and price-asc sorts.
+    // Filter stok dijalankan sebelum sort dan pagination pada seam HTTP.
     await page.goto("/products");
 
     const fetchList = (query: string) =>
@@ -201,13 +192,7 @@ test.describe("storefront product listing", () => {
     for (const query of ["limit=100", "limit=100&sortBy=price&sortOrder=asc"]) {
       const data = await fetchList(query);
       expect(data.length).toBeGreaterThan(0);
-      const firstOos = data.findIndex((p) => !p.hasStock);
-      const lastInStock = data.map((p) => p.hasStock).lastIndexOf(true);
-      if (firstOos !== -1) {
-        // There is at least one in-stock item above the first out-of-stock one.
-        expect(lastInStock).toBeGreaterThan(-1);
-        expect(firstOos).toBeGreaterThan(lastInStock);
-      }
+      expect(data.every((p) => p.hasStock)).toBe(true);
     }
   });
 

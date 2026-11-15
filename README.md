@@ -1,7 +1,7 @@
 # Marketplace Monorepo
 
-Monorepo for the Okcir marketplace: a storefront, an admin dashboard, and
-shared packages, managed with npm workspaces.
+Monorepo marketplace dengan storefront pelanggan, admin dashboard, dan
+shared packages, dikelola menggunakan npm workspaces.
 
 ## Tech Stack
 
@@ -31,6 +31,15 @@ shared packages, managed with npm workspaces.
 6. `npm run dev:store` — storefront on http://localhost:3000
 7. `npm run dev:admin` — admin on http://localhost:3001
 
+Commands development mendukung Windows dan Linux dengan **Node.js 24 LTS + npm**,
+tanpa Bash/WSL atau konfigurasi `script-shell` khusus. Jalankan
+`npm run dev:all` untuk store dan admin sekaligus. Mock provider hanya dijalankan
+oleh automated test melalui fixture `e2e/fixtures/jubelio/`, bukan oleh script dev.
+
+Setiap script dev juga menyalin output prosesnya ke `logs/<app>.log` (ditimpa
+setiap run, di-ignore git). Lihat
+[`docs/features/logging.md`](docs/features/logging.md#capture-log-development-logs).
+
 ## Scripts (run from ROOT)
 
 | Script | Purpose |
@@ -42,9 +51,16 @@ shared packages, managed with npm workspaces.
 | `db:push` | Apply schema to DB (see note below) |
 | `db:seed` | Seed sample data |
 | `db:reset` | Reset + reseed the DB |
-| `db:import-jubelio` | Full pull from Jubelio master data (see `docs/features/jubelio-sync.md`) |
+| `db:import-jubelio` | Pull Jubelio master data. Default = dev/filtered (cap/filter dipatuhi); `--full` = bootstrap production tanpa cap/filter dengan report durable |
+| `db:preflight:production` | Read-only preflight target/manifest/migration (`before-migrate` / `after-migrate`) |
+| `db:seed:production` | Seed referensi production non-destruktif (roles/grants fresh, HQ, system config, marker) |
+| `db:verify:production` | Verifikasi schema/referensi/Owner/import + daftar launch blockers (read-only) |
 | `db:bootstrap-owner` | One-time System Owner bootstrap CLI (see `docs/deployment-docs/rbac-owner-bootstrap.md`) |
 | `lint` / `lint:store` / `lint:admin` | ESLint |
+
+> **Log development:** setiap script dev menulis `logs/<app>.log`
+> (`store`, `admin`), ditimpa setiap run dan di-ignore git.
+> See [`docs/features/logging.md`](docs/features/logging.md#capture-log-development-logs).
 
 > **Note on `db:push` vs `db:migrate`:** the dev DB is managed with `db:push`
 > (schema-sync), **not** `db:migrate`. The `__drizzle_migrations` journal is not

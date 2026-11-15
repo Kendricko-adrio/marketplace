@@ -1,5 +1,12 @@
 # Verifikasi Deployment
 
+> **Production first deployment** memakai verifier khusus sebelum situs dibuka:
+> `bootstrap verify` menghasilkan `BOOTSTRAP_VERIFIED`/`BOOTSTRAP_INCOMPLETE`
+> dan daftar launch blockers. Lihat
+> [first-production-deployment.md](first-production-deployment.md). Checklist di
+> bawah ini untuk staging (database disposable, seed demo) dan smoke terbatas
+> production setelah bootstrap verified.
+
 ## 1. Cek HTTPS
 
 Buka di browser:
@@ -14,10 +21,13 @@ Buka di browser:
 
 ## 2. Test alur aplikasi
 
-- [ ] **Homepage store** load dengan produk sample (dari seed).
+- [ ] **Homepage store** load dengan produk sample (staging/seed) atau katalog
+  hasil full import (production).
 - [ ] **Login admin** di `https://dev-admin.adfsport.cloud/login`.
-  - Pakai kredensial admin dari seed (lihat `packages/db/src/seed.ts` untuk
-    email + password default). Cek file atau log seed.
+  - Staging: pakai kredensial admin dari seed (lihat `packages/db/src/seed.ts`).
+  - Production: login sebagai System Owner hasil bootstrap; password harus
+    diganti saat login pertama (`mustResetPassword`). Tidak ada kredensial demo
+    di production.
 - [ ] **Register customer** di store → email verifikasi sampai ke inbox.
   - Verifikasi SMTP berfungsi.
 - [ ] **Upload gambar produk** dari admin → muncul di store.

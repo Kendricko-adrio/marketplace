@@ -73,6 +73,14 @@ describe("initial roles", () => {
         g("roles", "delete", "global"),
         g("footer", "view", "global"),
         g("footer", "edit", "global"),
+        // Discount administration: two Global Modules, view/edit each.
+        g("discounts", "view", "global"),
+        g("discounts", "edit", "global"),
+        g("discount_capacity", "view", "global"),
+        g("discount_capacity", "edit", "global"),
+        // Markdown price administration (ticket03): global view/edit each.
+        g("prices", "view", "global"),
+        g("prices", "edit", "global"),
       ])
     );
   });
@@ -99,5 +107,29 @@ describe("initial roles", () => {
     expect(
       ADMIN_SEED_GRANTS.some((gr) => gr.scope === "all_branches")
     ).toBe(false);
+  });
+
+  it("gives fresh HQ the two discount modules as global view/edit and fresh Admin none", () => {
+    // Spec §7.3: `discounts` and `discount_capacity` are two separate Global
+    // Modules, each with exactly view + edit. A fresh HQ therefore gets the
+    // four approved global rows (no delete, never a branch scope), while a
+    // fresh Admin keeps least-privilege branch operations and gets none.
+    const discountTuples = (grants: readonly SeedGrant[]): string[] =>
+      grants
+        .filter(
+          (gr) =>
+            gr.module === "discounts" || gr.module === "discount_capacity"
+        )
+        .map((gr) => `${gr.module}:${gr.action}:${gr.scope}`);
+
+    expect(new Set(discountTuples(HQ_SEED_GRANTS))).toEqual(
+      new Set([
+        "discounts:view:global",
+        "discounts:edit:global",
+        "discount_capacity:view:global",
+        "discount_capacity:edit:global",
+      ])
+    );
+    expect(discountTuples(ADMIN_SEED_GRANTS)).toEqual([]);
   });
 });

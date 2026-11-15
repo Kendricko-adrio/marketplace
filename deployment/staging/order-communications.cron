@@ -1,0 +1,11 @@
+# Jadwal cron STAGING untuk komunikasi order (spec penyelarasan status,
+# notifikasi, dan email). Berkas ini HANYA contoh konfigurasi — tidak ada
+# pemasangan cron, akses remote, atau deployment yang dilakukan agent.
+#
+# Endpoint memakai CRON_SECRET yang sama dengan sweep reservasi. Wrapper
+# menambahkan log harian + housekeeping di direktori log staging.
+#
+# Setiap menit: polling mengambil batch terbatas (urutan due-time/id stabil) dan
+# mengecualikan pekerjaan yang sudah sent/failed/superseded, sehingga retry lima
+# menit dan sisa attempt tetap terhormati.
+* * * * * /home/ops/marketplace/deployment/common/cron/process-order-communications.sh --url https://dev-store.adfsport.cloud --env-file /home/ops/marketplace/deployment/staging/.env --log-dir /home/ops/logs/marketplace-order-comms/staging

@@ -15,12 +15,23 @@ export default defineConfig({
         import.meta.dirname,
         "../../packages/db/src/rbac"
       ),
+      "@marketplace/db/src": path.resolve(import.meta.dirname, "../../packages/db/src"),
       "@marketplace/db": path.resolve(import.meta.dirname, "../../packages/db/src"),
+      // Resolve the logging core straight from source so unit tests never depend
+      // on the package's dist artifact being built first.
+      "@marketplace/logging": path.resolve(
+        import.meta.dirname,
+        "../../packages/logging/src/index.ts"
+      ),
+      // Shared status resolver via subpath: modul murni tanpa menarik barrel
+      // @marketplace/ui (yang meng-export komponen Next/Render).
+      "@marketplace/ui/src": path.resolve(import.meta.dirname, "../../packages/ui/src"),
       "@marketplace/ui": path.resolve(import.meta.dirname, "../../packages/ui/src"),
     },
   },
   test: {
     environment: "node",
+    setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.{ts,tsx}"],
     passWithNoTests: true,
   },

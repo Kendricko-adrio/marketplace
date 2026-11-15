@@ -1,5 +1,9 @@
 import { Snap, type TransactionParameter } from "midtrans-client";
 import crypto from "crypto";
+import { createModuleLogger } from "./logger";
+import type { CheckoutPaymentOutcome } from "@/features/checkout/checkout-attempt";
+
+const log = createModuleLogger("midtrans");
 
 let snapClient: Snap | null = null;
 
@@ -181,8 +185,9 @@ export async function createSnapPayment(
   expiryMinutes?: number,
   paymentStartedAt?: Date
 ): Promise<CreateSnapPaymentResult> {
-  const snap = getSnapClient();
-
+  // Resolve the test-only transport before constructing the SDK. A broken
+  // E2E setup must never fall through to a real sandbox/provider endpoint.
+  const mockBase = controlledSnapMockBase();
   const parameter = buildSnapTransactionParameter({
     orderId,
     grossAmount,
@@ -192,6 +197,34 @@ export async function createSnapPayment(
     paymentStartedAt,
   });
 
+  if (mockBase) {
+    const response = await fetch(`${mockBase}/snap/v1/transactions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(parameter),
+      redirect: "error",
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) throw Object.assign(new Error("Midtrans mock Snap request failed"), {
+      httpStatusCode: response.status, ApiResponse: await response.json().catch(() => null),
+    });
+    const transaction: unknown = await response.json();
+    if (!transaction || typeof transaction !== "object" || Array.isArray(transaction)) {
+      throw new Error("Invalid Midtrans mock Snap response");
+    }
+    const { token, redirect_url } = transaction as Record<string, unknown>;
+    if (typeof token !== "string" || !token.trim() || typeof redirect_url !== "string") {
+      throw new Error("Invalid Midtrans mock Snap response");
+    }
+    let target: URL;
+    try { target = new URL(redirect_url); } catch { throw new Error("Invalid Midtrans mock redirect"); }
+    if (target.origin !== mockBase || target.username || target.password || target.hash) {
+      throw new Error("Invalid Midtrans mock redirect");
+    }
+    return { redirectUrl: target.href, token };
+  }
+
+  const snap = getSnapClient();
   try {
     const transaction = await snap.createTransaction(parameter);
 
@@ -200,20 +233,8 @@ export async function createSnapPayment(
       token: transaction.token,
     };
   } catch (error) {
-    // Midtrans client throws MidtransError with:
-    // .message, .httpStatusCode, .ApiResponse, .rawHttpClientData
-    const err = error as {
-      message?: string;
-      httpStatusCode?: number;
-      ApiResponse?: unknown;
-    };
-    console.error("Midtrans Snap createTransaction failed:", {
-      orderId,
-      grossAmount,
-      message: err.message,
-      httpStatusCode: err.httpStatusCode,
-      apiResponse: err.ApiResponse,
-    });
+    // SDK errors can contain customer data and credentials inside strings.
+    log.error(`Payment ${orderId}: Snap initialization unavailable`, new Error("Midtrans Snap initialization failed"));
     throw error;
   }
 }
@@ -222,6 +243,19 @@ export async function createSnapPayment(
  * Unified payment creation. Always uses Midtrans Snap (redirect flow).
  * Returns redirectUrl + token for the Snap payment page.
  */
+function controlledSnapMockBase(): string | null {
+  if (process.env.E2E_PROVIDER_MOCKS !== "true") return null;
+  if (process.env.NODE_ENV === "production") throw new Error("Midtrans mock is forbidden in production");
+  let url: URL;
+  try { url = new URL(process.env.MIDTRANS_MOCK_API_BASE_URL ?? ""); }
+  catch { throw new Error("Invalid Midtrans mock base URL"); }
+  if (url.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname) ||
+      url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("Invalid Midtrans mock base URL");
+  }
+  return url.origin;
+}
+
 export async function createPayment(
   orderId: string,
   grossAmount: number,
@@ -230,8 +264,12 @@ export async function createPayment(
   expiryMinutes?: number,
   paymentStartedAt?: Date
 ): Promise<CreateSnapPaymentResult> {
-  const mock = getMockPaymentResult(orderId);
-  if (mock) return mock;
+  // The provider adapter takes precedence over the old synthetic redirect.
+  // Its guard also rejects production/malformed configuration immediately.
+  if (!controlledSnapMockBase()) {
+    const mock = getMockPaymentResult(orderId);
+    if (mock) return mock;
+  }
   return createSnapPayment(
     orderId,
     grossAmount,
@@ -240,6 +278,37 @@ export async function createPayment(
     expiryMinutes,
     paymentStartedAt
   );
+}
+
+/** Conservative pre-order adapter: a lost response must never trigger blind compensation. */
+export async function createCheckoutPayment(input: BuildSnapParameterInput): Promise<CheckoutPaymentOutcome> {
+  try {
+    const payment = await createPayment(input.orderId, input.grossAmount, input.customerDetails,
+      input.itemDetails, input.expiryMinutes, input.paymentStartedAt);
+    if (typeof payment.token !== "string" || !payment.token.trim() ||
+      typeof payment.redirectUrl !== "string" || !payment.redirectUrl.trim()) return { kind: "unknown" };
+    const target = new URL(payment.redirectUrl);
+    const controlledLocal = process.env.NODE_ENV !== "production" &&
+      (process.env.E2E_PROVIDER_MOCKS === "true" || process.env.MIDTRANS_E2E_MOCK === "true") &&
+      ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname);
+    if (target.username || target.password || (target.protocol !== "https:" && !(controlledLocal && target.protocol === "http:"))) {
+      return { kind: "unknown" };
+    }
+    log.info(`Payment ${input.orderId}: checkout session ready`);
+    return { kind: "ready", ...payment };
+  } catch (error) {
+    // Context7 official SDK error docs identify 401 as a bad server key.
+    // Other 4xx (notably duplicate order IDs) do NOT prove session absence.
+    if (error && typeof error === "object" && "httpStatusCode" in error && error.httpStatusCode === 401 &&
+      "ApiResponse" in error && error.ApiResponse && typeof error.ApiResponse === "object" &&
+      "error_messages" in error.ApiResponse && Array.isArray(error.ApiResponse.error_messages) &&
+      error.ApiResponse.error_messages.length > 0 && error.ApiResponse.error_messages.every((value: unknown) => typeof value === "string")) {
+      log.error(`Payment ${input.orderId}: checkout initialization rejected by authentication`);
+      return { kind: "definitive_rejection" };
+    }
+    log.error(`Payment ${input.orderId}: checkout initialization result unknown`);
+    return { kind: "unknown" };
+  }
 }
 
 /**
@@ -386,31 +455,4 @@ export async function getMidtransTransactionStatus(
   }
 
   return (await res.json()) as MidtransTransactionStatus;
-}
-
-/**
- * Best-effort attempt to expire a pending Midtrans transaction.
- * Used by the sweep cron when a pending_payment order's reservation TTL has
- * elapsed but no `expire` webhook has arrived yet. Safe to call on a
- * transaction that is already expired/settled — a Midtrans 400 in that case is
- * logged and swallowed (we proceed to fail the order locally regardless).
- *
- * Uses the Snap client's `transaction.expire(orderId)` helper.
- */
-export async function expireMidtransTransaction(
-  orderId: string
-): Promise<void> {
-  try {
-    const snap = getSnapClient();
-    await snap.transaction.expire(orderId);
-  } catch (error) {
-    const err = error as { message?: string; httpStatusCode?: number };
-    // 400 "Transaction status has expired"/"already settled" etc. is expected
-    // when the sweep races the Midtrans scheduler or the webhook. Log and move on.
-    console.warn("Midtrans expire call failed (best-effort, ignoring):", {
-      orderId,
-      message: err.message,
-      httpStatusCode: err.httpStatusCode,
-    });
-  }
 }

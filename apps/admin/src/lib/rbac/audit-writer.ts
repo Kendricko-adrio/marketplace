@@ -19,6 +19,12 @@ import { auditLogs } from "@/db";
 
 export interface AuditEventInput {
   actorId: string | null;
+  /**
+   * Immutable actor identity string retained inside `changes` so attribution
+   * survives the `user_id` FK becoming NULL after an Admin User is deleted.
+   * Only written by callers that opt in (discount administration).
+   */
+  actorIdentity?: string | null;
   action: string;
   entityType: string;
   entityId: string | null;
@@ -44,7 +50,16 @@ export async function writeAuditEvent(
     action: input.action,
     entityType: input.entityType,
     entityId: input.entityId,
-    changes: (input.changes ?? null) as typeof auditLogs.$inferInsert["changes"],
+    changes: (input.actorIdentity
+      ? {
+          ...(input.changes !== null &&
+          typeof input.changes === "object" &&
+          !Array.isArray(input.changes)
+            ? (input.changes as Record<string, unknown>)
+            : {}),
+          actorIdentity: input.actorIdentity,
+        }
+      : (input.changes ?? null)) as typeof auditLogs.$inferInsert["changes"],
     policyVersion: input.policyVersion ?? null,
     branchScope: input.branchScope ?? null,
     branchId: input.branchId ?? null,

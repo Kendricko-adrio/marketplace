@@ -41,7 +41,7 @@ Composite primary key `(sectionId, productId)`.
 
 `ProductFilterConfig` (`search`, `category`, `brand`, `minPrice`,
 `maxPrice`, `hasDiscount`, `sortOrder`) is the shared filter shape — see
-[product-filters.md](./product-filters.md) for the full story; this doc only
+[product-filters.md](product-filters.md) for the full story; this doc only
 covers how the homepage CMS uses it.
 
 ## Endpoints
@@ -161,7 +161,7 @@ covers how the homepage CMS uses it.
 - Carousel manual: pick products → save → storefront shows them in order;
   switch to filter mode with brand/sort/hasDiscount → save → storefront
   carousel matches `/products` results for the same filter (see
-  [product-filters.md](./product-filters.md)).
+  [product-filters.md](product-filters.md)).
 - Promo cards: card with a filter links to `/products?brand=…` with
   the right results; card without a filter is not clickable.
 - Image cleanup: replace a banner slide image → the old file disappears from
@@ -175,5 +175,5 @@ covers how the homepage CMS uses it.
 ## Related
 
 - Filter details (ProductFilterConfig, brand/gender dimensions, shared
-  helpers): [docs/features/product-filters.md](./product-filters.md)
+  helpers): [docs/features/product-filters.md](product-filters.md)
 - Endpoint details: [docs/api-reference.md](./api-reference.md)

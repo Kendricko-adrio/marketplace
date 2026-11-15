@@ -1,0 +1,134 @@
+{
+  "run": "RESEARCH08-FIELD-MATRIX-PREFLIGHT-2026-10-18T10-04-56-604Z",
+  "scope": "Login dan discovery read-only item55269 sebelum approval business-write matrix.",
+  "initialCreateAttempts": 23,
+  "createAttempts": 0,
+  "events": [
+    {
+      "at": "2026-10-18T10:04:56.605Z",
+      "label": "login",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "at": "2026-10-18T10:04:59.828Z",
+      "label": "login",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-18T10:04:59.834Z",
+      "label": "master",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/55269"
+    },
+    {
+      "at": "2026-10-18T10:05:00.158Z",
+      "label": "master",
+      "phase": "response",
+      "http": 200,
+      "snapshot": {
+        "sell_price": "439000.0000",
+        "is_active": true,
+        "sell_unit": "Buah",
+        "uom_name": "Buah",
+        "sell_tax_id": null,
+        "sales_acct_id": null,
+        "cogs_acct_id": null,
+        "invt_acct_id": null,
+        "debt_acct_id": null
+      }
+    },
+    {
+      "at": "2026-10-18T10:05:00.164Z",
+      "label": "stock",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "input": {
+        "ids": [
+          55269
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T10:05:00.437Z",
+      "label": "stock",
+      "phase": "response",
+      "http": 200,
+      "snapshot": {
+        "rows": [
+          {
+            "location_id": -1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "location_id": 1,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "location_id": 2,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          },
+          {
+            "location_id": 7,
+            "on_hand": 0,
+            "on_order": 0,
+            "available": 0
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T10:05:00.442Z",
+      "label": "preflight-summary",
+      "businessWrites": 0,
+      "createAttempts": 0
+    }
+  ],
+  "master": {
+    "sell_price": "439000.0000",
+    "is_active": true,
+    "sell_unit": "Buah",
+    "uom_name": "Buah",
+    "sell_tax_id": null,
+    "sales_acct_id": null,
+    "cogs_acct_id": null,
+    "invt_acct_id": null,
+    "debt_acct_id": null
+  },
+  "stock": [
+    {
+      "location_id": -1,
+      "on_hand": 0,
+      "on_order": 0,
+      "available": 0
+    },
+    {
+      "location_id": 1,
+      "on_hand": 0,
+      "on_order": 0,
+      "available": 0
+    },
+    {
+      "location_id": 2,
+      "on_hand": 0,
+      "on_order": 0,
+      "available": 0
+    },
+    {
+      "location_id": 7,
+      "on_hand": 0,
+      "on_order": 0,
+      "available": 0
+    }
+  ]
+}

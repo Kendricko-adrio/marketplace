@@ -1,0 +1,174 @@
+import { NextRequest, NextResponse } from "next/server";
+import { db } from "@/db";
+import {
+  branches,
+  clients,
+  jubelioSalesOperations,
+  orders,
+} from "@/db";
+import { and, desc, eq, isNotNull, or } from "drizzle-orm";
+import { guard } from "@/lib/rbac/guard";
+import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+import { listCheckoutAttemptReviews } from "@/features/orders/checkout-attempt-review-repository";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-sales-operations-review");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB tidak pernah
+ * masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
+// GET /api/admin/reviews/sales-operations   [orders:view]
+//
+// Read-only ops review queue for the Jubelio Sales-Order flow: lists
+// `manual_review` SO/invoice/payment operations AND paid-but-blocked orders
+// (payment kept, fulfillment blocked). Exposes the known remote ids
+// (sales order / invoice / payment), the reason and timestamps. There are NO
+// write actions here by design: operators investigate in Jubelio and resolve
+// deliberately; a blind write could duplicate a remote operation.
+async function salesOperationsReview(request: NextRequest): Promise<Response> {
+  const guardResult = await guard("orders", "view");
+  if (!guardResult.ok) return guardResult.response;
+  const { ctx } = guardResult;
+
+  try {
+    const authorization = branchScopeFromAuthorization(ctx.authorization);
+    if (!authorization) {
+      log.warn(
+        `sales review ditolak: branch scope tidak dapat ditentukan (userId ${ctx.user.id}, reason missing_home_branch, outcome denied)`
+      );
+      return NextResponse.json(
+        { success: false, error: "Forbidden", code: "DENIED" },
+        { status: 403 }
+      );
+    }
+
+    // ---- manual_review operations ----
+    const opRows = await db
+      .select({
+        id: jubelioSalesOperations.id,
+        orderId: jubelioSalesOperations.orderId,
+        type: jubelioSalesOperations.type,
+        status: jubelioSalesOperations.status,
+        reference: jubelioSalesOperations.reference,
+        salesOrderId: jubelioSalesOperations.salesOrderId,
+        invoiceId: jubelioSalesOperations.invoiceId,
+        paymentId: jubelioSalesOperations.paymentId,
+        attemptCount: jubelioSalesOperations.attemptCount,
+        dispatchedAt: jubelioSalesOperations.dispatchedAt,
+        confirmedAt: jubelioSalesOperations.confirmedAt,
+        lastError: jubelioSalesOperations.lastError,
+        updatedAt: jubelioSalesOperations.updatedAt,
+        orderStatus: orders.status,
+        orderPaymentStatus: orders.paymentStatus,
+        orderTotal: orders.total,
+        orderBranchId: orders.branchId,
+        branchName: branches.name,
+        customerName: clients.name,
+        customerEmail: clients.email,
+      })
+      .from(jubelioSalesOperations)
+      .innerJoin(orders, eq(jubelioSalesOperations.orderId, orders.id))
+      .leftJoin(branches, eq(orders.branchId, branches.id))
+      .innerJoin(clients, eq(orders.userId, clients.id))
+      .where(eq(jubelioSalesOperations.status, "manual_review"))
+      .orderBy(desc(jubelioSalesOperations.updatedAt))
+      .limit(100);
+
+    // ---- paid-but-blocked orders (no manual_review op required) ----
+    const blockedRows = await db
+      .select({
+        orderId: orders.id,
+        status: orders.status,
+        paymentStatus: orders.paymentStatus,
+        paymentMethod: orders.paymentMethod,
+        paymentFailureReason: orders.paymentFailureReason,
+        total: orders.total,
+        jubelioSalesOrderId: orders.jubelioSalesOrderId,
+        jubelioInvoiceId: orders.jubelioInvoiceId,
+        jubelioPaymentId: orders.jubelioPaymentId,
+        fulfillmentBlockedReason: orders.fulfillmentBlockedReason,
+        updatedAt: orders.updatedAt,
+        branchId: orders.branchId,
+        branchName: branches.name,
+        customerName: clients.name,
+        customerEmail: clients.email,
+      })
+      .from(orders)
+      .leftJoin(branches, eq(orders.branchId, branches.id))
+      .innerJoin(clients, eq(orders.userId, clients.id))
+      .where(
+        and(
+          eq(orders.paymentStatus, "paid"),
+          or(
+            isNotNull(orders.fulfillmentBlockedReason),
+            // Paid but never settled to a verified invoice: fulfillment is
+            // implicitly blocked (no pickup code can exist for it).
+            and(
+              eq(orders.status, "processing"),
+              eq(orders.paymentStatus, "paid")
+            )
+          )
+        )
+      )
+      .orderBy(desc(orders.updatedAt))
+      .limit(100);
+
+    // Own-branch scope: filter both lists to the Home Branch.
+    const scopedOps =
+      authorization.mode === "own"
+        ? opRows.filter((row) => row.orderBranchId === authorization.branchId)
+        : opRows;
+    const scopedBlocked =
+      authorization.mode === "own"
+        ? blockedRows.filter((row) => row.branchId === authorization.branchId)
+        : blockedRows;
+
+    // Pre-order attempts that never became an order: visible here because they
+    // have no Orders row to link to (no fabricated order is ever created).
+    const checkoutAttempts = await listCheckoutAttemptReviews({ scope: authorization });
+
+    // Tidak ada identitas customer/nilai order di log — hanya jumlah baris.
+    log.info(
+      `sales review listed (operations ${scopedOps.length}, blockedOrders ${scopedBlocked.length}, checkoutAttempts ${checkoutAttempts.length}, mode ${authorization.mode}, outcome success)`
+    );
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        operations: scopedOps,
+        blockedOrders: scopedBlocked,
+        checkoutAttempts,
+      },
+    });
+  } catch {
+    log.error(
+      "sales review gagal (outcome error)",
+      new RouteLogError("sales review gagal")
+    );
+    return NextResponse.json(
+      { success: false, error: "Failed to load review queue" },
+      { status: 500 }
+    );
+  }
+}
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(
+  salesOperationsReview,
+  "admin-sales-operations-review"
+);

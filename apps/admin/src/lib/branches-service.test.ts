@@ -207,3 +207,104 @@ describe("deleteBranch", () => {
     expect(error.code).toBe("BRANCH_IN_USE");
   });
 });
+
+describe("branch shipping origin fields (ticket 02)", () => {
+  // The local shipping-origin complement (sender phone, sender address,
+  // sender postal code, optional Shipment area id) is edited ONLY through the
+  // branch mutation service: same branches:edit-guarded route, same
+  // transactional audit seam. The Jubelio sync must never write these columns
+  // (jubelio-sync.test.ts proves the sync SET allowlist excludes them —
+  // "Pelengkap lokal diedit sekali di menu Branch admin dan tidak ditimpa
+  // impor Jubelio").
+  //
+  // RED until UpdateBranchData carries the shipping fields and the update
+  // SET list persists them; the schema columns are the main agent's stage.
+  const originUpdate = {
+    ...branchInput,
+    shippingPhone: "021999888777",
+    shippingAddress: "Jl. Gudang Origin No. 7",
+    shippingPostalCode: "10110",
+    // Shipment string id incl. leading zeros — never coerced to a number.
+    shippingAreaId: "01010101",
+  } as const;
+
+  it("persists the origin fields in the same audited transaction", async () => {
+    const fake = createFakeDb({
+      selectQueue: [[{ ...existingBranchRow }]],
+      mutationRows: [],
+    });
+    state.current = fake;
+
+    const previous = await updateBranch(
+      "b-1",
+      { ...originUpdate, status: "aktif" as const },
+      ctx
+    );
+    expect(previous.name).toBe("Lama");
+
+    const selects = fake.ops.filter((op) => op.kind === "select");
+    expect(selects).toHaveLength(1);
+    expect(selects[0].isTx).toBe(true);
+    expect(selects[0].lock).toBe("update");
+
+    const updates = fake.ops.filter((op) => op.kind === "update");
+    expect(updates).toHaveLength(1);
+    expect(updates[0].isTx).toBe(true);
+    expect(updates[0].set).toMatchObject({
+      shippingPhone: "021999888777",
+      shippingAddress: "Jl. Gudang Origin No. 7",
+      shippingPostalCode: "10110",
+      shippingAreaId: "01010101",
+      updatedAt: expect.anything(),
+    });
+
+    // The origin edit is audited inside the same transaction.
+    const auditOps = auditInsertOps(fake);
+    expect(auditOps).toHaveLength(1);
+    expect(auditOps[0].isTx).toBe(true);
+    expect(auditOps[0].values).toMatchObject({
+      action: "UPDATE_BRANCH",
+      entityType: "branch",
+      entityId: "b-1",
+    });
+  });
+
+  it("persists NULL for the optional Shipment area id while keeping the sender block", async () => {
+    const fake = createFakeDb({
+      selectQueue: [[{ ...existingBranchRow }]],
+      mutationRows: [],
+    });
+    state.current = fake;
+
+    await updateBranch(
+      "b-1",
+      { ...originUpdate, shippingAreaId: null, status: "aktif" as const },
+      ctx
+    );
+
+    const updates = fake.ops.filter((op) => op.kind === "update");
+    expect(updates).toHaveLength(1);
+    expect(updates[0].set).toMatchObject({
+      shippingPhone: "021999888777",
+      shippingAddress: "Jl. Gudang Origin No. 7",
+      shippingPostalCode: "10110",
+      shippingAreaId: null,
+    });
+  });
+
+  it("rolls the origin edit back as one unit when the audit write fails", async () => {
+    const fake = createFakeDb({
+      selectQueue: [[{ ...existingBranchRow }]],
+      failInsert: (values) => (values as { action?: string }).action !== undefined,
+    });
+    state.current = fake;
+
+    await expect(
+      updateBranch("b-1", { ...originUpdate, status: "aktif" as const }, ctx)
+    ).rejects.toThrow();
+    // Nothing is committed: the origin update and the audit write abort as
+    // one unit.
+    expect(fake.rolledBack).toBe(true);
+    expect(fake.committed).toBe(false);
+  });
+});

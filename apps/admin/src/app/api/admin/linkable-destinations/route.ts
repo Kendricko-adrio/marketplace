@@ -2,8 +2,25 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { staticPages } from "@/db";
 import { eq, asc } from "drizzle-orm";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
-import { serializeError } from "@/lib/logger";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-linkable-destinations");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/driver tidak
+ * pernah masuk log.
+ */
+class LinkableDestinationsLogError extends Error {
+  constructor() {
+    super("linkable destinations gagal");
+    this.name = "LinkableDestinationsLogError";
+  }
+}
 
 // -----------------------------
 // GET /api/admin/linkable-destinations [footer:view]
@@ -35,10 +52,11 @@ const STATIC_ROUTES: LinkableDestination[] = [
   { label: "Daftar", href: "/register" },
 ];
 
-export async function GET(request: NextRequest) {
-  const guardResult = await guard("footer", "view", { request });
+async function listLinkableDestinations(
+  _request: NextRequest
+): Promise<Response> {
+  const guardResult = await guard("footer", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger } = guardResult;
 
   try {
     // Fetch published static pages, ordered by displayOrder then title.
@@ -57,7 +75,9 @@ export async function GET(request: NextRequest) {
       href: `/pages/${p.slug}`,
     }));
 
-    logger.info("linkable_destinations.get", { outcome: "success" });
+    log.info(
+      `linkable_destinations.get (pageCount ${pages.length}, staticCount ${STATIC_ROUTES.length}, outcome success)`
+    );
     return NextResponse.json({
       success: true,
       data: {
@@ -65,14 +85,20 @@ export async function GET(request: NextRequest) {
         static: STATIC_ROUTES,
       },
     });
-  } catch (error) {
-    logger.error("linkable_destinations.get.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error(
+      "linkable_destinations.get gagal (outcome error)",
+      new LinkableDestinationsLogError()
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch linkable destinations" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(
+  listLinkableDestinations,
+  "admin-linkable-destinations"
+);

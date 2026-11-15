@@ -16,6 +16,8 @@ export interface ParsedArgs {
   username?: string;
   password?: string;
   passwordFile?: string;
+  /** Guard: only create the first Owner on this database. */
+  expectedDatabase?: string;
 }
 
 const FLAGS = [
@@ -24,6 +26,7 @@ const FLAGS = [
   "--username",
   "--password",
   "--password-file",
+  "--expected-database",
 ] as const;
 
 export function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -48,6 +51,9 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
         break;
       case "--password-file":
         parsed.passwordFile = next;
+        break;
+      case "--expected-database":
+        parsed.expectedDatabase = next;
         break;
     }
   }

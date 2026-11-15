@@ -3,11 +3,19 @@ import { headers } from "next/headers";
 import { auth } from "@/lib/auth";
 import { safeStoreRedirect } from "@/lib/safe-redirect";
 import { getPublicAppUrl } from "@/lib/public-url";
+import { withRequestContext } from "@/lib/logger";
 
-// Syncs the edge cookie `client.onboarding` from the DB state, then redirects
-// home. Used when the DB says onboarding is done but the cookie is missing
-// (expired or never set) to avoid an infinite redirect loop with middleware.
-export async function GET(request: NextRequest) {
+/**
+ * Syncs the edge cookie `client.onboarding` from the DB state, then redirects
+ * home. Used when the DB says onboarding is done but the cookie is missing
+ * (expired or never set) to avoid an infinite redirect loop with middleware.
+ *
+ * Route ini tidak menulis log bisnis; `withRequestContext` di export handler
+ * yang memberi request scope (header `x-request-id`) plus satu baris completion,
+ * sehingga `createModuleLogger` tidak dideklarasikan di sini. Status redirect,
+ * lokasi redirect, dan cookie tidak diubah oleh wrapper.
+ */
+async function syncOnboardingCookie(request: NextRequest): Promise<Response> {
   const publicAppUrl = getPublicAppUrl();
   const session = await auth.api.getSession({
     headers: await headers(),
@@ -43,3 +51,5 @@ export async function GET(request: NextRequest) {
 
   return res;
 }
+
+export const GET = withRequestContext(syncOnboardingCookie, "onboarding-sync");

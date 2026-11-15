@@ -7,6 +7,18 @@ import { NextRequest, NextResponse } from "next/server";
 // Route tests mock `@/lib/rbac/guard` and `@/lib/logger` and inject a fake
 // Drizzle executor for `@/db` (see fake-db.ts), keeping the REAL services so
 // the full guard → route → service → db(transaction) seam is exercised.
+//
+// `@/lib/logger` hanya mengekspos facade (`createModuleLogger`,
+// `withRequestContext`, `getRequestId`, `withExecutionContext`,
+// `withDetachedExecutionContext`). `createModuleLogger` mengembalikan module
+// logger no-op dan wrapper scope menjadi pass-through, sehingga module yang
+// dimigrasikan berjalan di bawah mock ini tanpa menulis ke stdout dan tanpa
+// membuka scope nyata.
+//
+// Yang sengaja TIDAK direproduksi mock ini: header kanonik `x-request-id`, id
+// per-invocation, dan line penutup `METHOD <status>` — ketiganya dihasilkan
+// facade NYATA (`withRequestContext`). Route test yang butuh perilaku itu tidak
+// boleh meng-stub `@/lib/logger` sama sekali.
 
 /** Mock for the `guard` export of "@/lib/rbac/guard". Configured per test. */
 export const guardMock = vi.fn();
@@ -19,26 +31,39 @@ export function crossBranchNotFound() {
   );
 }
 
-export function makeLogger() {
-  const logger: Record<string, unknown> = {
-    requestId: "test",
+/**
+ * Facade module-logger stub — exactly the `createModuleLogger()` surface:
+ * six levels taking `(message, error?)` and nothing else. No `child()`, no
+ * `requestId`, no arbitrary bindings, because the facade has none either.
+ */
+export function makeModuleLogger() {
+  return {
+    trace: vi.fn(),
     debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
-  };
-  logger.child = vi.fn(() => logger);
-  return logger as unknown as {
-    requestId: string;
-    debug: ReturnType<typeof vi.fn>;
-    info: ReturnType<typeof vi.fn>;
-    warn: ReturnType<typeof vi.fn>;
-    error: ReturnType<typeof vi.fn>;
-    child: (context: Record<string, unknown>) => unknown;
+    fatal: vi.fn(),
   };
 }
 
-export type RouteLogger = ReturnType<typeof makeLogger>;
+export type RouteModuleLogger = ReturnType<typeof makeModuleLogger>;
+
+/**
+ * Pass-through stand-in for the facade `withRequestContext`: forwards every
+ * argument (including a framework `params` promise) and awaits the handler.
+ * It opens no scope and adds no header — the real wrapper owns both.
+ */
+export function withRequestContextPassThrough<Args extends unknown[]>(
+  handler: (...args: Args) => Response | Promise<Response>
+): (...args: Args) => Promise<Response> {
+  return async (...args: Args) => handler(...args);
+}
+
+/** Pass-through stand-in for the facade execution-scope wrappers. */
+export function runWorkPassThrough<T>(work: () => T): T {
+  return work();
+}
 
 export interface GuardContextOverrides {
   userId?: string;
@@ -47,11 +72,13 @@ export interface GuardContextOverrides {
   scope?: "own_branch" | "all_branches" | "global";
 }
 
-/** Resolve the mocked `guard` with an authorization success. */
-export function guardAllow(
-  logger: RouteLogger,
-  overrides: GuardContextOverrides = {}
-) {
+/**
+ * Resolve the mocked `guard` with an authorization success.
+ *
+ * The mocked result carries only `ctx` — the resolved actor/policy and
+ * authorization the routes read. No logger travels through the guard result.
+ */
+export function guardAllow(overrides: GuardContextOverrides = {}) {
   guardMock.mockResolvedValue({
     ok: true,
     ctx: {
@@ -66,16 +93,12 @@ export function guardAllow(
         homeBranchId: overrides.homeBranchId ?? "b-1",
       },
     },
-    logger,
   });
 }
 
 /** Resolve the mocked `guard` with an authorization denial. */
-export function guardDeny(
-  response: NextResponse,
-  logger: RouteLogger = makeLogger()
-) {
-  guardMock.mockResolvedValue({ ok: false, response, logger });
+export function guardDeny(response: NextResponse) {
+  guardMock.mockResolvedValue({ ok: false, response });
 }
 
 /** Build an admin API JSON request. */
@@ -91,12 +114,18 @@ export function jsonRequest(
   });
 }
 
-/** Standard mock for "@/lib/logger" (only the symbols routes import). */
+/**
+ * Standard mock for "@/lib/logger": the facade API of the target contract only.
+ * `getRequestId` reports `null` because this mock opens no request scope — the
+ * same value the real facade reports outside an HTTP scope.
+ */
 export async function loggerModuleMock() {
   const self = await import("./route-test");
   return {
-    createLogger: () => self.makeLogger(),
-    requestLogger: () => self.makeLogger(),
-    serializeError: (error: unknown) => ({ message: String(error) }),
+    createModuleLogger: () => self.makeModuleLogger(),
+    withRequestContext: self.withRequestContextPassThrough,
+    getRequestId: () => null,
+    withExecutionContext: self.runWorkPassThrough,
+    withDetachedExecutionContext: self.runWorkPassThrough,
   };
 }

@@ -6,11 +6,29 @@ import { z } from "zod";
 import { guard, crossBranchNotFound } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
 import { claimStockRecheck } from "@/lib/orders-service";
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 
 const requestSchema = z.object({
   operationId: z.string().min(1).max(100),
 });
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-order-stock-review");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB tidak pernah
+ * masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 /**
  * Safely asks the store reconciliation cron to re-check a manual-review note.
@@ -20,24 +38,24 @@ const requestSchema = z.object({
  * Home Branch (a cross-branch order id maps to 404 so existence is not
  * disclosed); all-branch edit is unrestricted.
  */
-export async function POST(
+async function stockReview(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const guardResult = await guard("orders", "edit", { request });
+): Promise<Response> {
+  const guardResult = await guard("orders", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
+  let orderId: string | null = null;
   try {
-    const { id: orderId } = await params;
-    const orderLog = logger.child({ orderId });
+    const { id } = await params;
+    orderId = id;
 
     const parsed = requestSchema.safeParse(await request.json());
     if (!parsed.success) {
-      orderLog.warn("stock-review.invalid_input", {
-        outcome: "denied",
-        issues: parsed.error.issues,
-      });
+      log.warn(
+        `stock-review ditolak: body tidak valid (order ${orderId}, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Invalid input" },
         { status: 400 }
@@ -50,7 +68,7 @@ export async function POST(
       .where(eq(orders.id, orderId))
       .limit(1);
     if (orderRows.length === 0) {
-      crossBranchNotFound(orderLog);
+      crossBranchNotFound();
       return NextResponse.json(
         { success: false, error: "Order not found" },
         { status: 404 }
@@ -59,11 +77,9 @@ export async function POST(
 
     const scope = branchScopeFromAuthorization(ctx.authorization);
     if (!scope) {
-      orderLog.warn("stock-review.scope_unresolvable", {
-        outcome: "denied",
-        reason: "missing_home_branch",
-        userId: ctx.user.id,
-      });
+      log.warn(
+        `stock-review ditolak: branch scope tidak dapat ditentukan (order ${orderId}, userId ${ctx.user.id}, reason missing_home_branch, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Forbidden", code: "DENIED" },
         { status: 403 }
@@ -72,7 +88,7 @@ export async function POST(
     // Own-branch scope can only act on their branch's orders — cross-branch
     // ids hide behind 404.
     if (scope.mode === "own" && orderRows[0].branchId !== scope.branchId) {
-      crossBranchNotFound(orderLog);
+      crossBranchNotFound();
       return NextResponse.json(
         { success: false, error: "Order not found" },
         { status: 404 }
@@ -86,11 +102,9 @@ export async function POST(
     // operation stays in manual_review and remains retryable).
     const orderBranchId = orderRows[0].branchId;
     if (!orderBranchId) {
-      orderLog.warn("stock-review.order_branch_missing", {
-        outcome: "denied",
-        reason: "missing_order_branch",
-        operationId: parsed.data.operationId,
-      });
+      log.warn(
+        `stock-review ditolak: order tanpa branch (order ${orderId}, operation ${parsed.data.operationId}, reason missing_order_branch, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Order is not branch-scoped" },
         { status: 409 }
@@ -106,30 +120,30 @@ export async function POST(
       branchId: orderBranchId,
     });
     if (!claim.claimed) {
-      orderLog.warn("stock-review.operation_not_claimable", {
-        outcome: "denied",
-        operationId: parsed.data.operationId,
-      });
+      log.warn(
+        `stock-review ditolak: operation tidak lagi manual_review (order ${orderId}, operation ${parsed.data.operationId}, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Operation is no longer in manual review" },
         { status: 409 }
       );
     }
 
-    orderLog.info("stock-review.queued", {
-      outcome: "success",
-      operationId: parsed.data.operationId,
-      scope: scope.mode,
-    });
+    log.info(
+      `stock-review queued (order ${orderId}, operation ${parsed.data.operationId}, scope ${scope.mode}, outcome success)`
+    );
     return NextResponse.json({ success: true });
-  } catch (error) {
-    logger.error("stock-review.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    log.error(
+      `stock-review gagal (order ${orderId ?? "unknown"}, outcome error)`,
+      new RouteLogError("stock-review gagal")
+    );
     return NextResponse.json(
       { success: false, error: "Failed to queue reconciliation" },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(stockReview, "admin-order-stock-review");

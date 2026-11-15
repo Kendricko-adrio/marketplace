@@ -1,0 +1,94 @@
+{
+  "run": "RESEARCH08-F6-RETEST-2026-10-18T09-18-35-545Z",
+  "initialCreateAttempts": 20,
+  "additionalCreateLimit": 1,
+  "createAttempts": 0,
+  "events": [
+    {
+      "at": "2026-10-18T09:18:35.554Z",
+      "label": "login",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "at": "2026-10-18T09:18:45.200Z",
+      "label": "login",
+      "phase": "response",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-18T09:18:45.200Z",
+      "label": "item-preflight",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/43842"
+    },
+    {
+      "at": "2026-10-18T09:18:45.410Z",
+      "label": "item-preflight",
+      "phase": "response",
+      "method": "GET",
+      "path": "/inventory/items/43842",
+      "http": 200,
+      "snapshot": {
+        "sell_price": "259000.0000",
+        "is_active": true,
+        "unit": "Buah"
+      }
+    },
+    {
+      "at": "2026-10-18T09:18:45.416Z",
+      "label": "stock-preflight",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "input": {
+        "ids": [
+          43842
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:18:45.657Z",
+      "label": "stock-preflight",
+      "phase": "response",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {
+        "rows": [
+          {
+            "item_id": 43842,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 1,
+            "available": 0
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:18:45.663Z",
+      "label": "preflight-decision",
+      "status": "blocked-before-create",
+      "priceMatches": true,
+      "stockSufficient": false,
+      "createDispatched": false,
+      "mirrorDispatched": false,
+      "invoiceConversionDispatched": false,
+      "businessWrites": 0
+    }
+  ],
+  "outcome": {
+    "status": "blocked-before-create",
+    "priceMatches": true,
+    "stockSufficient": false,
+    "createDispatched": false,
+    "mirrorDispatched": false,
+    "invoiceConversionDispatched": false,
+    "businessWrites": 0
+  }
+}

@@ -2,8 +2,26 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { branches } from "@/db";
 import { eq, and, asc, ilike } from "drizzle-orm";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 
-export async function GET(request: NextRequest) {
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("store-branches");
+
+/**
+ * Proyeksi teknis statis untuk jalur kegagalan tak terduga. Nilai yang
+ * tertangkap tidak pernah masuk log; kontrak HTTP tetap sama.
+ */
+class BranchesListLogError extends Error {
+  constructor() {
+    super("store branches: gagal memuat daftar branch");
+    this.name = "BranchesListLogError";
+  }
+}
+
+async function listPublicBranches(request: NextRequest): Promise<Response> {
   try {
     const { searchParams } = new URL(request.url);
     const city = searchParams.get("city");
@@ -33,11 +51,16 @@ export async function GET(request: NextRequest) {
       success: true,
       data: rows,
     });
-  } catch (error) {
-    console.error("Error fetching public branches:", error);
+  } catch {
+    log.error(
+      "Daftar branch publik gagal dimuat (outcome error)",
+      new BranchesListLogError()
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch branches" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(listPublicBranches, "store-branches");

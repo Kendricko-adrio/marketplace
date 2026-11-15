@@ -1,0 +1,1146 @@
+{
+  "run": "JUBELIO-TAX-2026-10-26T15-57-18-688Z",
+  "scope": "Pemilik memilih Dua SO + cancel (Recommended): sandbox terisolasi, satu login; maksimal dua create qty1/harga100000, kontrol NoTax1 dan PPN11% tax-2; maksimal satu cancel per SO terverifikasi belum invoice. Tanpa invoice/payment/config change. Stop saat ambigu.",
+  "expected": [
+    {
+      "case": "B0",
+      "taxId": 1,
+      "tax": 0,
+      "subTotal": 100000,
+      "grandTotal": 100000
+    },
+    {
+      "case": "B1",
+      "taxId": -2,
+      "tax": 11000,
+      "subTotal": 100000,
+      "grandTotal": 111000
+    }
+  ],
+  "createAttempts": 2,
+  "cancelAttempts": 2,
+  "events": [
+    {
+      "at": "2026-10-26T15:57:18.689Z",
+      "label": "login",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "at": "2026-10-26T15:57:20.528Z",
+      "label": "login",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T15:57:20.533Z",
+      "label": "taxes",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100"
+    },
+    {
+      "at": "2026-10-26T15:57:20.723Z",
+      "label": "taxes",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T15:57:20.729Z",
+      "label": "tax-records",
+      "taxes": [
+        {
+          "tax_id": 1,
+          "tax_name": "No Tax",
+          "rate": "0.00",
+          "tax_in": null,
+          "tax_out": null
+        },
+        {
+          "tax_id": -2,
+          "tax_name": "PPN 11%",
+          "rate": "11.00",
+          "tax_in": "1-1303 PPN Masukan",
+          "tax_out": "2-2103 PPN Pengeluaran"
+        }
+      ]
+    },
+    {
+      "at": "2026-10-26T15:57:20.729Z",
+      "label": "dummy-contact",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/contacts/116918"
+    },
+    {
+      "at": "2026-10-26T15:57:21.731Z",
+      "label": "dummy-contact",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T15:57:21.737Z",
+      "label": "global-stop",
+      "reason": "Dummy contact not verified",
+      "createAttempts": 0,
+      "cancelAttempts": 0
+    },
+    {
+      "at": "2026-10-26T15:58:46.025Z",
+      "label": "additional-login-authorization",
+      "scope": "Pemilik memilih Lanjutkan (Recommended): satu login tambahan, exact dummy identity dari sandbox-results.json; budget business-write tetap dua create/dua cancel."
+    },
+    {
+      "at": "2026-10-26T15:58:46.029Z",
+      "label": "login",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "at": "2026-10-26T15:58:47.896Z",
+      "label": "login",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T15:58:47.897Z",
+      "label": "taxes",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100"
+    },
+    {
+      "at": "2026-10-26T15:58:47.969Z",
+      "label": "taxes",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T15:58:47.970Z",
+      "label": "tax-records",
+      "taxes": [
+        {
+          "tax_id": 1,
+          "tax_name": "No Tax",
+          "rate": "0.00",
+          "tax_in": null,
+          "tax_out": null
+        },
+        {
+          "tax_id": -2,
+          "tax_name": "PPN 11%",
+          "rate": "11.00",
+          "tax_in": "1-1303 PPN Masukan",
+          "tax_out": "2-2103 PPN Pengeluaran"
+        }
+      ]
+    },
+    {
+      "at": "2026-10-26T15:58:47.970Z",
+      "label": "dummy-contact",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/contacts/116918"
+    },
+    {
+      "at": "2026-10-26T15:58:48.093Z",
+      "label": "dummy-contact",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T15:58:48.094Z",
+      "label": "dummy-contact-identity-check",
+      "contactIdMatches": true,
+      "nameMatchesHistoricalFixture": true
+    },
+    {
+      "at": "2026-10-26T15:58:48.094Z",
+      "label": "dummy-contact",
+      "contactId": 116918,
+      "dummyNameMatches": true
+    },
+    {
+      "at": "2026-10-26T15:58:48.095Z",
+      "label": "master-item",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/157190"
+    },
+    {
+      "at": "2026-10-26T15:58:48.224Z",
+      "label": "master-item",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T15:58:48.225Z",
+      "label": "master-item",
+      "snapshot": {
+        "itemId": 157190,
+        "itemGroupId": 55269,
+        "unit": "Buah",
+        "masterPrice": 1000000,
+        "approvedTransactionPrice": 100000,
+        "active": true
+      }
+    },
+    {
+      "at": "2026-10-26T15:58:48.225Z",
+      "label": "locations",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/locations/list"
+    },
+    {
+      "at": "2026-10-26T15:58:48.282Z",
+      "label": "locations",
+      "phase": "response",
+      "http": 500,
+      "errorCode": null
+    },
+    {
+      "at": "2026-10-26T15:58:48.283Z",
+      "label": "global-stop",
+      "reason": "HTTP 500 at locations",
+      "createAttempts": 0,
+      "cancelAttempts": 0
+    },
+    {
+      "at": "2026-10-26T16:10:39.564Z",
+      "label": "additional-login-authorization",
+      "scope": "Pemilik meminta iya coba lagi saja setelah perbandingan importer: izinkan satu login baru dan GET /locations/list?page=1&pageSize=100 lalu lanjut scope dua SO + cancel yang belum terpakai; stop jika ambigu. Tidak menjalankan importer atau mengubah DB/config aplikasi."
+    },
+    {
+      "at": "2026-10-26T16:10:39.568Z",
+      "label": "login",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "at": "2026-10-26T16:10:40.937Z",
+      "label": "login",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:10:40.938Z",
+      "label": "taxes",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100"
+    },
+    {
+      "at": "2026-10-26T16:10:41.045Z",
+      "label": "taxes",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:10:41.046Z",
+      "label": "tax-records",
+      "taxes": [
+        {
+          "tax_id": 1,
+          "tax_name": "No Tax",
+          "rate": "0.00",
+          "tax_in": null,
+          "tax_out": null
+        },
+        {
+          "tax_id": -2,
+          "tax_name": "PPN 11%",
+          "rate": "11.00",
+          "tax_in": "1-1303 PPN Masukan",
+          "tax_out": "2-2103 PPN Pengeluaran"
+        }
+      ]
+    },
+    {
+      "at": "2026-10-26T16:10:41.046Z",
+      "label": "dummy-contact",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/contacts/116918"
+    },
+    {
+      "at": "2026-10-26T16:10:41.197Z",
+      "label": "dummy-contact",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:10:41.202Z",
+      "label": "dummy-contact-identity-check",
+      "contactIdMatches": true,
+      "nameMatchesHistoricalFixture": true
+    },
+    {
+      "at": "2026-10-26T16:10:41.203Z",
+      "label": "dummy-contact",
+      "contactId": 116918,
+      "dummyNameMatches": true
+    },
+    {
+      "at": "2026-10-26T16:10:41.203Z",
+      "label": "master-item",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/157190"
+    },
+    {
+      "at": "2026-10-26T16:10:41.329Z",
+      "label": "master-item",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:10:41.334Z",
+      "label": "master-item",
+      "snapshot": {
+        "itemId": 157190,
+        "itemGroupId": 55269,
+        "unit": "Buah",
+        "masterPrice": 1000000,
+        "approvedTransactionPrice": 100000,
+        "active": true
+      }
+    },
+    {
+      "at": "2026-10-26T16:10:41.335Z",
+      "label": "locations",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/locations/list?page=1&pageSize=100"
+    },
+    {
+      "at": "2026-10-26T16:10:41.416Z",
+      "label": "locations",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:10:41.416Z",
+      "label": "locations",
+      "locationId": 2,
+      "exists": true
+    },
+    {
+      "at": "2026-10-26T16:10:41.417Z",
+      "label": "stock-preflight",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/?page=1&pageSize=100&q=Testasd"
+    },
+    {
+      "at": "2026-10-26T16:10:47.858Z",
+      "label": "stock-preflight",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:10:47.863Z",
+      "label": "stock-preflight",
+      "phase": "snapshot",
+      "itemId": 157190,
+      "locationId": 2,
+      "stock": {
+        "on_hand": 6,
+        "on_order": 6,
+        "available": 0,
+        "reserved": 0
+      }
+    },
+    {
+      "at": "2026-10-26T16:10:47.864Z",
+      "label": "global-stop",
+      "reason": "Insufficient stock",
+      "createAttempts": 0,
+      "cancelAttempts": 0
+    },
+    {
+      "at": "2026-10-26T16:13:06.611Z",
+      "label": "additional-login-authorization",
+      "scope": "Pemilik mengizinkan memilih item available sendiri dan melanjutkan pengujian: satu login baru, GET discovery item available di lokasi2, budget tetap dua SO qty1 harga100000 dan cancel terverifikasi. Tidak ada invoice/payment, edit stok/master/config, atau importer."
+    },
+    {
+      "at": "2026-10-26T16:13:06.615Z",
+      "label": "login",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "at": "2026-10-26T16:13:07.960Z",
+      "label": "login",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:07.965Z",
+      "label": "taxes",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100"
+    },
+    {
+      "at": "2026-10-26T16:13:08.240Z",
+      "label": "taxes",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:08.246Z",
+      "label": "tax-records",
+      "taxes": [
+        {
+          "tax_id": 1,
+          "tax_name": "No Tax",
+          "rate": "0.00",
+          "tax_in": null,
+          "tax_out": null
+        },
+        {
+          "tax_id": -2,
+          "tax_name": "PPN 11%",
+          "rate": "11.00",
+          "tax_in": "1-1303 PPN Masukan",
+          "tax_out": "2-2103 PPN Pengeluaran"
+        }
+      ]
+    },
+    {
+      "at": "2026-10-26T16:13:08.247Z",
+      "label": "dummy-contact",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/contacts/116918"
+    },
+    {
+      "at": "2026-10-26T16:13:08.381Z",
+      "label": "dummy-contact",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:08.386Z",
+      "label": "dummy-contact-identity-check",
+      "contactIdMatches": true,
+      "nameMatchesHistoricalFixture": true
+    },
+    {
+      "at": "2026-10-26T16:13:08.386Z",
+      "label": "dummy-contact",
+      "contactId": 116918,
+      "dummyNameMatches": true
+    },
+    {
+      "at": "2026-10-26T16:13:08.387Z",
+      "label": "available-discovery-page1",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/?page=1&pageSize=100"
+    },
+    {
+      "at": "2026-10-26T16:13:15.395Z",
+      "label": "available-discovery-page1",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:15.402Z",
+      "label": "available-candidates",
+      "page": 1,
+      "candidates": [
+        {
+          "itemId": 116334,
+          "available": 1
+        },
+        {
+          "itemId": 43931,
+          "available": 1
+        },
+        {
+          "itemId": 43932,
+          "available": 1
+        }
+      ]
+    },
+    {
+      "at": "2026-10-26T16:13:15.402Z",
+      "label": "candidate-master",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/116334"
+    },
+    {
+      "at": "2026-10-26T16:13:15.515Z",
+      "label": "candidate-master",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:15.528Z",
+      "label": "candidate-check",
+      "itemId": 116334,
+      "eligible": true,
+      "unit": "Buah",
+      "active": true
+    },
+    {
+      "at": "2026-10-26T16:13:15.529Z",
+      "label": "selected-fixture",
+      "snapshot": {
+        "itemId": 116334,
+        "unit": "Buah",
+        "code": "4067984175342",
+        "masterPrice": 349000,
+        "itemGroupId": 37137,
+        "contactId": 116918,
+        "locationId": 2,
+        "quantity": 1,
+        "approvedTransactionPrice": 100000
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:15.529Z",
+      "label": "locations",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/locations/list?page=1&pageSize=100"
+    },
+    {
+      "at": "2026-10-26T16:13:15.566Z",
+      "label": "locations",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:15.567Z",
+      "label": "locations",
+      "locationId": 2,
+      "exists": true
+    },
+    {
+      "at": "2026-10-26T16:13:15.568Z",
+      "label": "stock-preflight",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/?page=1&pageSize=100&q=4067984175342"
+    },
+    {
+      "at": "2026-10-26T16:13:19.546Z",
+      "label": "stock-preflight",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:19.552Z",
+      "label": "stock-preflight",
+      "phase": "snapshot",
+      "itemId": 116334,
+      "locationId": 2,
+      "stock": {
+        "on_hand": 1,
+        "on_order": 0,
+        "available": 1,
+        "reserved": 0
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:19.553Z",
+      "label": "preflight-pass",
+      "createAttempts": 0,
+      "cancelAttempts": 0
+    },
+    {
+      "at": "2026-10-26T16:13:24.300Z",
+      "label": "execution-start",
+      "visualReview": "N/A: vendor API research only; no application UI change",
+      "context7": "N/A: no external package API; Node built-ins and vendor OpenAPI only"
+    },
+    {
+      "at": "2026-10-26T16:13:24.310Z",
+      "label": "B0-stock-before",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/?page=1&pageSize=100&q=4067984175342"
+    },
+    {
+      "at": "2026-10-26T16:13:28.413Z",
+      "label": "B0-stock-before",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:28.419Z",
+      "label": "B0-stock-before",
+      "phase": "snapshot",
+      "itemId": 116334,
+      "locationId": 2,
+      "stock": {
+        "on_hand": 1,
+        "on_order": 0,
+        "available": 1,
+        "reserved": 0
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:28.420Z",
+      "label": "B0",
+      "phase": "financial-input",
+      "payload": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "contact_id": 116918,
+        "customer_name": "[DUMMY_REDACTED]",
+        "transaction_date": "2026-10-26T16:13:28.420Z",
+        "is_tax_included": false,
+        "note": "JUBELIO-TAX-2026-10-26T15-57-18-688Z-B0",
+        "ref_no": "JUBELIO-TAX-2026-10-26T15-57-18-688Z-B0",
+        "location_id": 2,
+        "source": 1,
+        "sub_total": 100000,
+        "total_disc": 0,
+        "total_tax": 0,
+        "grand_total": 100000,
+        "shipping_cost": 0,
+        "add_fee": 0,
+        "add_disc": 0,
+        "service_fee": 0,
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "item_id": 116334,
+            "qty_in_base": 1,
+            "price": 100000,
+            "disc": 0,
+            "disc_amount": 0,
+            "tax_id": 1,
+            "tax_amount": 0,
+            "amount": 100000,
+            "unit": "Buah",
+            "location_id": 2
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:28.420Z",
+      "label": "B0-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/"
+    },
+    {
+      "at": "2026-10-26T16:13:28.695Z",
+      "label": "B0-create",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:28.701Z",
+      "label": "B0",
+      "phase": "returned-id",
+      "salesorderId": 68448
+    },
+    {
+      "at": "2026-10-26T16:13:28.701Z",
+      "label": "B0-confirm",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/sales/orders/68448"
+    },
+    {
+      "at": "2026-10-26T16:13:28.985Z",
+      "label": "B0-confirm",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:28.986Z",
+      "label": "B0",
+      "phase": "so-snapshot",
+      "salesorderId": 68448,
+      "snapshot": {
+        "salesorder_id": 68448,
+        "salesorder_no": "SO-000068448",
+        "source": 1,
+        "location_id": 2,
+        "is_tax_included": false,
+        "sub_total": "100000.0000",
+        "total_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "100000.0000",
+        "shipping_cost": "0.0000",
+        "add_fee": "0.0000",
+        "add_disc": "0.0000",
+        "service_fee": "0.0000",
+        "insurance_cost": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "invoice_id": null,
+        "items": [
+          {
+            "salesorder_detail_id": 74733,
+            "item_id": 116334,
+            "qty_in_base": "1.0000",
+            "price": "100000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "tax_id": 1,
+            "tax_amount": "0.0000",
+            "amount": "100000.0000",
+            "unit": "Buah",
+            "location_id": null,
+            "loc_id": 2
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:28.988Z",
+      "label": "B0-stock-after-create",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/?page=1&pageSize=100&q=4067984175342"
+    },
+    {
+      "at": "2026-10-26T16:13:33.046Z",
+      "label": "B0-stock-after-create",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:33.052Z",
+      "label": "B0-stock-after-create",
+      "phase": "snapshot",
+      "itemId": 116334,
+      "locationId": 2,
+      "stock": {
+        "on_hand": 1,
+        "on_order": 1,
+        "available": 0,
+        "reserved": 0
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:33.052Z",
+      "label": "B0-pre-cancel",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/sales/orders/68448"
+    },
+    {
+      "at": "2026-10-26T16:13:33.386Z",
+      "label": "B0-pre-cancel",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:33.391Z",
+      "label": "B0-cancel",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/cancel/"
+    },
+    {
+      "at": "2026-10-26T16:13:33.937Z",
+      "label": "B0-cancel",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:33.943Z",
+      "label": "B0-confirm-cancel",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/sales/orders/68448"
+    },
+    {
+      "at": "2026-10-26T16:13:34.209Z",
+      "label": "B0-confirm-cancel",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:34.215Z",
+      "label": "B0",
+      "phase": "canceled-so-snapshot",
+      "salesorderId": 68448,
+      "snapshot": {
+        "salesorder_id": 68448,
+        "salesorder_no": "SO-000068448",
+        "source": 1,
+        "location_id": 2,
+        "is_tax_included": false,
+        "sub_total": "100000.0000",
+        "total_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "100000.0000",
+        "shipping_cost": "0.0000",
+        "add_fee": "0.0000",
+        "add_disc": "0.0000",
+        "service_fee": "0.0000",
+        "insurance_cost": "0.0000",
+        "is_canceled": true,
+        "is_paid": null,
+        "invoice_id": null,
+        "items": [
+          {
+            "salesorder_detail_id": 74733,
+            "item_id": 116334,
+            "qty_in_base": "1.0000",
+            "price": "100000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "tax_id": 1,
+            "tax_amount": "0.0000",
+            "amount": "100000.0000",
+            "unit": "Buah",
+            "location_id": null,
+            "loc_id": 2
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:34.216Z",
+      "label": "B0-stock-after-cancel",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/?page=1&pageSize=100&q=4067984175342"
+    },
+    {
+      "at": "2026-10-26T16:13:38.069Z",
+      "label": "B0-stock-after-cancel",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:38.075Z",
+      "label": "B0-stock-after-cancel",
+      "phase": "snapshot",
+      "itemId": 116334,
+      "locationId": 2,
+      "stock": {
+        "on_hand": 1,
+        "on_order": 0,
+        "available": 1,
+        "reserved": 0
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:38.075Z",
+      "label": "B0",
+      "phase": "case-pass",
+      "salesorderId": 68448,
+      "tax": 0,
+      "grandTotal": 100000,
+      "canceled": true,
+      "stockRestored": true
+    },
+    {
+      "at": "2026-10-26T16:13:38.076Z",
+      "label": "B1-stock-before",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/?page=1&pageSize=100&q=4067984175342"
+    },
+    {
+      "at": "2026-10-26T16:13:41.868Z",
+      "label": "B1-stock-before",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:41.874Z",
+      "label": "B1-stock-before",
+      "phase": "snapshot",
+      "itemId": 116334,
+      "locationId": 2,
+      "stock": {
+        "on_hand": 1,
+        "on_order": 0,
+        "available": 1,
+        "reserved": 0
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:41.875Z",
+      "label": "B1",
+      "phase": "financial-input",
+      "payload": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "contact_id": 116918,
+        "customer_name": "[DUMMY_REDACTED]",
+        "transaction_date": "2026-10-26T16:13:41.875Z",
+        "is_tax_included": false,
+        "note": "JUBELIO-TAX-2026-10-26T15-57-18-688Z-B1",
+        "ref_no": "JUBELIO-TAX-2026-10-26T15-57-18-688Z-B1",
+        "location_id": 2,
+        "source": 1,
+        "sub_total": 100000,
+        "total_disc": 0,
+        "total_tax": 11000,
+        "grand_total": 111000,
+        "shipping_cost": 0,
+        "add_fee": 0,
+        "add_disc": 0,
+        "service_fee": 0,
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "item_id": 116334,
+            "qty_in_base": 1,
+            "price": 100000,
+            "disc": 0,
+            "disc_amount": 0,
+            "tax_id": -2,
+            "tax_amount": 11000,
+            "amount": 111000,
+            "unit": "Buah",
+            "location_id": 2
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:41.875Z",
+      "label": "B1-create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/"
+    },
+    {
+      "at": "2026-10-26T16:13:42.164Z",
+      "label": "B1-create",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:42.170Z",
+      "label": "B1",
+      "phase": "returned-id",
+      "salesorderId": 68449
+    },
+    {
+      "at": "2026-10-26T16:13:42.170Z",
+      "label": "B1-confirm",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/sales/orders/68449"
+    },
+    {
+      "at": "2026-10-26T16:13:42.994Z",
+      "label": "B1-confirm",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:43.000Z",
+      "label": "B1",
+      "phase": "so-snapshot",
+      "salesorderId": 68449,
+      "snapshot": {
+        "salesorder_id": 68449,
+        "salesorder_no": "SO-000068449",
+        "source": 1,
+        "location_id": 2,
+        "is_tax_included": false,
+        "sub_total": "100000.0000",
+        "total_disc": "0.0000",
+        "total_tax": "11000.0000",
+        "grand_total": "111000.0000",
+        "shipping_cost": "0.0000",
+        "add_fee": "0.0000",
+        "add_disc": "0.0000",
+        "service_fee": "0.0000",
+        "insurance_cost": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "invoice_id": null,
+        "items": [
+          {
+            "salesorder_detail_id": 74734,
+            "item_id": 116334,
+            "qty_in_base": "1.0000",
+            "price": "100000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "tax_id": -2,
+            "tax_amount": "11000.0000",
+            "amount": "111000.0000",
+            "unit": "Buah",
+            "location_id": null,
+            "loc_id": 2
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:43.000Z",
+      "label": "B1-stock-after-create",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/?page=1&pageSize=100&q=4067984175342"
+    },
+    {
+      "at": "2026-10-26T16:13:47.080Z",
+      "label": "B1-stock-after-create",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:47.081Z",
+      "label": "B1-stock-after-create",
+      "phase": "snapshot",
+      "itemId": 116334,
+      "locationId": 2,
+      "stock": {
+        "on_hand": 1,
+        "on_order": 1,
+        "available": 0,
+        "reserved": 0
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:47.081Z",
+      "label": "B1-pre-cancel",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/sales/orders/68449"
+    },
+    {
+      "at": "2026-10-26T16:13:47.361Z",
+      "label": "B1-pre-cancel",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:47.367Z",
+      "label": "B1-cancel",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/cancel/"
+    },
+    {
+      "at": "2026-10-26T16:13:47.502Z",
+      "label": "B1-cancel",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:47.508Z",
+      "label": "B1-confirm-cancel",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/sales/orders/68449"
+    },
+    {
+      "at": "2026-10-26T16:13:47.700Z",
+      "label": "B1-confirm-cancel",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:47.706Z",
+      "label": "B1",
+      "phase": "canceled-so-snapshot",
+      "salesorderId": 68449,
+      "snapshot": {
+        "salesorder_id": 68449,
+        "salesorder_no": "SO-000068449",
+        "source": 1,
+        "location_id": 2,
+        "is_tax_included": false,
+        "sub_total": "100000.0000",
+        "total_disc": "0.0000",
+        "total_tax": "11000.0000",
+        "grand_total": "111000.0000",
+        "shipping_cost": "0.0000",
+        "add_fee": "0.0000",
+        "add_disc": "0.0000",
+        "service_fee": "0.0000",
+        "insurance_cost": "0.0000",
+        "is_canceled": true,
+        "is_paid": null,
+        "invoice_id": null,
+        "items": [
+          {
+            "salesorder_detail_id": 74734,
+            "item_id": 116334,
+            "qty_in_base": "1.0000",
+            "price": "100000.0000",
+            "disc": "0.00",
+            "disc_amount": "0.0000",
+            "tax_id": -2,
+            "tax_amount": "11000.0000",
+            "amount": "111000.0000",
+            "unit": "Buah",
+            "location_id": null,
+            "loc_id": 2
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:47.706Z",
+      "label": "B1-stock-after-cancel",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/?page=1&pageSize=100&q=4067984175342"
+    },
+    {
+      "at": "2026-10-26T16:13:51.633Z",
+      "label": "B1-stock-after-cancel",
+      "phase": "response",
+      "http": 200
+    },
+    {
+      "at": "2026-10-26T16:13:51.634Z",
+      "label": "B1-stock-after-cancel",
+      "phase": "snapshot",
+      "itemId": 116334,
+      "locationId": 2,
+      "stock": {
+        "on_hand": 1,
+        "on_order": 0,
+        "available": 1,
+        "reserved": 0
+      }
+    },
+    {
+      "at": "2026-10-26T16:13:51.635Z",
+      "label": "B1",
+      "phase": "case-pass",
+      "salesorderId": 68449,
+      "tax": 11000,
+      "grandTotal": 111000,
+      "canceled": true,
+      "stockRestored": true
+    },
+    {
+      "at": "2026-10-26T16:13:51.635Z",
+      "label": "suite-pass",
+      "createAttempts": 2,
+      "cancelAttempts": 2
+    }
+  ],
+  "status": "pass",
+  "selectedFixture": {
+    "itemId": 116334,
+    "unit": "Buah",
+    "code": "4067984175342",
+    "masterPrice": 349000,
+    "itemGroupId": 37137,
+    "contactId": 116918,
+    "locationId": 2,
+    "quantity": 1,
+    "approvedTransactionPrice": 100000
+  }
+}

@@ -1,0 +1,3 @@
+# Install under deploy crontab only after migrations, sandbox/credential checks and owner approval.
+# Every 5 minutes; the wrapper locks out overlapping runs and logs non-2xx responses.
+0 2 * * * /home/ops/marketplace/deployment/common/cron/refresh-jubelio-stock.sh --url https://dev-store.adfsport.cloud --env-file /home/ops/marketplace/deployment/staging/.env --log-dir /home/ops/log/marketplace-stock-refresh/staging

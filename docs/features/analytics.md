@@ -139,7 +139,11 @@ unauthorized navigation never renders the dashboard shell.
   `@marketplace/ui`). Alongside the SVG it renders a **visually-hidden
   (`sr-only`) accessible fallback table**
   (`data-testid="analytics-trend-table"`) with the full 30-row series so the
-  data remains readable by screen readers and without JS graphics.
+  data remains readable by screen readers and without JS graphics. Tabel itu
+  dibungkus `<div class="sr-only">` dan island-nya ber-`relative`: `overflow`
+  tidak memotong box `display: table`, dan tanpa ancestor ber-`position` tabel
+  tersebut lolos dari `<main>` lalu menambah area scroll halaman (lihat
+  [`../architecture/admin-app-shell.md`](../architecture/admin-app-shell.md) §3).
 - `format.ts` — shared display formatting (Rupiah, compact axis ticks,
   Indonesian trend dates, status labels). Client-side only: the dashboard
   fetches after mount, so none of it runs during SSR/hydration.

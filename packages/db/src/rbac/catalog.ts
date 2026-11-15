@@ -31,6 +31,9 @@ export const GLOBAL_MODULES = [
   "users",
   "roles",
   "footer",
+  "discounts",
+  "discount_capacity",
+  "prices",
 ] as const;
 
 export type BranchModule = (typeof BRANCH_MODULES)[number];
@@ -114,6 +117,28 @@ export const CATALOG: {
     delete: [],
   },
   footer: {
+    view: [],
+    edit: [],
+  },
+  // Discount administration: two separate Global Modules so a promo editor
+  // can be granted discount writes WITHOUT capacity writes (a capacity grant
+  // is what gates quota/limit overrides). Both are view/edit only — discounts
+  // and their capacity rows are archived, never deleted — and neither is
+  // branch-aware, so own_branch/all_branches scopes are rejected rather than
+  // silently widened to global.
+  discounts: {
+    view: [],
+    edit: [],
+  },
+  discount_capacity: {
+    view: [],
+    edit: [],
+  },
+  // Manual/bulk/Excel Markdown price changes (ticket03, spec §6, §7.3). A
+  // separate Global Module from product re-sync: re-sync writes SOURCE catalog
+  // data and never grants price-writing authority. View covers history/batch
+  // reads (paired with products:view all_branches); edit covers stage/apply.
+  prices: {
     view: [],
     edit: [],
   },

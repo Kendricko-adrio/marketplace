@@ -15,9 +15,9 @@ import { INITIAL_ROLE_SEED } from "./seed-defaults";
 // missing roles/missing grant rows are created, so running it against an
 // already-seeded database is a no-op.
 
-type Executor =
-  | NodePgDatabase<Record<string, never>>
-  | Parameters<Parameters<NodePgDatabase["transaction"]>[0]>[0];
+// Structural subset so both a plain script database and a schema-typed
+// transaction can provision the Initial Roles.
+type Executor = Pick<NodePgDatabase<Record<string, never>>, "select" | "insert">;
 
 export async function ensureInitialRoles(
   executor: Executor

@@ -1,14 +1,17 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { Loader2 } from "lucide-react";
+import { ChevronLeft, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import BranchForm from "@/components/admin/BranchForm";
 import type { BranchFormData } from "@/components/admin/BranchForm";
 import { useAuth } from "@/providers/auth-provider";
+import { hasConfiguredBranchRegion, type BranchShippingRegion } from "@marketplace/db/src/branch-shipping-region";
 
-interface ApiBranch {
+interface ApiBranch extends BranchShippingRegion {
   id: string;
   name: string;
   code: string;
@@ -19,6 +22,15 @@ interface ApiBranch {
   operatingHours: BranchFormData["operatingHours"];
   googleMapsUrl: string | null;
   status: string;
+  // Local shipping-origin complement (ticket 02): nullable in the API row,
+  // normalized to "" for the form (empty = belum dikonfigurasi).
+  shippingPhone: string | null;
+  shippingAddress: string | null;
+  shippingPostalCode: string | null;
+  shippingAreaId: string | null;
+  shippingProvinceId: string | null;
+  shippingCityId: string | null;
+  shippingDistrictId: string | null;
 }
 
 export default function EditBranchPage() {
@@ -29,6 +41,7 @@ export default function EditBranchPage() {
 
   const [initialData, setInitialData] = useState<BranchFormData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [regionConfigured, setRegionConfigured] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -51,6 +64,7 @@ export default function EditBranchPage() {
         }
 
         const branch: ApiBranch = data.data;
+        setRegionConfigured(hasConfiguredBranchRegion(branch));
 
         setInitialData({
           name: branch.name,
@@ -62,6 +76,13 @@ export default function EditBranchPage() {
           operatingHours: branch.operatingHours ?? {},
           googleMapsUrl: branch.googleMapsUrl ?? "",
           status: branch.status as "aktif" | "nonaktif",
+          shippingPhone: branch.shippingPhone ?? "",
+          shippingAddress: branch.shippingAddress ?? "",
+          shippingPostalCode: branch.shippingPostalCode ?? "",
+          shippingAreaId: branch.shippingAreaId ?? "",
+          shippingProvinceId: branch.shippingProvinceId ?? "",
+          shippingCityId: branch.shippingCityId ?? "",
+          shippingDistrictId: branch.shippingDistrictId ?? "",
         });
       } catch {
         const msg = "Gagal memuat data cabang";
@@ -121,8 +142,19 @@ export default function EditBranchPage() {
 
   return (
     <div className="max-w-4xl space-y-6">
-      <h2 className="text-2xl font-bold tracking-tight">Edit Cabang</h2>
-      <BranchForm mode="edit" initialData={initialData} onSubmit={handleSubmit} />
+      <div>
+        <Button asChild variant="ghost" size="sm" className="mb-2 -ml-2">
+          <Link href="/admin/branches">
+            <ChevronLeft className="h-4 w-4 mr-1" />
+            Kembali ke daftar cabang
+          </Link>
+        </Button>
+        <h2 className="text-2xl font-bold tracking-tight">Edit Cabang</h2>
+        <p className="text-muted-foreground text-sm mt-1">
+          Ubah data cabang <strong>{initialData.name}</strong> ({initialData.code}).
+        </p>
+      </div>
+      <BranchForm mode="edit" initialData={initialData} regionConfigured={regionConfigured} onSubmit={handleSubmit} />
     </div>
   );
 }

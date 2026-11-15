@@ -1,0 +1,7 @@
+ALTER TABLE "jubelio_sales_operation" ALTER COLUMN "order_id" DROP NOT NULL;--> statement-breakpoint
+ALTER TABLE "jubelio_sales_operation" ADD COLUMN "checkout_attempt_id" text;--> statement-breakpoint
+ALTER TABLE "jubelio_sales_operation" ADD CONSTRAINT "jubelio_sales_operation_checkout_attempt_id_checkout_attempt_id_fk" FOREIGN KEY ("checkout_attempt_id") REFERENCES "public"."checkout_attempt"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "jubelio_sales_operation" ADD CONSTRAINT "jubelio_sales_operation_attempt_order_fk" FOREIGN KEY ("checkout_attempt_id","order_id") REFERENCES "public"."checkout_attempt"("id","order_id") ON DELETE restrict ON UPDATE restrict;--> statement-breakpoint
+CREATE UNIQUE INDEX "jubelio_sales_operation_attempt_type_unique" ON "jubelio_sales_operation" USING btree ("checkout_attempt_id","type");--> statement-breakpoint
+ALTER TABLE "jubelio_sales_operation" ADD CONSTRAINT "jubelio_sales_operation_owner_required" CHECK ("jubelio_sales_operation"."order_id" IS NOT NULL OR "jubelio_sales_operation"."checkout_attempt_id" IS NOT NULL);--> statement-breakpoint
+ALTER TABLE "jubelio_sales_operation" ADD CONSTRAINT "jubelio_sales_operation_unpromoted_type_valid" CHECK ("jubelio_sales_operation"."order_id" IS NOT NULL OR "jubelio_sales_operation"."type" IN ('create','cancel'));

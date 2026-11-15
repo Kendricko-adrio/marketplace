@@ -52,7 +52,7 @@ export default function Footer({ config }: FooterProps) {
             <h3 className="text-2xl font-bold text-primary mb-4">{brandName}</h3>
           ) : null}
           {tagline ? (
-            <p className="text-muted-foreground leading-relaxed max-w-sm">
+            <p className="text-foreground leading-relaxed max-w-sm">
               {tagline}
             </p>
           ) : null}
@@ -74,7 +74,7 @@ export default function Footer({ config }: FooterProps) {
                     target="_blank"
                     rel="noopener noreferrer"
                     aria-label={s.platform}
-                    className="inline-flex"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-md"
                   >
                     {Icon}
                   </a>
@@ -83,7 +83,7 @@ export default function Footer({ config }: FooterProps) {
                     key={`${s.platform}-${idx}`}
                     href={s.url}
                     aria-label={s.platform}
-                    className="inline-flex"
+                    className="inline-flex h-9 w-9 items-center justify-center rounded-md"
                   >
                     {Icon}
                   </Link>
@@ -108,7 +108,7 @@ export default function Footer({ config }: FooterProps) {
                       href={link.href}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-sm text-muted-foreground hover:text-primary transition-colors"
+                      className="text-sm text-foreground hover:text-primary transition-colors"
                     >
                       {link.label}
                     </a>
@@ -116,7 +116,7 @@ export default function Footer({ config }: FooterProps) {
                     <Link
                       key={`link-${colIdx}-${linkIdx}`}
                       href={link.href}
-                      className="text-sm text-muted-foreground hover:text-primary transition-colors"
+                      className="text-sm text-foreground hover:text-primary transition-colors"
                     >
                       {link.label}
                     </Link>
@@ -128,7 +128,7 @@ export default function Footer({ config }: FooterProps) {
       </div>
 
       {copyrightText ? (
-        <div className="border-t py-6 text-center text-sm text-muted-foreground">
+        <div className="border-t py-6 text-center text-sm text-foreground">
           {copyrightText}
         </div>
       ) : null}

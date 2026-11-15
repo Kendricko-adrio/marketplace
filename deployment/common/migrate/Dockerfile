@@ -13,8 +13,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 COPY apps/store/package.json apps/store/
 COPY apps/admin/package.json apps/admin/
-COPY apps/jubelio-mock/package.json apps/jubelio-mock/
 COPY packages/db/package.json packages/db/
+COPY packages/logging/package.json packages/logging/
 COPY packages/ui/package.json packages/ui/
 
 RUN npm ci --include=dev
@@ -28,6 +28,10 @@ COPY packages/db ./packages/db
 
 WORKDIR /app/packages/db
 
+# Production reference data is NOT seeded by this default command. Use the
+# dedicated bootstrap service/command (preflight -> seed -> verify); see
+# docs/deployment-docs/first-production-deployment.md.
+#
 # Seeding is always explicit and seed.ts refuses NODE_ENV=production:
 #   docker compose --profile tools run --rm migrate npx tsx src/seed.ts
 #

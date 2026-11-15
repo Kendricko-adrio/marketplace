@@ -1,0 +1,346 @@
+{
+  "run": "DISCOUNT09-POSTINV-2026-10-19T15-48-31-472Z",
+  "authorization": "Owner approved Dua kasus (Recommended), protocol research-09-post-invoice-mirror.md",
+  "initialHistoricalCreateAttempts": 40,
+  "limits": {
+    "create": 2,
+    "invoice": 2,
+    "payment": 2,
+    "mirror": 6
+  },
+  "attempts": {
+    "create": 0,
+    "invoice": 0,
+    "payment": 0,
+    "mirror": 0
+  },
+  "stopped": true,
+  "status": "stopped",
+  "cases": [],
+  "events": [
+    {
+      "at": "2026-10-19T15:48:31.484Z",
+      "label": "login",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "at": "2026-10-19T15:48:33.528Z",
+      "label": "login",
+      "phase": "response",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-19T15:48:33.537Z",
+      "label": "dummy-contact",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/contacts/116918"
+    },
+    {
+      "at": "2026-10-19T15:48:33.761Z",
+      "label": "dummy-contact",
+      "phase": "response",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "contact_id": 116918,
+        "expectedDummyMatches": true
+      }
+    },
+    {
+      "at": "2026-10-19T15:48:33.769Z",
+      "label": "initial-master",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/157190"
+    },
+    {
+      "at": "2026-10-19T15:48:33.920Z",
+      "label": "initial-master",
+      "phase": "response",
+      "method": "GET",
+      "path": "/inventory/items/157190",
+      "http": 200,
+      "snapshot": {
+        "item_group_id": 55269,
+        "sell_price": "1000000.0000",
+        "is_active": true,
+        "expectedUnitMatches": false,
+        "matchingSKUCount": 1
+      }
+    },
+    {
+      "at": "2026-10-19T15:48:33.924Z",
+      "label": "initial-master-check",
+      "phase": "verification",
+      "matched": false,
+      "checks": {
+        "group": true,
+        "price": true,
+        "active": true,
+        "unit": false,
+        "sku": true
+      },
+      "failed": [
+        "unit"
+      ]
+    },
+    {
+      "at": "2026-10-19T15:48:33.927Z",
+      "label": "global-stop",
+      "phase": "stop",
+      "reason": "MISMATCH_initial-master-check_unit",
+      "stage": "initial-master",
+      "attempts": {
+        "create": 0,
+        "invoice": 0,
+        "payment": 0,
+        "mirror": 0
+      }
+    },
+    {
+      "at": "2026-10-19T15:48:33.930Z",
+      "label": "reconciliation-start",
+      "phase": "read-only",
+      "reason": "No further business writes or cleanup"
+    },
+    {
+      "at": "2026-10-19T15:48:33.933Z",
+      "label": "reconciliation-list-invoices-page-1",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/sales/invoices/",
+      "queryRedacted": true
+    },
+    {
+      "at": "2026-10-19T15:48:34.495Z",
+      "label": "reconciliation-list-invoices-page-1",
+      "phase": "response",
+      "method": "GET",
+      "path": "/sales/invoices/",
+      "http": 200,
+      "snapshot": {
+        "totalCount": 14,
+        "returnedRows": 14,
+        "rows": [
+          {
+            "doc_id": 45951,
+            "salesorder_id": 68411,
+            "contact_id": 116918,
+            "grand_total": "239000.0000",
+            "due": "0.00000000000000000000"
+          },
+          {
+            "doc_id": 45952,
+            "salesorder_id": 68417,
+            "contact_id": 116918,
+            "grand_total": "489000.0000",
+            "due": "0.00000000000000000000"
+          },
+          {
+            "doc_id": 45953,
+            "salesorder_id": 68418,
+            "contact_id": 116918,
+            "grand_total": "289000.0000",
+            "due": "0.00000000000000000000"
+          },
+          {
+            "doc_id": 45958,
+            "salesorder_id": 68426,
+            "contact_id": 116918,
+            "grand_total": "1000000.0000",
+            "due": "1000000.00000000000000000000"
+          },
+          {
+            "doc_id": 45959,
+            "salesorder_id": 68427,
+            "contact_id": 116918,
+            "grand_total": "900000.0000",
+            "due": "900000.00000000000000000000"
+          },
+          {
+            "doc_id": 45960,
+            "salesorder_id": 68428,
+            "contact_id": 116918,
+            "grand_total": "1010000.0000",
+            "due": "1010000.00000000000000000000"
+          },
+          {
+            "doc_id": 45961,
+            "salesorder_id": 68429,
+            "contact_id": 116918,
+            "grand_total": "910000.0000",
+            "due": "910000.00000000000000000000"
+          },
+          {
+            "doc_id": 45962,
+            "salesorder_id": 68430,
+            "contact_id": 116918,
+            "grand_total": "910000.0000",
+            "due": "910000.00000000000000000000"
+          },
+          {
+            "doc_id": 45963,
+            "salesorder_id": 68431,
+            "contact_id": 116918,
+            "grand_total": "900000.0000",
+            "due": "900000.00000000000000000000"
+          },
+          {
+            "doc_id": 45964,
+            "salesorder_id": 68432,
+            "contact_id": 116918,
+            "grand_total": "910000.0000",
+            "due": "910000.00000000000000000000"
+          },
+          {
+            "doc_id": 45968,
+            "salesorder_id": 68436,
+            "contact_id": 116918,
+            "grand_total": "1010000.0000",
+            "due": "1010000.00000000000000000000"
+          },
+          {
+            "doc_id": 45969,
+            "salesorder_id": 68437,
+            "contact_id": 116918,
+            "grand_total": "910000.0000",
+            "due": "910000.00000000000000000000"
+          },
+          {
+            "doc_id": 45972,
+            "salesorder_id": 68440,
+            "contact_id": 116918,
+            "grand_total": "910000.0000",
+            "due": "0.00000000000000000000"
+          },
+          {
+            "doc_id": 45973,
+            "salesorder_id": 68441,
+            "contact_id": 116918,
+            "grand_total": "1810000.0000",
+            "due": "0.00000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-19T15:48:34.498Z",
+      "label": "reconciliation-list-invoices",
+      "phase": "coverage",
+      "complete": true,
+      "returnedRows": 14,
+      "filter": "dummy-name-in-memory"
+    },
+    {
+      "at": "2026-10-19T15:48:34.501Z",
+      "label": "reconciliation-list-payments-page-1",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/sales/payments/",
+      "queryRedacted": true
+    },
+    {
+      "at": "2026-10-19T15:48:34.602Z",
+      "label": "reconciliation-list-payments-page-1",
+      "phase": "response",
+      "method": "GET",
+      "path": "/sales/payments/",
+      "http": 200,
+      "snapshot": {
+        "totalCount": 5,
+        "returnedRows": 5,
+        "rows": [
+          {
+            "payment_id": 40,
+            "contact_id": 116918,
+            "amount": "239000.0000",
+            "payment_type": 0,
+            "account_id": 2,
+            "payment_no": "CP-000000031"
+          },
+          {
+            "payment_id": 42,
+            "contact_id": 116918,
+            "amount": "489000.0000",
+            "payment_type": 0,
+            "account_id": 2,
+            "payment_no": "CP-000000033"
+          },
+          {
+            "payment_id": 44,
+            "contact_id": 116918,
+            "amount": "289000.0000",
+            "payment_type": 0,
+            "account_id": 2,
+            "payment_no": "CP-000000035"
+          },
+          {
+            "payment_id": 55,
+            "contact_id": 116918,
+            "amount": "910000.0000",
+            "payment_type": 0,
+            "account_id": 2,
+            "payment_no": "CP-000000046"
+          },
+          {
+            "payment_id": 57,
+            "contact_id": 116918,
+            "amount": "1810000.0000",
+            "payment_type": 0,
+            "account_id": 2,
+            "payment_no": "CP-000000048"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-19T15:48:34.605Z",
+      "label": "reconciliation-list-payments",
+      "phase": "coverage",
+      "complete": true,
+      "returnedRows": 5,
+      "filter": "dummy-name-in-memory"
+    },
+    {
+      "at": "2026-10-19T15:48:34.608Z",
+      "label": "reconciliation-stock",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/"
+    },
+    {
+      "at": "2026-10-19T15:48:34.997Z",
+      "label": "reconciliation-stock",
+      "phase": "response",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {
+        "rows": [
+          {
+            "item_id": 157190,
+            "location_id": 2,
+            "on_hand": 9,
+            "on_order": 6,
+            "available": 3
+          }
+        ]
+      }
+    }
+  ],
+  "stopReason": "MISMATCH_initial-master-check_unit",
+  "stoppedAtStage": "initial-master",
+  "stockAtStop": {
+    "item_id": 157190,
+    "location_id": 2,
+    "on_hand": 9,
+    "on_order": 6,
+    "available": 3
+  }
+}

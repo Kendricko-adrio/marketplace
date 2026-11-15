@@ -94,6 +94,48 @@ docker container ls            # staging + production, keduanya muncul (wajar)
 # `drizzle-kit migrate` saja di VPS.
 ```
 
+## Kontrak uang checkout berversi — kompatibilitas dan migration
+
+Catatan ini bukan instruksi aktivasi. Tidak ada env var, port, service,
+credential, volume, atau manifest deployment yang berubah untuk kontrak ini.
+
+- **Gate domain.** `system_config.discounts.contractVersion` dibaca tanpa cache
+  oleh store (berlaku pada request berikutnya); seeder menulis baris eksplisit
+  `0` pada kedua `SEED_MODE`, dan baris yang absen tetap berarti legacy `0`.
+  Mengubahnya ke `1` adalah keputusan operasi terpisah (butuh semua reader
+  kompatibel + izin), bukan bagian dari deployment ini. `tax.ppnRatePercent`
+  tetap dibaca saat boot, jadi perubahan rate butuh restart store seperti
+  sebelumnya.
+- **Skema additive.** Kolom/index/CHECK snapshot uang dan FK retention
+  `RESTRICT` dihasilkan drizzle-kit sebagai migration audit di
+  `packages/db/drizzle/` (`0034_*` untuk snapshot uang, `0035_*` untuk
+  penggantian FK menjadi `RESTRICT`). File tersebut tidak diedit tangan dan
+  tidak dihapus.
+- **Dev vs deployment.** Development tetap memakai `npm run db:push`. Deployment
+  memakai container migrate existing (`npx drizzle-kit migrate`) pada jendela
+  maintenance dengan backup lebih dulu. Migration deployment **tidak dijalankan**
+  dalam scope pekerjaan ini; jangan menyimpulkan sudah diterapkan.
+- **Admission rate-limit (ticket 02).** `POST /api/checkout/preview` dan
+  `POST /api/checkout/place-order` (gate1) memakai counter PostgreSQL
+  `discount_request_window` (preview 60/account + 300/IP, place 10/60 per 60
+  detik) dan menjawab `429 RATE_LIMITED` + `Retry-After` atau `503
+  POLICY_UNAVAILABLE` fail-closed. `deployment/{staging,production}/docker-compose.yml`
+  meng-set `CHECKOUT_TRUST_PROXY="true"` hanya karena port store tidak
+  dipublish langsung dan Caddy menimpa `X-Real-IP`/`X-Forwarded-For`. Jangan
+  aktifkan flag itu pada app yang dapat diakses langsung; development/mock
+  selalu memakai bucket loopback. Baris window bersifat ephemeral (dibersihkan
+  opportunistic, tanpa cron baru) dan terpisah dari `checkout_request` yang
+  retained bersama order.
+- **Urutan kompatibilitas.** Deploy skema + reader compatible lebih dulu, writer
+  tetap gate `0`. Nyalakan gate `1` hanya setelah store, admin, sweep, mirror dan
+  stock-sync readers menerima kontrak versi baru. Setelah ada order versi baru,
+  rollback ke image lama yang tidak mengenal versi itu **tidak aman**; gunakan
+  forward-fix atau image sebelumnya yang kompatibel, dan pause order baru saat
+  cutover.
+
+Kontrak uang dan daftar persyaratan rollout:
+[docs/features/versioned-checkout-pricing.md](../features/versioned-checkout-pricing.md).
+
 ## Port yang dipakai
 
 | Port | Pemakaian | Akses |

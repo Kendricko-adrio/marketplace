@@ -1,0 +1,2 @@
+ALTER TABLE "checkout_request" DROP CONSTRAINT "checkout_request_accepted_result_valid";--> statement-breakpoint
+ALTER TABLE "checkout_request" ADD CONSTRAINT "checkout_request_accepted_result_valid" CHECK (("checkout_request"."status" = 'accepted' AND jsonb_typeof("checkout_request"."result") = 'object' AND "checkout_request"."result"->'version' = '1'::jsonb AND "checkout_request"."result"->>'orderId' = "checkout_request"."order_id" AND octet_length("checkout_request"."result"::text) <= 262144) IS TRUE);

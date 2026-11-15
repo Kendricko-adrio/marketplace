@@ -1,120 +1,111 @@
 "use client";
-import { useState, useEffect } from "react";
+
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Image from "next/image";
 import {
-  ArrowLeft,
-  Package,
-  CreditCard,
-  MapPin,
-  Calendar,
-  Clock,
-  Loader2,
-  ShoppingBag,
-  Copy,
-  Check,
   AlertCircle,
+  ArrowLeft,
+  Calendar,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Clock,
+  Copy,
+  Loader2,
+  MapPin,
+  Package,
+  PackageX,
+  ShoppingBag,
+  Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import { formatPaymentMethodLabel } from "@/lib/payment-method-label";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { StatusBadge } from "@/components/ui/status-badge";
+import {
+  getStatusTone,
+  type StatusTone,
+} from "@marketplace/ui/src/lib/status-presentation";
+import { getStatusToneClassName } from "@marketplace/ui/src/lib/status-styles";
+import { OrderFulfillmentPanel } from "@/components/orders/OrderFulfillmentPanel";
+import { OrderPaymentSummary } from "@/components/orders/OrderPaymentSummary";
+import type {
+  OrderDetail,
+  PaymentCheckState,
+} from "@/components/orders/order-detail-types";
+import {
+  formatDate,
+  formatDateTime,
+  formatRupiah,
+  formatTrackingTime,
+} from "@/components/orders/order-detail-format";
+import { useCopyFeedback } from "@/components/orders/use-copy-feedback";
 
-interface OrderItem {
-  id: string;
-  orderId: string;
-  variantId: string;
-  productName: string;
-  variantInfo: string | null;
-  price: string;
-  quantity: number;
-  createdAt: string;
-  productId: string;
-  imageUrl: string | null;
-  slug: string | null;
-}
-
-interface Branch {
-  id: string;
-  name: string;
-  address: string;
-  city: string;
-  operatingHours: Record<string, unknown>;
-}
-
-interface OrderDetail {
-  id: string;
-  userId: string;
-  status: string;
-  paymentMethod: string | null;
-  paymentStatus: string;
-  paymentFailureReason: string | null;
-  pickupCode: string | null;
-  pickupDate: string | null;
-  pickupTime: string | null;
-  contactPhone: string;
-  contactEmail: string;
-  subtotal: string;
-  shippingCost: string;
-  discount: string;
-  serviceFee: string;
-  ppnRate: string;
-  ppnAmount: string;
-  total: string;
-  createdAt: string;
-  snapRedirectUrl: string | null;
-  branch: Branch | null;
-  items: OrderItem[];
-}
-
-const statusMap: Record<
-  string,
-  { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
-> = {
-  pending_payment: { label: "Pending Payment", variant: "outline" },
-  processing: { label: "Processing", variant: "secondary" },
-  ready_for_pickup: { label: "Ready for Pickup", variant: "default" },
-  completed: { label: "Completed", variant: "default" },
-  cancelled: { label: "Cancelled", variant: "destructive" },
-  failed_payment: { label: "Payment Failed", variant: "destructive" },
+const ORDER_STATUS_LABELS: Record<string, string> = {
+  pending_payment: "Menunggu pembayaran",
+  processing: "Pesanan diproses",
+  ready_for_pickup: "Siap diambil",
+  completed: "Pesanan selesai",
+  cancelled: "Pesanan dibatalkan",
+  failed_payment: "Pembayaran gagal",
 };
 
-const paymentStatusMap: Record<
-  string,
-  { label: string; variant: "default" | "secondary" | "destructive" | "outline" }
-> = {
-  pending: { label: "Menunggu", variant: "outline" },
-  paid: { label: "Lunas", variant: "default" },
-  failed: { label: "Gagal", variant: "destructive" },
+const UNKNOWN_STATUS_LABEL = "Status pesanan belum tersedia";
+
+const LOAD_ERROR_MESSAGE =
+  "Detail pesanan belum dapat dimuat. Silakan coba lagi.";
+
+const PICKUP_ARCHIVE_ID = "pickup-code-archive";
+
+/** Kelas penempatan sidebar desktop (statis agar terbaca Tailwind). */
+const PICKUP_COL_CLASS = "lg:col-start-3";
+const PICKUP_ROW_CLASS: Record<1 | 2 | 3, string> = {
+  1: "lg:row-start-1",
+  2: "lg:row-start-2",
+  3: "lg:row-start-3",
 };
 
-const STATUS_STEPS = [
-  { key: "pending_payment", label: "Order Placed" },
-  { key: "processing", label: "Paid" },
-  { key: "ready_for_pickup", label: "Ready for Pickup" },
-  { key: "completed", label: "Completed" },
-];
-
-function formatRupiah(value: string) {
-  return `Rp ${parseFloat(value).toLocaleString("id-ID")}`;
-}
-
-function formatDate(dateStr: string) {
-  return new Date(dateStr).toLocaleDateString("id-ID", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-}
-
-function formatDateTime(dateStr: string) {
-  return new Date(dateStr).toLocaleString("id-ID", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
+/**
+ * Sidik jari field yang relevan bagi customer. Metadata teknis (requestId,
+ * timestamp internal) sengaja tidak ikut supaya pesan "diperbarui" tidak
+ * pernah palsu.
+ */
+function orderSignature(order: OrderDetail): string {
+  return JSON.stringify({
+    status: order.status,
+    paymentStatus: order.paymentStatus,
+    blocked: order.fulfillmentBlockedReason,
+    failureReason: order.paymentFailureReason,
+    snap: order.snapRedirectUrl,
+    recovery: order.paymentRecovery
+      ? [
+          order.paymentRecovery.state,
+          order.paymentRecovery.paymentAvailable,
+          order.paymentRecovery.redirectUrl,
+          order.paymentRecovery.expiresAt,
+        ]
+      : null,
+    shipment: order.shipment
+      ? [
+          order.shipment.awb,
+          order.shipment.latestStatus,
+          order.shipment.delivered,
+          order.shipment.deliveredAt,
+          order.shipment.podUrl,
+        ]
+      : null,
+    money: [
+      order.subtotal,
+      order.discount,
+      order.shippingCost,
+      order.serviceFee,
+      order.ppnAmount,
+      order.total,
+    ],
+    promo: order.promo
+      ? [order.promo.status, order.promo.benefitAmount]
+      : null,
+    method: order.paymentMethod,
   });
 }
 
@@ -124,50 +115,143 @@ export default function OrderDetailPage() {
   const orderId = params.id as string;
 
   const [order, setOrder] = useState<OrderDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [copiedCode, setCopiedCode] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [checking, setChecking] = useState(false);
+  const [paymentCheck, setPaymentCheck] = useState<PaymentCheckState>("idle");
+  const [showPickupArchive, setShowPickupArchive] = useState(false);
+  const signatureRef = useRef<string | null>(null);
+  const checkingRef = useRef(false);
+  // Dua state terpisah: pesan salin ID dan pesan salin kode pickup tidak boleh
+  // muncul bersamaan di dua live region (pembaca layar mengumumkan ganda).
+  const { feedback: idFeedback, copy: copyId } = useCopyFeedback();
+  const { feedback: codeFeedback, copy: copyCode } = useCopyFeedback();
 
   useEffect(() => {
+    let ignore = false;
+
     async function fetchOrder() {
+      setInitialLoading(true);
+      setError(null);
+      setNotFound(false);
       try {
-        const res = await fetch(`/api/orders/${orderId}`);
-        const data = await res.json();
-        if (data.success) {
-          setOrder(data.data);
-        } else {
-          setError(data.error || "Pesanan tidak ditemukan");
+        const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}`);
+        const data = await res.json().catch(() => null);
+        if (ignore) return;
+        if (res.status === 404) {
+          setNotFound(true);
+          return;
         }
+        if (!res.ok || !data?.success) {
+          setError(LOAD_ERROR_MESSAGE);
+          return;
+        }
+        const detail = data.data as OrderDetail;
+        signatureRef.current = orderSignature(detail);
+        setOrder(detail);
       } catch {
-        setError("Terjadi kesalahan. Silakan coba lagi.");
+        if (!ignore) setError(LOAD_ERROR_MESSAGE);
       } finally {
-        setLoading(false);
+        if (!ignore) setInitialLoading(false);
       }
     }
+
     fetchOrder();
+
+    return () => {
+      ignore = true;
+    };
+  }, [orderId, reloadKey]);
+
+  /**
+   * Pemeriksaan status read-only: GET pesanan yang sama, tanpa POST, tanpa
+   * transaksi pengganti. Detail dan fokus tetap di layar; hasilnya
+   * checking/unchanged/updated/error, bukan klaim sukses/gagal.
+   */
+  const checkPaymentStatus = useCallback(async () => {
+    if (checkingRef.current) return;
+    checkingRef.current = true;
+    setChecking(true);
+    setPaymentCheck("checking");
+    try {
+      const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}`, {
+        cache: "no-store",
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success || !data?.data) {
+        setPaymentCheck("error");
+        return;
+      }
+      const next = data.data as OrderDetail;
+      if (String(next.id) !== String(orderId)) {
+        setPaymentCheck("error");
+        return;
+      }
+      const previous = signatureRef.current;
+      const nextSignature = orderSignature(next);
+      signatureRef.current = nextSignature;
+      setOrder(next);
+      setPaymentCheck(
+        previous !== null && previous !== nextSignature ? "updated" : "unchanged"
+      );
+    } catch {
+      setPaymentCheck("error");
+    } finally {
+      checkingRef.current = false;
+      setChecking(false);
+    }
   }, [orderId]);
 
-  async function copyOrderId() {
-    if (!order) return;
-    await navigator.clipboard.writeText(order.id);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
+  const goToHistory = useCallback(() => router.push("/account"), [router]);
 
-  function copyPickupCode() {
-    if (order?.pickupCode) {
-      navigator.clipboard.writeText(order.pickupCode);
-      setCopiedCode(true);
-      setTimeout(() => setCopiedCode(false), 2000);
-    }
-  }
-
-  if (loading) {
+  if (initialLoading) {
     return (
-      <div className="container mx-auto px-4 py-8">
-        <div className="flex items-center justify-center py-32">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      <div
+        className="container mx-auto max-w-6xl px-4 py-8"
+        role="status"
+        aria-live="polite"
+      >
+        {/* Loading harus benar-benar terlihat: teks + indikator, dan skeleton
+            memakai `bg-border` (bukan `bg-muted` yang setara background). */}
+        <div className="mb-6 flex items-center gap-2 text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+          <span className="text-sm font-medium">Memuat detail pesanan…</span>
+        </div>
+        <div className="animate-pulse space-y-6" aria-hidden>
+          <div className="space-y-2">
+            <div className="h-4 w-32 rounded bg-border" />
+            <div className="h-8 w-56 rounded bg-border" />
+            <div className="h-4 w-40 rounded bg-border" />
+          </div>
+          <div className="h-24 rounded-xl bg-border" />
+          <div className="grid gap-6 lg:grid-cols-3">
+            <div className="h-64 rounded-xl bg-border lg:col-span-2" />
+            <div className="h-64 rounded-xl bg-border" />
+          </div>
+          <div className="grid gap-6 lg:grid-cols-3">
+            <div className="h-48 rounded-xl bg-border lg:col-span-2" />
+            <div className="h-48 rounded-xl bg-border" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (notFound) {
+    return (
+      <div className="container mx-auto max-w-2xl px-4 py-16">
+        <div className="space-y-4 text-center">
+          <PackageX
+            className="mx-auto h-14 w-14 text-muted-foreground"
+            aria-hidden
+          />
+          <h1 className="text-xl font-semibold">Pesanan tidak ditemukan</h1>
+          <Button variant="outline" onClick={goToHistory}>
+            <ArrowLeft aria-hidden />
+            Kembali ke riwayat pesanan
+          </Button>
         </div>
       </div>
     );
@@ -175,383 +259,461 @@ export default function OrderDetailPage() {
 
   if (error || !order) {
     return (
-      <div className="container mx-auto px-4 py-8">
-        <div className="text-center py-32 space-y-4">
-          <Package className="h-16 w-16 mx-auto text-muted-foreground" />
+      <div className="container mx-auto max-w-2xl px-4 py-16">
+        <div className="space-y-4 text-center">
+          <AlertCircle
+            className="mx-auto h-14 w-14 text-muted-foreground"
+            aria-hidden
+          />
           <p className="text-lg text-muted-foreground">
-            {error ?? "Pesanan tidak ditemukan"}
+            {error ?? LOAD_ERROR_MESSAGE}
           </p>
-          <Button variant="outline" onClick={() => router.push("/account")}>
-            Kembali ke Akun
-          </Button>
+          <div className="flex flex-col justify-center gap-3 sm:flex-row">
+            <Button onClick={() => setReloadKey((key) => key + 1)}>
+              Coba lagi
+            </Button>
+            <Button variant="outline" onClick={goToHistory}>
+              <ArrowLeft aria-hidden />
+              Kembali ke riwayat pesanan
+            </Button>
+          </div>
         </div>
       </div>
     );
   }
 
-  const status = statusMap[order.status] ?? {
-    label: order.status,
-    variant: "secondary" as const,
-  };
-  const payStatus = paymentStatusMap[order.paymentStatus] ?? {
-    label: order.paymentStatus,
-    variant: "outline" as const,
-  };
-
-  const currentStepIndex = STATUS_STEPS.findIndex(
-    (s) => s.key === order.status
-  );
-  const isCancelled = order.status === "cancelled";
+  const knownStatus = Boolean(ORDER_STATUS_LABELS[order.status]);
+  const statusLabel = ORDER_STATUS_LABELS[order.status] ?? UNKNOWN_STATUS_LABEL;
+  const statusToneKey: StatusTone = getStatusTone("order", order.status);
+  const isBlocked =
+    order.paymentStatus === "paid" && Boolean(order.fulfillmentBlockedReason);
   const isFailedPayment = order.status === "failed_payment";
+  const isCancelled = order.status === "cancelled";
+  const isPickup = order.fulfillmentMethod !== "delivery";
+  const hasPickupCode = Boolean(order.pickupCode);
+  const activePickupCode = hasPickupCode && order.status === "ready_for_pickup";
+  const archivedPickupCode = hasPickupCode && order.status === "completed";
+  // Tracking kosong tidak boleh mendahului pembayaran pada pesanan pending.
+  const showTracking = !(order.status === "pending_payment" && !order.shipment);
+  const needsNextAction = isFailedPayment || isCancelled || !knownStatus;
+  const isDelivery = order.fulfillmentMethod === "delivery";
+  const sidebarHasPickup = isPickup && Boolean(order.branch);
+  // Penempatan desktop eksplisit (kelas statis, bukan template string) supaya
+  // urutan DOM tetap urutan mobile: bayar → pickup/alamat → barang.
+  const pickupHasCodeCard = activePickupCode || archivedPickupCode;
+  const branchRow: 1 | 2 | 3 = pickupHasCodeCard ? 2 : 1;
+  const paymentRow: 1 | 2 | 3 = isDelivery
+    ? 2
+    : !sidebarHasPickup
+      ? 1
+      : pickupHasCodeCard
+        ? 3
+        : 2;
+
+  const StatusIcon = isCancelled
+    ? PackageX
+    : isFailedPayment
+      ? AlertCircle
+      : isBlocked
+        ? AlertCircle
+        : order.status === "completed"
+          ? CheckCircle2
+          : order.status === "ready_for_pickup"
+            ? MapPin
+            : order.status === "pending_payment"
+              ? Clock
+              : order.shipment
+                ? Truck
+                : Package;
+
+  const statusTone = getStatusToneClassName(
+    isBlocked ? "progress" : statusToneKey
+  );
+
+  // Waktu pembaruan pengiriman: hanya dari DTO (deliveredAt / event terakhir).
+  const shipmentUpdateAt = order.shipment
+    ? (order.shipment.deliveredAt ??
+      order.shipment.timeline.at(-1)?.at ??
+      null)
+    : null;
+
+  // Ready: instruksi pengambilan + kode existing dipertahankan apa adanya.
+  const activePickupCodeCard = activePickupCode && (
+    <Card className="lg:col-start-3 lg:row-start-1">
+      <CardHeader className="pb-3">
+        <h2 className="flex items-center gap-2 text-base font-semibold leading-none tracking-tight">
+          <Package className="h-5 w-5 text-primary" aria-hidden />
+          Kode Pickup Anda
+        </h2>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <p className="break-all font-mono text-2xl font-bold tracking-widest text-primary">
+          {order.pickupCode}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Tunjukkan kode ini kepada staf cabang saat pengambilan.
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => copyCode(order.pickupCode!, "Kode disalin")}
+        >
+          <Copy aria-hidden />
+          Salin kode
+        </Button>
+        <p role="status" aria-live="polite" className="text-xs">
+          {codeFeedback && (
+            <span
+              className={
+                codeFeedback.ok ? "text-green-700" : "text-destructive"
+              }
+            >
+              {codeFeedback.message}
+            </span>
+          )}
+        </p>
+      </CardContent>
+    </Card>
+  );
+
+  // Completed: tanpa instruksi pengambilan aktif; kode hanya arsip tertutup.
+  const archivedPickupCodeCard = archivedPickupCode && (
+    <Card className={`${PICKUP_COL_CLASS} lg:row-start-1`}>
+      <CardHeader className="pb-3">
+        <h2 className="flex items-center gap-2 text-base font-semibold leading-none tracking-tight">
+          <Package className="h-5 w-5 text-primary" aria-hidden />
+          Arsip pengambilan
+        </h2>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <p className="text-muted-foreground">
+          Pesanan sudah selesai. Kode pengambilan hanya disimpan sebagai arsip.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => setShowPickupArchive((value) => !value)}
+          aria-expanded={showPickupArchive}
+          aria-controls={PICKUP_ARCHIVE_ID}
+        >
+          {showPickupArchive ? "Sembunyikan kode" : "Lihat kode pengambilan"}
+          {showPickupArchive ? <ChevronUp aria-hidden /> : <ChevronDown aria-hidden />}
+        </Button>
+        {showPickupArchive && (
+          <div
+            id={PICKUP_ARCHIVE_ID}
+            role="region"
+            aria-label="Arsip kode pengambilan"
+            className="rounded-lg border bg-muted/30 p-3"
+          >
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              Arsip kode pengambilan
+            </p>
+            <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+              <p className="break-all font-mono text-lg font-bold">
+                {order.pickupCode}
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => copyCode(order.pickupCode!, "Kode disalin")}
+              >
+                <Copy aria-hidden />
+                Salin kode
+              </Button>
+            </div>
+          </div>
+        )}
+        <p role="status" aria-live="polite" className="text-xs">
+          {codeFeedback && (
+            <span
+              className={
+                codeFeedback.ok ? "text-green-700" : "text-destructive"
+              }
+            >
+              {codeFeedback.message}
+            </span>
+          )}
+        </p>
+      </CardContent>
+    </Card>
+  );
+
+  const pickupBranchCard = isPickup && (
+    <Card className={isPickup ? `${PICKUP_COL_CLASS} ${PICKUP_ROW_CLASS[branchRow]}` : undefined}>
+      <CardHeader className="pb-3">
+        <h2 className="flex items-center gap-2 text-base font-semibold leading-none tracking-tight">
+          <MapPin className="h-5 w-5 text-primary" aria-hidden />
+          Pengambilan
+        </h2>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        {order.branch ? (
+          <>
+            <div className="flex items-start gap-2">
+              <MapPin
+                className="mt-0.5 h-4 w-4 shrink-0 text-primary"
+                aria-hidden
+              />
+              <div className="min-w-0">
+                <p className="break-words font-medium">{order.branch.name}</p>
+                <p className="break-words text-muted-foreground">
+                  {order.branch.address}, {order.branch.city}
+                </p>
+              </div>
+            </div>
+            {order.pickupDate && (
+              <div className="flex items-center gap-2">
+                <Calendar
+                  className="h-4 w-4 text-muted-foreground"
+                  aria-hidden
+                />
+                <span>{formatDate(order.pickupDate)}</span>
+              </div>
+            )}
+            {order.pickupTime && (
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-muted-foreground" aria-hidden />
+                <span>{order.pickupTime}</span>
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="text-muted-foreground">Lokasi pickup tidak tersedia</p>
+        )}
+      </CardContent>
+    </Card>
+  );
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-4xl">
-      {/* Header */}
-      <div className="flex items-center gap-4 mb-8">
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={() => router.push("/account")}
-        >
-          <ArrowLeft className="h-5 w-5" />
-        </Button>
-        <div>
+    <div className="container mx-auto max-w-6xl px-4 py-8">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div className="space-y-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-ml-3 text-muted-foreground"
+            onClick={goToHistory}
+          >
+            <ArrowLeft aria-hidden />
+            Riwayat pesanan
+          </Button>
           <h1 className="text-2xl font-bold">Detail Pesanan</h1>
           <p className="text-sm text-muted-foreground">
-            {formatDateTime(order.createdAt)}
+            Dibuat {formatDateTime(order.createdAt)}
           </p>
         </div>
-        <Badge variant={status.variant} className="ml-auto text-sm">
-          {status.label}
-        </Badge>
+        <StatusBadge
+          tone={isBlocked ? "progress" : statusToneKey}
+          className="text-sm"
+          aria-label="Status pesanan"
+        >
+          {statusLabel}
+        </StatusBadge>
       </div>
 
-      {/* Order ID */}
-      <div className="flex items-center gap-2 mb-6 text-sm">
-        <span className="text-muted-foreground">ID Pesanan:</span>
-        <span className="font-mono">{order.id}</span>
-        <Button variant="ghost" size="icon" className="h-6 w-6" onClick={copyOrderId}>
-          {copied ? (
-            <Check className="h-3.5 w-3.5 text-green-600" />
-          ) : (
-            <Copy className="h-3.5 w-3.5" />
-          )}
+      <div className="mb-6 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm">
+        <span className="text-muted-foreground">ID Pesanan</span>
+        <span className="break-all font-mono">{order.id}</span>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => copyId(order.id, "ID disalin")}
+        >
+          <Copy aria-hidden />
+          Salin ID
         </Button>
+        <p role="status" aria-live="polite" className="text-xs">
+          {idFeedback && (
+            <span
+              className={idFeedback.ok ? "text-green-700" : "text-destructive"}
+            >
+              {idFeedback.message}
+            </span>
+          )}
+        </p>
       </div>
 
-      {/* Status Stepper */}
-      {!isCancelled && !isFailedPayment && (
-        <Card className="mb-6">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              {STATUS_STEPS.map((step, i) => {
-                const isComplete = currentStepIndex > i;
-                const isCurrent = currentStepIndex === i;
-                return (
-                  <div
-                    key={step.key}
-                    className="flex items-center flex-1 last:flex-none"
-                  >
-                    <div className="flex flex-col items-center gap-1">
-                      <div
-                        className={`flex h-10 w-10 items-center justify-center rounded-full border-2 ${
-                          isComplete
-                            ? "border-green-600 bg-green-600 text-white"
-                            : isCurrent
-                            ? "border-primary bg-primary text-primary-foreground"
-                            : "border-muted bg-background text-muted-foreground"
-                        }`}
-                      >
-                        {isComplete ? (
-                          <Check className="h-5 w-5" />
-                        ) : (
-                          <span className="text-sm font-medium">{i + 1}</span>
-                        )}
-                      </div>
-                      <span
-                        className={`text-xs text-center ${
-                          isCurrent ? "font-semibold" : "text-muted-foreground"
-                        }`}
-                      >
-                        {step.label}
-                      </span>
-                    </div>
-                    {i < STATUS_STEPS.length - 1 && (
-                      <div
-                        className={`flex-1 h-0.5 mx-2 ${
-                          isComplete ? "bg-green-600" : "bg-muted"
-                        }`}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {isCancelled && (
-        <Card className="mb-6">
-          <CardContent className="p-6 text-center">
-            <AlertCircle className="h-10 w-10 mx-auto text-destructive mb-2" />
-            <p className="font-semibold text-destructive">
-              Pesanan ini telah dibatalkan
+      {/* Ringkasan status: order, pembayaran, dan paket tetap terpisah. */}
+      <Card
+        className={
+          isBlocked
+            ? "mb-6 border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/50"
+            : "mb-6"
+        }
+      >
+        <CardContent className="flex items-start gap-4 pt-6">
+          <div
+            className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${statusTone}`}
+          >
+            <StatusIcon className="h-5 w-5" aria-hidden />
+          </div>
+          <div className="min-w-0 space-y-1">
+            <p
+              className={`text-lg font-semibold ${
+                isBlocked ? "text-amber-900 dark:text-amber-100" : ""
+              }`}
+            >
+              {isBlocked
+                ? "Pembayaran diterima, pesanan menunggu verifikasi"
+                : statusLabel}
             </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {isFailedPayment && (
-        <Card className="mb-6">
-          <CardContent className="p-6 text-center">
-            <AlertCircle className="h-10 w-10 mx-auto text-destructive mb-2" />
-            <p className="font-semibold text-destructive">
-              Pembayaran Gagal
-            </p>
-            {order.paymentFailureReason && (
-              <p className="text-sm text-muted-foreground mt-2">
+            {isBlocked && (
+              <p className="text-sm text-amber-900 dark:text-amber-100">
+                Pembayaran Anda sudah tercatat. Pesanan belum dapat diproses
+                sampai tim kami menyelesaikan verifikasi. Tidak perlu membayar
+                ulang.
+              </p>
+            )}
+            {isFailedPayment && order.paymentFailureReason && (
+              <p className="text-sm text-muted-foreground">
                 {order.paymentFailureReason}
               </p>
             )}
-            <p className="text-sm text-muted-foreground mt-2">
-              Silakan buat pesanan baru untuk mencoba pembayaran kembali.
-            </p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Pickup Code Block */}
-      {order.pickupCode &&
-        (order.status === "ready_for_pickup" ||
-          order.status === "completed") && (
-          <Card className="mb-6">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-muted-foreground mb-1">
-                    Kode Pickup Anda
-                  </p>
-                  <p className="font-mono text-3xl font-bold tracking-widest text-primary">
-                    {order.pickupCode}
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Tunjukkan kode ini kepada staf cabang saat pengambilan.
-                  </p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={copyPickupCode}
-                  className="gap-1"
-                >
-                  {copiedCode ? (
-                    <>
-                      <Check className="h-4 w-4" /> Copied
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="h-4 w-4" /> Copy
-                    </>
-                  )}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left: Items + Summary */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Items */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <ShoppingBag className="h-4 w-4" />
-                Barang Pesanan ({order.items.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {order.items.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex gap-4 p-3 rounded-lg border bg-card"
-                >
-                  <div className="h-20 w-20 bg-muted rounded-md overflow-hidden flex items-center justify-center text-muted-foreground shrink-0">
-                    {item.imageUrl ? (
-                      <Image
-                        src={item.imageUrl}
-                        alt={item.productName}
-                        width={80}
-                        height={80}
-                        className="object-cover w-full h-full"
-                      />
-                    ) : (
-                      <Package className="h-8 w-8" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-medium truncate">{item.productName}</h4>
-                    {item.variantInfo && (
-                      <p className="text-sm text-muted-foreground">
-                        {item.variantInfo}
-                      </p>
-                    )}
-                    <p className="text-sm text-muted-foreground">
-                      {item.quantity} x {formatRupiah(item.price)}
-                    </p>
-                  </div>
-                  <div className="text-right shrink-0 flex flex-col justify-between">
-                    <p className="font-semibold">
-                      {formatRupiah(
-                        (parseFloat(item.price) * item.quantity).toString()
-                      )}
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-2"
-                      onClick={() => router.push(`/products/${item.slug ?? item.productId}`)}
-                    >
-                      <ShoppingBag className="h-3.5 w-3.5 mr-1.5" />
-                      Beli Lagi
-                    </Button>
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-
-          {/* Price Summary */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Ringkasan Pembayaran</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Subtotal</span>
-                <span>{formatRupiah(order.subtotal)}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Diskon</span>
-                <span>-{formatRupiah(order.discount)}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">PPN ({parseFloat(order.ppnRate)}%)</span>
-                <span>{formatRupiah(order.ppnAmount)}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Ongkos Kirim</span>
-                <span>{formatRupiah(order.shippingCost)}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Biaya Layanan</span>
-                <span>{formatRupiah(order.serviceFee)}</span>
-              </div>
-              <Separator />
-              <div className="flex justify-between font-bold text-lg">
-                <span>Total</span>
-                <span className="text-primary">{formatRupiah(order.total)}</span>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Right: Pickup + Payment Info */}
-        <div className="space-y-6">
-          {/* Pickup Info */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <MapPin className="h-4 w-4" />
-                Pengambilan
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              {order.branch ? (
-                <>
-                  <div className="flex items-start gap-2">
-                    <MapPin className="h-4 w-4 text-primary mt-0.5 shrink-0" />
-                    <div>
-                      <p className="font-medium">{order.branch.name}</p>
-                      <p className="text-muted-foreground">
-                        {order.branch.address}, {order.branch.city}
-                      </p>
-                    </div>
-                  </div>
-                  {order.pickupDate && (
-                    <div className="flex items-center gap-2">
-                      <Calendar className="h-4 w-4 text-muted-foreground" />
-                      <span>{formatDate(order.pickupDate)}</span>
-                    </div>
-                  )}
-                  {order.pickupTime && (
-                    <div className="flex items-center gap-2">
-                      <Clock className="h-4 w-4 text-muted-foreground" />
-                      <span>{order.pickupTime}</span>
-                    </div>
-                  )}
-                </>
-              ) : (
-                <p className="text-muted-foreground">
-                  Lokasi pickup tidak tersedia
+            {!isBlocked &&
+              !isCancelled &&
+              !isFailedPayment &&
+              shipmentUpdateAt && (
+                <p className="text-sm text-muted-foreground">
+                  Pembaruan pengiriman: {formatTrackingTime(shipmentUpdateAt)}
                 </p>
               )}
-            </CardContent>
-          </Card>
+          </div>
+        </CardContent>
+        {needsNextAction && (
+          <CardContent className="pt-0">
+            <div className="flex flex-wrap gap-2">
+              {knownStatus ? (
+                <Button onClick={goToHistory}>Lihat Pesanan Saya</Button>
+              ) : (
+                <Button
+                  className="gap-2"
+                  aria-busy={checking}
+                  aria-disabled={checking}
+                  onClick={() => void checkPaymentStatus()}
+                >
+                  {checking && (
+                    <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                  )}
+                  {checking ? "Memeriksa status…" : "Periksa status"}
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        )}
+      </Card>
 
-          {/* Payment Info */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <CreditCard className="h-4 w-4" />
-                Pembayaran
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Metode</span>
-                <span className="font-medium">
-                  {formatPaymentMethodLabel(order.paymentMethod)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Status</span>
-                <Badge variant={payStatus.variant}>{payStatus.label}</Badge>
-              </div>
-              {order.status === "pending_payment" &&
-                order.snapRedirectUrl && (
-                  <>
-                    <Separator />
-                    <div className="pt-1">
-                      <Button
-                        className="w-full"
-                        onClick={() =>
-                          (window.location.href = order.snapRedirectUrl!)
-                        }
-                      >
-                        <CreditCard className="h-4 w-4 mr-2" />
-                        Bayar Sekarang
-                      </Button>
-                      <p className="text-xs text-muted-foreground mt-2 text-center">
-                        Selesaikan pembayaran Anda sebelum link kedaluwarsa.
-                      </p>
-                    </div>
-                  </>
-                )}
-            </CardContent>
-          </Card>
-
-          {/* Back Button */}
-          <Button
-            variant="outline"
-            className="w-full"
-            onClick={() => router.push("/account")}
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Kembali ke Riwayat Pesanan
-          </Button>
+      {/*
+        Satu grid dengan urutan DOM mobile: pembayaran → pickup/alamat → barang.
+        Desktop memakai penempatan eksplisit supaya susunan multi-kolom lama
+        (barang di kiri, pickup/pembayaran di sidebar kanan) tetap sama.
+      */}
+      <div className="grid gap-6 lg:grid-cols-3 lg:items-start">
+        <div className={`${PICKUP_COL_CLASS} ${PICKUP_ROW_CLASS[paymentRow]}`}>
+          <OrderPaymentSummary
+            order={order}
+            paymentCheck={{ state: paymentCheck }}
+            onCheckPayment={() => void checkPaymentStatus()}
+            onPay={() => {
+              if (order.snapRedirectUrl) {
+                window.location.href = order.snapRedirectUrl;
+              }
+            }}
+          />
         </div>
+
+        {activePickupCodeCard}
+        {archivedPickupCodeCard}
+        {pickupBranchCard}
+
+        {isDelivery && (
+          <div className="lg:col-span-3 lg:row-start-1">
+            <OrderFulfillmentPanel
+              shipment={order.shipment}
+              deliverySnapshot={order.deliverySnapshot}
+              showTracking={showTracking}
+            />
+          </div>
+        )}
+
+        <Card
+          className={
+            isDelivery
+              ? "lg:col-span-2 lg:col-start-1 lg:row-span-2 lg:row-start-2"
+              : "lg:col-span-2 lg:col-start-1 lg:row-span-3 lg:row-start-1"
+          }
+        >
+          <CardHeader className="pb-3">
+            <h2 className="flex items-center gap-2 text-base font-semibold leading-none tracking-tight">
+              <ShoppingBag className="h-5 w-5 text-primary" aria-hidden />
+              Barang pesanan ({order.items.length})
+            </h2>
+          </CardHeader>
+          <CardContent>
+            {order.items.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Detail barang belum tersedia.
+              </p>
+            ) : (
+              <ul className="divide-y">
+                {order.items.map((item) => (
+                  <li
+                    key={item.id}
+                    className="flex gap-4 py-4 first:pt-0 last:pb-0"
+                  >
+                    <div className="flex h-20 w-20 shrink-0 items-center justify-center overflow-hidden rounded-md bg-muted text-muted-foreground">
+                      {item.imageUrl ? (
+                        <Image
+                          src={item.imageUrl}
+                          alt={item.productName}
+                          width={80}
+                          height={80}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <Package className="h-8 w-8" aria-hidden />
+                      )}
+                    </div>
+                    <div className="flex min-w-0 flex-1 flex-col gap-3 sm:flex-row sm:justify-between">
+                      <div className="min-w-0 space-y-1">
+                        <p className="break-words font-medium">
+                          {item.productName}
+                        </p>
+                        {item.variantInfo && (
+                          <p className="text-sm text-muted-foreground">
+                            {item.variantInfo}
+                          </p>
+                        )}
+                        <p className="text-sm text-muted-foreground">
+                          {item.quantity} × {formatRupiah(item.price)}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 sm:shrink-0 sm:flex-col sm:items-end sm:justify-between">
+                        <p className="whitespace-nowrap font-semibold">
+                          {formatRupiah(
+                            (parseFloat(item.price) * item.quantity).toString()
+                          )}
+                        </p>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            router.push(
+                              `/products/${item.slug ?? item.productId}`
+                            )
+                          }
+                        >
+                          Beli lagi
+                        </Button>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

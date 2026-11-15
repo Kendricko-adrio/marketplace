@@ -21,16 +21,19 @@ JUBELIO_SYNC_MAX_PRODUCTS=      # kosong = fetch semua; integer = cap untuk test
 
 ## A.1 Stock adjustment safety
 
-Stock writes used by checkout have stricter environment controls than catalog
-reads.
+Checkout now uses the Sales Order gateway exclusively. The adjustment checkout
+and stock-write account mapping below are historical, not active checkout
+settings; see [Jubelio Sales Orders](../features/jubelio-sales-orders.md)
+for the current runtime gates and settlement.
 
-Staging runs `jubelio-mock` as a private Compose service
-(`JUBELIO_MOCK_API_BASE_URL=http://jubelio-mock:3002`). Repo default untuk
-staging:
+Staging tidak lagi menjalankan container mock Jubelio. Service, dependency,
+URL mock, dan Dockerfile mock sudah dihapus dari konfigurasi repo. Fixture
+`e2e/fixtures/jubelio/` hanya dipakai automated test, bukan deployment.
+Penghapusan ini tidak mengubah akun, URL provider, mode, atau izin write existing.
+Contoh parameter legacy (bukan pengganti konfigurasi staging existing):
 
 ```env
 APP_ENV=staging
-JUBELIO_MOCK_API_BASE_URL=http://jubelio-mock:3002
 JUBELIO_STOCK_WRITES_ENABLED=false
 JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID=
 JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID=
@@ -49,8 +52,9 @@ JUBELIO_STOCK_QUEUE_TIMEOUT_MS=5000
 > mengurangi stok Jubelio **nyata**; perlakukan staging seperti production
 > untuk alur stok (uji data disposable jangan menyentuh alur checkout
 > stok). Gateway live tetap menuntut `NODE_ENV=production` + host HTTPS
-> `https://api2.jubelio.com` — keduanya terpenuhi. Mock tetap jalan sebagai
-> service untuk keperluan lain.
+> `https://api2.jubelio.com`. Konfigurasi repo staging tetap memakai mode dan
+> izin write tersebut; penghapusan mock tidak mengubahnya. Keadaan server
+> harus diverifikasi operator secara terpisah, bukan diasumsikan dari repo.
 
 Production sets `APP_ENV=production`, but live writes remain disabled until
 this explicit value is changed and the store container is restarted:
@@ -64,6 +68,68 @@ The gateway resolves `adjp_acct_id` and `adjm_acct_id` from
 emergency overrides and should normally remain empty. The gateway also requires
 `NODE_ENV=production` and the exact HTTPS host `https://api2.jubelio.com`. If
 any check fails, checkout stops before Midtrans.
+
+### A.2 Sales Order gateway (active checkout)
+
+`apps/store/src/lib/jubelio-sales-client.ts` menangani semua checkout baru dan
+tidak memakai mock pada runtime normal. Di luar production, request ditolak
+kecuali `JUBELIO_SALES_TEST_ACCOUNT_ENABLED=true` dengan URL eksplisit
+`JUBELIO_API_BASE_URL=https://api2.jubelio.com` dan kredensial akun test yang
+isolasinya telah dikonfirmasi. Jalur production tetap menuntut
+`APP_ENV=production`, `NODE_ENV=production`, URL tersebut, serta
+`JUBELIO_STOCK_WRITES_ENABLED=true`; flag akun test tidak dapat melewatinya.
+Jangan tambahkan flag akun test ke Compose production. Compose staging tidak
+meneruskannya dan tetap memakai pengaturan write mode production (lihat
+peringatan di atas). Fixture testing bukan pengaman koneksi staging.
+
+Pengaman konfigurasi bukan approval go-live. Isolasi akun test harus dikonfirmasi
+pemilik akun, bukan disimpulkan dari hostname. Mock hanya tersedia melalui
+fixture automated test; seam Sales E2E bersifat loopback-only dan ditolak pada
+mode production. Tidak ada fallback dari koneksi Jubelio normal ke fixture.
+After migration 0022, bootstrap real Jubelio stock for the catalog:
+`branch_stock.provider_stock_synced_at` is NULL on legacy rows. Browsing uses
+last-known availability provisionally; every new checkout reads selected
+item/location stock directly from Jubelio, then atomically holds it before SO
+create. Missing, inconsistent, or unreachable provider reads block checkout.
+Local hold writes must never refresh the provider observation clock. Install
+stock-only reconciliation cron separately to repair missed webhook updates.
+`POST /api/cron/refresh-jubelio-stock` (header `X-Cron-Secret`) walks mapped
+Jubelio item IDs with a DB-backed CAS keyset cursor (`system_config` key
+`jubelio.stockRefreshCursor`), 100 IDs/read, at most 200 reads/run. Only
+complete, consistent observations for existing item/location pairs refresh
+`provider_stock_synced_at`; missing, malformed or failed reads leave timestamps
+untouched. Jubelio sometimes omits `reserved` for zero; zero is inferred
+only when the explicit `available = on_hand - on_order` proves it. It never
+changes local holds, imports catalog data, or calls the
+adjustment API. Schedule **once daily at 02:00 host-local time**. A single
+invocation scans at most 20,000 distinct IDs; if mapped IDs exceed this, run
+additional bounded invocations or increase safe capacity before assuming full
+daily coverage. Monitor run duration, coverage, age and incomplete (503)
+responses. Reads are retried by the next keyset cycle, not by blindly
+refreshing timestamps. A daily snapshot cannot be used as a fallback when
+live provider verification is unavailable.
+
+Host cron templates: `deployment/staging/stock-refresh.cron` and
+`deployment/production/stock-refresh.cron`. Install as user `deploy` after
+migration 0022 and owner deployment approval, using
+`deployment/common/cron/refresh-jubelio-stock.sh` (reads the same CRON_SECRET
+as the store, `flock` avoids overlap, logs HTTP failures). Check logs under
+`/home/ops/log/marketplace-stock-refresh/<environment>/` and alert on any
+FAIL, incomplete 503, overlapping run, or mapped positive row older than
+one day. Check age with:
+
+```sql
+SELECT count(*) FILTER (WHERE bs.provider_stock_synced_at IS NULL OR bs.provider_stock_synced_at < now() - interval '1 day') AS lagging,
+       count(*) AS mapped_rows
+FROM branch_stock bs JOIN branch b ON b.id = bs.branch_id
+JOIN product_variant pv ON pv.id = bs.product_variant_id
+WHERE b.jubelio_location_id IS NOT NULL AND pv.jubelio_item_id IS NOT NULL;
+```
+
+Leave `checkout.paused` true until migration, live checkout verification,
+a complete initial stock scan, webhook delivery and daily cron monitoring are
+verified in the authorized target environment. During a provider outage,
+checkout remains unavailable even if the daily mirror is populated.
 
 The stock HTTP scheduler is process-wide. It spaces request starts to stay at
 or below `JUBELIO_STOCK_MAX_REQUESTS_PER_MINUTE`, caps simultaneous requests at
@@ -87,7 +153,8 @@ backup. Follow the complete operator procedure in
 [stock-adjustment-rollout.md](stock-adjustment-rollout.md); do not enable the
 switch from an ad-hoc shell session.
 
-The stateful mock supports `success`, `insufficient-stock`, `server-error`,
+Fixture automated test (`e2e/fixtures/jubelio/server.ts`) mendukung
+`success`, `insufficient-stock`, `server-error`,
 `rate-limit-once`, `unauthorized-once`, `timeout-before-apply`,
 `timeout-after-apply`, and `malformed-success`. Control it with
 `PUT /__control/scenario` and reset it with `POST /__control/reset`.
@@ -99,7 +166,19 @@ The stateful mock supports `success`, `insufficient-stock`, `server-error`,
 npm run db:import-jubelio
 # untuk testing cepat, cap jumlah produk:
 JUBELIO_SYNC_MAX_PRODUCTS=20 npm run db:import-jubelio
+
+# production bootstrap: semua halaman, tanpa cap/filter, report durable
+npm run db:import-jubelio -- --full \
+  --expected-database <production-db> \
+  --report-file /home/ops/log/marketplace-bootstrap/production/import.json
 ```
+
+Mode `--full` menolak `--item-name`, `JUBELIO_SYNC_MAX_PRODUCTS` berisi, dan
+`JUBELIO_SYNC_START_PAGE` selain 1; menjalankan advisory lock sesi; lalu
+menulis report yang hanya berstatus `complete` setelah rekonsiliasi ID group/
+SKU dan coverage stok lulus. Exit `4` berarti `FULL_IMPORT_INCOMPLETE` —
+ulangi full import dari halaman 1 setelah penyebabnya diperbaiki. Urutan
+production lengkap: [first-production-deployment.md](first-production-deployment.md).
 
 Mempaginasi `/inventory/items/masters` (~38rb produk), enrich per produk via
 `/inventory/catalog/{id}`, fetch stok per-location via `/inventory/items/all-stocks/`,
@@ -132,3 +211,54 @@ SELECT COUNT(*) FROM branch_stock WHERE pending_remote_stock < 0 OR reserved_sto
 -- thumbnail + gallery terisi
 SELECT name, thumbnail IS NOT NULL, jsonb_array_length(images) FROM product WHERE jubelio_item_group_id IS NOT NULL LIMIT 5;
 ```
+
+## E. Aktivasi PPN provider (kontrak provider3)
+
+Writer order baru mencatat PPN checkout pada Sales Order (spec
+[PPN checkout](../../.scratch/jubelio-sales-api-switching/plan/jubelio-sales-order-tax-spec.md)).
+Aktivasi bersifat **operasional dan tidak otomatis** — tidak ada startup yang
+menulis config, tidak ada menu admin, dan seeder penuh tidak boleh dijalankan
+pada database operational.
+
+Prasyarat sebelum writer baru dipakai:
+
+1. **Reader sebelum writer.** Deploy binary yang sudah memahami snapshot
+   provider3 (`decodePricingSnapshot`, `readOrderPricing`, invoice/payment,
+   mirror) dan constraint `orders_pricing_versions_valid` versi 3. Jangan pernah
+   rollback ke binary yang tidak memahami provider3 selama record3 masih ada:
+   tahan checkout baru lebih aman daripada membaca record3 sebagai provider2.
+2. **Verifikasi tenant lewat GET**, bukan menyalin ID: `GET /taxes/?page=1&pageSize=100`
+   dengan credentials tenant tersebut. Pastikan tepat satu record dengan rate
+   yang sama dengan kebijakan PPN website, `tax_out` (akun pajak keluaran) terisi,
+   dan catat `tax_id`-nya (tenant riset: `-2` = PPN 11%, `tax_out: 2-2103 PPN
+   Pengeluaran`). Rate PPh/No Tax bukan kandidat.
+3. **Isi config eksplisit** di `system_config` target (contoh UPSERT yang hanya
+   menyentuh satu key, jalankan setelah backup dan review):
+   ```sql
+   INSERT INTO system_config (key, value, type, description)
+   VALUES ('jubelio.salesTaxId', '-2', 'number',
+     'Tax ID master Jubelio untuk PPN barang pada SO/invoice/payment (diverifikasi GET /taxes/).')
+   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, type = EXCLUDED.type,
+     description = EXCLUDED.description, updated_at = now();
+   ```
+   Pastikan `tax.ppnRatePercent` sudah bernilai rate kebijakan saat ini. Kedua
+   key dibaca **uncached** setiap checkout baru; perubahan langsung berlaku pada
+   checkout berikutnya dan tidak mengubah order yang sedang berjalan.
+4. **Drain/check attempt in-flight.** Attempt dan order lama memakai snapshot
+   tersimpan; replay/recovery tidak membaca config/master, jadi transaksi yang
+   sedang berjalan tetap selesai dengan angka semula. Tetap periksa
+   `checkout_attempt` yang belum final sebelum cutover agar tidak ada campuran
+   yang membingungkan operasi.
+5. **Uji di staging** dengan `GET /taxes/` tenant staging + satu checkout kecil
+   (bukan provider write tambahan tanpa izin terpisah). Kegagalan preflight
+   menghasilkan `503 CHECKOUT_TAX_UNAVAILABLE` dan tidak membuat SO/invoice/
+   payment/Midtrans.
+6. **Batas yang belum tertutup**: variasi provider multi-line/diskon/ongkir/
+   mirror ber-tax baru dibuktikan lewat HTTP mock aplikasi. Bila provider
+   ternyata menghitung ulang berbeda, hentikan writer baru dan kembali ke
+   keputusan/spec — jangan mengubah pajak customer diam-diam.
+
+Rollback: kembalikan config ke nilai tenant yang benar atau tahan checkout baru;
+jangan menghapus baris `system_config` secara buta dan jangan menjalankan
+`db:migrate` pada dev (gunakan `db:push`). Constraint versi dihasilkan oleh
+`npm run db:generate` (`packages/db/drizzle/`), bukan ditulis tangan.

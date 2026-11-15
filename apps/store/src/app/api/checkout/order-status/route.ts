@@ -3,6 +3,24 @@ import { db } from "@/db";
 import { orders } from "@/db";
 import { eq } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("store-checkout-order-status");
+
+/**
+ * Proyeksi teknis statis untuk jalur kegagalan tak terduga. Nilai yang
+ * tertangkap tidak pernah masuk log; kontrak HTTP tetap sama.
+ */
+class OrderStatusLogError extends Error {
+  constructor() {
+    super("checkout order-status: gagal membaca status order");
+    this.name = "OrderStatusLogError";
+  }
+}
 
 /**
  * GET /api/checkout/order-status?orderId=xxx
@@ -11,7 +29,7 @@ import { requireOnboardedApiSession } from "@/lib/route-access";
  * The webhook (/api/webhooks/midtrans) remains the source of truth —
  * this endpoint only reads the DB.
  */
-export async function GET(request: NextRequest) {
+async function readOrderStatus(request: NextRequest): Promise<Response> {
   try {
     const access = await requireOnboardedApiSession();
     if (!access.ok) return access.response;
@@ -58,11 +76,19 @@ export async function GET(request: NextRequest) {
       status: order.status,
       paymentStatus: order.paymentStatus,
     });
-  } catch (error) {
-    console.error("Error fetching order status:", error);
+  } catch {
+    log.error(
+      "Status order gagal dibaca (outcome error)",
+      new OrderStatusLogError()
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch order status" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(
+  readOrderStatus,
+  "store-checkout-order-status"
+);

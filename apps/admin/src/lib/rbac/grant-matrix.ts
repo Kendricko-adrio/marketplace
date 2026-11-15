@@ -38,6 +38,9 @@ export const RBAC_MODULE_LABELS: Record<ModuleKey, string> = {
   users: "Pengguna",
   roles: "Hak Akses (Role)",
   footer: "Footer",
+  discounts: "Diskon",
+  discount_capacity: "Kapasitas Diskon",
+  prices: "Harga (Markdown)",
 };
 
 export const RBAC_ACTION_LABELS: Record<ActionKey, string> = {

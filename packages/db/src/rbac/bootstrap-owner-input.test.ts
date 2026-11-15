@@ -32,6 +32,23 @@ describe("parseArgs", () => {
     });
   });
 
+  it("parses the production target guard without touching secret priority", () => {
+    expect(
+      parseArgs([
+        "--email",
+        "owner@example.invalid",
+        "--password-file",
+        "/run/secrets/pw",
+        "--expected-database",
+        "qadfstore_production",
+      ])
+    ).toEqual({
+      email: "owner@example.invalid",
+      passwordFile: "/run/secrets/pw",
+      expectedDatabase: "qadfstore_production",
+    });
+  });
+
   it("ignores a flag with no following value", () => {
     expect(parseArgs(["--name", "--email", "a@b.co"])).toEqual({
       email: "a@b.co",

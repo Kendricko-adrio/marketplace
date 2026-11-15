@@ -8,22 +8,42 @@ import {
   validateMidtransWebhookPayload,
 } from "@/lib/midtrans";
 import {
-  claimAndFinalizePaidOrder,
+  blockOrderFulfillment,
   claimAndFailOrder,
+  claimPaidOrder,
   describeFailureReason,
+  processLateSettlement,
   resolvePaymentOutcome,
   type PaymentAttributes,
 } from "@/lib/order-finalize";
-import { requestLogger, serializeError } from "@/lib/logger";
-import { processLateSettlementStock } from "@/lib/jubelio-stock-saga";
+import { settleJubelioSalesOrder } from "@/lib/jubelio-sales-settlement";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 
-export async function POST(request: NextRequest) {
-  const log = requestLogger(request, { module: "midtrans-webhook" });
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("midtrans-webhook");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Midtrans/Next
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
+/** HTTP adapter webhook: validasi payload, re-verify ke Midtrans, claim/ finalize. */
+async function midtransWebhook(request: NextRequest): Promise<Response> {
   try {
     const body = await request.json();
     const verified = validateMidtransWebhookPayload(body);
     if (!verified.ok) {
-      log.warn("webhook authentication rejected", { error: verified.error });
+      log.warn(`webhook authentication rejected — ${verified.error}`);
       return NextResponse.json(
         { success: false, error: verified.error },
         { status: verified.status }
@@ -36,9 +56,10 @@ export async function POST(request: NextRequest) {
       statusCode: status_code,
     } = verified.data;
 
-    log.info("webhook received", { order_id, transaction_status, status_code });
-
-    const orderLog = log.child({ orderId: String(order_id) });
+    const orderRef = String(order_id);
+    log.info(
+      `webhook received: order ${orderRef}, status ${transaction_status}, statusCode ${status_code}`
+    );
 
     // ===== Load the order =====
     const orderRows = await db
@@ -48,7 +69,7 @@ export async function POST(request: NextRequest) {
       .limit(1);
 
     if (orderRows.length === 0) {
-      orderLog.error("order not found");
+      log.error(`webhook: order ${orderRef} not found`);
       return NextResponse.json(
         { success: false, error: "Order not found" },
         { status: 404 }
@@ -58,10 +79,9 @@ export async function POST(request: NextRequest) {
     const order = orderRows[0];
 
     if (!amountsMatch(order.total, gross_amount)) {
-      orderLog.error("gross amount mismatch", {
-        expected: order.total,
-        received: gross_amount,
-      });
+      log.error(
+        `webhook: order ${order.id} gross amount mismatch, expected ${order.total}, received ${gross_amount}`
+      );
       return NextResponse.json(
         { success: false, error: "Gross amount mismatch" },
         { status: 400 }
@@ -72,15 +92,16 @@ export async function POST(request: NextRequest) {
     // (The claim-guard inside the finalizers also enforces this, but checking
     // here avoids a redundant Midtrans status re-verify round-trip.)
     if (order.paymentStatus === "paid") {
-      orderLog.info("already processed — skipping");
+      log.info(`webhook: order ${order.id} already processed — skipping`);
       return NextResponse.json({
         success: true,
         message: "Order already processed",
       });
     }
     // A failed_payment order is not skipped before authoritative re-verification:
-    // Midtrans can settle after TTL compensation. That path must re-acquire
-    // stock or enter manual review instead of discarding a valid payment.
+    // Midtrans can settle after TTL compensation. That path must reconcile the
+    // Sales Order (never re-settle after a confirmed cancel) instead of
+    // discarding a valid payment.
 
     // ===== Re-verify with Midtrans (best practice) =====
     // Fetch authoritative status directly from Midtrans to defend against
@@ -93,7 +114,7 @@ export async function POST(request: NextRequest) {
     try {
       const statusRes = await getMidtransTransactionStatus(String(order_id));
       if (!statusRes) {
-        orderLog.error("transaction not found during status re-verify");
+        log.error(`webhook: order ${orderRef} transaction not found during status re-verify`);
         return NextResponse.json(
           { success: false, error: "Unable to verify transaction" },
           { status: 503 }
@@ -122,10 +143,11 @@ export async function POST(request: NextRequest) {
         typeof statusRes.transaction_id === "string" && statusRes.transaction_id
           ? statusRes.transaction_id
           : undefined;
-    } catch (verifyError) {
-      orderLog.error("status re-verify failed", {
-        error: serializeError(verifyError),
-      });
+    } catch {
+      log.error(
+        `webhook: order ${orderRef} status re-verify failed`,
+        new RouteLogError("midtrans status re-verify failed")
+      );
       return NextResponse.json(
         { success: false, error: "Unable to verify transaction" },
         { status: 503 }
@@ -146,42 +168,47 @@ export async function POST(request: NextRequest) {
     );
 
     if (outcome === "finalize") {
-      // Payment success: convert reservation → real deduction, generate pickup
-      // code, move to ready_for_pickup, send email. Claim-guard makes this
-      // idempotent against the sweep cron racing this webhook.
-      orderLog.info("settlement → finalize dispatched", {
-        authoritativeStatus,
-        paymentType: paymentAttributes.paymentType,
-      });
+      // Payment success: keep Midtrans's authoritative paid status. Fulfillment
+      // (ready_for_pickup + pickup code) happens ONLY after the Sales-Order
+      // settlement (invoice → payment) is verified; ambiguity keeps the order
+      // paid but blocked and creates a manual-review case.
+      log.info(
+        `order ${order.id}: settlement → paid claim dispatched (status ${authoritativeStatus}, paymentType ${
+          paymentAttributes.paymentType ?? "unknown"
+        })`
+      );
       if (order.status === "failed_payment") {
-        const lateSettlement = await processLateSettlementStock(
-          order.id,
-          undefined,
-          orderLog,
-          paymentAttributes
-        );
-        orderLog.info("late settlement processed", lateSettlement);
+        // Late settlement: honor the confirmed-cancel rule (no new SO/invoice/
+        // payment) before running the settlement pipeline.
+        const late = await processLateSettlement(order.id, paymentAttributes);
+        log.info(`order ${order.id}: late settlement processed (outcome ${late.status})`);
+        if (late.status === "settled") {
+          await settleJubelioSalesOrder(order.id);
+        } else if (late.status === "manual_review" && late.message) {
+          await blockOrderFulfillment(order.id, late.message);
+        }
       } else {
-        await claimAndFinalizePaidOrder(
-          order.id,
-          order,
-          orderLog,
-          paymentAttributes
-        );
+        const claimed = await claimPaidOrder(order.id, paymentAttributes);
+        if (claimed.claimed) {
+          const settlement = await settleJubelioSalesOrder(order.id);
+          log.info(
+            `order ${order.id}: settlement pipeline completed (outcome ${settlement.status})`
+          );
+        }
       }
     } else if (outcome === "fail") {
       const reason =
         describeFailureReason(authoritativeStatus, authoritativeStatusMessage) ??
         "Payment failed";
-      orderLog.info("failure → fail dispatched", {
-        authoritativeStatus,
-        reason,
-      });
+      // `reason` dapat memuat `status_message` provider: hanya status yang
+      // masuk log.
+      log.info(
+        `order ${order.id}: failure → fail dispatched (status ${authoritativeStatus})`
+      );
       await claimAndFailOrder(
         order.id,
         reason,
         authoritativeStatus,
-        orderLog,
         paymentAttributes
       );
     }
@@ -189,17 +216,23 @@ export async function POST(request: NextRequest) {
     // customer to retry with another method on the same order, so the order
     // stays pending_payment until a settlement/expire webhook or the TTL sweep.
     if (outcome === "defer") {
-      orderLog.info("non-terminal status — order stays pending_payment", {
-        authoritativeStatus,
-      });
+      log.info(
+        `order ${order.id}: non-terminal status — order stays pending_payment (status ${authoritativeStatus})`
+      );
     }
 
     return NextResponse.json({ success: true });
-  } catch (error) {
-    log.error("webhook handler failed", { error: serializeError(error) });
+  } catch {
+    log.error(
+      "webhook handler failed",
+      new RouteLogError("midtrans webhook handler failed")
+    );
     return NextResponse.json(
       { success: false, error: "Webhook processing failed" },
       { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(midtransWebhook, "midtrans-webhook");

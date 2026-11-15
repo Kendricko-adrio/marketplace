@@ -46,15 +46,6 @@ x-logging: &journald-logging
     tag: "{{.Name}}"
 
 services:
-  jubelio-mock:
-    build:
-      context: ../..
-      dockerfile: deployment/common/jubelio-mock/Dockerfile
-    restart: unless-stopped
-    logging: *journald-logging
-    expose:
-      - "3002"
-
   # ---------------------------------------------------------------------------
   # STOREFRONT
   # ---------------------------------------------------------------------------
@@ -76,6 +67,11 @@ services:
       # operator diizinkan memotong stok langsung ke Jubelio live dari env ini.
       # Lihat docs/deployment-docs/jubelio-sync.md (A.1).
       APP_ENV: production
+      # Store hanya diakses lewat Caddy (port tidak dipublish). Caddy menimpa
+      # X-Real-IP/X-Forwarded-For dengan remote_host, jadi admission checkout
+      # boleh memakai IP itu; tanpa flag ini preview/place-order gagal tertutup
+      # 503 POLICY_UNAVAILABLE. Lihat docs/deployment-docs/discounts-cutover.md.
+      CHECKOUT_TRUST_PROXY: "true"
       # Better Auth (store)
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
       BETTER_AUTH_URL: "https://dev-store.adfsport.cloud"
@@ -98,13 +94,16 @@ services:
       JUBELIO_EMAIL: ${JUBELIO_EMAIL}
       JUBELIO_PASSWORD: ${JUBELIO_PASSWORD}
       JUBELIO_CHANNEL_ID: ${JUBELIO_CHANNEL_ID:-64}
+      JUBELIO_SHIPMENT_URL: ${JUBELIO_SHIPMENT_URL:-https://api-shipment.jubelio.com}
+      JUBELIO_SHIPMENT_CLIENT_ID: ${JUBELIO_SHIPMENT_CLIENT_ID:-}
+      JUBELIO_SHIPMENT_CLIENT_SECRET: ${JUBELIO_SHIPMENT_CLIENT_SECRET:-}
+      JUBELIO_SHIPMENT_WEBHOOK_SECRET: ${JUBELIO_SHIPMENT_WEBHOOK_SECRET:-}
       JUBELIO_WEBHOOK_SECRET: ${JUBELIO_WEBHOOK_SECRET}
       JUBELIO_SYNC_CONCURRENCY: ${JUBELIO_SYNC_CONCURRENCY:-5}
       JUBELIO_SYNC_MAX_PRODUCTS: ${JUBELIO_SYNC_MAX_PRODUCTS:-}
       # Stock writes — live Jubelio: operator mengizinkan write langsung dari
       # environment ini (APP_ENV=production + JUBELIO_API_BASE_URL live).
       # Gateway production menuntut NODE_ENV=production + host api2.jubelio.com.
-      JUBELIO_MOCK_API_BASE_URL: "http://jubelio-mock:3002"
       JUBELIO_STOCK_WRITES_ENABLED: "true"
       JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID: ${JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID:-}
       JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID: ${JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID:-}
@@ -127,9 +126,6 @@ services:
     # Ports are NOT published to the host — Caddy handles public ingress.
     expose:
       - "3000"
-    depends_on:
-      jubelio-mock:
-        condition: service_started
     healthcheck:
       # 127.0.0.1 (bukan `localhost`): `localhost` di container resolve ke
       # IPv6 ::1 di mana server tidak listen → healthcheck false-unhealthy.
@@ -173,6 +169,11 @@ services:
       JUBELIO_CHANNEL_ID: ${JUBELIO_CHANNEL_ID:-64}
       JUBELIO_SYNC_CONCURRENCY: ${JUBELIO_SYNC_CONCURRENCY:-5}
       JUBELIO_SYNC_MAX_PRODUCTS: ${JUBELIO_SYNC_MAX_PRODUCTS:-}
+      # Shipment packing/booking uses separate credentials, never Omnichannel.
+      JUBELIO_SHIPMENT_URL: ${JUBELIO_SHIPMENT_URL:-https://api-shipment.jubelio.com}
+      JUBELIO_SHIPMENT_CLIENT_ID: ${JUBELIO_SHIPMENT_CLIENT_ID:-}
+      JUBELIO_SHIPMENT_CLIENT_SECRET: ${JUBELIO_SHIPMENT_CLIENT_SECRET:-}
+      JUBELIO_SHIPMENT_TIMEOUT_MS: ${JUBELIO_SHIPMENT_TIMEOUT_MS:-10000}
       # Uploads — shared named volume (admin writes, store reads)
       UPLOADS_DIR: /app/uploads
       # URL the admin app uses to call the store's internal endpoints

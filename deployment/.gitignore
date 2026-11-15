@@ -3,6 +3,17 @@
 staging/.env
 production/.env
 
+# Manifest bootstrap production yang sudah terisi (non-secret, tetap lokal).
+# Template bootstrap.config.example.json tetap di-commit.
+production/bootstrap.config.json
+production/bootstrap.config.*.json
+!production/bootstrap.config.example.json
+
+# Secret bootstrap (file password Owner, dsb). Jangan pernah di-commit.
+production/secrets/
+production/*.password
+production/*.secret
+
 # Caddy persistent state (sertifikat, config) — di-mount via named volume,
 # tapi kalau ada folder lokal yang tertinggal, ignore.
 staging/caddy/data

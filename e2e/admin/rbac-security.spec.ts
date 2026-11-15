@@ -103,8 +103,8 @@ test.beforeAll(async () => {
   );
   await pool.query(
     `INSERT INTO branch_stock
-       (branch_id, product_variant_id, stock, reserved_stock, pending_remote_stock)
-     VALUES ($1, $2, 5, 0, 0)`,
+       (branch_id, product_variant_id, stock, reserved_stock, pending_remote_stock, available_stock)
+     VALUES ($1, $2, 5, 0, 0, 5)`,
     [sbyBranchId, variantId]
   );
 
@@ -501,9 +501,11 @@ test.describe("branch-aware security — all-branch HQ", () => {
         status: "aktif",
       },
     });
-    expect(create.status()).toBe(201);
-    const { data } = await create.json();
-    const createdId = data.id as string;
+    // Authorized but incomplete input is rejected before provider traffic.
+    // Verified successful creation is covered by branch-origin-mock.spec.ts.
+    expect(create.status()).toBe(400);
+    const createdId = `e2e-region-delete-${RUN}`;
+    await pool.query("INSERT INTO branch (id,name,code,city,address,status) VALUES ($1,$2,$3,'E2E City','Jl. E2E No. 1','aktif')", [createdId, `E2E Sec Branch ${RUN}`, `E2ESEC${RUN}`]);
 
     // Cleanup the created branch in a finally block.
     try {

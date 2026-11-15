@@ -11,15 +11,32 @@ import {
   count as countFn,
   type SQL,
 } from "drizzle-orm";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
-import { serializeError } from "@/lib/logger";
 import {
   trendWindowKeys,
   trendWindowStart,
   zeroFilledTrend,
   type TrendRow,
 } from "@/lib/analytics-wib";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-analytics");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/driver tidak
+ * pernah masuk log.
+ */
+class AnalyticsLogError extends Error {
+  constructor() {
+    super("analytics summary gagal");
+    this.name = "AnalyticsLogError";
+  }
+}
 
 // =========================================================
 // Revenue condition — the single source of truth for EVERY revenue aggregate
@@ -54,19 +71,17 @@ const revenueCondition: SQL = and(
 //      to_char(created_at AT TIME ZONE 'Asia/Jakarta', 'YYYY-MM-DD');
 //   3. order status counts;
 //   4. five recent orders joined with their customer.
-export async function GET(request: NextRequest) {
-  const guardResult = await guard("analytics", "view", { request });
+async function analyticsSummary(_request: NextRequest): Promise<Response> {
+  const guardResult = await guard("analytics", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const scope = branchScopeFromAuthorization(ctx.authorization);
     if (!scope) {
-      logger.warn("analytics.scope_unresolvable", {
-        outcome: "denied",
-        reason: "missing_home_branch",
-        userId: ctx.user.id,
-      });
+      log.warn(
+        `analytics.scope_unresolvable (userId ${ctx.user.id}, reason missing_home_branch, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Forbidden", code: "DENIED" },
         { status: 403 }
@@ -151,10 +166,7 @@ export async function GET(request: NextRequest) {
     const qualifyingRevenue = parseFloat(kpi?.totalRevenue ?? "0");
     const qualifyingOrderCount = Number(kpi?.revenueOrderCount ?? 0);
 
-    logger.info("analytics.summary", {
-      outcome: "success",
-      scope: scope.mode,
-    });
+    log.info(`analytics.summary (scope ${scope.mode}, outcome success)`);
     return NextResponse.json({
       success: true,
       data: {
@@ -179,14 +191,14 @@ export async function GET(request: NextRequest) {
         trend: zeroFilledTrend(trendRows as TrendRow[], trendWindowKeys(now)),
       },
     });
-  } catch (error) {
-    logger.error("analytics.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error("analytics.summary gagal (outcome error)", new AnalyticsLogError());
     return NextResponse.json(
       { success: false, error: "Failed to fetch analytics" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(analyticsSummary, "admin-analytics");

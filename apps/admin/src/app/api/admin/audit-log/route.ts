@@ -2,10 +2,27 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { auditLogs, users } from "@/db";
 import { eq, desc, or, and } from "drizzle-orm";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
 import { branchScopeFromAuthorization } from "@/lib/rbac/branch-scope";
-import { serializeError } from "@/lib/logger";
 import { parsePagination } from "@/lib/pagination";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-audit-log");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/driver tidak
+ * pernah masuk log.
+ */
+class AuditLogLogError extends Error {
+  constructor() {
+    super("audit-log list gagal");
+    this.name = "AuditLogLogError";
+  }
+}
 
 // GET /api/admin/audit-log   [audit_log:view]
 //
@@ -16,19 +33,17 @@ import { parsePagination } from "@/lib/pagination";
 //     events (branchScope "global" or unclassified legacy events) are
 //     excluded.
 //   - all scope  → branch-tagged and global events alike.
-export async function GET(request: NextRequest) {
-  const guardResult = await guard("audit_log", "view", { request });
+async function auditLogList(request: NextRequest): Promise<Response> {
+  const guardResult = await guard("audit_log", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
   try {
     const scope = branchScopeFromAuthorization(ctx.authorization);
     if (!scope) {
-      logger.warn("audit-log.scope_unresolvable", {
-        outcome: "denied",
-        reason: "missing_home_branch",
-        userId: ctx.user.id,
-      });
+      log.warn(
+        `audit-log scope tidak dapat ditentukan (userId ${ctx.user.id}, reason missing_home_branch, outcome denied)`
+      );
       return NextResponse.json(
         { success: false, error: "Forbidden", code: "DENIED" },
         { status: 403 }
@@ -77,23 +92,21 @@ export async function GET(request: NextRequest) {
       user: row.user || { name: "System", email: null },
     }));
 
-    logger.info("audit-log.list", {
-      outcome: "success",
-      count: formattedLogs.length,
-      scope: scope.mode,
-    });
+    log.info(
+      `audit-log.list (count ${formattedLogs.length}, limit ${limit}, scope ${scope.mode}, outcome success)`
+    );
     return NextResponse.json({
       success: true,
       data: formattedLogs,
     });
-  } catch (error) {
-    logger.error("audit-log.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // Nilai yang tertangkap tidak pernah masuk log: bisa memuat SQL/nilai baris.
+    log.error("audit-log.list gagal (outcome error)", new AuditLogLogError());
     return NextResponse.json(
       { success: false, error: "Failed to fetch audit log" },
       { status: 500 }
     );
   }
 }
+
+export const GET = withRequestContext(auditLogList, "admin-audit-log");

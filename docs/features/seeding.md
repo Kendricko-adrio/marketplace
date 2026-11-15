@@ -32,18 +32,45 @@ npm run db:import-jubelio
 ```
 
 The seed step creates only application-owned baseline data such as admin/client
-accounts, permissions, addresses, vouchers, homepage section configuration,
+accounts, permissions, addresses, homepage section configuration,
 static pages, footer configuration (including the dummy WhatsApp destination),
 and system configuration (including `tax.ppnRatePercent = 11`). It deliberately
 leaves the following catalog-managed tables empty for the import:
 
 - `category`, `brand`, and `gender`
 - `product`, `product_variant`, `product_to_category`, and `product_image`
-- `branch` and `branch_stock`
+- Branch toko pada `branch` serta seluruh `branch_stock`; pengecualian: branch
+  administratif lokal **HQ** tetap dibuat oleh seeder.
 
 Catalog-dependent sample orders, notifications, carts, homepage product links,
-and stock/order audit entries are also omitted. Admin users remain unassigned
-to a branch until a branch assignment is configured after import.
+and stock/order audit entries are also omitted. `hqmanager` langsung di-assign
+ke branch HQ. User `admintoko` tetap memerlukan assignment branch toko setelah
+import.
+
+## Branch administratif HQ
+
+Kedua mode seed membuat satu branch lokal dengan nama dan code `HQ`, status
+`aktif`, serta `jubelioLocationId = null`. `hqmanager` memakai HQ sebagai Home
+Branch, bukan branch toko Jakarta pada mode demo. Hak akses lintas branch tetap
+berasal dari grants role HQ, bukan assignment Home Branch.
+
+HQ tidak mendapat `branch_stock`, cart, order, atau checkout attempt demo.
+Branch ini tidak menyediakan barang untuk transaksi; tidak ada stok maupun
+mapping lokasi Jubelio untuk fulfillment. Ini bukan pembatasan baru pada schema
+atau larangan global mengubah data HQ di kemudian hari. Kota memakai placeholder
+`Belum dikonfigurasi`, tanpa mengarang alamat operasional atau origin pengiriman.
+
+Contoh: sesudah seed mode Jubelio lalu import, `hqmanager` tetap berada di HQ,
+sedangkan stok produk tetap melekat pada branch toko hasil import Jubelio.
+
+Pengujian fixture ada di `packages/db/src/seed-hq.test.ts`; assertion hasil seed
+(assignment dan ketiadaan stok/transaksi HQ) ada di
+`packages/db/src/rbac/seed-roles-integration.test.ts`. Test integrasi memerlukan
+DB disposable yang sudah di-reset dan di-seed sesuai mode yang ingin diverifikasi.
+
+Context7 checkpoint: `/drizzle-team/drizzle-orm-docs` — pola insert `.values()`
+dan update `.set().where(eq(...))` dikonfirmasi; `/vitest-dev/vitest` — assertion
+`toMatchObject` dikonfirmasi. Tidak ada perubahan schema atau UI.
 
 ## Destructive behavior
 
@@ -75,3 +102,70 @@ full-access/all-branch bypass is owned by the policy code.
 
 Cleanup order respects the FKs: grants are deleted before Roles, and Roles
 after users (`users.role_id` is `ON DELETE RESTRICT`).
+
+## Demo Coupon dan Redemption (ticket 07)
+
+`SEED_MODE=demo` membuat satu Offer publik **enabled** (fixed goods Rp25.000,
+kuota 50, budget Rp1.000.000, per-account 1) dengan revision published/benefit,
+plus tiga snapshot Redemption yang konsisten dengan counter:
+
+- order `completed`/paid → Redemption `consumed` (dihitung);
+- order `pending_payment` → Redemption `reserved` (dihitung);
+- order `failed_payment`/failed → Redemption `released` (tidak dihitung,
+  retained sebagai evidence).
+
+Global usage `reserved1/consumed1` (amount Rp25.000 masing-masing), client usage
+untuk `john@example.com` sama, dan satu allocation `offer_goods` per order.
+Seed juga membuat satu Offer `manual_only` "Kode Manual Demo Rp25.000" dengan
+dua kode canonical (`HEMAT17AGUSTUS` aktif, `PROMO2026OFF` nonaktif) dan satu
+Redemption `consumed` yang menyebut `code_id` kode aktif. Kode nonaktif tetap
+reserved untuk menunjukkan literal/owner tidak pernah dipindah. Sejak ticket 10
+seed juga membuat satu Offer publik enabled **percentage goods** "Diskon Demo
+10% (maks Rp20.000)" (`rate 10.000000`, `cap_amount 20000`, kuota 50, budget
+Rp1.000.000, per-account 1, usage nol) sebagai fixture picker/simulasi.
+`discounts.contractVersion` tetap `0` pada seed, jadi data ini adalah demo,
+bukan rollout aktif. Seeder `SEED_MODE=jubelio` tetap tidak membuat katalog/transaksi
+dummy. Cleanup FK-ordered menghapus events → allocations → Redemptions →
+client usage sebelum orders/Offer.
+
+## Demo batch Markdown bulk dan workbook (ticket 04–05)
+
+`SEED_MODE=demo` juga membuat dua batch harga yang **belum di-apply** agar layar
+`/admin/products/harga` punya data review nyata tanpa mengubah harga:
+
+- satu batch `bulk` `staged` berisi 3 row `pending` (`SS-WHT-41`, `SS-BLK-41`,
+  `OX-BLK-41`) dengan preview non-otoritatif;
+- satu batch `xlsx` `staged` berisi 2 row `pending` (`SS-WHT-41` target
+  `820000`, `CS-NVY-40` `restore_base`) dengan identitas internal workbook v1
+  existing. Marker pada file workbook baru adalah `markdown_v1`; identitas
+  internal batch seed/histori tidak diganti.
+
+Keduanya tidak menulis revision/current pointer dan tidak mengubah
+`product_variant.price`. Cleanup FK-ordered melepas `origin_retry_row_id` lebih
+dulu (self-FK), lalu menghapus ledger apply-request → batch rows → current
+pointer → revisions → batch; reset tidak lagi memalsukan state `pending` pada
+row yang gagal parse.
+
+
+## Demo state editor terpadu
+
+`SEED_MODE=demo` juga membuat tiga Offer fixture untuk editor terpadu, semua
+memakai snapshot `draft_configuration` seperti UI:
+
+- **Draft Demo Belum Lengkap** — Offer `draft` dengan snapshot hanya berisi nama;
+- **Promo Demo Dengan Draft Baru** — Offer `enabled` dengan revision live dan
+draft berbeda, sehingga daftar/editor menampilkan badge **Ada draft**;
+- **Promo Demo Dijeda** — Offer `paused` dengan draft tersimpan.
+
+Offer lain (kupon publik, kode manual, persentase, subsidi ongkir) tetap ada.
+`discounts.contractVersion` tetap `0`; fixture ini hanya untuk melihat state
+editor, bukan aktivasi rollout.
+
+## Demo subsidi ongkir (ticket 11)
+
+Seed demo menambahkan satu Offer publik `Subsidi Ongkir Demo Rp20.000` (cap
+20000) dan satu Offer `manual_only` `Kode Subsidi Ongkir Demo Rp15.000` dengan
+kode canonical aktif `ONGKIRHEMAT`. Keduanya memakai benefit `kind='shipping'`,
+`scope='shipping'`, `cap_amount` positif, kuota/budget/per-account aktif, dan
+usage nol pada seed fresh. Baris demo ini hanya untuk picker/simulasi lokal;
+`discounts.contractVersion` tetap `0` sampai rollout berizin.

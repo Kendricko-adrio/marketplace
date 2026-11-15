@@ -3,6 +3,8 @@ import Image from "next/image";
 import { ShoppingCart } from "lucide-react";
 import { Card, CardContent } from "../ui/card";
 import { Badge } from "../ui/badge";
+import { StatusBadge } from "../ui/status-badge";
+import { getStatusTone } from "../../lib/status-presentation";
 
 interface ProductCardProps {
   /** Product slug — used for the detail-page link (never the raw id, which is
@@ -18,6 +20,8 @@ interface ProductCardProps {
   /** True when the product has no sellable stock in any branch — the card is
    *  greyed out and the detail link is disabled. */
   outOfStock?: boolean;
+  /** Last-known stock is zero; the product remains selectable until live check. */
+  stockUnconfirmed?: boolean;
 }
 
 export default function ProductCard({
@@ -30,6 +34,7 @@ export default function ProductCard({
   gender,
   collection,
   outOfStock,
+  stockUnconfirmed,
 }: ProductCardProps) {
   const discount = originalPrice
     ? Math.round(((originalPrice - price) / originalPrice) * 100)
@@ -56,9 +61,20 @@ export default function ProductCard({
         </Badge>
       )}
       {outOfStock && (
-        <Badge className="absolute top-2 left-2 bg-muted text-muted-foreground">
-          Stok Habis
-        </Badge>
+        <StatusBadge
+          tone={getStatusTone("stock-visibility", "unavailable")}
+          className="absolute top-2 left-2"
+        >
+          Stok Belum Tersedia
+        </StatusBadge>
+      )}
+      {stockUnconfirmed && !outOfStock && (
+        <StatusBadge
+          tone={getStatusTone("stock-visibility", "unconfirmed")}
+          className="absolute top-2 left-2"
+        >
+          Cek stok saat bayar
+        </StatusBadge>
       )}
     </>
   );

@@ -30,7 +30,7 @@ surfaces: the storefront product list and the admin homepage editor.
   import / webhook (upserted by slug from the supplier master data). There is no
   admin brand management page — the dimension list is owned by the supplier
   sync, matching the push-managed replica design (see
-  [jubelio-sync.md](./jubelio-sync.md)).
+  [jubelio-sync.md](jubelio-sync.md)).
 - **Easy wins exposed**: a sort dropdown (Terbaru / Harga Termurah / Harga
   Termahal) and a "Hanya produk diskon" (`hasDiscount`) toggle — both were
   already supported by `/api/products` but hidden from the UI.

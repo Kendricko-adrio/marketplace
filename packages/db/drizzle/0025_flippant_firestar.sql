@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "jubelio_channel_status_intent_active_per_so_unique" ON "jubelio_channel_status_intent" USING btree ("sales_order_id") WHERE "jubelio_channel_status_intent"."status" = 'possibly_sent';

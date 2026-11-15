@@ -13,7 +13,7 @@ how the marketplace syncs from Jubelio, replacing the older CSV-based SOH sync
 | `item_group` (`item_group_id`, `item_group_name`, `sell_price`, `description`, `selected_brand_name`, `thumbnail`, `images[]`) | `product` | `jubelio_item_group_id` (unique) | `base_price` = group `sell_price`; `thumbnail` = card image; `images` JSONB = gallery from `/inventory/catalog/{id}` |
 | `item` / sku (`item_id`, `item_code`, `sell_price`, `barcode`, `variation_values`) | `product_variant` | `jubelio_item_id` (unique) | `sku` = `item_code` (GTIN); `price` = variant `sell_price`; `size`/`color` from `variation_values` (`Ukuran`→size, `Warna`→color) |
 | `location` (`location_id`, `location_code`, `location_name`, `is_active`) | `branch` | `jubelio_location_id` (unique) | Source: `GET /locations/list` (NOT `/locations/`, which returns only the webstore). `code` = `location_code`; `status` mirrors `is_active`. **This is the branch** — not the channel. |
-| stock: `(item_id, location_id)` `on_hand`/`available` | `branch_stock` | composite `(branchId, productVariantId)` | `stock` = `on_hand`. Catalog sync never writes checkout counters (`reservedStock`, `pendingRemoteStock`). |
+| stock: `(item_id, location_id)` `on_hand`/`on_order`/`reserved`/`available` | `branch_stock` | composite `(branchId, productVariantId)` | `stock` = `on_hand`; `onOrderStock` = `on_order`; `providerReservedStock` = `reserved`; `availableStock` = `available`; `providerStockSyncedAt` = actual provider observation write time; browse stock is provisional, while place-order requires a fresh live provider read. Catalog sync never writes checkout counters (`pendingRemoteStock`) nor the legacy `reservedStock`. |
 | `category` (`category_id`, `category_name`) | `category` | `jubelio_category_id` (unique) | Created **on demand** — only categories used by synced products (see decision 8). Upserted by slug (merges with CSV-SOH categories). |
 | `selected_brand_name` | `brand` | `slug` | Upserted by slug per product (create if new, link if existing). |
 
@@ -25,7 +25,7 @@ locations are imported, including staging and webstore locations.
 
 ## Architecture (mirrors SOH sync)
 
-Three entry points share `packages/db/src/jubelio-sync.ts`:
+Four entry points share the Jubelio stock read client (`packages/db/src/jubelio-sync.ts`):
 
 1. **One-shot pull** — `npm run db:import-jubelio`
    (`packages/db/src/import-jubelio.ts`). Paginates `/inventory/items/masters`,
@@ -41,6 +41,21 @@ Three entry points share `packages/db/src/jubelio-sync.ts`:
    (`apps/admin/src/app/api/admin/products/[id]/sync/route.ts`), triggered by
    the "Sync dari Jubelio" button on the admin product detail page. Calls
    `syncOneProduct(db, item_group_id)`.
+4. **Recurring stock-only scan** — `POST /api/cron/refresh-jubelio-stock`
+   (`packages/db/src/jubelio-stock-refresh.ts`) runs with `CRON_SECRET`
+   daily as a reconciliation safety net. It reads mapped item/location pairs in bounded,
+   resumable keyset pages, only applying complete provider stock observations
+   to existing rows. It does not import catalog or change local SO holds.
+   See [deployment instructions](../deployment-docs/jubelio-sync.md).
+
+The importer writes `on_hand`, `on_order`, `reserved`, and `available` into
+`branch_stock.stock`, `on_order_stock`, `provider_reserved_stock`, and
+`available_stock` on both first insert and subsequent conflict updates. It
+preserves local `pending_remote_stock` and legacy `reserved_stock`. To verify
+this mapping against PostgreSQL without contacting Jubelio, run
+`npm exec --workspace=packages/db -- vitest run src/jubelio-sync.db.test.ts`;
+the fixture is rolled back after the test. Ensure the local schema is current
+(`npm run db:push` in development) before running it.
 
 ## Importing one product by exact name
 
@@ -63,23 +78,48 @@ stock are imported in the same way as a full pull. This mode reads from the
 configured `JUBELIO_API_BASE_URL`; it does not perform checkout stock
 adjustments.
 
-## Checkout stock adjustments
+## Checkout Sales Orders
 
-Checkout writes use a separate gateway in
-`apps/store/src/lib/jubelio-stock-client.ts`:
+Checkout memakai `apps/store/src/lib/jubelio-sales-client.ts`, bukan inventory
+adjustment. Provider `available` dikurangi pending hold lokal secara konservatif.
+Produk dan cart menampilkan snapshot terakhir; storefront menyembunyikan produk,
+varian, dan cabang habis serta membatasi quantity cart berdasarkan snapshot itu.
+Place-order tetap membaca pasangan item/location langsung dari Jubelio, menolak
+observasi hilang/inkonsisten/tidak terjangkau, lalu memperoleh atomic hold atas
+`available - pendingRemoteStock` sebelum membuat Sales Order. Daily stock-only
+scan memperbaiki gap webhook tanpa mengirim adjustment atau Sales Order; scan
+bukan fallback checkout ketika provider tidak tersedia. Lihat
+[Sales Orders](jubelio-sales-orders.md) dan [stock reservation](stock-reservation.md).
 
-- `POST /inventory/adjustments/` with negative `qty_in_base` reserves stock.
-- The same endpoint with positive `qty_in_base` compensates a failed or
-  expired payment.
-- `GET /inventory/items/to-stock/{location_id}` supplies unit/cost metadata.
-- `GET /wms/default-bin/{location_id}` supplies `bin_id`.
-- `POST /inventory/items/all-stocks/` confirms absolute on-hand after a write.
-- `GET /inventory/adjustments/` is searched by the unique operation note after
-  ambiguous timeouts.
+## Visibilitas stok storefront dan batas keranjang
 
-The marketplace does not retry an ambiguous POST blindly. Durable operation
-state and the unique note make crash recovery and reconciliation fail-closed.
-See `docs/features/stock-reservation.md`.
+- Stok tersedia = `max(0, COALESCE(availableStock, 0) - pendingRemoteStock)`.
+  Jangan kurangi lagi `on_order`, provider reserved, atau legacy `reservedStock`.
+  Snapshot belum diketahui (`NULL`) tidak membuka pembelian.
+- Katalog/search dan carousel homepage (manual maupun filter) hanya menampilkan
+  produk dengan minimal satu varian tersedia pada cabang aktif dan mapped.
+  Filter berlaku sebelum count/pagination/limit, bukan sesudah hasil diambil.
+- Harga kartu, filter harga/Markdown dan sort memakai varian yang tersedia;
+  jika filter cabang dipakai, varian sumber harga harus tersedia di cabang itu.
+- Detail menyembunyikan varian dan cabang kosong. Ukuran mengikuti warna
+  terpilih, sehingga kombinasi tidak tersedia tidak ditawarkan. Pergantian
+  varian mereset cabang, quantity, dan gambar terpilih.
+- URL langsung produk habis tetap menampilkan informasi produk dengan label
+  **Stok habis**, tanpa opsi varian/cabang dan tanpa pembelian.
+- API tambah/update cart membatasi quantity akhir terhadap stok tersedia.
+  Penambahan ulang memperhitungkan quantity yang sudah di cart; conditional
+  upsert dan lock row stok menjaga request konkuren. Cart bukan reservasi.
+- Item lama yang stoknya kemudian habis tidak dihapus otomatis. Tombol tambah
+  quantity dinonaktifkan; validasi Jubelio live saat place-order tetap wajib.
+
+Contoh: Red/M memiliki `availableStock=3` dan `pendingRemoteStock=1`,
+jadi batasnya 2. Jika cart sudah berisi 1, penambahan 2 ditolak. Red/S dengan
+stok 0 tidak muncul; Blue/L tetap ditawarkan jika cabang lain memiliki stok.
+Produk muncul kembali setelah sync mencatat stok tersedia positif.
+
+Regression: [stock-visibility mock E2E](../../e2e/store/stock-visibility-mock.spec.ts)
+memverifikasi HTTP dan browser dengan stok 0, snapshot null, pending hold,
+quantity konkuren, filter cabang/harga, pagination, carousel, dan item cart lama.
 
 ## Auth
 
@@ -138,7 +178,6 @@ the token and auto re-logins on 401. Env: `JUBELIO_EMAIL`, `JUBELIO_PASSWORD`,
 | `JUBELIO_SYNC_MAX_PRODUCTS` | cap products synced (empty = all) | empty |
 | `JUBELIO_SYNC_START_PAGE` | masters page to start/resume from | `1` |
 | `APP_ENV` | safety boundary for stock writes (`production` is the only live value) | `NODE_ENV` |
-| `JUBELIO_MOCK_API_BASE_URL` | stateful mock used by every non-production environment | `http://127.0.0.1:3002` |
 | `JUBELIO_STOCK_WRITES_ENABLED` | explicit production live-write kill switch | `false` |
 | `JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID` / `JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID` | Optional emergency overrides; normally resolved from Jubelio account mapping | empty |
 | `JUBELIO_STOCK_TIMEOUT_MS` | HTTP timeout; a POST timeout is treated as ambiguous | `8000` |

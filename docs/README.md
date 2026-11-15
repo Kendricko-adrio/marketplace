@@ -17,6 +17,10 @@ which category it belongs to, then place it in the matching folder:
 | `docs/<vendor>-api/` | **Third-party API** references the project uses (OpenAPI spec + explaining README), e.g. `docs/jubelio-api/`. |
 | `docs/architecture/` | **Internal codebase reference**: structure, DB, auth, middleware (index: `docs/architecture/README.md`). |
 
+Production first deployment dimulai dari
+[`deployment-docs/first-production-deployment.md`](deployment-docs/first-production-deployment.md)
+(preflight → migrate → seed referensi → Owner → full import → verifier).
+
 ## Deciding the Folder (agent-authorized)
 
 - **Our own API endpoint** (new or changed route) → `docs/api-reference.md`,
@@ -42,6 +46,18 @@ Before placing a doc, check the live folder structure with `ls docs/` (do not
 rely on memory) and update `docs/features/` / `docs/deployment-docs/`
 index/README if any of them mention a file that moved.
 
+### Dokumen kerja vs. dokumentasi permanen
+
+Research, proposal/spec/plan, wayfinding, dan implementation tickets berada di
+`.scratch/<feature>/{research,plan,wayfinder,ticket}/`, dengan navigasi dan status
+plan pada `index.md` per fitur. Lihat [panduan artefak](../.scratch/README.md).
+Tidak ada register status global. Plan Done tetap disimpan bersama evidence.
+
+`docs/` hanya menyimpan dokumentasi permanen: rangkum desain, invariant, flow,
+API, dan operasional yang sudah diverifikasi ke tujuan yang sesuai di atas.
+Jangan menyimpan draft research/plan/ticket baru di `docs/` atau `.agents/`.
+ADRs dan referensi arsitektur permanen tetap berada di `docs/`.
+
 ## Rules
 
 - **Keep `docs/api-reference.md` fresh**: every new/changed endpoint is
@@ -56,8 +72,26 @@ index/README if any of them mention a file that moved.
 | Area | Where to start |
 |---|---|
 | API reference (our endpoints) | `docs/api-reference.md` |
-| Features | `docs/features/` (e.g. `stock-reservation.md`, `jubelio-sync.md`) |
+| Features | `docs/features/` (e.g. `stock-reservation.md`, `jubelio-sync.md`, `jubelio-sales-orders.md`) |
 | Deployment / ops | `docs/deployment-docs/README.md` |
 | Third-party APIs | `docs/jubelio-api/README.md` |
 | Internal architecture | `docs/architecture/README.md` |
 | Testing | `docs/testing/README.md` |
+| Agent tooling (MCP servers, Context7) | `docs/agents/mcp-tooling.md` |
+| Domain docs (glossary, ADR, cara mengonsumsinya) | [`docs/agents/domain.md`](agents/domain.md) |
+| Home delivery lifecycle | [`docs/features/home-delivery.md`](features/home-delivery.md) |
+| Delivery follow-up | [`docs/features/delivery-follow-up.md`](features/delivery-follow-up.md) |
+| Komunikasi order (status, notifikasi admin, email + retry) | [`docs/features/order-communications.md`](features/order-communications.md) |
+| Delivery handoff and tracking | [`docs/features/delivery-tracking.md`](features/delivery-tracking.md) |
+| Delivery packing and booking | [`docs/features/delivery-fulfillment.md`](features/delivery-fulfillment.md) |
+| Guided admin delivery workflow | [`docs/features/admin-delivery-workflow.md`](features/admin-delivery-workflow.md) |
+| Delivery orders and settlement | [`docs/features/delivery-orders.md`](features/delivery-orders.md) |
+| Delivery checkout quotes | [`docs/features/delivery-quotes.md`](features/delivery-quotes.md) |
+| Versioned checkout pricing (money snapshot, PPN goods-only, provider payable) | [`docs/features/versioned-checkout-pricing.md`](features/versioned-checkout-pricing.md) |
+| Administrasi Offer diskon; fondasi service draft terpadu tersedia, cutover endpoint/UI belum selesai | [`docs/features/discount-administration.md`](features/discount-administration.md) |
+| Promo checkout pickup/delivery (kode promo, kupon, review pembayaran, subsidi ongkir, lifecycle Redemption) | [`docs/features/discount-redemption.md`](features/discount-redemption.md) |
+| Manual Markdown price changes (per-SKU target, projection, apply/history, provider whole-line discount) | [`docs/features/markdown-pricing.md`](features/markdown-pricing.md) |
+| Direktori Customer admin (pagination, pencarian, summary global) | [`docs/features/admin-customers.md`](features/admin-customers.md) |
+| Mandatory verified branch Shipment regions | [`docs/features/branch-shipping-regions.md`](features/branch-shipping-regions.md) |
+| Client address book, branch shipping origin and parcel master | [`docs/features/client-addresses.md`](features/client-addresses.md) |
+| Warna status semantik store & admin (token, resolver domain, `StatusBadge`, aggregate import/bulk) | [`docs/features/status-colors.md`](features/status-colors.md) |

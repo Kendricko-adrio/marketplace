@@ -13,13 +13,31 @@ const labelVariants = cva(
 const Label = React.forwardRef<
   React.ElementRef<typeof LabelPrimitive.Root>,
   React.ComponentPropsWithoutRef<typeof LabelPrimitive.Root> &
-    VariantProps<typeof labelVariants>
->(({ className, ...props }, ref) => (
+    VariantProps<typeof labelVariants> & {
+      /**
+       * Menampilkan penanda bintang untuk field wajib.
+       *
+       * Ini hanya penanda visual: kontrak "wajib" tetap diumumkan oleh
+       * atribut `required` (atau `aria-required`) pada kontrolnya, sehingga
+       * pembaca layar tidak perlu melafalkan bintang. Warna bintang sengaja
+       * mengikuti warna label (bukan `--destructive` yang hanya ~3.8:1) agar
+       * penanda tetap memenuhi kontras teks WCAG AA.
+       */
+      required?: boolean
+    }
+>(({ className, required, children, ...props }, ref) => (
   <LabelPrimitive.Root
     ref={ref}
     className={cn(labelVariants(), className)}
     {...props}
-  />
+  >
+    {children}
+    {required ? (
+      <span aria-hidden="true" className="ml-0.5">
+        *
+      </span>
+    ) : null}
+  </LabelPrimitive.Root>
 ))
 Label.displayName = LabelPrimitive.Root.displayName
 

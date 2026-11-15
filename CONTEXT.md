@@ -1,6 +1,6 @@
 # Marketplace Administration Context
 
-The language used for staff identity, authorization, and branch-bounded administration in the marketplace back office.
+The language used for staff identity, authorization, branch-bounded administration, and product pricing/promotion administration in the marketplace back office.
 
 ## Language
 
@@ -139,3 +139,69 @@ _Avoid_: remote HQ pickup, all-branch pickup override
 **Edit Action**:
 The Action that permits modifying data and, where scope can authorize a new target, creating data in a Module. Creating a branch is an explicit all-branch operation.
 _Avoid_: update-only permission
+
+### Alamat Pengiriman Customer
+
+**Draft Alamat**:
+Calon alamat pengiriman yang belum dikonfirmasi customer dan belum menjadi bagian dari Buku Alamat.
+_Avoid_: alamat tersimpan, alamat yang sudah dibuat
+
+**Alamat Tersimpan**:
+Alamat penerima dalam Buku Alamat milik customer yang tetap tersedia terlepas dari apakah checkout dilanjutkan atau order terbentuk.
+_Avoid_: draft alamat, alamat milik order
+
+**Alamat Utama**:
+Alamat Tersimpan yang menjadi pilihan awal tujuan pengiriman customer pada checkout berikutnya. Status utama merupakan pilihan customer, bukan konsekuensi otomatis dari menambahkan alamat baru.
+_Avoid_: alamat terbaru, alamat wajib untuk semua order
+
+### Pemenuhan Order Delivery
+
+**Order Selesai**:
+Order yang penanganannya telah berakhir, termasuk delivery yang ditutup secara manual. Status ini sendiri bukan bukti barang telah diterima customer.
+_Avoid_: selalu berarti barang sudah sampai
+
+**Delivery Siap Diproses**:
+Order delivery yang pembayaran customer, invoice Jubelio, dan pembayaran Jubelio sudah terverifikasi sehingga dapat disiapkan untuk pengiriman. Belum berarti barang telah diserahkan kepada kurir.
+_Avoid_: barang sudah dikirim, barang sudah sampai
+
+**Delivery Mulai Diantar**:
+Tahap ketika petugas mencatat penyerahan barang kepada kurir atau kurir mengonfirmasi barang sudah dibawa, mana yang lebih dahulu. Pembuatan resi saja bukan bukti barang mulai diantar.
+_Avoid_: resi terbit, booking berhasil
+
+**Delivery Sudah Sampai**:
+Tahap ketika kurir mengonfirmasi barang telah diterima. Penutupan order secara manual bukan bukti bahwa barang sudah sampai.
+_Avoid_: order ditutup manual, barang diserahkan ke kurir
+
+### Product Pricing and Promotions
+
+**Base Price**:
+The undiscounted selling price of a product variant supplied by Jubelio, against which a website Markdown is measured.
+_Avoid_: cost price, cheapest product price
+
+**Markdown**:
+A website-managed fixed selling-price reduction of a product variant for all branches, including clearance of older or slow-moving stock. It is a product price adjustment rather than an inherently time-bound campaign; a percentage input calculates the confirmed fixed price, not a continuing percentage rule.
+_Avoid_: mandatory sale campaign, stock adjustment
+
+**Offer**:
+Identitas promo yang memiliki ketentuan benefit dan jatah pemakaian bersama. Pergantian nama, revisi ketentuan, atau penambahan kode tidak menjadikannya promo baru dan tidak mereset riwayat pemakaian.
+_Avoid_: kode sebagai identitas promo, Markdown
+
+**Offer Revision**:
+Versi ketentuan suatu Offer yang menjadi acuan ketika order dibuat. Perubahan ketentuan berikutnya tidak mengubah benefit yang telah disepakati pada order tersebut.
+_Avoid_: promo baru, hitung ulang order lama
+
+**Redemption**:
+Catatan pemakaian satu Offer pada satu order, termasuk kode bila dipakai, ketentuan yang berlaku, nilai benefit, dan status pemakaiannya. Satu order memiliki paling banyak satu Redemption kupon/kode; Markdown bukan Redemption.
+_Avoid_: prior claim, slot promo tambahan
+
+**Promo Reservation**:
+Penahanan kuota, budget, dan jatah akun untuk benefit aktual saat order dibuat. Penahanan menjadi pemakaian final setelah paid terverifikasi atau dilepas ketika order unpaid berakhir secara pasti dan aman.
+_Avoid_: pemakaian final saat preview, release otomatis karena timeout
+
+**Coupon**:
+Offer yang ditemukan dan dipilih langsung oleh customer tanpa prior claim untuk mengurangi nilai barang atau ongkir. Pada fase awal, Coupon barang bersifat general untuk seluruh barang order dengan harga setelah Markdown, tanpa targeting produk/kategori/brand; satu order dapat menggabungkan Markdown dengan maksimal satu Coupon atau Manual Promo Code untuk barang maupun ongkir.
+_Avoid_: additional coupon slot, permanent product price
+
+**Manual Promo Code**:
+Offer yang diaktifkan dengan memasukkan kode, bukan memilih Coupon yang ditampilkan. Manual Promo Code berbagi satu slot order dengan Coupon; pada fase awal, benefit barang berlaku general untuk seluruh barang order dengan harga setelah Markdown, tanpa targeting produk/kategori/brand, tetapi persyaratan offer lainnya tetap berlaku.
+_Avoid_: separate stacking slot, proof of customer identity

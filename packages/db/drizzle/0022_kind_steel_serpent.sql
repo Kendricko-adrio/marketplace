@@ -1,0 +1,2 @@
+ALTER TABLE "branch_stock" ADD COLUMN "provider_stock_synced_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "jubelio_sales_operation" ADD COLUMN "hold_accounted_at" timestamp with time zone;

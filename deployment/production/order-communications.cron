@@ -1,0 +1,11 @@
+# Jadwal cron PRODUCTION untuk komunikasi order (spec penyelarasan status,
+# notifikasi, dan email). Berkas ini HANYA contoh konfigurasi — tidak ada
+# pemasangan cron, akses remote, atau deployment yang dilakukan agent.
+#
+# Prasyarat: migration (order_communication_event, order_email_job,
+# orders.order_communication_version) sudah diterapkan, SMTP terkonfigurasi, dan
+# CRON_SECRET production tersedia di file env.
+#
+# Setiap menit; wrapper menambahkan log harian + housekeeping
+# (retensi default 7 hari) di direktori log production.
+* * * * * /home/ops/marketplace/deployment/common/cron/process-order-communications.sh --url https://store.adfsport.cloud --env-file /home/ops/marketplace/deployment/production/.env --log-dir /home/ops/logs/marketplace-order-comms/production

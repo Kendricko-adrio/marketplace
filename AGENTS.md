@@ -2,7 +2,7 @@
 
 ## 1. Project Overview & Architecture
 
-**Okcir marketplace** is an e-commerce monorepo: a storefront for customers, an
+**Marketplace** is an e-commerce monorepo: a storefront for customers, an
 admin dashboard for operations, and a shared database package, managed with npm
 workspaces. Products, stock, and branch data are synced from **Jubelio**
 (master-data API, see `docs/features/jubelio-sync.md`).
@@ -12,6 +12,7 @@ workspaces. Products, stock, and branch data are synced from **Jubelio**
 | `apps/store` | Storefront (customers) — http://localhost:3000 |
 | `apps/admin` | Admin dashboard (ops) — http://localhost:3001 |
 | `packages/db` | 🏛️ Shared schema owner (`@marketplace/db`) |
+| `.scratch/<feature>/` | Workflow artifacts: research, plans, wayfinding, tickets + per-feature `index.md` |
 
 **Stack:** Next.js 16 (App Router) · PostgreSQL 16 + Drizzle ORM · Better Auth
 (two instances) · TypeScript · Tailwind + shadcn/ui.
@@ -19,18 +20,15 @@ workspaces. Products, stock, and branch data are synced from **Jubelio**
 **Architecture facts you must know (deep-dives linked):**
 
 - **Schema lives ONLY in `packages/db/src/schema/`.** Apps are read-only
-  consumers via the `@marketplace/db` alias (no rebuild needed).
-  → [`docs/architecture/database.md`](docs/architecture/database.md)
-- **Two independent Better Auth instances** — store (`clients` table,
-  `client.*` cookies) and admin (`users` table, `admin.*` cookies). Never
-  interchangeable. → [`docs/architecture/auth.md`](docs/architecture/auth.md)
+  consumers via the `@marketplace/db` alias. → [`docs/architecture/database.md`](docs/architecture/database.md)
+- **Two independent Better Auth instances** — store (`clients`, `client.*`
+  cookies) vs admin (`users`, `admin.*`). → [`docs/architecture/auth.md`](docs/architecture/auth.md)
 - **Route protection is per-app middleware** (store: cart/checkout/account +
   onboarding gate; admin: `/admin/*`). → [`docs/architecture/middleware.md`](docs/architecture/middleware.md)
 - Each app has its own local `db` instance; the shared package's `db` is for
   scripts only. → [`docs/architecture/overview.md`](docs/architecture/overview.md)
 
-More context: [`README.md`](README.md) (project overview) and
-[`docs/README.md`](docs/README.md) (docs index).
+**More context:** [`README.md`](README.md) · [`docs/README.md`](docs/README.md).
 
 ## 2. Build, Test, & Run Commands
 
@@ -64,16 +62,15 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 | `test:e2e:ui` | Playwright UI mode (interactive browser runner) |
 | `test:e2e:install` | Install Playwright browsers (Chromium) |
 
-> **Testing prerequisites:** `test:unit` needs no infrastructure. `test:e2e`
-> needs Postgres up + seeded (`npm run db:push && npm run db:seed`), Chromium
-> installed (`npm run test:e2e:install`), and starts both dev servers via
-> `webServer` (reuses running ones). See [`docs/testing/README.md`](docs/testing/README.md).
+> **Testing prerequisites:** `test:unit` needs no infrastructure; `test:e2e`
+> needs Postgres up + seeded, Chromium installed (`test:e2e:install`), and
+> auto-starts both dev servers. See [`docs/testing/README.md`](docs/testing/README.md).
 
 > ⚠️ **Use `db:push`, NOT `db:migrate`** (dev). The dev DB is schema-sync
 > managed; the `__drizzle_migrations` journal is not kept in sync, so
 > `db:migrate` replays old `CREATE TABLE`s and fails with `relation already
-> exists`. Treat the generated SQL in `packages/db/drizzle/` as the audit
-> record. (Deployment containers do run `drizzle-kit migrate` — see
+> exists`. Generated SQL in `packages/db/drizzle/` is the audit record — never
+> hand-edit or delete it. (Deployment containers run `drizzle-kit migrate` — see
 > `docs/deployment-docs/`.)
 
 ## 3. Coding Style & Conventions
@@ -87,79 +84,400 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 - **Path aliases:** `@/*` → `src/*`; `@marketplace/db` → `packages/db/src`
   (details: [`docs/architecture/overview.md`](docs/architecture/overview.md)).
 - **Every timestamp column uses `timestamptz`** (`withTimezone: true`) — never
-  bare `timestamp`. Send `Date` objects on insert.
-  (Details: [`docs/architecture/database.md`](docs/architecture/database.md).)
-- **Logging is mandatory for backend logic** — every change to an API route
-  or backend logic under `/api/**` must log through the app's structured
-  logger (`apps/store/src/lib/logger.ts` / `apps/admin/src/lib/logger.ts`):
-  at minimum an `info` on success and an `error` with context on failure, so
-  the order lifecycle stays auditable. Details:
-  [`docs/features/logging.md`](docs/features/logging.md).
-- **Docs are mandatory** — every new/changed endpoint and feature needs a doc
-  entry. Folder rules: [`docs/README.md`](docs/README.md).
-- Write AGENTS.md and code-facing docs in **English**.
+  bare `timestamp`; send `Date` objects on insert. (Details:
+  [`docs/architecture/database.md`](docs/architecture/database.md).)
+- **Backend structure and logging follow the `maintainable-code` skill** —
+  feature-first `route.ts` → `*-service.ts` → `*-repository.ts` / `*-client.ts`,
+  one service per business operation, no query inside `route.ts`, and
+  module-scoped loggers that are never passed as parameters. Read
+  [`.agents/skills/maintainable-code/SKILL.md`](.agents/skills/maintainable-code/SKILL.md)
+  and [`docs/architecture/code-organization.md`](docs/architecture/code-organization.md)
+  before writing or restructuring backend code.
+- **Logging is mandatory for backend logic** — every change to `/api/**` code
+  must log through the app's structured logger (`apps/store/src/lib/logger.ts`
+  / `apps/admin/src/lib/logger.ts`): minimum `info` on success, `error` with
+  context on failure. Details: [`docs/features/logging.md`](docs/features/logging.md).
+- Keep AGENTS.md in **English**. For generated documents, follow the
+  **Indonesian documentation policy** in section 6.
+- **Bahasa dokumentasi:** seluruh dokumen project yang dibuat atau di-generate
+  harus menggunakan **bahasa Indonesia**, termasuk AGENTS.md, research notes,
+  plans, spesifikasi, decision/implementation tickets, wayfinder maps, ADRs,
+  READMEs, dan dokumentasi teknis untuk code. Gunakan bahasa Indonesia untuk
+  judul, headings, dan isi; pertahankan English technical/product terms yang
+  familiar jika lebih jelas. Jangan menerjemahkan code identifiers, paths,
+  commands, URLs, metadata tracker yang machine-readable, atau kutipan sumber
+  verbatim. Aturan ini menggantikan default bahasa pada skills/templates,
+  kecuali pengguna secara eksplisit meminta bahasa lain. Dokumen existing
+  tidak perlu diterjemahkan massal kecuali diminta.
 
 ## 4. Agent Constraints & Boundaries
 
-- **Schema edits ONLY in `packages/db/src/schema/`** — apps are read-only
-  consumers and never define tables.
-- **Run `db:*` scripts only from the root** via `npm run db:*`.
-- **Never treat the two Better Auth instances interchangeably** — store vs
-  admin are distinct; cross-type sign-in is rejected by session hooks
-  (`INVALID_USER_TYPE`).
+- **Align and approve before acting.** Verify repo facts; ask the user about
+  unresolved behavior and scope rather than guessing. For nontrivial work,
+  confirm shared understanding before drafting, then obtain explicit user
+  approval of the **complete** plan/spec before Ready or implementation;
+  orchestrator self-review is not approval. Obtain separate approval of a
+  multi-session ticket breakdown before publishing it. Small, well-defined
+  requests may proceed from agreed conversational scope without a plan file.
+  Stop for new product decisions; do not silently re-plan. After research,
+  classify open items and recommend the next step without automatically
+  starting another stage; follow the research-to-alignment procedure in the
+  skill below. Read the on-demand
+  [`development-workflow` skill](.agents/skills/development-workflow/SKILL.md)
+  for the full process and gates.
+- **Write the technical and UX blueprint before implementation.** A nontrivial
+  spec/plan carries, inside the same file, the file-level technical blueprint
+  (full paths, responsibility, layer, exported contract, test seam) and the UX
+  blueprint (reference page, component reuse map, state matrix with final copy,
+  viewport/accessibility). Both are an **advisory checklist**: unfilled parts
+  become open items, and a requested prototype is the binding reference for
+  flow, structure, and states while existing tokens/components stay the visual
+  source of truth. A small single-session change may use a 4–6 line mini
+  version. Details: [`development-workflow` section 2](.agents/skills/development-workflow/SKILL.md)
+  and [`ux-design` section 3](.agents/skills/ux-design/SKILL.md).
+- **Subagents are opt-in, bounded, and edit-only implementers.** Spawn only
+  when the user explicitly authorizes delegation for the current task/session;
+  plan approval is not permission. For implementation handoffs, subagents may
+  read and edit files (including code, tests, and docs), but must not run unit
+  tests, E2E tests, builds, lint, typechecks, or other validation commands.
+  They hand back their changes and a concise report, then stop. The main agent
+  owns integration, review, and all validation: inspect the changes, run the
+  relevant tests/checks, and decide any follow-up edits. No nested subagents
+  without separate permission. Follow the skill's handoff, isolation, and
+  loop-stop rules. Implementation handoffs use the project `implementer` agent
+  ([`.agents/agents/implementer.md`](.agents/agents/implementer.md)), whose tool
+  allowlist has no shell — a child cannot run validation even by accident. The
+  main agent owns the verification ladder in section 5.
+- **Plan → execute → review applies to any behavior-affecting change.** "Code"
+  is broadly defined — no loopholes: app code, config/env files, schema files,
+  seeders, middleware/route configs, files under `deployment/`. Pure research,
+  standalone planning, and research/plan documents (e.g. under `.scratch/` or
+  `docs/`) are exempt. Workflow artifacts live in `.scratch/<feature>/` with
+  plan status tracked only in that feature's `index.md` — see
+  [`.scratch/README.md`](.scratch/README.md).
+  Implement approved scope one verifiable slice at a time; review against the
+  approved behavior and repo standards before accepting the result.
+- **No completion claim without AC coverage.** Before reporting work, turn the
+  approved spec's acceptance criteria (or the ticket's) into an `AC → evidence`
+  table and mark every row `Verified` (with the command/spec and its result) or
+  `Pending`. Completion language ("selesai", "done", "implemented", "fixed")
+  is allowed only when every row is `Verified`. Otherwise the report's first
+  line must state in plain terms what the user will still see unchanged and
+  which ACs are `Pending`. Test counts, typecheck, lint, and a clean diff are
+  evidence for rows — never a substitute for rows. When the spec has its own
+  closing checklist, copy its unfinished items verbatim into the limitations.
+- **No layer-first delivery when the approved spec changes user-visible
+  behavior.** Ship tracer-bullet slices that end in a working user path (e.g.
+  list → create → editor). A backend-only foundation slice is not a deliverable:
+  report it as "belum ada perubahan yang terlihat" and name the surface that
+  still runs the old implementation. Never present schema/services/tests as
+  delivery of a UI contract.
+- **Schema sync against the user's development database needs explicit
+  permission and a stated breakage risk.** A foundation slice that adds a column
+  without the matching `db:push` turns an unchanged page into a 500; a slice
+  that adds it unannounced destroys their working state. Ask before touching
+  their local DB, say what breaks until it is applied, and never bundle it into
+  an unreported checkpoint.
+- **Load the matching skill first** — the lookup is mandatory before
+  implementation, for the main agent **and** for an authorized implementer
+  subagent: `ux-design` (all coding; mandatory UX and cross-page consistency
+  gates for frontend), `maintainable-code` (backend structure, service/repository
+  boundaries, contextual logging), `tdd` (tests), `systematic-debugging` (bugs,
+  test failures, unexpected behavior — never guess a fix), `nextjs` (UI),
+  `better-auth-best-practices` (auth), `frontend-design` (visual polish within
+  the established design system). If subagents are used, they must load the
+  matching skill too; subagent use never bypasses a rule, and loading a skill
+  never grants scope, delegation, or commit/remote permission that the user did
+  not approve separately.
+- **Mandatory `to-spec` skill lookup before writing specifications.** Read
+  [`.agents/skills/to-spec/SKILL.md`](.agents/skills/to-spec/SKILL.md) in full
+  and use it to synthesize specifications from the agreed conversation,
+  research, and decisions; merely naming the skill is not loading it. This
+  applies to the main agent and any authorized subagent writing a spec.
+  The project's technical/UX blueprints, artifact placement, and explicit
+  approval gates in `development-workflow` still take precedence over upstream
+  file-path restrictions and automatic publication or `ready-for-agent` steps.
+- **Mandatory UX skill lookup before coding, especially frontend development.**
+  Read [`.agents/skills/ux-design/SKILL.md`](.agents/skills/ux-design/SKILL.md)
+  in full before any coding task; merely naming the skill is not loading it.
+  For frontend development (pages, components, forms, navigation, layout,
+  styling, themes/tokens, and interaction states), apply its task-flow,
+  clickability, concise-copy, spacing, accessibility, and cross-page consistency
+  gates. Reuse the established shared components and design tokens; do not
+  invent a different visual style per page. `ux-design` usability and consistency
+  requirements take precedence over conflicting aesthetic advice in
+  `frontend-design`. For backend-only work without UX impact, record that the
+  visual gates are not applicable. This requirement also applies to authorized
+  implementer subagents; the main agent still owns all validation.
+- **Confirm UX decisions, reuse established patterns.** Before frontend
+  implementation, resolve user-owned workflow, information-priority, action,
+  and permission decisions during alignment (or grill/wayfinder when used).
+  Agents must inspect and reuse established visual and data-behavior patterns,
+  not ask users to decide every color or spacing value. Record the reference
+  and list/table contract (search scope, pagination, sorting, filters, URL state,
+  and feedback states) in the approved spec or small-change conversation.
+  Do not silently substitute client-side search for backend search or omit
+  pagination. Ambiguous standards or necessary deviations require a reasoned
+  proposal and user decision before the affected implementation. Follow
+  `ux-design` for reference audits and rendered/behavioral verification.
+- **Context7 inquiry is mandatory before implementation.** Model knowledge stops
+  at its training cut-off, so never write library/framework API code from
+  memory. Before the first code slice that touches an external package
+  (Next.js 16, React, Drizzle ORM/drizzle-kit, Better Auth, Zod, Tailwind,
+  Playwright, Vitest, etc.):
+  1. `mcp__context7__resolve_library_id` with `{ libraryName: "<package>" }`
+     to get the canonical library ID for the installed version.
+  2. `mcp__context7__query_docs` with
+     `{ libraryId: "<id>", query: "<specific API question>" }` for every
+     uncertain signature, option, migration, or deprecation.
+  3. Record the library ID and what was confirmed in the plan/ticket/slice notes
+     (e.g. `Context7 checkpoint: <id> — <what was verified>`), so review can
+     audit it.
+  These tools come from the project server in `.pi/mcp.json` (OAuth, exposure
+  `direct`). If a lookup fails with `needs sign-in`, run `/mcp login context7`
+  (or `pi mcp login context7`) and retry. Skip the lookup only when the slice
+  touches no external API surface (pure refactor of already-confirmed code,
+  CSS/layout tweaks, docs, repo-internal logic), and say so in one line.
+  Subagents cannot call MCP tools (the `implementer` allowlist has neither
+  shell nor MCP), so the main agent runs the inquiry and passes the confirmed
+  signatures/options into the handoff packet; "the subagent should check
+  Context7" is not a valid handoff. If Context7 is unreachable, fall back to
+  the installed package types/source in `node_modules` or official vendor docs
+  and state which source replaced it — silent guessing is a violation. Setup:
+  [`docs/agents/mcp-tooling.md`](docs/agents/mcp-tooling.md).
+- **Schema edits ONLY in `packages/db/src/schema/`** — apps never define tables.
+- **Never treat the two Better Auth instances interchangeably** — cross-type
+  sign-in is rejected by session hooks (`INVALID_USER_TYPE`).
 - **Onboarding is store-only** — never assume a `role`/onboarding field on the
   wrong table.
 - **Keep the seeder in sync with schema** — when tables/columns change, update
-  `packages/db/src/seed.ts` (add a `DELETE` respecting FK order + realistic
-  rows) so `db:reset && db:seed` yields a testable DB.
-- **Use Context7** for current library/framework documentation before writing
-  code — don't rely on memory for library APIs.
-- **Every task requires unit tests** — follow the `tdd` skill
-  (`.agents/skills/tdd/SKILL.md`): red → green loop, one vertical slice at a
-  time, tests at public seams only (never internals), expected values from an
-  independent source of truth (no tautological assertions). Write the failing
-  test first for features and bug fixes.
-- **Load the matching skill first** — e.g. `tdd` for tests, `systematic-debugging`
-  for bugs, `nextjs` for UI, `better-auth-best-practices` for auth,
-  `frontend-design` for web design. Check available skills before starting a task.
+  `packages/db/src/seed.ts` (FK-ordered `DELETE` + realistic rows) so
+  `db:reset && db:seed` yields a testable DB. Details:
+  [`docs/architecture/database.md`](docs/architecture/database.md).
 - **Deployment-aware** — when a change touches env vars, domains/URLs/ports,
   cron/webhook endpoints, volumes/healthchecks, or build steps, update the
   matching files under `deployment/` (`common/`, `staging/`, `production/`).
   See [`docs/deployment-docs/README.md`](docs/deployment-docs/README.md).
-- **Documentation is part of the task, not a follow-up.** See
-  [`docs/README.md`](docs/README.md) for where each doc belongs.
-- **Remote access is request-only.** The agent may use an explicitly configured
-  SSH connection to access a remote server, but only when the user explicitly
-  requests the remote action. Never initiate SSH access, file transfer, remote
-  commands, Docker operations, service restarts, or deployment proactively.
-- **Never push proactively.** Run `git push` (including pushes from or affecting
-  a remote server) only when the user explicitly requests it. Preparing a local
-  commit does not imply permission to push or deploy it.
-- **Use `systematic-debugging` before guessing fixes** on any bug, test
-  failure, or unexpected behavior.
+- **Documentation is part of the task, not a follow-up** — every new/changed
+  endpoint and feature needs a doc entry ([`docs/README.md`](docs/README.md)).
+  When a plan reaches Done, retain its file in `.scratch/<feature>/plan/`,
+  mark its entry in `.scratch/<feature>/index.md` Done with date and evidence,
+  and distill enduring content into `docs/` per its destination rules.
+  Existing workflow artifacts, including legacy `.agents/` plans, use the
+  same centralized layout; do not recreate the old locations.
+- **Generate workflow text artifacts by feature, not by session or skill.**
+  Before generating a file, inspect `.scratch/` and reuse the existing stable
+  kebab-case feature slug (e.g. `discounts`; do not create a separate
+  `discounts-implementation` folder). Put research and supporting evidence in
+  `research/`; proposals, specs, and plans in `plan/`; decision maps, decision
+  tickets, and design decisions in `wayfinder/`; implementation maps, tickets,
+  handoffs, and verification in `ticket/`; optional prototypes in `prototype/`.
+  Create only needed subfolders. Use descriptive Markdown filenames and
+  numbered tickets (`NN-<slug>.md`); preserve machine-readable metadata.
+  Maintain one `index.md` per feature for artifact navigation, plan approval,
+  status, blockers, and verification links. There is no global status index:
+  parallel feature branches must not share a status file. Ticket status stays
+  in each ticket, never duplicated in the index. Link cross-feature evidence
+  rather than copying it; update links when moving files. Keep skill definitions
+  in `.agents/skills/` and enduring documentation in `docs/`. This placement
+  policy overrides upstream skill output-path examples, not approval gates.
+- **Jubelio research access.** Read-only GET requests to Jubelio may run during
+  research without a separate user decision, using available credentials
+  securely and reporting only redacted, relevant fields (never tokens, raw
+  customer responses, or PII). Any POST (including authentication via
+  `POST /login`) or other request that changes Jubelio data requires explicit
+  user permission for that action/scope before it is sent. POST is not
+  categorically forbidden; describe the proposed write test and safeguards
+  first when applicable. Do not treat permission for one POST as permission for
+  other writes or changes to existing orders.
+- **No implicit commit, remote access, or push.** A plan/ticket approval does
+  not authorize a commit. Commit only when the user requests or authorizes it;
+  never include unrelated changes from a dirty worktree. Use the explicitly
+  configured SSH connection only when the user explicitly requests the remote
+  action — never initiate SSH, file transfer, remote commands, Docker
+  operations, restarts, or deployment. Run `git push` only when the user
+  explicitly requests it; a local commit does not imply permission to push
+  or deploy it.
 
 ## 5. Testing Requirements
 
-- **Every new feature or bug fix must ship with tests.** If there is no existing
-  test seam for the code you are touching, create one (extract pure helpers,
-  expose a module-level function, or add an E2E spec). Do not consider a task
-  complete until tests cover the new behavior.
+- **Every new feature or bug fix must ship with tests.** If no test seam
+  exists, create one (extract pure helpers, expose a module-level function,
+  or add an E2E spec). A task is not complete until tests cover the new behavior.
 - **Before committing or opening a PR, run the test suite.** At minimum:
   - `npm run test:unit` for any logic change.
   - `npm run test:e2e` for any UI, routing, or auth change.
-- **UI changes require Playwright E2E coverage.** If a feature touches pages,
-  components, forms, or navigation, add a `*.spec.ts` under `e2e/store/` or
-  `e2e/admin/` and assert the user-visible behavior (e.g., form submission,
-  redirect, rendered content). The canonical way to verify a UI feature works is
-  to run its Playwright spec and see it pass.
+- **UI changes require Playwright E2E coverage.** Features touching pages,
+  components, forms, or navigation get a `*.spec.ts` under `e2e/store/` or
+  `e2e/admin/` asserting user-visible behavior. The canonical way to verify
+  a UI feature works is to run its Playwright spec and see it pass.
+- **Frontend acceptance also requires the `ux-design` review gate.** The main
+  agent must inspect the rendered UI and relevant interaction states, compare
+  it against an agreed peer-page/shared-pattern reference, and verify cross-page
+  consistency alongside the required Playwright coverage. JSX inspection or a
+  passing click test alone does not establish good UX. If browser verification
+  is blocked, report that limitation and do not claim frontend completion.
 - **Use the `tdd` skill** (`.agents/skills/tdd/SKILL.md`) for all test work:
-  red → green loop, one vertical slice at a time, tests at public seams only,
-  expected values from an independent source of truth. Load the skill before
-  writing any test code.
+  one vertical slice at a time, tests at public seams only, expected values
+  from an independent source of truth (no tautological assertions), and write
+  the failing test first for features and bug fixes. When an implementation is
+  delegated, the subagent authors/updates tests but does not execute them; the
+  main agent runs the tests and completes the red → green verification loop.
+- **Verification ladder — focused development, full verification at the end.**
+  - **L0 (per slice):** `npm run verify:types:store` and/or
+    `npm run verify:types:admin` (`tsc --noEmit`, incremental) for affected apps.
+  - **L1 (development/TDD):** run
+    `npm run verify:unit:slice -- <explicit test paths>` at the agreed public
+    seams for the current slice. Always list the relevant unit test files;
+    never default to a whole workspace or full suite. Prove RED before GREEN.
+    Refactoring belongs to review per `tdd`; verify affected files afterward.
+  - **L2 (final integration of the user-agreed deliverable):** run the full
+    unit suite for logic changes (`npm run test:unit`) and the required E2E
+    suites for UI/routing/auth changes. Run affected mock specs with explicit
+    paths via `npm run verify:batch:e2e -- <spec paths>` at this final gate,
+    not per internal batch. The legacy `npm run test:e2e` still requires
+    separate authorization; if unavailable, report final verification Pending.
+  - The end means the end of the requested scope, not every slice, ticket,
+    internal batch, or progress report. Several approved tickets requested
+    together share a final gate after integration. Do not run full unit,
+    integration, or E2E suites during development by default; an earlier run
+    requires an explicit user request. Before commit/PR or claiming completion,
+    the final gate must pass for the current integrated changes.
+  - Author required E2E coverage alongside the feature, but defer its execution
+    to the final gate. Unit tests do not prove browser/integration behavior;
+    keep the corresponding ACs Pending until the required evidence exists.
+    Rendered UI review remains required for frontend acceptance.
+  - Tickets awaiting final evidence may remain `claimed`; do not mark them
+    `resolved` solely on focused unit tests. Record final gate evidence for
+    each ticket when the integrated deliverable passes; partial progress keeps
+    final verification and affected ACs Pending, without forcing a broad run.
+  - Re-run focused tests only when relevant code, tests, dependencies, or test
+    conditions changed, or a specific failure needs investigation. Preserve
+    passing evidence for unchanged code; do not re-run just for reassurance.
+    If a final suite fails, diagnose and repair using focused tests first,
+    then repeat the affected final gate. If changes invalidate previous
+    evidence, revalidate the impacted gate rather than reusing stale results.
+  - Keep output bounded: capture logs outside the repo or print summary/FAIL
+    lines (Playwright artifacts still belong under `/playwright/`). New mock
+    specs must be added to `playwright.mock.config.ts` `testMatch`, or they
+    silently never run.
 - **Keep tests deterministic.** Do not depend on random data, time-of-day, or
   external services that are not mocked / controlled in the test environment.
+- **Centralize disposable Playwright output under `/playwright/` (gitignored).**
+  Standard and mock HTML reports go to `playwright/reports/{default,mock}/`;
+  runner artifacts (Markdown, traces, screenshots, video) go to
+  `playwright/results/{default,mock}/`. Manual browser/MCP dumps go to
+  `playwright/mcp/`, optionally under a descriptive run subfolder. The MCP
+  `--output-dir` applies only to automatically named files: when passing an
+  explicit filename, include `playwright/mcp/<run>/...` from the repo root,
+  never a bare root filename. Put optional blob/JSON/custom reporter output
+  under `playwright/blob/` or `playwright/reports/<run>/`; CLI/env output
+  overrides must stay inside `playwright/`. Do not create root-level
+  `playwright-report*`, `test-results`, or `.playwright-mcp` directories, and
+  never force-add generated artifacts. Keep test specs/config tracked;
+  enduring verification summaries belong in docs or the feature's `.scratch/`
+  folder, linking to disposable artifacts when helpful. `e2e/.auth/` retains
+  its existing ignored storage-state contract. See
+  [`docs/testing/README.md`](docs/testing/README.md) for report commands.
 - **When a Playwright run fails, read the Markdown output — do NOT open the
-  screenshot/image file.** Playwright emits a text/Markdown report (the snapshot,
-  trace, and error context as text) alongside any `.png`/attachment. Diagnose
-  from the Markdown only; opening the image attachment wastes a turn and is
-  forbidden here.
+  screenshot/image file.** Playwright emits a text/Markdown report (snapshot,
+  trace, error context) alongside any `.png` attachment. Diagnose from the
+  Markdown only; opening the image wastes a turn and is forbidden.
+
+## 6. Communication With the User
+
+- **Generate all documentation in Indonesian**, unless the user explicitly
+  requests another language. This includes research notes, proposals, wayfinder
+  maps and decision tickets, specifications, plans, ADRs, architecture/feature/API
+  documentation, and agent-facing handoffs. Preserve commonly used English
+  technical/product terms, code/API/database identifiers, file paths, commands,
+  and machine-readable tracker metadata keys/values rather than translating
+  them awkwardly or breaking automation. AGENTS.md remains the English-language
+  agent instruction file; this exception does not make English the default for
+  other generated documents. Existing documents outside the requested scope do
+  not need wholesale translation, but newly generated content must follow this
+  policy.
+- Respond in the user's language unless they request another language. When
+  responding in Indonesian, keep commonly used English technical and product
+  terms in English rather than translating them literally or awkwardly. This
+  applies broadly, not just to specific examples such as interface, mock,
+  testing, develop, and UAT. Explain the reasoning, relevant project context,
+  practical consequences, and any important caveats in enough detail for the
+  user to understand the decision; avoid unexplained jargon and unnecessary
+  repetition.
+- Ground project-specific claims in references the user can inspect: link to
+  relevant code snippets (with file paths and line numbers when available),
+  files, endpoints, tests, or project documentation. For library/API claims,
+  cite the documentation consulted. Distinguish verified facts from assumptions
+  or proposals; never invent a reference or imply a test was run when it was not.
+- Give a concrete example and a realistic case when explaining a nontrivial
+  behavior, recommendation, or trade-off. Show the input/action and expected
+  outcome, not just a generic analogy. Keep examples short and directly tied
+  to the question; for straightforward status updates, a full case study is
+  unnecessary.
+- Before asking the user to decide, explain what prompted the question, what
+  the agent already checked, the available options and their trade-offs, and
+  what changes under each option. Recommend an option with a reason when the
+  evidence supports it. Do not ask the user for facts the agent can verify in
+  the repo; ask only for preferences, requirements, or decisions the user owns.
+- **Introduce every question with plain-language context.** This applies to
+  all questions, including clarification, planning, grilling, and document/spec
+  reviews, whether asked through a tool or in chat. Before the actual question,
+  explain the relevant part of the code, flow, or document; what happens or is
+  proposed; and the concern or consideration that makes a decision necessary.
+  Do not jump straight to an isolated question or assume the user remembers
+  earlier context. Use language the user can understand: avoid unfamiliar
+  jargon and acronyms, or briefly explain them before using them. A file path
+  or code identifier alone is not an explanation of the behavior.
+  - **Code/flow template:** "In <feature or code section>, <explain the flow>.
+    When <actor> performs <action, enters input, or triggers a condition>,
+    <current or proposed behavior occurs>. <consideration and impact>.
+    <question>?"
+  - **Document/grilling template:** "In <document path and section>, the
+    spec describes <context or proposed behavior>. However, <consideration,
+    ambiguity, risk, or edge case>. <question>?" Verify the document's content
+    first and distinguish what it actually says from the agent's interpretation.
+  - **Business-flow questions must include a concrete example** in the question
+    itself: a realistic actor, input/action or condition, and the resulting
+    outcome or how the options change it. For example: "The checkout spec says
+    a voucher reduces the order total, but does not explain what happens when
+    the customer changes the cart. For example, a customer applies a voucher
+    requiring a Rp100,000 minimum, then removes an item so the cart is worth
+    Rp80,000. Should the voucher be removed automatically with an explanation,
+    or should checkout be blocked until the customer changes the cart or
+    removes the voucher?" Keep the introduction and example focused, but never
+    omit the context merely to shorten the question.
+- **Every `ask_user_question` question must carry concrete context.** Never
+  assume the user knows which flow, file, button, action, or process the agent
+  means. In each question's `question` field, first identify the relevant
+  flow/page (and file path when useful), the actor and their button/action,
+  and the resulting process or behavior; then ask the decision. Explain what
+  the answer will affect. Prior chat context, a short header, or option
+  descriptions alone are not a substitute: each question must be understandable
+  on its own. For non-UI questions, name the relevant artifact/process, trigger,
+  and consequence instead; do not invent a button or customer flow. Clearly
+  distinguish verified current behavior from proposed behavior.
+  Example: "In the checkout flow, when a customer clicks 'Apply voucher', the
+  system validates the code before updating the order total. If the code is
+  invalid, should checkout remain available without the discount, or should
+  the customer have to remove the code first?"
+  File-oriented template: "In `<file path>`, when `<actor>` performs
+  `<action>`, `<verified behavior / explicitly proposed process>` occurs.
+  This decision affects `<impact>`. `<question>`?"
+- When reporting work, state what changed, why, where to inspect it, and what
+  verification ran (or why it could not run). If blocked or uncertain, say so
+  explicitly and give the next actionable step.
+
+**Example — explaining a decision:** "Store and admin authentication must stay
+separate: store sessions use `client.*` cookies and the `clients` table, while
+admin sessions use `admin.*` and `users` (see
+[`docs/architecture/auth.md`](docs/architecture/auth.md)). For example, an
+admin user opening a store-only account page should not be treated as a signed-in
+store client. Reusing the admin session in the store would violate that boundary."
+
+**Example — asking with context:** "The new stock display needs a source of
+truth. The schema is owned by `packages/db/src/schema/`, and the apps consume it
+(see [`docs/architecture/database.md`](docs/architecture/database.md)). Should
+the storefront show stock per branch (more precise, more UI complexity) or an
+aggregate across branches (simpler, hides branch availability)? I recommend per
+branch if customers choose a pickup location; which behavior do you want?"

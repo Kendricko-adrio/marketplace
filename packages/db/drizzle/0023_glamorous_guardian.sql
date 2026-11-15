@@ -1,0 +1,2 @@
+ALTER TABLE "jubelio_sales_operation" ADD COLUMN "channel_status_mismatch_reason" text;--> statement-breakpoint
+ALTER TABLE "jubelio_sales_operation" ADD COLUMN "channel_status_mismatch_at" timestamp with time zone;

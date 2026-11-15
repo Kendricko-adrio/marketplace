@@ -1,5 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { withPermission } from "@/lib/rbac/route-guards";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis.
+ */
+const log = createModuleLogger("admin-homepage-preview-products");
+
+/**
+ * Proyeksi teknis statis untuk jalur kegagalan tak terduga. Nilai yang
+ * tertangkap tidak pernah masuk log; kontrak HTTP tetap sama.
+ */
+class ProductPreviewLogError extends Error {
+  constructor() {
+    super("admin homepage preview-products: gagal memuat preview produk");
+    this.name = "ProductPreviewLogError";
+  }
+}
 
 /**
  * Server-side proxy that forwards product filter queries to the storefront
@@ -11,7 +29,10 @@ import { withPermission } from "@/lib/rbac/route-guards";
  * mechanism only), so this proxy avoids "Failed to fetch" errors in the admin
  * client component.
  */
-export const GET = withPermission(async (_ctx, request: NextRequest) => {
+async function previewProducts(
+  _ctx: unknown,
+  request: NextRequest
+): Promise<Response> {
   try {
     const { searchParams } = new URL(request.url);
     // Forward only whitelisted filter params to the store API.
@@ -44,11 +65,19 @@ export const GET = withPermission(async (_ctx, request: NextRequest) => {
     const res = await fetch(storeUrl, { cache: "no-store" });
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
-  } catch (error) {
-    console.error("Error proxying product preview:", error);
+  } catch {
+    log.error(
+      "Preview produk gagal dimuat (outcome error)",
+      new ProductPreviewLogError()
+    );
     return NextResponse.json(
       { success: false, error: "Failed to fetch product preview" },
       { status: 500 }
     );
   }
-}, "homepage", "view");
+}
+
+export const GET = withRequestContext(
+  withPermission(previewProducts, "homepage", "view"),
+  "admin-homepage-preview-products"
+);

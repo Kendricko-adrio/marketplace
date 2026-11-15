@@ -4,14 +4,33 @@ import {
   carts,
   cartItems,
   branches,
-  branchStocks,
   productVariants,
   products,
 } from "@/db";
 import { eq, and, inArray } from "drizzle-orm";
 import { requireOnboardedApiSession } from "@/lib/route-access";
 import { z } from "zod";
-import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
+import { verifyAndAdjustCheckoutStock } from "@/features/checkout/verify-checkout-stock-service";
+import { checkoutStockAdjustmentMessage } from "@/lib/checkout-stock-adjustment";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("cart-validate-checkout");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Next/provider
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 // Pre-checkout validation: verifies that the branch of the selected items is
 // still active before the customer is allowed to proceed to /checkout. If the
@@ -24,34 +43,32 @@ const validateCheckoutSchema = z.object({
     .min(1, "Select at least one item to checkout"),
 });
 
-export async function POST(request: NextRequest) {
-  let log = requestLogger(request, { module: "validate-checkout" });
+async function validateCheckout(request: NextRequest): Promise<Response> {
   log.info("checkout validation requested");
   try {
     const access = await requireOnboardedApiSession();
-    if (!access.ok) return withRequestId(access.response, log);
+    if (!access.ok) return access.response;
     const { session } = access;
 
     const body = await request.json();
     const parsed = validateCheckoutSchema.safeParse(body);
 
     if (!parsed.success) {
-      log.warn("invalid request body", { issues: parsed.error.issues });
-      return withRequestId(
-        NextResponse.json(
-          {
-            success: false,
-            error: "Invalid request body",
-            details: parsed.error.issues,
-          },
-          { status: 400 }
-        ),
-        log
+      // Detail issue zod tidak masuk log: hanya jumlahnya (pesan bisnis).
+      log.warn(
+        `invalid request body: ${parsed.error.issues.length} issue, user ${session.user.id}`
+      );
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Invalid request body",
+          details: parsed.error.issues,
+        },
+        { status: 400 }
       );
     }
 
     const { selectedItemIds } = parsed.data;
-    log = log.child({ userId: session.user.id, itemCount: selectedItemIds.length });
 
     // ===== Load the user's cart =====
     const cartRows = await db
@@ -79,6 +96,7 @@ export async function POST(request: NextRequest) {
         variantId: cartItems.variantId,
         quantity: cartItems.quantity,
         productName: products.name,
+        jubelioItemId: productVariants.jubelioItemId,
       })
       .from(cartItems)
       .innerJoin(productVariants, eq(cartItems.variantId, productVariants.id))
@@ -87,7 +105,7 @@ export async function POST(request: NextRequest) {
         and(eq(cartItems.cartId, cart.id), inArray(cartItems.id, selectedItemIds))
       );
 
-    if (selectedItems.length === 0) {
+    if (selectedItems.length !== new Set(selectedItemIds).size) {
       return NextResponse.json(
         { success: false, error: "No selected items to checkout" },
         { status: 400 }
@@ -123,6 +141,7 @@ export async function POST(request: NextRequest) {
         id: branches.id,
         name: branches.name,
         status: branches.status,
+        jubelioLocationId: branches.jubelioLocationId,
       })
       .from(branches)
       .where(eq(branches.id, branchId))
@@ -135,10 +154,9 @@ export async function POST(request: NextRequest) {
     if (branchInactive) {
       // Remove ALL of this branch's items from the customer's cart (this
       // customer only — cart items are scoped to the user's cart).
-      log.warn("branch inactive — removing its items from cart", {
-        branchId,
-        branchName: branch[0]?.name ?? null,
-      });
+      log.warn(
+        `branch inactive — removing its items from cart (branch ${branchId}, name ${branch[0]?.name ?? "-"})`
+      );
       const itemsToRemove = await db
         .select({ id: cartItems.id })
         .from(cartItems)
@@ -166,103 +184,56 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // ===== Check stock for each selected item (soft UX pre-check) =====
-    // Available stock = Jubelio on-hand minus holds awaiting remote confirmation.
-    // Same calculation as the soft pre-check in place-order. The
-    // authoritative race-free guard remains the atomic conditional UPDATE
-    // inside the place-order transaction; this pre-check just gives the
-    // customer early feedback on the cart page instead of failing at step 3.
-    //
-    // Two outcomes per item when qty > available:
-    //   - available <= 0  → product is fully out of stock → remove it from cart
-    //   - 0 < available   → partial stock → lower the cart quantity to available
-    const outOfStock: { cartItemId: string; name: string }[] = [];
-    const adjusted: { cartItemId: string; name: string; available: number }[] = [];
-
-    for (const item of selectedItems) {
-      const stockRow = await db
-        .select()
-        .from(branchStocks)
-        .where(
-          and(
-            eq(branchStocks.branchId, branchId),
-            eq(branchStocks.productVariantId, item.variantId)
-          )
-        )
-        .limit(1);
-
-      const available =
-        (stockRow[0]?.stock ?? 0) - (stockRow[0]?.pendingRemoteStock ?? 0);
-
-      if (item.quantity > available) {
-        if (available <= 0) {
-          outOfStock.push({ cartItemId: item.id, name: item.productName });
-        } else {
-          adjusted.push({
-            cartItemId: item.id,
-            name: item.productName,
-            available,
-          });
-        }
-      }
-    }
-
-    if (outOfStock.length > 0 || adjusted.length > 0) {
-      // Remove fully out-of-stock items from the cart.
-      log.warn("insufficient stock — adjusting cart", {
-        outOfStock: outOfStock.length,
-        adjusted: adjusted.length,
-      });
-      if (outOfStock.length > 0) {
-        await db
-          .delete(cartItems)
-          .where(
-            and(
-              eq(cartItems.cartId, cart.id),
-              inArray(
-                cartItems.id,
-                outOfStock.map((o) => o.cartItemId)
-              )
-            )
-          );
-      }
-
-      // Lower the quantity of partially-available items to what's left.
-      for (const item of adjusted) {
-        await db
-          .update(cartItems)
-          .set({ quantity: item.available })
-          .where(eq(cartItems.id, item.cartItemId));
-      }
-
-      // Bump cart.updatedAt so the cart badge/provider reflects the change.
-      await db
-        .update(carts)
-        .set({ updatedAt: new Date() })
-        .where(eq(carts.id, cart.id));
-
+    const unmappedItem = selectedItems.find((item) => item.jubelioItemId == null);
+    if (branch[0].jubelioLocationId == null || unmappedItem) {
+      log.warn(`checkout validation rejected — missing Jubelio mapping (branch ${branchId})`);
       return NextResponse.json({
         success: false,
-        code: "INSUFFICIENT_STOCK",
-        outOfStock: outOfStock.map(({ name }) => ({ name })),
-        adjusted: adjusted.map(({ name, available }) => ({ name, available })),
-      });
+        error: "Barang atau cabang belum terhubung ke stok Jubelio. Silakan hubungi toko.",
+      }, { status: 409 });
     }
 
-    // Branch is active and stock is sufficient — ok to proceed to /checkout.
-    log.info("checkout validation passed", { branchId });
-    return withRequestId(
-      NextResponse.json({ success: true }),
-      log
+    // Snapshot katalog hanya advisory; jangan mengubah quantity tanpa live read.
+    // Place-order mengulang verifikasi dan memperoleh hold secara independen.
+    const stockCheck = await verifyAndAdjustCheckoutStock(db, cart.id, selectedItems.map((item) => ({
+      cartItemId: item.id,
+      branchId,
+      variantId: item.variantId,
+      itemId: item.jubelioItemId!,
+      locationId: branch[0].jubelioLocationId!,
+      quantity: item.quantity,
+      productName: item.productName,
+    })));
+    if (!stockCheck.ok) {
+      if (stockCheck.reason === "unavailable") {
+        log.error(`checkout validation rejected — Jubelio stock unavailable (branch ${branchId}, detail ${stockCheck.detail ?? "-"})`);
+        return NextResponse.json({
+          success: false,
+          error: "Stok Jubelio belum dapat diverifikasi. Silakan coba beberapa saat lagi.",
+        }, { status: 503 });
+      }
+      return NextResponse.json({
+        success: false,
+        code: "CHECKOUT_STOCK_ADJUSTED",
+        adjustments: stockCheck.adjustments,
+        error: checkoutStockAdjustmentMessage(stockCheck.adjustments),
+      }, { status: 409 });
+    }
+    log.info(
+      `checkout validation passed: user ${session.user.id}, branch ${branchId}`
     );
-  } catch (error) {
-    log.error("validate-checkout failed", { error: serializeError(error) });
-    return withRequestId(
-      NextResponse.json(
-        { success: false, error: "Failed to validate checkout" },
-        { status: 500 }
-      ),
-      log
+    return NextResponse.json({ success: true });
+  } catch {
+    log.error(
+      "validate-checkout failed",
+      new RouteLogError("validate-checkout failed")
+    );
+    return NextResponse.json(
+      { success: false, error: "Failed to validate checkout" },
+      { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(validateCheckout, "cart-validate-checkout");

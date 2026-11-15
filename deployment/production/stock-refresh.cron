@@ -1,0 +1,3 @@
+# Install under deploy crontab only after migrations, credential checks and owner approval.
+# Keep checkout paused until refresh age/coverage checks pass.
+0 2 * * * /home/ops/marketplace/deployment/common/cron/refresh-jubelio-stock.sh --url https://store.adfsport.cloud --env-file /home/ops/marketplace/deployment/production/.env --log-dir /home/ops/log/marketplace-stock-refresh/production

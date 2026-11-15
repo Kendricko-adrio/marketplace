@@ -1,0 +1,491 @@
+{
+  "run": "RESEARCH08-F6-ALT-2026-10-18T09-27-30-581Z",
+  "initialCreateAttempts": 20,
+  "additionalCreateLimit": 1,
+  "createAttempts": 1,
+  "mirrorAttempts": 0,
+  "invoiceConversionAttempts": 0,
+  "events": [
+    {
+      "at": "2026-10-18T09:27:30.582Z",
+      "label": "login",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "at": "2026-10-18T09:27:32.545Z",
+      "label": "login",
+      "phase": "response",
+      "method": "POST",
+      "path": "/login",
+      "http": 200
+    },
+    {
+      "at": "2026-10-18T09:27:32.551Z",
+      "label": "dummy-contact",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/contacts/116918"
+    },
+    {
+      "at": "2026-10-18T09:27:32.702Z",
+      "label": "dummy-contact",
+      "phase": "response",
+      "method": "GET",
+      "path": "/contacts/116918",
+      "http": 200,
+      "snapshot": {
+        "contact_id": 116918,
+        "dummyNameMatches": true
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:32.708Z",
+      "label": "item-preflight",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/inventory/items/60344"
+    },
+    {
+      "at": "2026-10-18T09:27:32.978Z",
+      "label": "item-preflight",
+      "phase": "response",
+      "method": "GET",
+      "path": "/inventory/items/60344",
+      "http": 200,
+      "snapshot": {
+        "sell_price": "650000.0000",
+        "is_active": true,
+        "unit": "Buah"
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:32.979Z",
+      "label": "tax-preflight",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100"
+    },
+    {
+      "at": "2026-10-18T09:27:33.176Z",
+      "label": "tax-preflight",
+      "phase": "response",
+      "method": "GET",
+      "path": "/taxes/?page=1&pageSize=100",
+      "http": 200,
+      "snapshot": {
+        "matchingTax": [
+          {
+            "tax_id": 1,
+            "tax_name": "No Tax",
+            "rate": "0.00"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:33.182Z",
+      "label": "stock-preflight",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "input": {
+        "ids": [
+          60344
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:33.370Z",
+      "label": "stock-preflight",
+      "phase": "response",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {
+        "rows": [
+          {
+            "item_id": 60344,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 0,
+            "available": 1
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:33.375Z",
+      "label": "stock-preflight-rows",
+      "rows": [
+        {
+          "item_id": 60344,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 0,
+          "available": 1
+        }
+      ]
+    },
+    {
+      "at": "2026-10-18T09:27:33.376Z",
+      "label": "independent-expected",
+      "header": {
+        "sub_total": 650000,
+        "total_disc": 20000,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 640000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": 20000,
+        "add_fee": 0,
+        "service_fee": 0
+      },
+      "line": {
+        "item_id": 60344,
+        "qty_in_base": 1,
+        "price": 650000,
+        "disc": 3.08,
+        "disc_amount": 20000,
+        "amount": 630000,
+        "tax_amount": 0,
+        "tax_id": 1
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:33.376Z",
+      "label": "create",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "input": {
+        "salesorder_id": 0,
+        "salesorder_no": "[auto]",
+        "source": 1,
+        "location_id": 2,
+        "sub_total": 650000,
+        "total_disc": 20000,
+        "add_disc": 0,
+        "total_tax": 0,
+        "grand_total": 640000,
+        "shipping_cost": 10000,
+        "insurance_cost": 0,
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": 20000,
+        "add_fee": 0,
+        "service_fee": 0,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-F6-ALT-2026-10-18T09-27-30-581Z",
+        "items": [
+          {
+            "salesorder_detail_id": 0,
+            "item_id": 60344,
+            "location_id": 2,
+            "qty_in_base": 1,
+            "price": 650000,
+            "disc": 3.08,
+            "disc_amount": 20000,
+            "amount": 630000,
+            "tax_amount": 0,
+            "tax_id": 1,
+            "unit": "Buah"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:36.475Z",
+      "label": "create",
+      "phase": "response",
+      "method": "POST",
+      "path": "/sales/orders/",
+      "http": 200,
+      "snapshot": {
+        "id": 68423
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:36.481Z",
+      "label": "created-so-get",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/sales/orders/68423"
+    },
+    {
+      "at": "2026-10-18T09:27:36.728Z",
+      "label": "created-so-get",
+      "phase": "response",
+      "method": "GET",
+      "path": "/sales/orders/68423",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68423,
+        "salesorder_no": "SO-000068423",
+        "invoice_id": null,
+        "invoice_no": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "650000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "640000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "20000.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-F6-ALT-2026-10-18T09-27-30-581Z",
+        "items": [
+          {
+            "salesorder_detail_id": 74708,
+            "item_id": 60344,
+            "qty_in_base": "1.0000",
+            "price": "650000.0000",
+            "disc": "3.08",
+            "disc_amount": "20000.0000",
+            "amount": "630000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1,
+            "unit": "Buah"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:36.729Z",
+      "label": "verify-Belum Bayar",
+      "matches": false,
+      "mismatches": [
+        "item.identity/unit"
+      ]
+    },
+    {
+      "at": "2026-10-18T09:27:36.729Z",
+      "label": "safety-stop",
+      "reason": "SO nominal/identity/state mismatch"
+    },
+    {
+      "at": "2026-10-18T09:27:36.730Z",
+      "label": "business-writes-stopped",
+      "errorType": "Error",
+      "fixtureId": 68423,
+      "invoiceId": null
+    },
+    {
+      "at": "2026-10-18T09:27:36.731Z",
+      "label": "reconcile-so",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/sales/orders/68423"
+    },
+    {
+      "at": "2026-10-18T09:27:37.161Z",
+      "label": "reconcile-so",
+      "phase": "response",
+      "method": "GET",
+      "path": "/sales/orders/68423",
+      "http": 200,
+      "snapshot": {
+        "salesorder_id": 68423,
+        "salesorder_no": "SO-000068423",
+        "invoice_id": null,
+        "invoice_no": null,
+        "source": 1,
+        "location_id": 2,
+        "sub_total": "650000.0000",
+        "total_disc": "20000.0000",
+        "add_disc": "0.0000",
+        "total_tax": "0.0000",
+        "grand_total": "640000.0000",
+        "shipping_cost": "10000.0000",
+        "insurance_cost": "0.0000",
+        "original_shipment_cost": 30000,
+        "shipping_cost_discount": "20000.0000",
+        "add_fee": "0.0000",
+        "service_fee": "0.0000",
+        "is_canceled": null,
+        "is_paid": null,
+        "channel_status": "Belum Bayar",
+        "is_tax_included": false,
+        "ref_no": "RESEARCH08-F6-ALT-2026-10-18T09-27-30-581Z",
+        "items": [
+          {
+            "salesorder_detail_id": 74708,
+            "item_id": 60344,
+            "qty_in_base": "1.0000",
+            "price": "650000.0000",
+            "disc": "3.08",
+            "disc_amount": "20000.0000",
+            "amount": "630000.0000",
+            "tax_amount": "0.0000",
+            "tax_id": 1,
+            "unit": "Buah"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:37.166Z",
+      "label": "reconcile-stock",
+      "phase": "dispatch-intent",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "input": {
+        "ids": [
+          60344
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:37.340Z",
+      "label": "reconcile-stock",
+      "phase": "response",
+      "method": "POST",
+      "path": "/inventory/items/all-stocks/",
+      "http": 200,
+      "snapshot": {
+        "rows": [
+          {
+            "item_id": 60344,
+            "location_id": 2,
+            "on_hand": 1,
+            "on_order": 1,
+            "available": 0
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:37.346Z",
+      "label": "reconcile-stock-rows",
+      "rows": [
+        {
+          "item_id": 60344,
+          "location_id": 2,
+          "on_hand": 1,
+          "on_order": 1,
+          "available": 0
+        }
+      ]
+    },
+    {
+      "at": "2026-10-18T09:27:37.346Z",
+      "label": "reconcile-list",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/sales/invoices/?page=1&pageSize=100&q=DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z"
+    },
+    {
+      "at": "2026-10-18T09:27:37.850Z",
+      "label": "reconcile-list",
+      "phase": "response",
+      "method": "GET",
+      "path": "/sales/invoices/?page=1&pageSize=100&q=DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z",
+      "http": 200,
+      "snapshot": {
+        "totalCount": 3,
+        "returnedRows": 3,
+        "rows": [
+          {
+            "doc_id": 45951,
+            "doc_type": "invoice",
+            "salesorder_id": 68411,
+            "ref_no": "SO-000068411",
+            "grand_total": "239000.0000",
+            "due": "0.00000000000000000000"
+          },
+          {
+            "doc_id": 45952,
+            "doc_type": "invoice",
+            "salesorder_id": 68417,
+            "ref_no": "SO-000068417",
+            "grand_total": "489000.0000",
+            "due": "0.00000000000000000000"
+          },
+          {
+            "doc_id": 45953,
+            "doc_type": "invoice",
+            "salesorder_id": 68418,
+            "ref_no": "SO-000068418",
+            "grand_total": "289000.0000",
+            "due": "0.00000000000000000000"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:37.856Z",
+      "label": "reconcile-list-coverage",
+      "path": "/sales/invoices/",
+      "pages": 1,
+      "returnedRows": 3,
+      "totalCount": 3,
+      "completeForFilter": true
+    },
+    {
+      "at": "2026-10-18T09:27:37.856Z",
+      "label": "reconcile-list",
+      "phase": "dispatch-intent",
+      "method": "GET",
+      "path": "/sales/payments/?page=1&pageSize=100&q=DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z"
+    },
+    {
+      "at": "2026-10-18T09:27:37.942Z",
+      "label": "reconcile-list",
+      "phase": "response",
+      "method": "GET",
+      "path": "/sales/payments/?page=1&pageSize=100&q=DISCOUNT-VERIFY-2026-10-14T15-58-21-705Z",
+      "http": 200,
+      "snapshot": {
+        "totalCount": 3,
+        "returnedRows": 3,
+        "rows": [
+          {
+            "payment_id": 40,
+            "amount": "239000.0000"
+          },
+          {
+            "payment_id": 42,
+            "amount": "489000.0000"
+          },
+          {
+            "payment_id": 44,
+            "amount": "289000.0000"
+          }
+        ]
+      }
+    },
+    {
+      "at": "2026-10-18T09:27:37.943Z",
+      "label": "reconcile-list-coverage",
+      "path": "/sales/payments/",
+      "pages": 1,
+      "returnedRows": 3,
+      "totalCount": 3,
+      "completeForFilter": true
+    }
+  ],
+  "fixtureId": 68423,
+  "outcome": {
+    "status": "stopped-after-create-dispatch",
+    "fixtureId": 68423,
+    "invoiceId": null,
+    "createAttempts": 1,
+    "mirrorAttempts": 0,
+    "invoiceConversionAttempts": 0,
+    "paymentDispatched": false,
+    "cancelDispatched": false,
+    "existingOrdersModified": false,
+    "rollbackProven": false
+  }
+}

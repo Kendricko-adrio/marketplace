@@ -63,7 +63,7 @@ adds a prefilled message.
 
 - **`pages`** — published static pages (`isPublished = true`) from
   `static_page`, ordered by `displayOrder` then `title`, as
-  `{ label: title, href: "/pages/<slug>" }`. See [static-pages.md](./static-pages.md).
+  `{ label: title, href: "/pages/<slug>" }`. See [static-pages.md](static-pages.md).
 - **`static`** — hardcoded storefront routes: Beranda `/`, Semua Produk
   `/products`, Cabang `/branches`, Keranjang Belanja `/cart`, Checkout
   `/checkout`, Akun Saya `/account`, Masuk `/login`, Daftar `/register`.
@@ -92,9 +92,27 @@ rel="noopener noreferrer">` and internal ones as `<Link>`.
   this, Next.js could statically render the footer once at build time).
 - It uses `DEFAULT_FOOTER_CONFIG` when the row is missing or cannot be loaded,
   then passes the effective config to the shared `<Footer />`.
-- It selects a safe enabled WhatsApp URL and renders
-  `FloatingWhatsappButton` beside (not inside) the footer. Keeping it outside
-  prevents the fixed button from appearing in the admin preview dialog.
+- It selects a safe enabled WhatsApp URL and renders `StoreWhatsappHelp`
+  (`apps/store/src/components/StoreWhatsappHelp.tsx`) before the footer.
+  Keeping the presentation outside the footer prevents the fixed button from
+  appearing in the admin preview dialog; the preview keeps rendering only
+  `<Footer />`.
+- `StoreWhatsappHelp` is a small client wrapper that uses `usePathname()` — no
+  config fetch, no business data. On `/checkout` and `/account/orders/[id]`
+  **below the desktop breakpoint `lg`** it renders a normal inline link
+  (“Butuh bantuan? Hubungi WhatsApp”, 44 px minimum height) and hides the
+  floating button; on desktop and every other route the floating button is
+  unchanged. The split exists because a preflight hit-test at 320 CSS px showed
+  the fixed 56×56 button covering 34% of the primary **Lanjut** action and 92%
+  of a field hint on `/checkout` (artifacts: `playwright/mcp/checkout-phase2/`).
+  Exactly one help affordance is active per viewport (`lg:hidden` vs
+  `hidden lg:block`).
+- Footer typography and targets: tagline, links and copyright use the opaque
+  `text-foreground` (≥4,5:1 on the real footer background in both themes), and
+  social anchors get a ≥32×32 hit area (`h-9 w-9` with `gap-3`, so neighbours
+  never overlap). Both changes live in the shared `Footer`, so the admin
+  preview shows the same improved store rendering; no admin-only surface is
+  restyled.
 - The default and seed config include `https://wa.me/6281234567890` enabled.
 
 ## Admin UI
@@ -148,4 +166,4 @@ rel="noopener noreferrer">` and internal ones as `<Link>`.
 ## Related
 
 - Endpoint details: [docs/api-reference.md](./api-reference.md)
-- Static pages (the `pages` link category): [docs/features/static-pages.md](./static-pages.md)
+- Static pages (the `pages` link category): [docs/features/static-pages.md](static-pages.md)

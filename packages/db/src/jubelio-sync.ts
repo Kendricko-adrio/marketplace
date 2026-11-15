@@ -18,8 +18,8 @@
  * Shopee = channel_id 64. See docs/features/jubelio-sync.md + memory [[jubelio-sync-api]].
  *
  * Invariants (mirror the former SOH sync; do NOT violate):
- *   - branch_stock.reservedStock is NEVER written here (runtime-managed by
- *     checkout — see [[stock-reservation-design]]). Only `stock` is written.
+ *   - branch_stock.reservedStock and pendingRemoteStock are NEVER written here
+ *     (checkout-managed). Provider stock series are mirrored separately.
  *   - Branch status mirrors Jubelio location `is_active` on every upsert.
  *   - Upserts keyed on Jubelio natural keys (jubelioItemGroupId / jubelioItemId /
  *     jubelioLocationId / jubelioCategoryId) → idempotent re-runs.
@@ -32,6 +32,7 @@
  */
 
 import { createHash } from "node:crypto";
+import { normalizeJubelioMasterParcel, type JubelioParcelDimensions } from "./jubelio-parcel";
 import { sql, eq, inArray } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import {
@@ -63,8 +64,44 @@ let tokenExpiresAt = 0;
 /** Max retry attempts for 429 / 5xx responses before giving up. */
 const MAX_RETRIES = Math.max(0, Number(process.env.JUBELIO_SYNC_MAX_RETRIES || 5));
 
+// Optional, explicitly configured client-side bounds for the production
+// bootstrap import. When neither env var is set, the shared webhook/admin sync
+// path keeps its previous behaviour (no timeout, no budget) — the bootstrap
+// service wires both. The budget counts every request, including login and
+// retries, so the importer does not rely on 429s as its only throttle.
+function readPositiveNumber(value: string | undefined): number | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+const REQUEST_TIMEOUT_MS = readPositiveNumber(process.env.JUBELIO_SYNC_TIMEOUT_MS);
+const REQUEST_BUDGET_PER_MINUTE = readPositiveNumber(
+  process.env.JUBELIO_SYNC_REQUESTS_PER_MINUTE
+);
+
+let budgetWindowStart = 0;
+let budgetCount = 0;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+async function awaitRequestBudget(): Promise<void> {
+  if (REQUEST_BUDGET_PER_MINUTE === null) return;
+  for (;;) {
+    const now = Date.now();
+    if (now - budgetWindowStart >= 60_000) {
+      budgetWindowStart = now;
+      budgetCount = 0;
+    }
+    if (budgetCount < REQUEST_BUDGET_PER_MINUTE) {
+      budgetCount += 1;
+      return;
+    }
+    await sleep(60_000 - (now - budgetWindowStart));
+  }
 }
 
 /** Exponential backoff with jitter (base 1s, cap 30s). */
@@ -81,10 +118,14 @@ async function login(): Promise<string> {
       "jubelio-sync: JUBELIO_EMAIL and JUBELIO_PASSWORD must be set"
     );
   }
+  await awaitRequestBudget();
   const res = await fetch(`${API_BASE}/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
+    ...(REQUEST_TIMEOUT_MS === null
+      ? {}
+      : { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }),
   });
   if (!res.ok) {
     throw new Error(`jubelio-sync: login failed (${res.status})`);
@@ -111,8 +152,12 @@ async function jubelioRequest(
   let token = await getToken();
   let relogged = false;
   for (let attempt = 0; ; attempt++) {
+    await awaitRequestBudget();
     const res = await fetch(`${API_BASE}${path}`, {
       ...init,
+      ...(init.signal === undefined && REQUEST_TIMEOUT_MS !== null
+        ? { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) }
+        : {}),
       headers: {
         Authorization: token,
         ...(init.body ? { "Content-Type": "application/json" } : {}),
@@ -216,6 +261,7 @@ export type JubelioCatalogSku = {
   barcode: string | null;
   variation_values: JubelioVariationValue[];
   end_qty?: number;
+  parcelDimensions?: JubelioParcelDimensions | null;
 };
 
 export type JubelioCatalogProduct = {
@@ -239,6 +285,7 @@ export type JubelioStockItem = {
     on_hand?: number;
     available?: number;
     reserved?: number;
+    on_order?: number;
   }[];
 };
 
@@ -352,9 +399,21 @@ export async function fetchMastersPage(
 export async function fetchProductCatalog(
   itemGroupId: number
 ): Promise<JubelioCatalogProduct> {
-  return jubelioGet<JubelioCatalogProduct>(
-    `/inventory/catalog/${itemGroupId}`
-  );
+  const catalog = await jubelioGet<JubelioCatalogProduct>(`/inventory/catalog/${itemGroupId}`);
+  return enrichJubelioSkuParcels(catalog, (itemId) => jubelioGet<unknown>(`/inventory/items/${itemId}`));
+}
+
+/** Read every SKU's own master detail; never infer dimensions from its group. */
+export async function enrichJubelioSkuParcels(
+  catalog: JubelioCatalogProduct,
+  readItem: (itemId: number) => Promise<unknown>
+): Promise<JubelioCatalogProduct> {
+  const product_skus: JubelioCatalogSku[] = [];
+  // Sequential reads preserve the existing provider request throttle.
+  for (const sku of catalog.product_skus ?? []) {
+    product_skus.push({ ...sku, parcelDimensions: normalizeJubelioMasterParcel(await readItem(sku.item_id)) });
+  }
+  return { ...catalog, product_skus };
 }
 
 /** Per-location stock for a batch of variant item_ids. */
@@ -388,6 +447,15 @@ export type JubelioStockRow = {
   itemId: number;
   locationId: number;
   onHand: number;
+  /** Jubelio `on_order` (provider-side SO liability). */
+  onOrder: number;
+  /** Jubelio `reserved` (provider-side pick/reserve liability). */
+  reserved: number;
+  /**
+   * Jubelio `available` = on_hand − on_order − reserved. NULL only when no
+   * usable value could be derived (the caller then fails closed).
+   */
+  available: number | null;
 };
 
 /**
@@ -398,7 +466,14 @@ export type JubelioStockRow = {
 export function resolveKnownJubelioStockRows(
   rows: JubelioStockRow[],
   variantIdByItemId: ReadonlyMap<number, string>
-): { branchId: string; productVariantId: string; stock: number }[] {
+): {
+  branchId: string;
+  productVariantId: string;
+  stock: number;
+  onOrder: number;
+  providerReserved: number;
+  available: number | null;
+}[] {
   return rows.flatMap((row) => {
     const productVariantId = variantIdByItemId.get(row.itemId);
     if (!productVariantId) return [];
@@ -407,6 +482,9 @@ export function resolveKnownJubelioStockRows(
         branchId: keyId("jubelio:branch:", String(row.locationId)),
         productVariantId,
         stock: row.onHand,
+        onOrder: row.onOrder,
+        providerReserved: row.reserved,
+        available: row.available,
       },
     ];
   });
@@ -812,6 +890,7 @@ export async function upsertJubelioProducts(
           price: money(sku.sell_price),
           isDefault: firstVariant,
           barcode: sku.barcode ?? null,
+          parcelDimensions: sku.parcelDimensions ?? null,
           jubelioItemId: sku.item_id,
         })
         .onConflictDoUpdate({
@@ -822,6 +901,7 @@ export async function upsertJubelioProducts(
             size: sql`excluded.size`,
             price: sql`excluded.price`,
             barcode: sql`excluded.barcode`,
+            parcelDimensions: sql`excluded.parcel_dimensions`,
             updatedAt: now,
             // isDefault NOT updated — preserve admin edits.
           },
@@ -842,10 +922,13 @@ export async function upsertJubelioProducts(
 }
 
 /**
- * Upsert per-branch stock. `rows` = per (variant item_id, location_id) on_hand.
- * Never touches reservedStock (checkout-managed invariant). Uses Jubelio
- * `on_hand` (the physical pool); falls back to `available` when on_hand is
- * missing (they're equal when Jubelio reserved=0).
+ * Upsert per-branch stock. `rows` = per (variant item_id, location_id) series.
+ * Never touches pendingRemoteStock (the Sales-Order hold, checkout-managed
+ * invariant) nor reservedStock (legacy adjustment ledger). Captures ALL FOUR
+ * Jubelio series from the same snapshot: on_hand → stock, on_order,
+ * reserved → providerReserved, and available. The provider `available` is the
+ * sellable input for the Sales-Order flow (it already nets out on_order and
+ * reserved, so local code must never subtract them again).
  */
 export async function upsertJubelioStock(
   db: Db,
@@ -875,41 +958,113 @@ export async function upsertJubelioStock(
   for (const chunk of chunked(resolvedRows, BATCH_SIZE)) {
     await db
       .insert(branchStocks)
-      .values(chunk)
+      .values(chunk.map((row) => ({
+        branchId: row.branchId,
+        productVariantId: row.productVariantId,
+        stock: row.stock,
+        onOrderStock: row.onOrder,
+        providerReservedStock: row.providerReserved,
+        availableStock: row.available,
+        providerStockSyncedAt: now,
+      })))
       .onConflictDoUpdate({
         target: [branchStocks.branchId, branchStocks.productVariantId],
-        set: { stock: sql`excluded.stock`, updatedAt: now },
+        set: {
+          stock: sql`excluded.stock`,
+          onOrderStock: sql`excluded.on_order_stock`,
+          providerReservedStock: sql`excluded.provider_reserved_stock`,
+          availableStock: sql`excluded.available_stock`,
+          providerStockSyncedAt: now,
+          updatedAt: now,
+        },
       });
   }
   return resolvedRows.length;
 }
 
 /**
- * Flatten a /inventory/items/all-stocks/ response into per (item,location)
- * rows. Every named location is included because every named Jubelio location
- * is imported as a branch. Unknown location ids are skipped to avoid FK errors.
+ * Clamp a single stock-series observation. Zero is an observation: an explicit
+ * 0 is kept. Anything absent, negative, or non-finite fails closed to 0
+ * (except `available`, see below).
  */
-export function flattenStock(
-  resp: JubelioStockResponse
-): { itemId: number; locationId: number; onHand: number }[] {
+function clampSeries(raw: unknown): number {
+  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0
+    ? raw
+    : 0;
+}
+
+/**
+ * Flatten a /inventory/items/all-stocks/ response into per (item,location)
+ * rows capturing all four Jubelio series: on_hand, on_order, reserved and
+ * available. Every named location is included because every named Jubelio
+ * location is imported as a branch. Unknown location ids are skipped to avoid
+ * FK errors; unknown item ids are filtered later by resolveKnownJubelioStockRows.
+ *
+ * Fail-closed rules (zero-clamp slice, extended for the Sales-Order flow):
+ * - on_hand falls back to `available` when absent; anything else unusable → 0.
+ * - on_order / reserved: absent/negative/non-finite → 0 (an absent liability
+ *   series must never hide local units, but also never adds sellable stock).
+ * - available: Jubelio's documented formula is on_hand − on_order − reserved.
+ *   The explicit `available` value is used when present; when absent it is
+ *   DERIVED from the three captured series. When no usable derivation exists
+ *   the row carries `available: null` and the storefront fails closed (0
+ *   sellable) instead of guessing.
+ */
+export function flattenStock(resp: JubelioStockResponse): {
+  itemId: number;
+  locationId: number;
+  onHand: number;
+  onOrder: number;
+  reserved: number;
+  available: number | null;
+}[] {
   const outletIds = new Set(
     (resp.locations ?? [])
       .filter((l) => l.location_name?.trim())
       .map((l) => l.location_id)
   );
-  const out: { itemId: number; locationId: number; onHand: number }[] = [];
+  const out: {
+    itemId: number;
+    locationId: number;
+    onHand: number;
+    onOrder: number;
+    reserved: number;
+    available: number | null;
+  }[] = [];
   for (const item of resp.data ?? []) {
     for (const ls of item.location_stocks ?? []) {
       if (!outletIds.has(ls.location_id)) continue;
+      const onHandRaw = ls.on_hand ?? ls.available;
       const onHand =
-        ls.on_hand ??
-        ls.available ??
-        (ls.reserved != null && ls.available != null
-          ? ls.available + ls.reserved
-          : 0);
-      if (onHand > 0) {
-        out.push({ itemId: item.item_id, locationId: ls.location_id, onHand });
+        typeof onHandRaw === "number" && Number.isFinite(onHandRaw) && onHandRaw >= 0
+          ? onHandRaw
+          : 0;
+      const onOrder = clampSeries(ls.on_order);
+      const reserved = clampSeries(ls.reserved);
+      let available: number | null;
+      if (typeof ls.available === "number" && Number.isFinite(ls.available)) {
+        // An explicit observation is kept (clamped at 0 for negatives — a
+        // negative available is not sellable).
+        available = Math.max(0, ls.available);
+      } else if (
+        ls.on_hand != null ||
+        ls.on_order != null ||
+        ls.reserved != null
+      ) {
+        // Derive from the captured series (Jubelio's documented formula).
+        available = Math.max(0, onHand - onOrder - reserved);
+      } else {
+        // No usable observation at all — fail closed upstream.
+        available = null;
       }
+      out.push({
+        itemId: item.item_id,
+        locationId: ls.location_id,
+        onHand,
+        onOrder,
+        reserved,
+        available,
+      });
     }
   }
   return out;

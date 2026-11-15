@@ -1,10 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import type { RegionLevel, ShipmentRegion } from "@marketplace/db/src/shipment-regions";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { ReadOnlyInput } from "@/components/ui/read-only-input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
@@ -31,11 +41,20 @@ export interface BranchFormData {
   operatingHours: OperatingHours;
   googleMapsUrl: string;
   status: "aktif" | "nonaktif";
+  // Shipment hierarchy is required; sender details remain optional on save.
+  shippingPhone: string;
+  shippingAddress: string;
+  shippingPostalCode: string;
+  shippingAreaId: string;
+  shippingProvinceId: string;
+  shippingCityId: string;
+  shippingDistrictId: string;
 }
 
 interface BranchFormProps {
   mode: "create" | "edit";
   initialData?: BranchFormData;
+  regionConfigured?: boolean;
   onSubmit: (data: BranchFormData) => Promise<void>;
 }
 
@@ -49,11 +68,47 @@ const DAY_KEYS = [
   { key: "sunday", label: "Minggu" },
 ] as const;
 
+const REGION_SELECTORS = [
+  { level: "provinces", field: "shippingProvinceId", label: "Provinsi Pengiriman" },
+  { level: "cities", field: "shippingCityId", label: "Kota/Kabupaten Pengiriman" },
+  { level: "districts", field: "shippingDistrictId", label: "Kecamatan Pengiriman" },
+  { level: "areas", field: "shippingAreaId", label: "Kelurahan/Desa Pengiriman" },
+] as const;
+
+function useRegionOptions(level: RegionLevel, parentId?: string, generation = 0) {
+  const [retry, setRetry] = useState(0);
+  const key = `${level}:${parentId ?? ""}:${generation}:${retry}`;
+  const enabled = level === "provinces" || !!parentId;
+  const [result, setResult] = useState<{ key: string; options: ShipmentRegion[]; error: boolean } | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let ignore = false;
+    const controller = new AbortController();
+    async function load() {
+      try {
+        const query = new URLSearchParams({ level, ...(parentId ? { parentId } : {}) });
+        const response = await fetch(`/api/admin/shipment/regions?${query}`, { signal: controller.signal });
+        const body = await response.json();
+        if (!response.ok || !body.success || !Array.isArray(body.data)) throw new Error("Unavailable");
+        if (!ignore) setResult({ key, options: body.data, error: false });
+      } catch {
+        if (!ignore) setResult({ key, options: [], error: true });
+      }
+    }
+    void load();
+    return () => { ignore = true; controller.abort(); };
+  }, [enabled, level, parentId, key]);
+  const current = result?.key === key ? result : null;
+  return { options: enabled ? current?.options ?? [] : [], loading: enabled && !current, error: enabled && !!current?.error, retry: () => setRetry((n) => n + 1) };
+}
+
 export default function BranchForm({
   mode,
   initialData,
+  regionConfigured,
   onSubmit,
 }: BranchFormProps) {
+  const router = useRouter();
   const [formData, setFormData] = useState<BranchFormData>(
     initialData ?? {
       name: "",
@@ -73,10 +128,39 @@ export default function BranchForm({
       },
       googleMapsUrl: "",
       status: "aktif",
+      shippingPhone: "",
+      shippingAddress: "",
+      shippingPostalCode: "",
+      shippingAreaId: "",
+      shippingProvinceId: "",
+      shippingCityId: "",
+      shippingDistrictId: "",
     }
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [regionGenerations, setRegionGenerations] = useState([0, 0, 0, 0]);
+  const provinces = useRegionOptions("provinces");
+  const cities = useRegionOptions("cities", formData.shippingProvinceId, regionGenerations[1]);
+  const districts = useRegionOptions("districts", formData.shippingCityId, regionGenerations[2]);
+  const areas = useRegionOptions("areas", formData.shippingDistrictId, regionGenerations[3]);
+  const lookups = [provinces, cities, districts, areas];
+  const selectedArea = areas.options.find((area) => area.id === formData.shippingAreaId);
+  const regionReady = REGION_SELECTORS.every(({ field }, i) =>
+    !lookups[i].loading && !lookups[i].error && lookups[i].options.some((option) => option.id === formData[field])
+  ) && !!selectedArea?.postalCode && selectedArea.postalCode === formData.shippingPostalCode;
+  const legacy = mode === "edit" && (regionConfigured === false || !initialData?.shippingProvinceId || !initialData.shippingCityId || !initialData.shippingDistrictId || !initialData.shippingAreaId || !initialData.shippingPostalCode);
+
+  function changeRegion(index: number, value: string) {
+    // A → B → A is a new request, not permission to reuse A's cached options.
+    setRegionGenerations((previous) => previous.map((generation, i) => i > index ? generation + 1 : generation));
+    setFormData((previous) => {
+      const next = { ...previous, [REGION_SELECTORS[index].field]: value, shippingPostalCode: "" };
+      for (let i = index + 1; i < REGION_SELECTORS.length; i++) next[REGION_SELECTORS[i].field] = "";
+      if (index === 3) next.shippingPostalCode = areas.options.find((option) => option.id === value)?.postalCode ?? "";
+      return next;
+    });
+  }
 
   function updateField<K extends keyof BranchFormData>(
     key: K,
@@ -115,6 +199,7 @@ export default function BranchForm({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!regionReady || submitting) return;
     setError(null);
     setSubmitting(true);
     try {
@@ -137,16 +222,21 @@ export default function BranchForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-8">
+    <form onSubmit={handleSubmit} className="space-y-6">
       {error && (
         <div className="bg-destructive/10 text-destructive text-sm p-3 rounded-md">
           {error}
         </div>
       )}
 
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Informasi Cabang</h3>
-        <div className="grid gap-4 sm:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle><h3>Informasi Cabang</h3></CardTitle>
+          <CardDescription>
+            Nama, kode, alamat, dan koordinat cabang yang tampil di storefront.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2 sm:col-span-2">
             <Label htmlFor="name">Nama Cabang</Label>
             <Input
@@ -237,12 +327,89 @@ export default function BranchForm({
               </Label>
             </div>
           </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Jam Operasional</h3>
-        <div className="space-y-3">
+      <Card>
+        <CardHeader>
+          <CardTitle><h3>Asal Pengiriman</h3></CardTitle>
+          <CardDescription>
+            Wilayah Shipment wajib dipilih untuk semua cabang. Tidak mengubah
+            kota atau alamat umum cabang.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {legacy && <p role="status" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">Wilayah pengiriman cabang belum lengkap. Lengkapi pilihan sebelum menyimpan perubahan.</p>}
+          <div className="grid gap-4 sm:grid-cols-2">
+            {REGION_SELECTORS.map(({ field, label }, index) => {
+              const lookup = lookups[index];
+              const value = formData[field];
+              const parentExists = index === 0 || !!formData[REGION_SELECTORS[index - 1].field];
+              const missing = !!value && !lookup.loading && !lookup.error && !lookup.options.some((option) => option.id === value);
+              return <div key={field} className="space-y-2">
+                <Label htmlFor={field}>{label}</Label>
+                <select id={field} required value={value} disabled={submitting || !parentExists || lookup.loading || lookup.error}
+                  className="border-input bg-field w-full rounded-md border px-3 py-2 text-sm disabled:opacity-50"
+                  onChange={(event) => changeRegion(index, event.target.value)}>
+                  <option value="">{lookup.loading ? "Memuat wilayah…" : "Pilih wilayah"}</option>
+                  {value && !lookup.options.some((option) => option.id === value) && <option value={value}>Pilihan tersimpan perlu diverifikasi</option>}
+                  {lookup.options.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+                </select>
+                {missing && <p role="alert" className="text-destructive text-sm">Wilayah tersimpan tidak tersedia. Pilih ulang wilayah ini.</p>}
+                {lookup.error && <div role="alert" className="text-destructive text-sm">Gagal memuat wilayah. <Button type="button" variant="outline" size="sm" onClick={lookup.retry}>Coba lagi — {label}</Button></div>}
+              </div>;
+            })}
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="shippingPhone">Telepon Pengirim</Label>
+              <Input
+                id="shippingPhone"
+                type="tel"
+                inputMode="tel"
+                placeholder="021999888777"
+                value={formData.shippingPhone}
+                onChange={(e) => updateField("shippingPhone", e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="shippingPostalCode">Kode Pos Asal Kirim</Label>
+              <ReadOnlyInput
+                id="shippingPostalCode"
+                type="text"
+                inputMode="numeric"
+                placeholder="Pilih kelurahan terlebih dahulu"
+                value={formData.shippingPostalCode}
+                hint="Terisi otomatis dari Kelurahan/Area."
+              />
+            </div>
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="shippingAddress">Alamat Asal Kirim</Label>
+              <Textarea
+                id="shippingAddress"
+                rows={2}
+                placeholder="Alamat lengkap pengirim untuk pickup kurir"
+                value={formData.shippingAddress}
+                onChange={(e) => updateField("shippingAddress", e.target.value)}
+              />
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Kode pos berasal dari kelurahan Shipment. Nama cabang dipakai sebagai nama pengirim.
+            Telepon dan alamat pengirim boleh kosong saat menyimpan, tetapi wajib untuk delivery.
+            {selectedArea && selectedArea.postalCode !== formData.shippingPostalCode && " Kode pos tersimpan sudah tidak cocok. Pilih ulang kelurahan sebelum menyimpan."}
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle><h3>Jam Operasional</h3></CardTitle>
+          <CardDescription>
+            Aktifkan hari buka, lalu atur jam layanan cabang.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
           {DAY_KEYS.map(({ key, label }) => {
             const hours = formData.operatingHours[key] ?? null;
             const isOpen = hours !== null;
@@ -284,11 +451,19 @@ export default function BranchForm({
               </div>
             );
           })}
-        </div>
-      </div>
+        </CardContent>
+      </Card>
 
       <div className="flex items-center justify-end gap-2">
-        <Button type="submit" disabled={submitting}>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => router.push("/admin/branches")}
+          disabled={submitting}
+        >
+          Batal
+        </Button>
+        <Button type="submit" disabled={submitting || !regionReady}>
           {submitting && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
           {mode === "create" ? "Buat Cabang" : "Simpan Perubahan"}
         </Button>

@@ -1,546 +1,337 @@
 import { NextRequest, NextResponse } from "next/server";
-import { db } from "@/db";
-import {
-  carts,
-  cartItems,
-  productVariants,
-  products,
-  branches,
-  branchStocks,
-  orders,
-  orderItems,
-  jubelioStockOperations,
-} from "@/db";
-import { eq, and, sql } from "drizzle-orm";
+import { placeCheckoutOrder, type PlaceCheckoutOutcome } from "@/features/checkout/place-checkout-service";
+import { placeOrderLegacy } from "@/features/checkout/place-order-legacy-service";
+import { type PlaceDeliveryResult } from "@/features/checkout/place-order-delivery";
+import { classifyPlaceOrderError, RouteLogError } from "@/features/checkout/place-order-errors";
 import { requireOnboardedApiSession } from "@/lib/route-access";
-import { z } from "zod";
-import { pickupDateToInstant, validatePickupSlot } from "@/lib/pickup-validation";
-import { createPayment, getMockPaymentResult } from "@/lib/midtrans";
-import { getConfigNumber, getPpnRatePercent } from "@/lib/config";
-import {
-  calculateLineItemSubtotal,
-  calculateOrderPricing,
-} from "@/lib/order-pricing";
-import { buildPaymentItemDetails } from "@/lib/payment-item-details";
-import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
-import { claimAndFailOrder } from "@/lib/order-finalize";
-import { initializeReservedOrderPayment } from "@/lib/payment-initialization";
-import {
-  applyJubelioStockOperation,
-  createReserveOperationValues,
-  failOrderWithAmbiguousReserve,
-} from "@/lib/jubelio-stock-saga";
+import { parsePlaceOrderBody, REPRICE_REQUIRED_MESSAGE } from "@/features/checkout/place-order-input";
+import { readCheckoutJson } from "@/lib/checkout-input";
+import { admitCheckoutRequest } from "@/lib/checkout-admission";
+import { getMockPaymentResult } from "@/lib/midtrans";
+import { createModuleLogger, getRequestId, withRequestContext } from "@/lib/logger";
+import { findAcceptedCheckout, checkoutResultResponse, type CheckoutRecovery } from "@/lib/checkout-request";
+import { placeCheckout } from "@/features/checkout/place-order-service";
+import { createCheckoutPayment } from "@/lib/midtrans";
 
 /**
- * Thrown inside the place-order transaction when the atomic stock-reservation
- * UPDATE matches 0 rows (another concurrent checkout took the last units).
- * The catch block translates it into a 400 so the customer can retry; the whole
- * transaction rolls back, releasing any reservations made for earlier items.
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
  */
-class InsufficientStockError extends Error {
-  constructor(public productName: string) {
-    super(`Insufficient stock for ${productName}`);
-    this.name = "InsufficientStockError";
+const log = createModuleLogger("checkout-place-order");
+
+/** HTTP mapping for the version-2 attempt contract (no order means no redirect). */
+function checkoutAttemptResponse(result: Awaited<ReturnType<typeof placeCheckout>>): Response {
+  const { replayed, ...data } = result;
+  if (result.state === "promoted") {
+    log.info(`checkout attempt promoted: order ${data.orderId}, attempt ${data.attemptId}, replay ${replayed}`);
+    return NextResponse.json({ success: true, data, orderId: data.orderId, redirectUrl: data.redirectUrl },
+      { status: replayed ? 200 : 201, headers: { "Cache-Control": "no-store" } });
+  }
+  if (result.state === "rejected") {
+    log.warn(`checkout rejected before order creation (attempt ${data.attemptId}, ${data.failureCode})`);
+    return NextResponse.json({ success: false, code: data.failureCode, error: data.message, data,
+      orderId: null, requestId: getRequestId() },
+      { status: data.failureCode === "SALES_ORDER_REJECTED" ? 409 : 502, headers: { "Cache-Control": "no-store" } });
+  }
+  return NextResponse.json({ success: false,
+    code: data.state === "manual_review" ? "CHECKOUT_MANUAL_REVIEW" : "CHECKOUT_PROCESSING",
+    error: data.message, data, orderId: null, requestId: getRequestId() },
+    { status: 202, headers: { "Cache-Control": "no-store" } });
+}
+
+async function postPlaceOrder(request: NextRequest): Promise<Response> {
+  const recovery: CheckoutRecovery = {};
+  try {
+    const response = await placeOrder(request, recovery);
+    if (response.status >= 400 && recovery.identity) {
+      // Dua live-read concurrent dapat mengganti observation stamp sebelum
+      // salah satu commit. Guard stock tetap ketat; tunggu sebentar hanya
+      // hasil key yang sama, tanpa mengulang placement atau provider request.
+      const waits = response.status === 503 ? [0, 25, 75, 150, 250] : [0];
+      for (const wait of waits) {
+        if (wait) await new Promise((resolve) => setTimeout(resolve, wait));
+        const accepted = await findAcceptedCheckout(recovery.identity);
+        if (accepted) return checkoutResultResponse(accepted, !recovery.committed);
+      }
+    }
+    return response;
+  } catch (error) {
+    const decision = classifyPlaceOrderError("recovery", error);
+    if (decision.kind === "request-conflict") {
+      const error = decision.error;
+      log.warn(`checkout request key conflict (code ${error.code})`);
+      return NextResponse.json({ success: false, code: error.code, error: error.message, requestId: getRequestId() }, { status: 409, headers: { "Cache-Control": "no-store" } });
+    }
+    log.error(
+      `checkout result recovery unavailable (committed ${!!recovery.committed})`,
+      new RouteLogError("checkout result recovery unavailable")
+    );
+    return NextResponse.json({ success: false, code: "POLICY_UNAVAILABLE", error: "Status checkout belum dapat dibaca. Coba lagi dengan request yang sama.", requestId: getRequestId() }, { status: 503, headers: { "Cache-Control": "no-store" } });
   }
 }
 
-const placeOrderSchema = z.object({
-  phone: z
-    .string()
-    .min(8, "Phone number is required")
-    .max(20, "Phone number is too long"),
-  email: z.string().email("Valid email is required"),
-  pickupDate: z.string(), // YYYY-MM-DD
-  pickupTime: z.string(), // HH:mm
-  // Cart item ids the customer chose to checkout in this order.
-  selectedItemIds: z.array(z.string()).min(1, "Select at least one item to checkout"),
-});
-
-export async function POST(request: NextRequest) {
-  let log = requestLogger(request, { module: "place-order" });
+async function placeOrder(request: NextRequest, recovery: CheckoutRecovery) {
   log.info("place order requested");
+  // E2E-only payment seam shared by the creator and replay paths.
+  const initializeCheckoutPayment = (paymentInput: Parameters<typeof createCheckoutPayment>[0]) => {
+    const mockRequested = process.env.NODE_ENV !== "production" &&
+      request.headers.get("x-e2e-payment-mock") === "true";
+    const mock = mockRequested
+      ? getMockPaymentResult(paymentInput.orderId, { MIDTRANS_E2E_MOCK: "true", NODE_ENV: "test" })
+      : null;
+    return mock ? Promise.resolve({ kind: "ready" as const, ...mock }) : createCheckoutPayment(paymentInput);
+  };
   try {
     const access = await requireOnboardedApiSession();
-    if (!access.ok) return withRequestId(access.response, log);
+    if (!access.ok) return access.response;
     const { session } = access;
 
-    const body = await request.json();
-    const parsed = placeOrderSchema.safeParse(body);
+    const body = await readCheckoutJson(request);
+    const requestedMethod = (body as { fulfillmentMethod?: unknown } | null)?.fulfillmentMethod;
+
+    // ===== Method-aware body handling: pickup stays the legacy shape; a
+    // delivery submission carries ONLY the approval (never money/slots). =====
+    const isDelivery = requestedMethod === "delivery";
+    const parsed = parsePlaceOrderBody(body, requestedMethod);
 
     if (!parsed.success) {
-      log.warn("invalid request body", { issues: parsed.error.issues });
-      return withRequestId(
-        NextResponse.json(
-          {
-            success: false,
-            error: "Invalid request body",
-            details: parsed.error.issues,
-          },
-          { status: 400 }
-        ),
-        log
-      );
-    }
-
-    const { phone, email, pickupDate, pickupTime, selectedItemIds } =
-      parsed.data;
-    log = log.child({
-      userId: session.user.id,
-      itemCount: selectedItemIds.length,
-      pickupDate,
-      pickupTime,
-    });
-
-    // ===== Load the user's cart =====
-    const cartRows = await db
-      .select()
-      .from(carts)
-      .where(eq(carts.userId, session.user.id))
-      .limit(1);
-
-    if (cartRows.length === 0) {
-      log.warn("checkout rejected — cart is empty");
-      return NextResponse.json(
-        { success: false, error: "Cart is empty" },
-        { status: 400 }
-      );
-    }
-
-    const cart = cartRows[0];
-
-    // ===== Load the selected cart items with variant + product + branch =====
-    const items = await db
-      .select({
-        cartItemId: cartItems.id,
-        quantity: cartItems.quantity,
-        variantId: productVariants.id,
-        variantColor: productVariants.color,
-        variantSize: productVariants.size,
-        variantPrice: productVariants.price,
-        jubelioItemId: productVariants.jubelioItemId,
-        productId: products.id,
-        productName: products.name,
-        branchId: cartItems.branchId,
-      })
-      .from(cartItems)
-      .innerJoin(productVariants, eq(cartItems.variantId, productVariants.id))
-      .innerJoin(products, eq(productVariants.productId, products.id))
-      .where(eq(cartItems.cartId, cart.id));
-
-    const selectedItems = items.filter((item) =>
-      selectedItemIds.includes(item.cartItemId)
-    );
-
-    if (selectedItems.length === 0) {
-      log.warn("checkout rejected — no selected cart items", { selectedItemIds });
-      return NextResponse.json(
-        { success: false, error: "No selected items to checkout" },
-        { status: 400 }
-      );
-    }
-
-    // ===== Enforce single-branch checkout =====
-    // All selected items must belong to the same branch.
-    const branchIds = new Set(
-      selectedItems.map((i) => i.branchId).filter((b): b is string => !!b)
-    );
-    if (branchIds.size === 0) {
-      log.warn("checkout rejected — selected items have no branch");
-      return NextResponse.json(
-        { success: false, error: "Selected items have no branch assigned" },
-        { status: 400 }
-      );
-    }
-    if (branchIds.size > 1) {
-      log.warn("multi-branch checkout rejected", {
-        branchIds: Array.from(branchIds),
-      });
-      return withRequestId(
-        NextResponse.json(
-          {
-            success: false,
-            error:
-              "Tidak bisa checkout barang di branch yang berbeda. Pilih barang dari satu cabang saja.",
-          },
-          { status: 400 }
-        ),
-        log
-      );
-    }
-
-    const branchId = Array.from(branchIds)[0];
-    log = log.child({ branchId });
-
-    // ===== Load the branch and validate operating hours =====
-    const branch = await db
-      .select()
-      .from(branches)
-      .where(eq(branches.id, branchId))
-      .limit(1);
-
-    if (branch.length === 0 || branch[0].status !== "aktif") {
-      log.warn("checkout rejected — branch unavailable", { branchId });
-      return NextResponse.json(
-        { success: false, error: "Branch is no longer available" },
-        { status: 400 }
-      );
-    }
-    if (branch[0].jubelioLocationId == null) {
-      log.warn("checkout rejected — branch is not linked to Jubelio", { branchId });
-      return NextResponse.json(
-        { success: false, error: "Branch is not linked to Jubelio inventory" },
-        { status: 409 }
-      );
-    }
-    const unmappedItem = selectedItems.find((item) => item.jubelioItemId == null);
-    if (unmappedItem) {
-      log.warn("checkout rejected — product is not linked to Jubelio", {
-        variantId: unmappedItem.variantId,
-        productName: unmappedItem.productName,
-      });
+      log.warn(`invalid request body (${parsed.error.issues.length} issue)`);
       return NextResponse.json(
         {
           success: false,
-          error: `${unmappedItem.productName} is not linked to Jubelio inventory`,
+          error: "Invalid request body",
+          details: parsed.error.issues,
         },
-        { status: 409 }
-      );
-    }
-
-    const slotValidation = validatePickupSlot(
-      branch[0].operatingHours,
-      pickupDate,
-      pickupTime
-    );
-    if (!slotValidation.ok) {
-      return NextResponse.json(
-        { success: false, error: slotValidation.error },
         { status: 400 }
       );
     }
 
-    // ===== Re-check stock for each selected item (soft check) =====
-    // Confirmed remote reservations are already reflected in Jubelio on-hand
-    // (`stock`). Only holds still waiting for remote confirmation are
-    // subtracted here. This is a soft UX pre-check; the authoritative guard is the
-    // atomic conditional UPDATE inside the transaction below.
-    for (const item of selectedItems) {
-      const stockRow = await db
-        .select()
-        .from(branchStocks)
-        .where(
-          and(
-            eq(branchStocks.branchId, branchId),
-            eq(branchStocks.productVariantId, item.variantId)
-          )
-        )
-        .limit(1);
-
-      const availableStock =
-        (stockRow[0]?.stock ?? 0) - (stockRow[0]?.pendingRemoteStock ?? 0);
-      if (item.quantity > availableStock) {
-        log.warn("checkout rejected — soft stock check failed", {
-          variantId: item.variantId,
-          requestedQuantity: item.quantity,
-          availableStock,
-        });
-        return NextResponse.json(
-          {
-            success: false,
-            error: `Insufficient stock for ${item.productName} at this branch`,
-          },
-          { status: 400 }
-        );
-      }
-    }
-
-    // ===== Calculate totals =====
-    const subtotal = calculateLineItemSubtotal(
-      selectedItems.map((item) => ({
-        price: item.variantPrice,
-        quantity: item.quantity,
-      }))
-    );
-    const ppnRatePercent = await getPpnRatePercent();
-    const pricing = calculateOrderPricing({
-      subtotal,
-      discount: 0,
-      shippingCost: 0,
-      serviceFee: 0,
-      ppnRatePercent,
+    const outcome = await placeCheckoutOrder({ actor: session.user, input: parsed.data, isDelivery, recovery,
+      initializeCheckoutPayment,
+      admit: (carriesManualCode) => admitCheckoutRequest({ clientId: session.user.id, kind: "place", headers: request.headers, carriesManualCode }),
     });
-    const total = Number(pricing.total);
-    const paymentItemDetails = buildPaymentItemDetails({
-      items: selectedItems.map((item) => ({
-        id: item.variantId,
-        name: item.productName,
-        price: item.variantPrice,
-        quantity: item.quantity,
-      })),
-      ...pricing,
-    });
-
-    // ===== Reservation TTL (minutes) from system_config (cached at boot) =====
-    const ttlMinutes = await getConfigNumber("reservation.ttlMinutes", 15);
-
-    // ===== Persist order + reservation atomically, then call Midtrans outside the transaction =====
-    const orderId = crypto.randomUUID();
-    const stockOperationId = crypto.randomUUID();
-    // Single anchor for both the local reservation clock and the Midtrans expiry
-    // countdown (`expiry.start_time`) so async methods (VA/GoPay) cannot outlive
-    // the reservation TTL.
-    const paymentStartedAt = new Date();
-    const expiresAt = new Date(paymentStartedAt.getTime() + ttlMinutes * 60_000);
-    log = log.child({ orderId });
-    log.info("creating order", {
-      ppnRatePercent: pricing.ppnRatePercent,
-      ppnAmount: pricing.ppnAmount,
-      total: pricing.total,
-      ttlMinutes,
-    });
-
-    try {
-      await db.transaction(async (tx) => {
-        // ===== Create the order =====
-        // expiresAt drives the sweep cron and pairs with the Midtrans expiry
-        // so the reservation is released even if the `expire` webhook is missed.
-        await tx.insert(orders).values({
-          id: orderId,
-          userId: session.user.id,
-          branchId,
-          status: "pending_payment",
-          // Set later from the authoritative Midtrans GET status (the method is
-          // unknowable until the customer picks one on the hosted Snap page).
-          paymentMethod: null,
-          paymentStatus: "pending",
-          pickupDate: pickupDateToInstant(pickupDate),
-          pickupTime,
-          contactPhone: phone,
-          contactEmail: email,
-          subtotal: pricing.subtotal,
-          shippingCost: pricing.shippingCost,
-          discount: pricing.discount,
-          serviceFee: pricing.serviceFee,
-          ppnRate: pricing.ppnRatePercent,
-          ppnAmount: pricing.ppnAmount,
-          total: pricing.total,
-          expiresAt,
-        });
-
-        // ===== Create order items (with real product names) =====
-        for (const item of selectedItems) {
-          await tx.insert(orderItems).values({
-            id: crypto.randomUUID(),
-            orderId,
-            variantId: item.variantId,
-            productName: item.productName,
-            variantInfo: `${item.variantColor || ""} ${item.variantSize || ""}`.trim(),
-            price: item.variantPrice,
-            quantity: item.quantity,
-          });
-        }
-
-        // ===== Atomically hold stock while Jubelio confirms the adjustment =====
-        // Conditional UPDATE: only increments pending_remote_stock if enough is
-        // still available (stock - pending_remote_stock >= qty). 0 rows means another
-        // concurrent checkout took the last units → throw to roll back the whole
-        // transaction (releasing reservations made for earlier items in this tx).
-        // This is race-free without FOR UPDATE: two concurrent checkouts for the
-        // last unit produce one match and one miss.
-        for (const item of selectedItems) {
-          const reserved = await tx
-            .update(branchStocks)
-            .set({
-              pendingRemoteStock: sql`${branchStocks.pendingRemoteStock} + ${item.quantity}`,
-              updatedAt: new Date(),
-            })
-            .where(
-              and(
-                eq(branchStocks.branchId, branchId),
-                eq(branchStocks.productVariantId, item.variantId),
-                sql`${branchStocks.stock} - ${branchStocks.pendingRemoteStock} >= ${item.quantity}`
-              )
-            )
-            .returning({ branchId: branchStocks.branchId });
-          if (reserved.length === 0) {
-            throw new InsufficientStockError(item.productName);
-          }
-          log.info("local stock hold created", {
-            variantId: item.variantId,
-            quantity: item.quantity,
-          });
-        }
-
-        await tx.insert(jubelioStockOperations).values(
-          createReserveOperationValues({
-            operationId: stockOperationId,
-            orderId,
-            locationId: branch[0].jubelioLocationId!,
-            items: selectedItems.map((item) => ({
-              variantId: item.variantId,
-              itemId: item.jubelioItemId!,
-              quantity: item.quantity,
-              description: item.productName,
-            })),
-          })
-        );
-
-      });
-
-      // Never create a Midtrans transaction until Jubelio confirms that its
-      // on-hand stock has been reduced. Provider calls stay outside the DB tx.
-      log.info("Jubelio stock reserve dispatched", { operationId: stockOperationId });
-      const stockOutcome = await applyJubelioStockOperation(stockOperationId, undefined, log);
-      log.info("Jubelio stock reserve completed", {
-        operationId: stockOperationId,
-        status: stockOutcome.status,
-      });
-      if (stockOutcome.status !== "applied") {
-        if (stockOutcome.status === "reconciling") {
-          await failOrderWithAmbiguousReserve(
-            orderId,
-            "Stock confirmation from Jubelio is still pending",
-            log
-          );
-        }
-        const status = stockOutcome.status === "rejected" ? 409 : 503;
-        const error =
-          stockOutcome.status === "rejected"
-            ? "Stock produk berubah atau tidak mencukupi. Silakan periksa keranjang Anda."
-            : "Stock sedang dikonfirmasi. Silakan coba kembali beberapa saat lagi.";
-        return withRequestId(
-          NextResponse.json({ success: false, error }, { status }),
-          log
-        );
-      }
-
-      const initialized = await initializeReservedOrderPayment({
-        create: () => {
-          const mockRequested =
-            process.env.NODE_ENV !== "production" &&
-            request.headers.get("x-e2e-payment-mock") === "true";
-          const mock = mockRequested
-            ? getMockPaymentResult(orderId, {
-                MIDTRANS_E2E_MOCK: "true",
-                NODE_ENV: "test",
-              })
-            : null;
-          return mock
-            ? Promise.resolve(mock)
-            : createPayment(
-            orderId,
-            total,
-            {
-              first_name: session.user.name || "Customer",
-              email,
-              phone,
-            },
-            paymentItemDetails,
-            ttlMinutes,
-            paymentStartedAt
-          );
-        },
-        persist: async (paymentResult) => {
-          await db.transaction(async (tx) => {
-            await tx
-              .update(orders)
-              .set({
-                snapRedirectUrl: paymentResult.redirectUrl,
-                updatedAt: new Date(),
-              })
-              .where(eq(orders.id, orderId));
-
-            for (const itemId of selectedItemIds) {
-              await tx
-                .delete(cartItems)
-                .where(
-                  and(eq(cartItems.id, itemId), eq(cartItems.cartId, cart.id))
-                );
-            }
-          });
-        },
-        compensate: async (error) => {
-          await claimAndFailOrder(
-            orderId,
-            "Payment initialization failed",
-            "initialization_error",
-            log
-          );
-          log.error("payment initialization failed; reservation released", {
-            error: serializeError(error),
-          });
-        },
-      });
-
-      const midtransResult = initialized.payment;
-      if (initialized.persistenceError) {
-        log.error("payment created but local metadata needs reconciliation", {
-          error: serializeError(initialized.persistenceError),
-        });
-      }
-
-      log.info("order placed successfully", {
-        redirectUrl: !!midtransResult.redirectUrl,
-        ppnRatePercent: pricing.ppnRatePercent,
-        ppnAmount: pricing.ppnAmount,
-        total: pricing.total,
-      });
-      return withRequestId(
-        NextResponse.json({
-          success: true,
-          orderId,
-          redirectUrl: midtransResult.redirectUrl,
-          token: midtransResult.token,
-        }),
-        log
-      );
-    } catch (midtransError) {
-      // Insufficient stock → 400 (customer can retry / pick fewer units).
-      if (midtransError instanceof InsufficientStockError) {
-        log.warn("insufficient stock — reservation transaction rolled back", {
-          productName: midtransError.productName,
-        });
-        return withRequestId(
-          NextResponse.json(
-            { success: false, error: midtransError.message },
-            { status: 400 }
-          ),
-          log
-        );
-      }
-      const err = midtransError as {
-        message?: string;
-        httpStatusCode?: number;
-        ApiResponse?: unknown;
-      };
-      log.error("Midtrans payment creation failed", {
-        message: err.message,
-        httpStatusCode: err.httpStatusCode,
-        apiResponse: err.ApiResponse,
-      });
-      // The compensation path marks the order failed and releases reservation;
-      // checked-out cart rows are preserved so the customer can retry.
-      return withRequestId(
-        NextResponse.json(
-          {
-            success: false,
-            error:
-              err.message ||
-              "Failed to initiate payment. Your cart is preserved — please try again.",
-          },
-          { status: 502 }
-        ),
-        log
-      );
-    }
+    return mapPlaceCheckoutOutcome(outcome);
   } catch (error) {
-    log.error("place order failed", { error: serializeError(error) });
-    return withRequestId(
-      NextResponse.json(
-        { success: false, error: "Failed to place order" },
-        { status: 500 }
-      ),
-      log
-    );
+    return mapPlaceOrderError(error);
   }
 }
+
+function mapPlaceCheckoutOutcome(outcome: PlaceCheckoutOutcome): Response {
+  if (outcome.kind === "attempt") return checkoutAttemptResponse(outcome.result);
+  if (outcome.kind === "delivery-failure") return mapDeliveryQuoteFailure(outcome.result);
+  if (outcome.kind === "rejected") {
+    switch (outcome.reason) {
+      case "paused": return NextResponse.json(outcome.data, { status: 503 });
+      case "unsupported-version": return NextResponse.json(outcome.data, { status: 400 });
+      case "cart-empty": return NextResponse.json(outcome.data, { status: 400 });
+      case "items-not-owned": return NextResponse.json(outcome.data, { status: 404 });
+      case "no-items": return NextResponse.json(outcome.data, { status: 400 });
+      case "no-branch": return NextResponse.json(outcome.data, { status: 400 });
+      case "multiple-branches": return NextResponse.json(outcome.data, { status: 400 });
+      case "branch-unavailable": return NextResponse.json(outcome.data, { status: 400 });
+      case "branch-unlinked": return NextResponse.json(outcome.data, { status: 409 });
+      case "product-unlinked": return NextResponse.json(outcome.data, { status: 409 });
+      case "pickup-slot": return NextResponse.json(outcome.data, { status: 400 });
+      case "tax-unavailable": return NextResponse.json({ ...outcome.data, requestId: getRequestId() }, { status: 503, headers: { "Cache-Control": "no-store" } });
+      case "account-missing": return NextResponse.json({ ...outcome.data, requestId: getRequestId() }, { status: 404, headers: { "Cache-Control": "no-store" } });
+      case "promo-ineligible": return NextResponse.json({ ...outcome.data, requestId: getRequestId() }, { status: outcome.eligibility.status, headers: { "Cache-Control": "no-store" } });
+      case "stock-adjusted": return NextResponse.json(outcome.data, { status: 409 });
+      case "stock-unavailable": return NextResponse.json(outcome.data, { status: 503 });
+      case "attempt-reservation": return NextResponse.json({ ...outcome.data, requestId: getRequestId() }, { status: 409, headers: { "Cache-Control": "no-store" } });
+      case "attempt-unavailable": return NextResponse.json({ ...outcome.data, requestId: getRequestId() }, { status: 503, headers: { "Cache-Control": "no-store" } });
+    }
+  }
+  return mapLegacyOutcome(outcome);
+}
+
+function mapLegacyOutcome(result: Awaited<ReturnType<typeof placeOrderLegacy>>): Response {
+  if (result.kind === "accepted") return checkoutResultResponse(result.result, result.replay);
+  if (result.kind === "legacy-failure") return mapLegacyPlaceOrderError(result.error, result.hasIdentity);
+  if (result.kind === "legacy-sales-rejected") return NextResponse.json({ success: false, error: "Stock produk berubah atau tidak mencukupi. Silakan periksa keranjang Anda." }, { status: 409 });
+  if (result.kind === "legacy-sales-pending") return NextResponse.json({ success: false, error: result.message }, { status: 503 });
+  // TX-02 §13.1: an UNKNOWN payment initialization names the owned order and
+  // never invites a replacement checkout. No redirect is promised.
+  if (result.kind === "legacy-payment-unknown") {
+    log.warn(`payment initialization unknown for order ${result.orderId} — recovery owns observation`);
+    return NextResponse.json(
+      {
+        success: false,
+        code: "PAYMENT_INITIALIZATION_UNKNOWN",
+        error:
+          "Status pembayaran belum dapat dipastikan. Periksa pesanan ini sebelum mencoba pembayaran lagi.",
+        orderId: result.orderId,
+        redirectUrl: null,
+        requestId: getRequestId(),
+      },
+      { status: 202, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+  if (result.kind === "legacy-payment-rejected") {
+    log.warn(`payment initialization rejected for order ${result.orderId}`);
+    return NextResponse.json(
+      {
+        success: false,
+        code: "PAYMENT_INITIALIZATION_REJECTED",
+        error: "Pembayaran belum dapat disiapkan. Pesanan belum dibuat. Periksa ulang pesanan lalu coba lagi.",
+        orderId: result.orderId,
+        retryAllowed: true,
+        requestId: getRequestId(),
+      },
+      { status: 502, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+  return NextResponse.json({ success: true, orderId: result.orderId, redirectUrl: result.redirectUrl, token: result.token });
+}
+
+function mapDeliveryQuoteFailure(result: Extract<PlaceDeliveryResult, { ok: false }>): Response {
+  const failure = result.failure;
+  if (failure.kind === "account-missing") {
+    return NextResponse.json({ success: false, code: "NOT_FOUND", error: "Akun tidak ditemukan.", requestId: getRequestId() }, { status: 404, headers: { "Cache-Control": "no-store" } });
+  }
+  if (failure.kind === "promo") {
+    return NextResponse.json({ success: false, code: failure.evaluation.mapped.code, error: failure.evaluation.message, requestId: getRequestId() },
+      { status: failure.evaluation.mapped.status, headers: { "Cache-Control": "no-store" } });
+  }
+  if (failure.kind === "data") {
+    const status = failure.error.code === "NOT_FOUND" ? 404 : failure.error.code === "UNAVAILABLE" ? 502 : 400;
+    return NextResponse.json({ success: false, error: failure.error.message }, { status });
+  }
+  return NextResponse.json({ success: false, error: REPRICE_REQUIRED_MESSAGE, code: "DELIVERY_REPRICE_REQUIRED", data: { services: failure.services } }, { status: 409 });
+}
+
+function mapLegacyPlaceOrderError(checkoutError: unknown, hasIdentity: boolean): Response {
+  const decision = classifyPlaceOrderError("legacy", checkoutError);
+  if (decision.kind === "promo-reservation") {
+    const checkoutError = decision.error;
+    log.warn(
+      `checkout promo rejected at commit (code ${checkoutError.code}, reason ${checkoutError.reason})`
+    );
+    return NextResponse.json(
+      {
+        success: false,
+        code: checkoutError.code,
+        error: checkoutError.safeMessage,
+        requestId: getRequestId(),
+      },
+      { status: checkoutError.status, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+  if (decision.kind === "pricing-review") {
+    const checkoutError = decision.error;
+    log.warn(`checkout source changed before commit (code ${checkoutError.code})`);
+    return NextResponse.json({ success: false, code: "CHECKOUT_REVIEW_REQUIRED", error: checkoutError.message }, { status: 409 });
+  }
+  // Insufficient stock → 400 (customer can retry / pick fewer units).
+  if (decision.kind === "stock") {
+    const checkoutError = decision.error;
+    log.warn(
+      `insufficient stock — checkout transaction rolled back (product ${checkoutError.productName}, missingSnapshot ${checkoutError.missingSnapshot})`
+    );
+    return NextResponse.json(
+      {
+        success: false,
+        error: checkoutError.missingSnapshot
+          ? "Stok berubah saat checkout. Silakan coba lagi."
+          : checkoutError.message,
+      },
+      { status: checkoutError.missingSnapshot ? 503 : 400 }
+    );
+  }
+  if (hasIdentity) {
+    log.error("checkout transaction unavailable (code POLICY_UNAVAILABLE)");
+    return NextResponse.json({ success: false, code: "POLICY_UNAVAILABLE",
+      error: "Checkout belum dapat diselesaikan. Coba kembali dengan request yang sama.", requestId: getRequestId() },
+      { status: 503, headers: { "Cache-Control": "no-store" } });
+  }
+  const err = checkoutError as {
+    message?: string;
+    httpStatusCode?: number;
+    ApiResponse?: unknown;
+  };
+  log.error(
+    `Midtrans payment creation failed (http status ${err.httpStatusCode ?? "-"})`,
+    new RouteLogError("midtrans payment creation failed")
+  );
+  // The compensation path marks the order failed and cancels the SO;
+  // checked-out cart rows are preserved so the customer can retry.
+  return NextResponse.json(
+    {
+      success: false,
+      error:
+        err.message ||
+        "Failed to initiate payment. Your cart is preserved — please try again.",
+    },
+    { status: 502 }
+  );
+}
+
+function mapPlaceOrderError(error: unknown): Response {
+  const decision = classifyPlaceOrderError("workflow", error);
+  if (decision.kind === "rethrow") throw decision.error;
+  if (decision.kind === "admission") {
+    const error = decision.error;
+    if (error.status === 503) log.error(`checkout admission unavailable (code ${error.code})`);
+    else log.warn(`checkout admission denied (code ${error.code})`);
+    return NextResponse.json({ success: false, code: error.code, error: error.message, requestId: getRequestId() },
+      { status: error.status, headers: { "Cache-Control": "no-store", ...(error.retryAfter ? { "Retry-After": String(error.retryAfter) } : {}) } });
+  }
+  if (decision.kind === "review-required") {
+    const error = decision.error;
+    log.warn(
+      `checkout review rejected (code ${error.code}, requiresAcknowledgement ${error.requiresAcknowledgement ?? "-"})`
+    );
+    return NextResponse.json(
+      {
+        success: false,
+        code: error.code,
+        error: error.message,
+        requestId: getRequestId(),
+        ...(error.requiresAcknowledgement
+          ? { data: { requiresAcknowledgement: error.requiresAcknowledgement } }
+          : {}),
+      },
+      { status: 409, headers: { "Cache-Control": "no-store" } });
+  }
+  if (decision.kind === "review-unavailable") {
+    log.error("checkout review unavailable (code PRICING_UNAVAILABLE)");
+    return NextResponse.json({ success: false, code: "PRICING_UNAVAILABLE", error: "Review checkout belum tersedia.", requestId: getRequestId() }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  }
+  if (decision.kind === "promo-reservation") {
+    const error = decision.error;
+    log.warn(`checkout promo rejected (code ${error.code}, reason ${error.reason})`);
+    return NextResponse.json(
+      { success: false, code: error.code, error: error.safeMessage, requestId: getRequestId() },
+      { status: error.status, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+  if (decision.kind === "redemption-review") {
+    const error = decision.error;
+    log.warn("checkout promo review changed (code CHECKOUT_REVIEW_REQUIRED)");
+    return NextResponse.json(
+      { success: false, code: "CHECKOUT_REVIEW_REQUIRED", error: error.message, requestId: getRequestId() },
+      { status: 409, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+  if (decision.kind === "input") {
+    const error = decision.error;
+    log.warn(`checkout body rejected (status ${error.status})`);
+    return NextResponse.json({ success: false, error: error.message }, { status: error.status });
+  }
+  if (decision.kind === "pricing-input") {
+    const error = decision.error;
+    log.warn(`checkout pricing input rejected (code ${error.code})`);
+    return NextResponse.json({ success: false, error: "Data harga atau keranjang tidak valid.", code: error.code }, { status: 400 });
+  }
+  log.error(
+    `place order failed (${error instanceof Error ? error.name : "UnknownError"})`,
+    new RouteLogError("place order failed")
+  );
+  return NextResponse.json(
+    { success: false, error: "Failed to place order" },
+    { status: 500 }
+  );
+}
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const POST = withRequestContext(postPlaceOrder, "checkout-place-order");

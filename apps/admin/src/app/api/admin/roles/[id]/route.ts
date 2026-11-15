@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
 import { guard } from "@/lib/rbac/guard";
 import {
   grantSchema,
@@ -30,6 +30,24 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("admin-role-detail");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB tidak pernah
+ * masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
+
 const reviseRoleSchema = roleIdentitySchema.extend({
   grants: z.array(grantSchema),
   expectedVersion: z.number().int().positive(),
@@ -42,13 +60,12 @@ const archiveRoleSchema = z.object({
 
 type RouteContext = { params: Promise<{ id: string }> };
 
-export async function GET(
+async function roleDetail(
   _request: NextRequest,
   { params }: RouteContext
-) {
-  const guardResult = await guard("roles", "view", {});
+): Promise<Response> {
+  const guardResult = await guard("roles", "view");
   if (!guardResult.ok) return guardResult.response;
-  const { logger } = guardResult;
 
   try {
     const { id } = await params;
@@ -57,48 +74,44 @@ export async function GET(
     // remains separately validated by the /restore route and service.
     const role = await getRoleDetail(id, { includeArchived: true });
     if (!role) {
-      logger.warn("roles.detail.not_found", {
-        outcome: "denied",
-        roleId: id,
-      });
+      log.warn(`roles detail ditolak: role tidak ditemukan (roleId ${id}, outcome denied)`);
       return NextResponse.json(
         { success: false, error: "Role not found", code: "NOT_FOUND" },
         { status: 404 }
       );
     }
-    logger.info("roles.detail", {
-      outcome: "success",
-      roleId: id,
-      policyVersion: role.version,
-    });
+    log.info(
+      `roles detail (roleId ${id}, version ${role.version}, outcome success)`
+    );
     return NextResponse.json({ success: true, data: role });
   } catch (error) {
     const mapped = mapServiceError(error);
     if (mapped) return mapped;
-    logger.error("roles.detail.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+    log.error(
+      "roles detail gagal (outcome error)",
+      new RouteLogError("roles detail gagal")
+    );
     return internalErrorResponse();
   }
 }
 
-export async function PUT(
+async function reviseRoleHandler(
   request: NextRequest,
   { params }: RouteContext
-) {
-  const guardResult = await guard("roles", "edit", { request });
+): Promise<Response> {
+  const guardResult = await guard("roles", "edit");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
+  let roleId: string | null = null;
   try {
     const { id } = await params;
+    roleId = id;
     const body = reviseRoleSchema.safeParse(await request.json());
     if (!body.success) {
-      logger.warn("roles.revise.invalid_body", {
-        outcome: "denied",
-        roleId: id,
-      });
+      log.warn(
+        `roles revise ditolak: body tidak valid (roleId ${id}, outcome denied)`
+      );
       return invalidBodyResponse();
     }
 
@@ -111,74 +124,72 @@ export async function PUT(
       reason: body.data.reason ?? null,
     });
 
-    logger.info("roles.revise", {
-      outcome: "success",
-      roleId: id,
-      actorId: actor.userId,
-      fromVersion: body.data.expectedVersion,
-      toVersion: updated.version,
-      policyVersion: actor.policyVersion,
-    });
+    // Alasan free-text operator tidak masuk log.
+    log.info(
+      `roles revise (roleId ${id}, actor ${actor.userId}, fromVersion ${body.data.expectedVersion}, toVersion ${updated.version}, policyVersion ${actor.policyVersion}, outcome success)`
+    );
     return NextResponse.json({ success: true, data: updated });
   } catch (error) {
     const mapped = mapServiceError(error);
     if (mapped) {
-      logger.warn("roles.revise.denied", {
-        outcome: "denied",
-        code: (error as { code?: string }).code,
-      });
+      log.warn(
+        `roles revise denied (roleId ${roleId ?? "unknown"}, code ${(error as { code?: string }).code}, outcome denied)`
+      );
       return mapped;
     }
-    logger.error("roles.revise.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+    log.error(
+      `roles revise gagal (roleId ${roleId ?? "unknown"}, outcome error)`,
+      new RouteLogError("roles revise gagal")
+    );
     return internalErrorResponse();
   }
 }
 
-export async function DELETE(
+async function archiveRoleHandler(
   request: NextRequest,
   { params }: RouteContext
-) {
-  const guardResult = await guard("roles", "delete", { request });
+): Promise<Response> {
+  const guardResult = await guard("roles", "delete");
   if (!guardResult.ok) return guardResult.response;
-  const { logger, ctx } = guardResult;
+  const { ctx } = guardResult;
 
+  let roleId: string | null = null;
   try {
     const { id } = await params;
+    roleId = id;
     const body = archiveRoleSchema.safeParse(await request.json());
     if (!body.success) {
-      logger.warn("roles.archive.invalid_body", {
-        outcome: "denied",
-        roleId: id,
-      });
+      log.warn(
+        `roles archive ditolak: alasan wajib (roleId ${id}, outcome denied)`
+      );
       return invalidBodyResponse();
     }
 
     const actor = buildActorContext(ctx.user.id, ctx.policy);
     const archived = await archiveRole(actor, id, body.data.reason);
 
-    logger.info("roles.archive", {
-      outcome: "success",
-      roleId: id,
-      actorId: actor.userId,
-      policyVersion: actor.policyVersion,
-    });
+    // Alasan free-text operator tidak masuk log.
+    log.info(
+      `roles archive (roleId ${id}, actor ${actor.userId}, policyVersion ${actor.policyVersion}, outcome success)`
+    );
     return NextResponse.json({ success: true, data: archived });
   } catch (error) {
     const mapped = mapServiceError(error);
     if (mapped) {
-      logger.warn("roles.archive.denied", {
-        outcome: "denied",
-        code: (error as { code?: string }).code,
-      });
+      log.warn(
+        `roles archive denied (roleId ${roleId ?? "unknown"}, code ${(error as { code?: string }).code}, outcome denied)`
+      );
       return mapped;
     }
-    logger.error("roles.archive.failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+    log.error(
+      `roles archive gagal (roleId ${roleId ?? "unknown"}, outcome error)`,
+      new RouteLogError("roles archive gagal")
+    );
     return internalErrorResponse();
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(roleDetail, "admin-role-detail");
+export const PUT = withRequestContext(reviseRoleHandler, "admin-role-detail");
+export const DELETE = withRequestContext(archiveRoleHandler, "admin-role-detail");

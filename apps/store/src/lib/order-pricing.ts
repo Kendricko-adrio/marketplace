@@ -4,6 +4,8 @@ const RATE_SCALE = BigInt(10) ** BigInt(RATE_SCALE_DIGITS);
 const CENTS_PER_RUPIAH = BigInt(100);
 
 export interface OrderPricingInput {
+  /** Defaults to pickup for existing callers; delivery taxes the quoted shipping. */
+  fulfillmentMethod?: "pickup" | "delivery";
   subtotal: string | number;
   discount?: string | number;
   shippingCost?: string | number;
@@ -72,14 +74,15 @@ export function calculateOrderPricing(input: OrderPricingInput): OrderPricing {
   const discount = moneyToCents(input.discount);
   const shippingCost = moneyToCents(input.shippingCost);
   const serviceFee = moneyToCents(input.serviceFee);
-  const taxableBase = subtotal > discount ? subtotal - discount : BigInt(0);
+  const goodsBase = subtotal > discount ? subtotal - discount : BigInt(0);
+  const taxableBase = goodsBase + (input.fulfillmentMethod === "delivery" ? shippingCost : BigInt(0));
   const ppnRatePercent = resolvePpnRate(input.ppnRatePercent);
   const rate = parseFixed(ppnRatePercent, RATE_SCALE_DIGITS)!;
   const denominator = BigInt(100) * RATE_SCALE * CENTS_PER_RUPIAH;
   const numerator = taxableBase * rate;
   const ppnRupiah = numerator === BigInt(0) ? BigInt(0) : (numerator + denominator - BigInt(1)) / denominator;
   const ppnAmount = ppnRupiah * CENTS_PER_RUPIAH;
-  const total = taxableBase + shippingCost + serviceFee + ppnAmount;
+  const total = goodsBase + shippingCost + serviceFee + ppnAmount;
 
   return {
     subtotal: formatMoney(subtotal),

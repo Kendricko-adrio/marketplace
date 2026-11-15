@@ -13,6 +13,15 @@ and API handlers verify the Better Auth session and database state again.
 | Protected layouts | Load the server session and require `clients.onboardingCompleted === true` |
 | Protected APIs | Return 401 without a client session and 403 when onboarding is incomplete |
 
+The `callbackUrl` carries the **pathname and its query** (`pathname + search`),
+so a customer who hits `/checkout/result?order_id=…` while signed out returns
+to that same result page after signing in instead of losing the order
+identity. The value stays an internal path; `apps/store/src/lib/safe-redirect.ts`
+still rejects external, protocol-relative and non-http(s) callbacks, and the
+onboarding gate is never bypassed to reach the result page. Both the email flow
+and the Google flow pass the same safe callback through
+`/api/onboarding/sync` (new Google users still land on `/onboarding`).
+
 The `client.onboarding` cookie may still be synchronized for UX compatibility,
 but it cannot grant access. Missing, false, or null database state is denied.
 

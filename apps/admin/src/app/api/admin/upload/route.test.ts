@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
-import { guard } from "@/lib/rbac/guard";
+import {
+  guardAllow,
+  guardMock,
+  type RouteModuleLogger,
+} from "@/test-support/route-test";
 import { deleteFile } from "@/lib/uploads";
-
-import { DELETE } from "./route";
 
 // =========================================================
 // Regression: purpose-bound DELETE /api/admin/upload
@@ -14,37 +16,37 @@ import { DELETE } from "./route";
 // never be authorized as `products.edit` and then delete a homepage file.
 // A products editor must not be able to reach homepage (or any other
 // purpose) files through literal or encoded traversal in the url param.
+//
+// Logging: the route uses one module-scoped facade logger, so assertions read
+// the SAME stub the module created and the business facts travel in the
+// `message` (the facade has no free business fields).
 
-const { testLogger } = vi.hoisted(() => {
-  const log = () => {};
-  const logger = {
-    requestId: "test",
-    debug: log,
-    info: log,
-    warn: log,
-    error: log,
-    child: () => logger,
+/**
+ * Stub module logger yang dipakai route. `vi.hoisted` menjaga container ini
+ * sudah ada saat factory mock dievaluasi (import `./route` berjalan lebih dulu
+ * daripada body file test).
+ */
+const captured = vi.hoisted(() => ({
+  moduleLog: null as RouteModuleLogger | null,
+}));
+
+vi.mock("@/lib/rbac/guard", async () => {
+  const helpers = await import("@/test-support/route-test");
+  return {
+    guard: helpers.guardMock,
+    crossBranchNotFound: helpers.crossBranchNotFound,
   };
-  return { testLogger: logger };
 });
 
-vi.mock("@/lib/rbac/guard", () => ({
-  guard: vi.fn(),
-}));
-
-vi.mock("@/lib/logger", () => ({
-  testLogger: {
-    requestId: "test",
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    child: vi.fn(() => testLogger),
-  },
-  createLogger: () => testLogger,
-  requestLogger: () => testLogger,
-  serializeError: (error: unknown) => ({ message: String(error) }),
-}));
+vi.mock("@/lib/logger", async () => {
+  const helpers = await import("@/test-support/route-test");
+  const shared = helpers.makeModuleLogger();
+  captured.moduleLog = shared;
+  return {
+    ...(await helpers.loggerModuleMock()),
+    createModuleLogger: () => shared,
+  };
+});
 
 vi.mock("@/lib/uploads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/uploads")>();
@@ -53,6 +55,15 @@ vi.mock("@/lib/uploads", async (importOriginal) => {
     deleteFile: vi.fn(async () => {}),
   };
 });
+
+import { DELETE } from "./route";
+
+/** Stub module logger milik route (dibuat saat `./route` diimpor). */
+function moduleLog(): RouteModuleLogger {
+  const value = captured.moduleLog;
+  if (!value) throw new Error("module logger route belum dibuat");
+  return value;
+}
 
 function deleteRequest(url: string): NextRequest {
   const params = new URLSearchParams();
@@ -64,16 +75,11 @@ function deleteRequest(url: string): NextRequest {
 }
 
 beforeEach(() => {
-  vi.mocked(guard).mockReset();
-  vi.mocked(guard).mockResolvedValue({
-    ok: true,
-    ctx: {
-      user: { id: "u1" } as never,
-      policy: {} as never,
-      authorization: { allowed: true, scope: "all_branches" } as never,
-    },
-    logger: testLogger,
-  });
+  guardMock.mockReset();
+  guardAllow();
+  moduleLog().info.mockClear();
+  moduleLog().warn.mockClear();
+  moduleLog().error.mockClear();
   vi.mocked(deleteFile).mockClear();
 });
 
@@ -83,7 +89,16 @@ describe("DELETE /api/admin/upload (purpose-bound)", () => {
 
     expect(response.status).toBe(200);
     expect(deleteFile).toHaveBeenCalledWith("/uploads/products/abc.png");
-    expect(guard).toHaveBeenCalledWith("products", "edit", expect.anything());
+    // Authorization stays pinned to the folder's owning module — no request
+    // object is threaded into the guard any more.
+    expect(guardMock).toHaveBeenCalledWith("products", "edit");
+    expect(guardMock).toHaveBeenCalledTimes(1);
+    // The success event carries the canonical internal path in its message.
+    expect(moduleLog().info).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "upload.deleted (purpose products.edit, url /uploads/products/abc.png, outcome success)"
+      )
+    );
   });
 
   it("rejects literal traversal instead of authorizing one folder and deleting another", async () => {
@@ -94,6 +109,10 @@ describe("DELETE /api/admin/upload (purpose-bound)", () => {
 
     expect(response.status).toBe(400);
     expect(deleteFile).not.toHaveBeenCalled();
+    // The raw client URL is never written to the log.
+    expect(moduleLog().warn).toHaveBeenCalledWith(
+      "upload.delete.invalid_url (reason unknown_folder_purpose, outcome denied)"
+    );
   });
 
   it("rejects percent-encoded traversal", async () => {
@@ -136,7 +155,7 @@ describe("DELETE /api/admin/upload (purpose-bound)", () => {
     const response = await DELETE(deleteRequest("/uploads/unknown/x.png"));
 
     expect(response.status).toBe(400);
-    expect(guard).not.toHaveBeenCalled();
+    expect(guardMock).not.toHaveBeenCalled();
     expect(deleteFile).not.toHaveBeenCalled();
   });
 });

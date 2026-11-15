@@ -1,12 +1,118 @@
-# Jubelio-backed Stock Reservation
+# Stock Reservation (Sales-Order hold)
 
 ## Purpose
 
-Checkout reserves inventory in Jubelio before a customer is allowed to open
-Midtrans. This prevents the same units from being sold by a retail outlet or
-another marketplace channel during the 15-minute payment window.
+Checkout reserves inventory before a customer is allowed to open Midtrans.
+Since the Jubelio Sales-Order cutover (see
+[`jubelio-sales-orders.md`](jubelio-sales-orders.md)) the hold is a **local
+Sales-Order hold plus a remote Sales Order** — the direct-adjustment
+lifecycle below is RETIRED and kept only as the historical record of legacy
+rows.
 
-## Locked direct-adjustment lifecycle
+## Implemented: SO hold semantics
+
+- Sellable = provider `available` (mirrored into `branch_stock.available_stock`
+  by jubelio-sync, all four series: on_hand/on_order/reserved/available)
+  minus local unconfirmed holds (`pending_remote_stock`).
+- The hold is acquired atomically BEFORE the SO create POST. Confirmed create
+  clears it and decrements the `availableStock` mirror in one transaction;
+  confirmed cancel does **not** subtract an unrelated pending order's hold.
+  The provider restores stock on cancel and the next real sync refreshes it.
+  An interrupted confirmation is recovered via the operation's nullable
+  `hold_accounted_at` marker, never another remote POST.
+- Fail closed: checkout first re-reads the selected items/branch from Jubelio.
+  Missing, inconsistent, or unreachable observations block an SO create;
+  last-known catalog stock is provisional. A local `updated_at` or old
+  `provider_stock_synced_at` is never proof of live availability. Ambiguous
+  create outcomes keep the hold and go to manual review.
+- The cart's **Checkout** button verifies selected Jubelio stock before
+  navigating to `/checkout` (`POST /api/cart/validate-checkout`). If 31 units
+  are requested but only 20 are sellable, quantity becomes 20, a popup explains
+  the change, totals refresh and the customer stays in cart. Positive-stock
+  items remain selected for a deliberate second Checkout click; zero-stock
+  items remain in cart but are deselected. This gate creates no stock hold or
+  order. **Bayar Sekarang** independently repeats the live read and atomic
+  hold because availability can change while filling checkout.
+- On a verified shortage at either gate, checkout refuses the entire submission
+  with HTTP 409 `CHECKOUT_STOCK_ADJUSTED`. Every insufficient selected item
+  with positive sellable stock is reduced in the customer's cart in one
+  quantity-guarded transaction (e.g. 10 requested, 5 sellable → quantity 5).
+  Zero-stock items remain unchanged in cart but are deselected from checkout;
+  if none remain, the customer returns to cart. The page shows the changes,
+  recalculates totals, clears confirmation and never automatically reposts or
+  opens payment. Delivery returns to fulfillment and requires a fresh quote
+  and service selection. Missing/invalid/unreachable provider observations
+  never adjust quantities. Later atomic-hold races still fail closed and ask
+  the customer to retry; no quantity adjustment uses an unverified snapshot.
+  Contract tests: `apps/store/src/app/api/checkout/place-order/route.test.ts`
+  dan `e2e/store/checkout-stock-adjustment-mock.spec.ts` (provider API di-stub,
+  dijalankan melalui `playwright.mock.config.ts`). Spec legacy
+  `e2e/store/checkout-stock-adjustment.spec.ts` tetap tersedia, tetapi bukan
+  bukti verifikasi alur dua langkah saat ini.
+
+- Concurrency guarantees are proven against PostgreSQL in
+  `apps/store/src/lib/jubelio-sales-holds.db.test.ts` (parallel checkouts
+  cannot oversell; a sync refresh never clears or double-subtracts a hold).
+- `reserved_stock` is a legacy adjustment-era ledger column: historical record
+  only, never part of the sellable formula, never written by the SO flow.
+
+### Pemulihan kontrak penyesuaian stok
+
+Kedua endpoint memakai
+`apps/store/src/features/checkout/verify-checkout-stock-service.ts` melalui
+`verifyAndAdjustCheckoutStock(db, cartId, selections)`. Service memverifikasi
+seluruh pasangan barang/cabang sebelum memanggil transaksi penyesuaian quantity
+existing. Provider read berada di luar transaksi; stok nol tidak menghapus item,
+dan observasi gagal/tidak lengkap tidak mengubah quantity. HTTP adapter tetap
+memetakan shortage ke `409 CHECKOUT_STOCK_ADJUSTED` beserta `adjustments`, atau
+observasi unavailable ke `503` tanpa adjustments.
+
+Test HTTP mencakup kedua endpoint dan pembacaan cart dengan proyeksi Markdown.
+Mock Playwright memverifikasi rendering checkout, pesan penyesuaian, quantity,
+total, serta kewajiban konfirmasi ulang pada desktop/mobile untuk
+`pricingContractVersion: 0` dan `1`.
+
+Pada contract v1, `submitVersioned` memperlakukan respons gagal dengan
+`CHECKOUT_STOCK_ADJUSTED` dan daftar adjustments nonkosong sebagai penolakan
+stok definitif, bukan hasil order yang ambigu. Consumer memperbarui cart dan
+selection melalui handler shared, lalu menghapus pending request key, review
+token/acknowledgements lama, serta feedback attempt lama. Tidak ada auto-submit
+atau preview otomatis. Pickup tetap di pembayaran dengan tombol
+**Periksa ulang pesanan**; tombol bayar tetap disabled meskipun checkbox dicentang
+sebelum review baru tersedia. Setelah review dan konfirmasi baru, submit berikutnya
+memakai request key baru. Delivery kembali ke langkah pengiriman, membuang
+approval/layanan lama dan meminta quote serta pemilihan layanan ulang. Alamat dan
+kontak tetap dipertahankan. Stok nol hanya mengubah selection; jika semua pilihan
+habis, customer kembali ke cart tanpa menghapus barang.
+
+Koneksi terputus, observasi provider unavailable, atau response adjustment tanpa
+daftar adjustments tidak menghapus key/review lama dan tidak mengubah quantity.
+Customer tetap memeriksa status dengan key yang sama; hanya bila lookup menjawab
+404, recovery mengirim ulang body/key yang sama. Hasil attempt v2 dan order yang
+sudah diterima tetap ditangani lebih dahulu, sebelum cabang penolakan stok.
+Contoh: 10 unit senilai Rp 11.100 menjadi 5 unit senilai Rp 5.550 (PPN 11%):
+customer harus membuat review baru dan mengonfirmasi ulang sebelum submit baru;
+network failure saja tidak boleh mengubah 10 unit atau membuat key baru.
+
+## Batas sebelum checkout
+
+Katalog dan cart sekarang memakai snapshot stok tersedia terakhir sebagai batas
+pilihan/quantity, bukan hanya mengecek mapping. Produk/varian/cabang habis tidak
+ditawarkan. Menambah cart tidak memperoleh hold dan tidak menjamin stok saat
+bayar: live read dan atomic hold di place-order tetap wajib. Item cart lama
+tidak dihapus otomatis ketika snapshot berubah menjadi nol. Lihat
+[visibilitas storefront](jubelio-sync.md#visibilitas-stok-storefront-dan-batas-keranjang).
+
+---
+
+# RETIRED: direct-adjustment lifecycle (historical)
+
+The lifecycle below served checkout until the Sales-Order cutover. The
+runtime paths were removed; the text is retained as the record of legacy
+rows (`jubelio_stock_operation`, `reserved_stock`) that may still exist for
+pre-cutover orders.
+
+## Locked direct-adjustment lifecycle (retired)
 
 The marketplace uses Jubelio inventory adjustments as a stock hold; it does
 not create Jubelio Reserved Stock records or Sales Orders. This decision avoids
@@ -172,9 +278,11 @@ restart the store after changing it.
 
 ## Environment safety
 
-All environments except `APP_ENV=production` are forced to
-`JUBELIO_MOCK_API_BASE_URL`, even if `NODE_ENV=production` and a live URL is
-present. Live writes additionally require all of:
+Bagian adjustment di dokumen ini merupakan riwayat implementasi legacy.
+Checkout aktif memakai [Sales Order gateway](jubelio-sales-orders.md), tanpa
+fallback mock pada runtime normal. Mock hanya fixture automated test di
+`e2e/fixtures/jubelio/`; development/staging tidak menjalankan service mock.
+Pengaman production write tetap memerlukan:
 
 - `APP_ENV=production`
 - `NODE_ENV=production`
@@ -244,7 +352,11 @@ headers, passwords, tokens, cookies, and secrets are always redacted.
 
 ## Verification
 
-- Start `npm run dev:store`; this also starts the local mock on port 3002.
+- Skenario adjustment di bawah adalah referensi legacy, bukan acceptance
+  checkout Sales Order aktif. `npm run dev:store` tidak menjalankan mock.
+  Fixture `e2e/fixtures/jubelio/server.ts` dijalankan oleh harness Playwright;
+  gunakan [panduan testing](../testing/README.md#fixture-provider-khusus-automated-test)
+  untuk regression test offline, bukan mengarahkan skenario ini ke sandbox.
 - Place one unit from stock 10: mock/local on-hand becomes 9,
   `reserved_stock=1`, `pending_remote_stock=0`, then Midtrans is created.
 - Set mock scenario `insufficient-stock`: checkout shows a stock error and

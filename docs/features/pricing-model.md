@@ -99,7 +99,7 @@ end-to-end:
   then applies configured PPN after discounts with upward whole-Rupiah rounding.
   `orders.ppn_rate`, `orders.ppn_amount`, and `orders.total` freeze the complete
   charged price regardless of later product or tax-rate changes. See
-  [ppn.md](./ppn.md).
+  [ppn.md](ppn.md).
 - **Stock reservation** and the rest of the order flow are unaffected by
   pricing — pricing only changes which number is shown/charged, and that number
   was already `variant.price`.

@@ -1,14 +1,8 @@
 import { NextResponse } from "next/server";
 import { headers } from "next/headers";
-import type { NextRequest } from "next/server";
 
 import { auth } from "@/lib/auth";
-import {
-  createLogger,
-  requestLogger,
-  serializeError,
-  type Logger,
-} from "@/lib/logger";
+import { createModuleLogger } from "@/lib/logger";
 import {
   admissionDecision,
   authorizeLoaded,
@@ -26,6 +20,31 @@ import type { BranchScope } from "@marketplace/db/src/rbac/catalog";
 // structured `warn` logs for contextual denials and `error` logs for
 // unexpected failures. Cross-branch object IDs are mapped to 404 via
 // `objectScopeViolation` so they do not disclose existence.
+//
+// Logging contract (maintainable-code §7): one module-scoped logger, no logger
+// or `requestId` is returned to the caller or threaded through the call chain.
+// The RBAC resource/action and the acting ids travel in the `message`; the
+// correlation id comes from the active HTTP scope opened by the route handler.
+// Actor ids are internal identifiers — no name, email, session material or
+// free-text denial reason is ever written.
+
+const log = createModuleLogger("rbac");
+
+/**
+ * Static, module-owned projection for the unexpected path of this guard.
+ *
+ * An unexpected failure can come from the auth provider or the policy query,
+ * so its message/stack may carry free text (connection strings, provider
+ * bodies). The caught value is therefore never handed to a log line: this
+ * constant projection is the only thing the `error` field receives, while the
+ * caller still gets the identical 500 envelope it got before.
+ */
+class RbacGuardLogError extends Error {
+  constructor() {
+    super("rbac guard tidak dapat menyelesaikan permintaan");
+    this.name = "RbacGuardLogError";
+  }
+}
 
 export interface PolicyContext {
   user: LoadedPolicy["user"];
@@ -35,12 +54,10 @@ export interface PolicyContext {
 }
 
 export type GuardResult =
-  | { ok: true; ctx: PolicyContext; logger: Logger }
-  | { ok: false; response: NextResponse; logger: Logger };
+  | { ok: true; ctx: PolicyContext }
+  | { ok: false; response: NextResponse };
 
 export interface GuardOptions {
-  /** Incoming request for request-scoped structured logging. */
-  request?: NextRequest;
   /** Require a specific scope (e.g. edit-all for global re-sync). */
   requiredScope?: BranchScope | "global";
 }
@@ -65,17 +82,14 @@ export async function guard(
   action: Parameters<typeof authorizeLoaded>[2],
   options: GuardOptions = {}
 ): Promise<GuardResult> {
-  const logger = options.request
-    ? requestLogger(options.request, { module, action })
-    : createLogger({ module, action });
-
   try {
     const session = await auth.api.getSession({ headers: await headers() });
     if (!session) {
-      logger.warn("auth.unauthenticated", { outcome: "denied" });
+      log.warn(
+        `rbac.auth.unauthenticated (resource ${module}, action ${action}, outcome denied)`
+      );
       return {
         ok: false,
-        logger,
         response: jsonError(401, "UNAUTHENTICATED", "Unauthorized"),
       };
     }
@@ -84,13 +98,11 @@ export async function guard(
       (session.user as { mustResetPassword?: boolean }).mustResetPassword
     );
     if (mustResetPassword) {
-      logger.warn("auth.must_reset_password", {
-        outcome: "denied",
-        userId: session.user.id,
-      });
+      log.warn(
+        `rbac.auth.must_reset_password (resource ${module}, action ${action}, userId ${session.user.id}, outcome denied)`
+      );
       return {
         ok: false,
-        logger,
         response: jsonError(
           403,
           "MUST_RESET_PASSWORD",
@@ -101,13 +113,11 @@ export async function guard(
 
     const loaded = await loadPolicy(session.user.id);
     if (!loaded) {
-      logger.warn("rbac.policy_unresolvable", {
-        outcome: "denied",
-        userId: session.user.id,
-      });
+      log.warn(
+        `rbac.policy_unresolvable (resource ${module}, action ${action}, userId ${session.user.id}, outcome denied)`
+      );
       return {
         ok: false,
-        logger,
         response: jsonError(
           403,
           "NO_ACCESS",
@@ -123,15 +133,11 @@ export async function guard(
       roleArchived: loaded.role.archived,
     });
     if (!admission.admitted) {
-      logger.warn("rbac.admission_denied", {
-        outcome: "denied",
-        userId: loaded.user.id,
-        roleId: loaded.role.id,
-        reason: admission.reason,
-      });
+      log.warn(
+        `rbac.admission_denied (resource ${module}, action ${action}, userId ${loaded.user.id}, roleId ${loaded.role.id}, reason ${admission.reason}, outcome denied)`
+      );
       return {
         ok: false,
-        logger,
         response: jsonError(
           403,
           "NO_ACCESS",
@@ -147,16 +153,11 @@ export async function guard(
       options.requiredScope
     );
     if (!result.allowed) {
-      logger.warn("rbac.authorization_denied", {
-        outcome: "denied",
-        userId: loaded.user.id,
-        roleId: loaded.role.id,
-        policyVersion: loaded.policyVersion,
-        reason: result.reason,
-      });
+      log.warn(
+        `rbac.authorization_denied (resource ${module}, action ${action}, userId ${loaded.user.id}, roleId ${loaded.role.id}, policyVersion ${loaded.policyVersion}, reason ${result.reason}, outcome denied)`
+      );
       return {
         ok: false,
-        logger,
         response: jsonError(
           403,
           "DENIED",
@@ -167,21 +168,22 @@ export async function guard(
 
     return {
       ok: true,
-      logger,
       ctx: {
         user: loaded.user,
         policy: loaded,
         authorization: result,
       },
     };
-  } catch (error) {
-    logger.error("rbac.guard_failure", {
-      outcome: "error",
-      error: serializeError(error),
-    });
+  } catch {
+    // The caught value is intentionally not inspected for logging: it may carry
+    // provider/auth free text. The static projection keeps the line diagnosable
+    // without exporting it.
+    log.error(
+      `rbac.guard_failure (resource ${module}, action ${action}, outcome error)`,
+      new RbacGuardLogError()
+    );
     return {
       ok: false,
-      logger,
       response: jsonError(500, "INTERNAL", "Internal server error"),
     };
   }
@@ -209,10 +211,7 @@ export function objectScopeViolation(
 }
 
 /** 404 response for cross-branch object references (never discloses existence). */
-export function crossBranchNotFound(logger: Logger): NextResponse {
-  logger.warn("rbac.object_not_found", {
-    outcome: "denied",
-    reason: "cross_branch",
-  });
+export function crossBranchNotFound(): NextResponse {
+  log.warn("rbac.object_not_found (reason cross_branch, outcome denied)");
   return jsonError(404, "NOT_FOUND", "Not found");
 }

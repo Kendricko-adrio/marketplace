@@ -82,6 +82,11 @@ describe("permission catalog shape", () => {
         "users",
         "roles",
         "footer",
+        // Discount administration modules (ticket06): global view/edit only.
+        "discounts",
+        "discount_capacity",
+        // Markdown price administration (ticket03): global view/edit only.
+        "prices",
       ].sort()
     );
     for (const m of BRANCH_MODULES) expect(isBranchModule(m)).toBe(true);
@@ -122,6 +127,54 @@ describe("permission catalog shape", () => {
       const displayName = key === "system_owner" ? "system owner" : key;
       expect(PROTECTED_ROLE_NAMES).toContain(displayName);
     }
+  });
+});
+
+// =========================================================
+// Discount administration modules (ticket06, spec §7.3)
+// =========================================================
+// `discounts` and `discount_capacity` are Global Modules with exactly
+// view/edit and no delete or own/all-branch actions. A promo editor without
+// the capacity grant must not be able to reach capacity writes through the
+// catalog, so the branch scopes are rejected rather than silently ignored.
+describe("discount administration module catalog", () => {
+  const g = (
+    module: string,
+    action: string,
+    scope: string | null
+  ): Grant => ({ module, action, scope } as unknown as Grant);
+
+  it("accepts discounts and discount_capacity as global view/edit and rejects delete or branch scopes", () => {
+    expect(
+      validateGrants([
+        g("discounts", "view", "global"),
+        g("discounts", "edit", "global"),
+        g("discount_capacity", "view", "global"),
+        g("discount_capacity", "edit", "global"),
+      ])
+    ).toEqual([]);
+
+    // No delete action on either module.
+    expect(validateGrants([g("discounts", "delete", "global")])).toContain(
+      "action"
+    );
+    expect(
+      validateGrants([g("discount_capacity", "delete", "global")])
+    ).toContain("action");
+
+    // No branch-scoped action on a global module.
+    expect(validateGrants([g("discounts", "view", "own_branch")])).toContain(
+      "scope"
+    );
+    expect(
+      validateGrants([g("discounts", "edit", "all_branches")])
+    ).toContain("scope");
+    expect(
+      validateGrants([g("discount_capacity", "view", "all_branches")])
+    ).toContain("scope");
+    expect(
+      validateGrants([g("discount_capacity", "edit", "own_branch")])
+    ).toContain("scope");
   });
 });
 

@@ -56,6 +56,11 @@ export const auditLogsRelations = relations(auditLogs, ({ one }) => ({
 //   is on the Midtrans Snap payment page before the order expires.
 //   tax.ppnRatePercent (number) — PPN applied after discount; restart the store
 //   process after changing it.
+//   jubelio.salesTaxId (number) — signed Jubelio tax master id recorded on new
+//   Sales Orders (contract provider3). No admin UI: the value is read uncached
+//   per checkout together with tax.ppnRatePercent, verified against
+//   `GET /taxes/` (identity + exact rate + output account mapping), and checkout
+//   fails closed when it is missing/invalid or drifts from the master.
 export const systemConfig = pgTable("system_config", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),

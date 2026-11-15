@@ -7,6 +7,8 @@ Docker), Caddy sebagai reverse proxy dengan auto-HTTPS.
 Dokumentasi ini dipecah menjadi banyak file kecil (satu topik per file) supaya
 mudah dicari. Mulai dari sini, lalu ikuti urutan di bawah.
 
+Shipment quote credentials and operational prerequisites: [shipment-readiness.md](shipment-readiness.md). Mock verification does not authorize deployment or live provider requests.
+
 ## Struktur folder `deployment/`
 
 ```
@@ -47,16 +49,18 @@ deployment/
 | 9 | [verification.md](verification.md) | Verifikasi deployment |
 | 10 | [operations.md](operations.md) | Operasional sehari-hari (redeploy, backup, stop) |
 | 11 | [cron-sweep.md](cron-sweep.md) | Sweep reservasi stok (cron) |
-| 12 | [jubelio-sync.md](jubelio-sync.md) | Sync Jubelio (import + webhook) |
+| 12 | [jubelio-sync.md](jubelio-sync.md) | Sync Jubelio (import, webhook, stock-only cron + rollout checks) |
 | 13 | [letsencrypt.md](letsencrypt.md) | Rate-limit Let's Encrypt |
 | 14 | [troubleshooting.md](troubleshooting.md) | Troubleshooting |
 | 15 | [environments.md](environments.md) | Memisahkan staging & production |
 | 16 | [reference.md](reference.md) | Cheat-sheet command, port, domain |
-| 17 | [jubelio-webhook-simulator.md](jubelio-webhook-simulator.md) | Test signed Jubelio webhook calls with live read-only data |
 | 18 | [stock-adjustment-rollout.md](stock-adjustment-rollout.md) | Production preflight, operator canary, monitoring, and kill-switch recovery |
 | 19 | [logging.md](logging.md) | Log container di journald dengan retensi host 7 hari |
 | 20 | [rbac-rollout.md](rbac-rollout.md) | RBAC cutover maintenance window: verified backup/restore, paired code+schema migration, Owner bootstrap, smoke tests, monitoring, paired rollback |
 | 21 | [rbac-owner-bootstrap.md](rbac-owner-bootstrap.md) | One-time System Owner bootstrap CLI (RBAC) |
+| 22 | [discounts-cutover.md](discounts-cutover.md) | Cutover/rollout/rollback diskon: gate `discounts.contractVersion`, trusted IP + batas request proxy, UAT staging dan forward-fix |
+| 23 | [order-communications.md](order-communications.md) | Cron komunikasi order (proyeksi fakta + antrean email/retry) |
+| 24 | [first-production-deployment.md](first-production-deployment.md) | Bootstrap production pertama: preflight → migrate → seed referensi → Owner → full import Jubelio → verifier, recovery dan gate go-live |
 
 ## Quick start (staging)
 
@@ -86,14 +90,18 @@ docker compose -p staging --env-file .env --profile tools run --rm migrate
 
 ## Staging vs Production
 
-Saat ini project masih di **tahap staging**. Production belum di-deploy, tapi
-struktur folder sudah disiapkan. Perbedaan utama:
+Saat ini project masih di **tahap staging**. Struktur production sudah disiapkan
+termasuk service one-shot `bootstrap` (profile `tools`). **First production
+deployment tidak boleh memakai `up -d --build` penuh atau seed demo**; ikuti
+[first-production-deployment.md](first-production-deployment.md) dari database
+baru sampai gate go-live.
 
 | Aspek | Staging | Production |
 |-------|---------|------------|
 | Domain | `dev-store` / `dev-admin` | `store` / `admin` |
 | Midtrans | Sandbox (`IS_PRODUCTION=false`) | Live (`true`) |
-| Seed | Jalankan eksplisit hanya untuk data disposable | **Diblokir oleh seeder** |
+| Seed | Jalankan eksplisit hanya untuk data disposable | **Diblokir oleh seeder**; gunakan `bootstrap seed` (referensi non-destruktif) |
+| Bootstrap | migration + seed demo opsional | preflight → migrate → seed referensi → Owner → full import → verify |
 | DB | `qadfstore` (user `qmarketplace`) | `qadfstore_production` — belum dibuat |
 
 Lihat [environments.md](environments.md) untuk detail pemisahan environment.

@@ -10,11 +10,37 @@ import {
   branches,
   brands,
   genders,
+  variantPriceCurrent,
+  variantPriceRevisions,
 } from "@/db";
 import { eq, ilike, and, or, sql, desc, asc, gte, lte, inArray } from "drizzle-orm";
 import { hasAvailableStock } from "@/lib/stock";
+import { sellableVariantSql } from "@/lib/storefront-stock";
+import {
+  effectivePriceSql,
+  markdownActiveSql,
+  projectRow,
+} from "@/lib/variant-price-projection";
 import { parseListParams } from "@/lib/list-params";
-import { requestLogger, withRequestId, serializeError } from "@/lib/logger";
+import { createModuleLogger, withRequestContext } from "@/lib/logger";
+
+/**
+ * Module logger untuk route ini: dibuat sekali di module scope, sedangkan
+ * `requestId` dibaca dari scope HTTP yang aktif setiap kali log ditulis
+ * (`withRequestContext` di export handler membuka scope tersebut).
+ */
+const log = createModuleLogger("products-list");
+
+/**
+ * Proyeksi teknis statis untuk field `error`: pesan asli dari DB/Next/provider
+ * tidak pernah masuk log, hanya pesan yang ditulis module ini.
+ */
+class RouteLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RouteLogError";
+  }
+}
 
 type ProductResult = {
   id: string;
@@ -30,8 +56,8 @@ type ProductResult = {
   thumbnail: string | null;
 };
 
-export async function GET(request: NextRequest) {
-  const log = requestLogger(request, { module: "products-list" });
+/** HTTP adapter: baca filter, query halaman produk, map ke status/body existing. */
+async function listProducts(request: NextRequest): Promise<Response> {
   try {
     const { searchParams } = new URL(request.url);
 
@@ -48,15 +74,37 @@ export async function GET(request: NextRequest) {
       searchParams
     );
 
-    // Cheapest variant net price per product — the price shown on cards and the
-    // basis for the price-range filter, the "has discount" filter, and price
-    // sort. Joined (avoids N+1). Products without variants are excluded.
+    // Cheapest variant EFFECTIVE price per product — the price shown on cards
+    // and the single basis for the price-range filter, the "has Markdown" filter
+    // and price sort. The projection is identical to the JS one
+    // (lib/variant-price-projection): a target counts only while it is below the
+    // variant's CURRENT source. Joined (avoids N+1); products without variants
+    // are excluded.
     const minPriceSq = db
       .select({
         productId: productVariants.productId,
-        minPrice: sql<string>`min(${productVariants.price})`.as("minPrice"),
+        minPrice: sql<string>`min(${effectivePriceSql(
+          productVariants.price,
+          variantPriceRevisions.targetUnitPrice
+        )})`.as("minPrice"),
+        hasMarkdown: sql<boolean>`bool_or(${markdownActiveSql(
+          productVariants.price,
+          variantPriceRevisions.targetUnitPrice
+        )})`.as("hasMarkdown"),
       })
       .from(productVariants)
+      .leftJoin(
+        variantPriceCurrent,
+        eq(variantPriceCurrent.variantId, productVariants.id)
+      )
+      .leftJoin(
+        variantPriceRevisions,
+        and(
+          eq(variantPriceRevisions.id, variantPriceCurrent.revisionId),
+          eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
+        )
+      )
+      .where(sellableVariantSql(branchId))
       .groupBy(productVariants.productId)
       .as("vp");
 
@@ -79,8 +127,9 @@ export async function GET(request: NextRequest) {
     }
 
     if (hasDiscount) {
-      // Discount = RRP (base_price) above the cheapest variant net price.
-      conditions.push(sql`${products.basePrice} > ${minPriceSq.minPrice}`);
+      // "Diskon" means an ACTIVE Markdown on a relevant variant — never the
+      // legacy RRP (product.base_price) above the cheapest variant.
+      conditions.push(sql`${minPriceSq.hasMarkdown}`);
     }
 
     if (minPrice) {
@@ -99,31 +148,6 @@ export async function GET(request: NextRequest) {
         .where(eq(brands.slug, brandSlug))
         .limit(1);
       conditions.push(brand.length ? eq(products.brandId, brand[0].id) : sql`false`);
-    }
-
-    // Branch filter (branch id) via a subquery: the product must have at least
-    // one variant with available stock (stock - pendingRemoteStock > 0) at that
-    // branch. Composes with the other conditions and applies to the count
-    // query too, so pagination.total reflects the branch-filtered set.
-    if (branchId) {
-      conditions.push(
-        inArray(
-          products.id,
-          db
-            .select({ productId: productVariants.productId })
-            .from(productVariants)
-            .innerJoin(
-              branchStocks,
-              eq(branchStocks.productVariantId, productVariants.id)
-            )
-            .where(
-              and(
-                eq(branchStocks.branchId, branchId),
-                sql`${branchStocks.stock} - ${branchStocks.pendingRemoteStock} > 0`
-              )
-            )
-        )
-      );
     }
 
     // Category filter (slug → id) via a subquery on the junction table, so it
@@ -149,24 +173,6 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // "Has sellable stock in any active branch" — the same rule as
-    // `hasAvailableStock` (lib/stock.ts) but expressed in SQL so it can drive
-    // ordering. Used as the FIRST ORDER BY tier so out-of-stock products are
-    // always pushed below in-stock ones, regardless of the user's chosen sort.
-    // NOTE: no `.as()` here — an alias would make Drizzle emit `ORDER BY
-    // "has_sellable_stock"` referencing a column that isn't in the SELECT
-    // list (Postgres rejects it). Without the alias Drizzle inlines the full
-    // EXISTS expression in the ORDER BY clause, which is valid.
-    const hasSellableStock = sql<boolean>`EXISTS (
-      SELECT 1
-      FROM ${productVariants}
-      JOIN ${branchStocks} ON ${branchStocks.productVariantId} = ${productVariants.id}
-      JOIN ${branches} ON ${branches.id} = ${branchStocks.branchId}
-      WHERE ${productVariants.productId} = ${products.id}
-        AND ${branches.status} = 'aktif'
-        AND ${branchStocks.stock} - ${branchStocks.pendingRemoteStock} > 0
-    )`;
-
     const chosenSort =
       sortBy === "price"
         ? sortOrder === "asc"
@@ -176,8 +182,8 @@ export async function GET(request: NextRequest) {
         ? asc(products.createdAt)
         : desc(products.createdAt);
 
-    // Tier 1: in-stock first (out-of-stock last). Tier 2: the user's sort.
-    const orderBy = [desc(hasSellableStock), chosenSort];
+    // Produk habis sudah dieliminasi sebelum pagination dan count.
+    const orderBy = [chosenSort];
 
     const selectCols = {
       id: products.id,
@@ -219,14 +225,69 @@ export async function GET(request: NextRequest) {
     // the page's products, then their branch-stock rows restricted to active
     // branches (same rule as the product-detail API).
     const pageVariantRows = await db
-      .select({ id: productVariants.id, productId: productVariants.productId })
+      .select({
+        id: productVariants.id,
+        productId: productVariants.productId,
+        jubelioItemId: productVariants.jubelioItemId,
+        price: productVariants.price,
+        targetUnitPrice: variantPriceRevisions.targetUnitPrice,
+        markdownRevisionId: variantPriceRevisions.id,
+        revisionVariantId: variantPriceRevisions.variantId,
+      })
       .from(productVariants)
+      .leftJoin(
+        variantPriceCurrent,
+        eq(variantPriceCurrent.variantId, productVariants.id)
+      )
+      .leftJoin(
+        variantPriceRevisions,
+        and(
+          eq(variantPriceRevisions.id, variantPriceCurrent.revisionId),
+          eq(variantPriceRevisions.variantId, variantPriceCurrent.variantId)
+        )
+      )
       .where(
-        inArray(
-          productVariants.productId,
-          queryResults.map((p) => p.id)
+        and(
+          inArray(productVariants.productId, queryResults.map((p) => p.id)),
+          sellableVariantSql(branchId)
         )
       );
+
+    // Card display: the cheapest EFFECTIVE variant, its own source for the
+    // strikethrough, and the stable tie-break by variant id (spec §4.1).
+    type DisplayPrice = {
+      effective: bigint;
+      source: bigint;
+      active: boolean;
+      revisionId: string | null;
+      variantId: string;
+    };
+    const displayByProduct = new Map<string, DisplayPrice>();
+    for (const row of pageVariantRows) {
+      const projection = projectRow({
+        variantId: row.id,
+        sourceUnitPrice: row.price,
+        storedTargetUnitPrice: row.targetUnitPrice,
+        markdownRevisionId:
+          row.revisionVariantId === null ? null : row.markdownRevisionId,
+      });
+      const candidate: DisplayPrice = {
+        effective: BigInt(projection.effectiveUnitPrice),
+        source: BigInt(projection.sourceUnitPrice),
+        active: projection.markdownActive,
+        revisionId: projection.markdownRevisionId,
+        variantId: row.id,
+      };
+      const current = displayByProduct.get(row.productId);
+      if (
+        !current ||
+        candidate.effective < current.effective ||
+        (candidate.effective === current.effective &&
+          candidate.variantId < current.variantId)
+      ) {
+        displayByProduct.set(row.productId, candidate);
+      }
+    }
 
     // When a branch filter is active, hasStock reflects availability at that
     // branch only (products shown are all in-stock there anyway — this keeps
@@ -246,6 +307,8 @@ export async function GET(request: NextRequest) {
             productVariantId: branchStocks.productVariantId,
             stock: branchStocks.stock,
             pendingRemoteStock: branchStocks.pendingRemoteStock,
+            availableStock: branchStocks.availableStock,
+            jubelioLocationId: branches.jubelioLocationId,
           })
           .from(branchStocks)
           .innerJoin(branches, eq(branchStocks.branchId, branches.id))
@@ -255,17 +318,22 @@ export async function GET(request: NextRequest) {
     const variantToProduct = new Map(
       pageVariantRows.map((v) => [v.id, v.productId])
     );
+    const mappedVariantIds = new Set(
+      pageVariantRows.filter((v) => v.jubelioItemId != null).map((v) => v.id)
+    );
     const stockByProduct = new Map<
       string,
-      { stock: number; pendingRemoteStock: number }[]
+      { stock: number; pendingRemoteStock: number; availableStock: number | null }[]
     >();
     for (const row of pageStockRows) {
       const productId = variantToProduct.get(row.productVariantId);
-      if (!productId) continue;
+      if (!productId || row.jubelioLocationId == null ||
+          !mappedVariantIds.has(row.productVariantId)) continue;
       const list = stockByProduct.get(productId) ?? [];
       list.push({
         stock: row.stock,
         pendingRemoteStock: row.pendingRemoteStock,
+        availableStock: row.availableStock,
       });
       stockByProduct.set(productId, list);
     }
@@ -300,11 +368,22 @@ export async function GET(request: NextRequest) {
           }
         }
 
+        const display = displayByProduct.get(product.id);
         return {
           ...product,
-          price: product.price ?? product.basePrice,
+          price: display
+            ? display.effective.toString()
+            : (product.price ?? product.basePrice),
+          // Original/coretan always comes from the SAME variant that supplies
+          // the effective price — never the group RRP or another variant.
+          sourcePrice: display
+            ? display.source.toString()
+            : (product.price ?? product.basePrice),
+          markdownActive: display?.active ?? false,
+          markdownRevisionId: display?.revisionId ?? null,
           image,
           hasStock: hasAvailableStock(stockByProduct.get(product.id) ?? []),
+          lastKnownInStock: hasAvailableStock(stockByProduct.get(product.id) ?? []),
         };
       })
     );
@@ -319,33 +398,20 @@ export async function GET(request: NextRequest) {
         totalPages: Math.ceil(total / limit),
       },
     });
-    log.info("products.list", {
-      filters: {
-        search,
-        category: categorySlug,
-        brand: brandSlug,
-        branch: branchId,
-        minPrice,
-        maxPrice,
-        status,
-        hasDiscount,
-        sortBy,
-        sortOrder,
-        page,
-        limit,
-      },
-      returned: productsWithImages.length,
-      total,
-    });
-    return withRequestId(response, log);
-  } catch (error) {
-    log.error("products.list.failed", serializeError(error));
-    return withRequestId(
-      NextResponse.json(
-        { success: false, error: "Failed to fetch products" },
-        { status: 500 }
-      ),
-      log
+    // Nilai query mentah (search/category/brand/branch/harga) tidak masuk log;
+    // hanya fakta bisnis halaman + boolean filter yang aman.
+    log.info(
+      `products list loaded: page ${page}, limit ${limit}, returned ${productsWithImages.length}, total ${total}, sortBy ${sortBy}, sortOrder ${sortOrder}, hasDiscount ${hasDiscount}`
+    );
+    return response;
+  } catch {
+    log.error("products list failed", new RouteLogError("products list failed"));
+    return NextResponse.json(
+      { success: false, error: "Failed to fetch products" },
+      { status: 500 }
     );
   }
 }
+
+/** HTTP entry: wrapper menambahkan `x-request-id` kanonik + satu baris completion. */
+export const GET = withRequestContext(listProducts, "products-list");

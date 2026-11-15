@@ -1,5 +1,24 @@
 # Order Flow (End-to-End)
 
+> **Sales-Order cutover (2026-09-24):** checkout, the settlement pipeline and
+> the sweep now run the Jubelio **Sales-Order** lifecycle (see
+> [`jubelio-sales-orders.md`](jubelio-sales-orders.md)). The differences vs
+> the original text: the paid claim (`pending_payment` → `processing`/`paid`)
+> no longer touches stock and no longer grants pickup; `ready_for_pickup` +
+> pickup code are granted only by `fulfillPaidOrder` AFTER the Sales-Order
+> settlement (invoice → payment) is verified. A paid order whose settlement
+> is ambiguous stays `processing`/`paid` with `fulfillmentBlockedReason` set
+> and never exposes a pickup code.
+
+> **Kontrak uang berversi (gate `discounts.contractVersion`).** Pada gate `1`,
+> order baru menyimpan snapshot uang berversi (`pricing1/engine1/provider2`);
+> repayment, detail order dan settlement membaca snapshot itu lewat decoder
+> strict, bukan kolom/config terbaru, dan versi yang tidak dikenal fail closed.
+> Service fee kontrak baru selalu `0` dan tidak ditagih sebagai baris charge.
+> Alur di bawah yang menyebut baris `SERVICE_FEE` atau formula PPN atas
+> barang+ongkir adalah **LEGACY gate `0`**. Detail:
+> [versioned-checkout-pricing.md](versioned-checkout-pricing.md).
+
 ## Purpose
 
 End-to-end lifecycle of a customer order: checkout → Midtrans Snap payment →
@@ -62,22 +81,23 @@ tinted summary panel while retaining the branch name and city at a glance.
    required. Validates body (`phone`, `email`, `pickupDate`, `pickupTime`,
    `selectedItemIds`), loads the user's cart, filters the selected items,
    enforces **single-branch checkout**, checks branch `status = "aktif"` +
-   pickup slot (`validatePickupSlot`), soft stock pre-check, and authoritative
-   pricing. PPN comes from `tax.ppnRatePercent` (11% fallback), is applied after
-   discount, and is rounded upward to whole Rupiah. The rate and amount are
-   snapshotted on the order. A short transaction then:
-   insert order (`pending_payment`/`pending`, `paymentMethod` NULL,
-   `expiresAt`), insert
-   `order_item` rows, an atomic `pending_remote_stock` hold, and a durable
-   Jubelio reserve operation. After commit, a negative Jubelio adjustment is
-   sent outside the transaction. Midtrans Snap is created only after Jubelio
-   confirms the deduction. A second short transaction
-   persists `snapRedirectUrl` and deletes only the checked-out cart items.
-   A Jubelio rejection/ambiguous result blocks Midtrans and preserves the cart;
-   Midtrans item details include the PPN snapshot and sum exactly to the order
-   gross total. Re-payment uses the same stored snapshot rather than current
-   config. Midtrans creation failure triggers a compensating positive Jubelio
-   adjustment. Returns
+   pickup slot (`validatePickupSlot`), then reads the selected stock live from
+   Jubelio. Missing/inconsistent/unreachable stock or insufficient `available`
+   blocks checkout before a Sales Order is sent; the last-known local mirror
+   is advisory. It reconciles that mirror without overwriting concurrent
+   holds and applies authoritative pricing. PPN comes from
+   `tax.ppnRatePercent` (11% fallback), is applied after discount, and is
+   rounded upward to whole Rupiah. A short transaction inserts order/items,
+   atomically holds `pending_remote_stock` against the just-read observation,
+   and persists a durable Jubelio Sales Order create intent. After commit the
+   SO POST and GET confirmation run outside the transaction. Midtrans Snap is
+   created only after a confirmed SO. A second transaction persists
+   `snapRedirectUrl` and deletes only the checked-out cart items. A rejected
+   or ambiguous provider result blocks Midtrans and preserves the cart. Item
+   details include the PPN snapshot and sum to the order gross total; names
+   are shortened to 50 characters only in Midtrans payloads. Re-payment uses
+   the stored snapshot. Midtrans initialization failure triggers SO cancel
+   (or manual review if the provider outcome is ambiguous). Returns
    `{ success, orderId, redirectUrl,
    token }`; customer is redirected to the Snap page.
 2. **Pay** — the customer picks a method (QRIS, GoPay, transfer bank/VA, or
@@ -116,9 +136,25 @@ tinted summary panel while retaining the branch name and city at a glance.
    (`apps/store/src/app/checkout/page.tsx`) redirects the customer straight to
    the Midtrans Snap page (`window.location.href = data.redirectUrl`); no
    polling. After payment, Midtrans redirects back to the checkout result page
-   (`apps/store/src/app/checkout/result/page.tsx`), which derives the outcome
-   directly from Snap's query params (`transaction_status` → success /
-   pending / cancel).
+   (`apps/store/src/app/checkout/result/page.tsx`). That page now **verifies**
+   the order instead of guessing: with `order_id` it issues one owner-scoped
+   read-only `GET /api/orders/{id}` and derives the presentation from the DTO
+   (`paid` → "Pembayaran diterima", `paid` + `fulfillmentBlockedReason` →
+   "Pembayaran diterima, pesanan menunggu verifikasi", `pending` dengan order
+   non-terminal → "Menunggu pembayaran", `failed` → "Pembayaran gagal",
+   cancelled dengan pembayaran bukan paid/failed → "Pesanan dibatalkan",
+   kombinasi asing/kontradiktif → "Status pembayaran belum dapat dipastikan").
+   Snap's `transaction_status`/`status_code` query values are **ignored**: they
+   are never treated as proof of settlement or failure. A verified `paid` stays
+   paid even when the order is cancelled or blocked. Read failures stay honest:
+   404 → "Pesanan tidak ditemukan" (no ownership disclosure), 401 → "Masuk untuk
+   memeriksa pesanan" with a login-return callback that keeps `order_id`, 403 →
+   "Akses pesanan belum tersedia", and network/5xx/invalid envelope or a DTO
+   whose `id` does not match → "Status pembayaran belum dapat diperiksa" with a
+   **Coba lagi** that re-reads the same order. Without an `order_id` the page
+   shows "Pesanan belum dapat ditentukan" and never picks the latest order. No
+   payment session, provider retry, or replacement order is ever created from
+   this page.
 6. **Order-status endpoint (not consumed by UI)** — `GET
    /api/checkout/order-status?orderId=…`
    (`apps/store/src/app/api/checkout/order-status/route.ts`) exists: read-only
@@ -138,7 +174,12 @@ tinted summary panel while retaining the branch name and city at a glance.
    auth via `secret = HMAC-SHA256(BETTER_AUTH_SECRET, orderId)` (shared secret
    between the two apps; mismatch → 403). Requires `ready_for_pickup`, sets
    `status = "completed"`, then schedules the order-completed email with
-   Next.js `after()` so SMTP latency does not block the response. The
+   Next.js `after()` so SMTP latency does not block the response. The same
+   `after()` boundary schedules the best-effort channel mirror
+   reconciliation, which projects `Selesai` onto the Jubelio Status Channel
+   from the committed `completed` state only (ticket #06) — a mirror failure
+   is logged and never affects the completion or the response (the sweep's
+   GET-only reconciliation covers any mirror gap). The
    admin route then writes an `audit_log` row (`VERIFY_PICKUP_CODE`).
 
 ## Failure path
@@ -184,6 +225,15 @@ fail. Otherwise a new Snap payment is created from the stored order items
 reservation TTL; the new `snapRedirectUrl` is persisted and
 `{ redirectUrl, token }` returned. The existing reservation stays in place — no
 new reservation is made.
+
+> **LEGACY gate `0`.** Baris `SERVICE_FEE` di atas tidak ada pada kontrak
+> berversi. Pada gate `1`, repayment memanggil `readOrderPricing(order)`
+> **sebelum** early return `snapRedirectUrl`, sehingga order dengan versi
+> snapshot tidak dikenal tidak pernah mengembalikan redirect maupun membuat
+> token baru. Item detail Midtrans dibangun dari snapshot tersimpan: line
+> efektif, adjustment diskon (0 di baseline), `PPN`, dan `SHIPPING` hanya bila
+> ongkir net nonzero — tanpa baris service fee — dan jumlah detailnya wajib
+> tepat sama dengan `total`.
 
 ## Emails
 

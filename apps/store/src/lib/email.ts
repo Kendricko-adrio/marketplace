@@ -46,6 +46,12 @@ function getTransporter(): nodemailer.Transporter {
     port: 465,
     secure: true,
     auth: { user, pass },
+    // Spec order-communications §5.2: timeout transport WAJIB lebih pendek
+    // daripada lease claim lima menit, supaya satu dispatch tidak pernah
+    // memegang claim melewati lease-nya.
+    connectionTimeout: 20_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 60_000,
   });
 
   return transporter;
@@ -62,6 +68,38 @@ export async function sendEmail(input: SendEmailInput): Promise<void> {
     html: input.html,
     text: input.text,
   });
+}
+
+export interface EmailDeliveryReceipt {
+  accepted: string[];
+  rejected: string[];
+}
+
+/**
+ * Kirim satu pesan dan kembalikan bukti penerimaan server email.
+ *
+ * Kontrak `sendEmail` di atas SENGAJA tidak berubah (email autentikasi tetap
+ * memakai jalur yang sama), sedangkan antrean email order butuh menerima /
+ * menolak per penerima untuk mengklasifikasikan hasil.
+ */
+export async function sendEmailMessage(
+  input: SendEmailInput
+): Promise<EmailDeliveryReceipt> {
+  const from = process.env.SMTP_FROM || BRAND_SUPPORT_EMAIL;
+  const transport = getTransporter();
+
+  const info = await transport.sendMail({
+    from: `${BRAND_NAME} <${from}>`,
+    to: input.to,
+    subject: input.subject,
+    html: input.html,
+    text: input.text,
+  });
+
+  return {
+    accepted: Array.isArray(info.accepted) ? info.accepted.map(String) : [],
+    rejected: Array.isArray(info.rejected) ? info.rejected.map(String) : [],
+  };
 }
 
 export async function sendVerificationEmail(

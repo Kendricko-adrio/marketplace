@@ -23,6 +23,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   Card,
@@ -290,9 +292,9 @@ export default function AdminUsersPage() {
                             <div className="font-medium flex items-center gap-2">
                               {user.name}
                               {user.mustResetPassword && (
-                                <Badge variant="outline" className="text-amber-600 border-amber-400 text-xs">
+                                <StatusBadge tone={getStatusTone("admin-user", "reset_required")}>
                                   Reset diperlukan
-                                </Badge>
+                                </StatusBadge>
                               )}
                             </div>
                             <div className="text-xs text-muted-foreground">
@@ -329,12 +331,9 @@ export default function AdminUsersPage() {
                         )}
                       </TableCell>
                       <TableCell>
-                        <Badge
-                          variant="default"
-                          className="bg-green-500 hover:bg-green-600"
-                        >
+                        <StatusBadge tone={getStatusTone("admin-user", "active")}>
                           Aktif
-                        </Badge>
+                        </StatusBadge>
                       </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>

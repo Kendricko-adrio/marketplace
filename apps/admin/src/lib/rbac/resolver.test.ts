@@ -1,6 +1,6 @@
 import "../../test-support/load-env";
 
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 
 const url = process.env.DATABASE_URL;
 const testDb = url ? drizzle(url, { schema }) : null;
@@ -14,13 +14,14 @@ import {
 import { authorize } from "@marketplace/db/src/rbac/policy";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { eq } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 import * as schema from "@marketplace/db/src/schema";
 import { ADMIN_SEED_GRANTS } from "@marketplace/db/src/rbac/seed-defaults";
 
 // =========================================================
 // Slice 3 — current-policy resolver + session admission.
-// Pure admission decision + DB-backed loadPolicy against the seeded dev DB
-// (skipped when the database is not reachable).
+// Pure admission decision + DB-backed loadPolicy against the seeded Role and
+// isolated Admin User fixture (skipped when the database is not reachable).
 // =========================================================
 
 const ADMISSION_BASE = {
@@ -96,17 +97,33 @@ async function rbacSchemaReady(): Promise<boolean> {
 
 describe.skipIf(
   !((await dbReachable()) && (await rbacSchemaReady()))
-)("loadPolicy (seeded dev DB)", () => {
-  let adminUser: { id: string } | null = null;
+)("loadPolicy (seeded role with isolated Admin user)", () => {
+  const runId = randomUUID();
+  const branchId = `resolver-test-${runId}-branch`;
+  const adminId = `resolver-test-${runId}-admin`;
+  let adminCreated = false;
+  let branchCreated = false;
   let ownerUser: { id: string } | null = null;
 
   beforeAll(async () => {
-    const admin = await testDb!
-      .select({ id: schema.users.id })
-      .from(schema.users)
-      .where(eq(schema.users.email, "admin@store.com"))
+    const [adminRole] = await testDb!
+      .select({ id: schema.adminRoles.id })
+      .from(schema.adminRoles)
+      .where(eq(schema.adminRoles.key, "admin"))
       .limit(1);
-    adminUser = admin[0] ?? null;
+    if (!adminRole) throw new Error("Seeded Admin Role is required for the resolver DB test");
+    // Never mutate admin@store.com: local operator accounts can legitimately
+    // differ from seed fixtures. Create only rows owned by this test run.
+    await testDb!.insert(schema.branches).values({
+      id: branchId, code: `resolver-test-${runId}`, name: "Resolver Test Branch",
+      city: "Test", address: "Test",
+    });
+    branchCreated = true;
+    await testDb!.insert(schema.users).values({
+      id: adminId, name: "Resolver Test Admin", email: `${runId}@fixture.invalid`,
+      roleId: adminRole.id, branchId, isActive: true, emailVerified: true,
+    });
+    adminCreated = true;
     const owner = await testDb!
       .select({ id: schema.users.id })
       .from(schema.users)
@@ -115,9 +132,13 @@ describe.skipIf(
     ownerUser = owner[0] ?? null;
   });
 
-  it("resolves the seeded Admin's role identity, grants, home branch, and policy version", async () => {
-    if (!adminUser) return;
-    const loaded = await loadPolicy(adminUser.id, testDb!);
+  afterAll(async () => {
+    if (adminCreated) await testDb!.delete(schema.users).where(eq(schema.users.id, adminId));
+    if (branchCreated) await testDb!.delete(schema.branches).where(eq(schema.branches.id, branchId));
+  });
+
+  it("resolves the seeded Admin Role's identity and grants with the fixture Home Branch", async () => {
+    const loaded = await loadPolicy(adminId, testDb!);
     expect(loaded).not.toBeNull();
     const p = loaded as LoadedPolicy;
     expect(p.role.key).toBe("admin");
@@ -125,7 +146,7 @@ describe.skipIf(
     expect(p.role.archived).toBe(false);
     expect(p.role.version).toBe(1);
     expect(p.user.isActive).toBe(true);
-    expect(p.user.homeBranchId).toBeTruthy();
+    expect(p.user.homeBranchId).toBe(branchId);
     expect(p.policyVersion).toBe(p.role.version);
     const grantSet = p.role.grants.map((g) => `${g.module}:${g.action}:${g.scope}`);
     expect(grantSet).toEqual(
@@ -149,8 +170,7 @@ describe.skipIf(
   });
 
   it("authorizes via the pure policy after loading (owner bypass, admin own scope)", async () => {
-    if (!adminUser) return;
-    const loaded = (await loadPolicy(adminUser.id, testDb!)) as LoadedPolicy;
+    const loaded = (await loadPolicy(adminId, testDb!)) as LoadedPolicy;
     const policy = toPolicy(loaded);
     // Admin has orders view-own: own scope pins the server-side Home Branch.
     const own = authorize(policy, "orders", "view");

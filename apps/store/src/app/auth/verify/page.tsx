@@ -3,6 +3,9 @@ import { useEffect, useState, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { CheckCircle2, Loader2, XCircle } from "lucide-react";
+import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
+import { getStatusToneClassName } from "@marketplace/ui/src/lib/status-styles";
 import {
   Card,
   CardContent,
@@ -69,6 +72,20 @@ function VerifyEmailContent() {
     <div className="container mx-auto px-4 py-16 flex justify-center items-center min-h-[calc(100vh-4rem)]">
       <Card className="w-full max-w-md shadow-lg border-muted/40">
         <CardHeader className="space-y-1">
+          {/* Ikon status dekoratif: makna sudah disampaikan heading di bawah,
+              jadi ikon tidak diumumkan ulang ke screen reader. */}
+          <div
+            className={`mx-auto mb-2 flex h-12 w-12 items-center justify-center rounded-full border ${getStatusToneClassName(getStatusTone("email-verification-flow", status))}`}
+            data-status-tone={getStatusTone("email-verification-flow", status)}
+          >
+            {status === "verifying" && (
+              <Loader2 className="h-6 w-6 animate-spin" aria-hidden />
+            )}
+            {status === "success" && (
+              <CheckCircle2 className="h-6 w-6" aria-hidden />
+            )}
+            {status === "error" && <XCircle className="h-6 w-6" aria-hidden />}
+          </div>
           <CardTitle className="text-2xl font-bold text-center">
             {status === "verifying" && "Memverifikasi..."}
             {status === "success" && "Email Terverifikasi!"}

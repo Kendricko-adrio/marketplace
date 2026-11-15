@@ -91,13 +91,22 @@ export const adminRoleGrants = pgTable(
     ),
     // Scope shape per module kind: branch-aware modules require an explicit
     // branch scope; global modules require global scope (or none).
+    // The discount administration modules (discounts, discount_capacity) and
+    // the Markdown price module (prices) are separate, deliberately narrower
+    // clauses: global view/edit only, so no delete and no
+    // own_branch/all_branches row can ever be stored. Existing modules keep
+    // their clauses untouched.
     check(
       "admin_role_grant_module_scope_shape_check",
-      sql`(
+      sql`((
         ${t.module} in ('products', 'orders', 'notifications', 'branches', 'analytics', 'audit_log')
         and ${t.scope} in ('own_branch', 'all_branches')
       ) or (
         ${t.module} in ('customers', 'homepage', 'pages', 'users', 'roles', 'footer')
+        and (${t.scope} = 'global' or ${t.scope} is null)
+      )) or (
+        ${t.module} in ('discounts', 'discount_capacity', 'prices')
+        and ${t.action} in ('view', 'edit')
         and (${t.scope} = 'global' or ${t.scope} is null)
       )`
     ),

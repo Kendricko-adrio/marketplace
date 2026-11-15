@@ -149,15 +149,22 @@ docker compose -p staging --env-file .env ps
 cd ~/marketplace
 cd deployment/production
 cp .env.example .env
-nano .env                        # isi secret production
+cp bootstrap.config.example.json bootstrap.config.json
+nano .env bootstrap.config.json   # isi secret + manifest non-secret
 
-docker compose -p production --env-file .env up -d --build
+# JANGAN `up -d --build` sebelum bootstrap database selesai.
+# Ikuti docs/deployment-docs/first-production-deployment.md
 
 # SELALU backup DB production sebelum migrate
 pg_dump -U qmarketplace_production -h localhost qadfstore_production > backup-$(date +%Y%m%d).sql
 
-# Migration production SAJA (JANGAN run seed di production!)
-docker compose -p production --env-file .env --profile tools run --rm migrate npx drizzle-kit migrate
+# Production: build tooling → preflight → migrate → seed referensi
+docker compose -p production --env-file .env --profile tools build migrate bootstrap
+docker compose -p production --env-file .env --profile tools run --rm \
+  bootstrap preflight --config /bootstrap/bootstrap.config.json --phase before-migrate
+docker compose -p production --env-file .env --profile tools run --rm migrate
+docker compose -p production --env-file .env --profile tools run --rm \
+  bootstrap seed --config /bootstrap/bootstrap.config.json
 
 # Cek
 docker container ls --filter "name=production-"

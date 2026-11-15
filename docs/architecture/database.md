@@ -10,12 +10,39 @@ Apps are read-only consumers: they create a local `db` connection and re-export
 the shared schema (see [overview.md](overview.md)). Never define tables in an
 app.
 
+## Backfill snapshot draft diskon
+
+Revision draft yang dibuat sebelum kolom `draft_configuration` ada diisi oleh
+`npm run db:backfill-discount-drafts` (idempotent; hanya revision belum publish;
+tidak mengubah pointer live, kapasitas, kode, usage, version, atau audit).
+
 ## Schema Change Workflow
 
 1. Edit `packages/db/src/schema/*.ts`
 2. `npm run db:generate` — generates a migration in `packages/db/drizzle/`
 3. `npm run db:push` — applies the change to the dev DB
 4. No rebuild/sync needed — apps read the schema source via path alias.
+
+## Snapshot draft diskon terpadu (additive, belum cutover)
+
+`discount_offer_revision.draft_configuration` adalah JSONB nullable bertipe
+`DiscountDraftConfiguration` dari `packages/db/src/discount-draft.ts`. Parser
+server menolak field/kind/version asing dan memisahkan validitas draft parsial
+dari kelengkapan publish. DB menegakkan object dengan `draftSchemaVersion: 1`
+dan ukuran maksimal 262144 byte; bentuk lengkap tetap divalidasi aplikasi.
+
+Kolom terms published dan `discount_benefit` tetap projection live yang dibaca
+pricing. Service baru menyimpan proposal kapasitas/kode hanya dalam snapshot;
+publish mematerialisasikannya di transaksi yang sama dengan pointer dan audit.
+Snapshot pada revision published dipertahankan untuk provenance, bukan diedit
+untuk mengubah order lama.
+
+Migration `0057_watery_speed.sql` additive juga membawa perubahan constraint
+Harga dari pekerjaan paralel; SQL generated tidak diedit manual. Revision
+legacy tetap NULL: baseline dapat dibaca oleh repository baru, tetapi ini
+**bukan backfill persisted**. Seed existing tetap kompatibel dengan NULL selama
+cutover endpoint/UI belum selesai. Jangan mengaktifkan writer baru sebelum
+writer legacy dihentikan sesuai [catatan fitur](../features/discount-administration.md#fondasi-editor-terpadu--belum-cutover-httpui).
 
 ## `db:push` vs `db:migrate` (dev)
 
@@ -111,6 +138,23 @@ payment_type verbatim (`qris`, `gopay`, `credit_card`, `bank_transfer`,
 migration was required to repurpose them (comment-only change in
 `packages/db/src/schema/orders.ts`).
 
+## Markdown price history (ticket 03)
+
+Tabel harga Markdown dimiliki schema bersama: `price_change_batch`,
+`price_change_batch_row`, `variant_price_revision`, dan
+`variant_price_current` (`packages/db/src/schema/prices.ts`, migrasi
+`0041_even_wong.sql`). Target Markdown **tidak** ditulis ke
+`product_variant.price`; source sync hanya mengubah source, dan proyeksi
+efektif dihitung saat read. FK variant/revision/current memakai `RESTRICT`
+sehingga histori harga menahan cascade delete catalog.
+
+Satu detail urutan: baris batch menyimpan `applied_revision_id` (FK ke
+revision), sedangkan revision menyimpan `batch_row_id` dengan UNIQUE tanpa FK
+balik — dua arah FK akan menjadi siklus yang tidak bisa dihapus FK-ordered oleh
+seeder. Saat reset, seeder mereset `price_change_batch_row`
+(`state='pending'`, `applied_revision_id=NULL`) sebelum menghapus revision.
+Lihat [../features/markdown-pricing.md](../features/markdown-pricing.md).
+
 ## Seeder Must Stay in Sync
 
 Whenever a table/column is added or removed in `packages/db/src/schema/`,
@@ -119,8 +163,10 @@ produces a fully populated, testable DB without manual data entry:
 
 - Add a `DELETE` for any new table at the top of `seed()` (respecting FK order).
 - Add realistic sample rows for the new table/columns in `SEED_MODE=demo`.
-- Keep `SEED_MODE=jubelio` free of dummy catalog, branch, stock, and dependent
-  transactional fixtures; Jubelio import owns those rows in that mode.
+- Jaga `SEED_MODE=jubelio` tanpa dummy catalog, branch toko, stok, atau fixture
+  transaksi terkait; data tersebut mengikuti import Jubelio. Pengecualian:
+  branch administratif lokal HQ tetap dibuat dan di-assign ke `hqmanager`,
+  tanpa stok atau contoh transaksi.
 - The seeder refuses to run when `NODE_ENV=production`.
 
 See [../features/seeding.md](../features/seeding.md) for mode behavior and the

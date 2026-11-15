@@ -34,7 +34,7 @@ test.describe("storefront product detail", () => {
     await expect(
       page.getByRole("heading", { name: "Pilih Cabang" })
     ).toBeVisible();
-    const branchRows = page.locator("button", { hasText: /Stok: \d+/ });
+    const branchRows = page.locator("button", { hasText: /Stok terakhir: [1-9]\d*/ });
     expect(await branchRows.count()).toBeGreaterThan(0);
   });
 
@@ -46,7 +46,7 @@ test.describe("storefront product detail", () => {
     await page.waitForLoadState("networkidle");
 
     await expect(
-      page.getByText("Stok habis di semua cabang")
+      page.getByText("Stok habis", { exact: true })
     ).toBeVisible();
     // Add-to-cart is disabled without a selected branch.
     await expect(

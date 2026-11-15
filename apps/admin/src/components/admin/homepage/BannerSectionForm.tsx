@@ -3,6 +3,7 @@ import { useState, useRef } from "react";
 import { Upload, Loader2, X, Plus, ChevronUp, ChevronDown, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { BannerContent, BannerSlide, ProductFilterConfig } from "@marketplace/ui";
 import { buildProductFilterQuery } from "@marketplace/ui";
@@ -163,14 +164,14 @@ export default function BannerSectionForm({
         </div>
 
         {slides.length === 0 ? (
-          <div className="text-center py-8 border rounded-lg text-sm text-muted-foreground">
+          <div className="text-center py-8 border border-dashed rounded-lg bg-muted text-sm text-muted-foreground">
             Belum ada slide. Klik &quot;Tambah Slide&quot; untuk menambahkan gambar
             background. Slide akan berotasi otomatis.
           </div>
         ) : (
           <div className="space-y-3">
             {slides.map((slide, index) => (
-              <div key={index} className="border rounded-lg p-3 space-y-3">
+              <div key={index} className="rounded-lg border bg-muted p-3 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-medium">Slide {index + 1}</span>
                   <div className="flex items-center gap-1">
@@ -207,7 +208,7 @@ export default function BannerSectionForm({
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-[160px_1fr] gap-3">
-                  <div className="border rounded-md p-2 space-y-2">
+                  <div className="rounded-md border bg-card p-2 space-y-2">
                     {slide.imageUrl ? (
                       <div className="relative h-24">
                         <Image
@@ -226,7 +227,7 @@ export default function BannerSectionForm({
                         </button>
                       </div>
                     ) : (
-                      <div className="w-full h-24 bg-muted rounded flex items-center justify-center text-muted-foreground text-xs">
+                      <div className="w-full h-24 bg-card border border-dashed rounded flex items-center justify-center text-muted-foreground text-xs">
                         Belum ada gambar
                       </div>
                     )}
@@ -258,9 +259,11 @@ export default function BannerSectionForm({
 
                   <div className="space-y-2">
                     <div className="space-y-1">
-                      <Label className="text-xs">Alt Text (aksesibilitas)</Label>
-                      <input
-                        className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                      <Label className="text-xs" htmlFor={`slide-${index}-alt`}>
+                        Alt Text (aksesibilitas)
+                      </Label>
+                      <Input
+                        id={`slide-${index}-alt`}
                         value={slide.altText ?? ""}
                         onChange={(e) => updateSlide(index, { altText: e.target.value })}
                         placeholder={`Deskripsi slide ${index + 1}`}
@@ -274,15 +277,17 @@ export default function BannerSectionForm({
         )}
       </div>
 
-      <div className="border-t pt-4 space-y-4">
+      {/* Grouped by a divider instead of a tinted panel: the "Hasil Link"
+          field below is read-only and renders on `bg-muted`, so a `bg-muted`
+          panel here would make that field vanish into its own container. */}
+      <div className="space-y-4 border-t pt-4">
         <p className="text-sm font-medium">Teks &amp; Tombol (digunakan bersama oleh semua slide)</p>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="space-y-2">
             <Label htmlFor="ctaText">Teks Tombol CTA</Label>
-            <input
+            <Input
               id="ctaText"
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
               value={banner.ctaText ?? ""}
               onChange={(e) => update({ ctaText: e.target.value })}
               placeholder="Belanja Sekarang"
@@ -317,9 +322,8 @@ export default function BannerSectionForm({
         {ctaMode === "custom" ? (
           <div className="space-y-2">
             <Label htmlFor="ctaLink">Link CTA</Label>
-            <input
+            <Input
               id="ctaLink"
-              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
               value={banner.ctaLink ?? ""}
               onChange={(e) => update({ ctaLink: e.target.value })}
               placeholder="/products"
@@ -330,7 +334,7 @@ export default function BannerSectionForm({
           </div>
         ) : (
           <div className="space-y-3">
-            <div className="border rounded-lg p-3 space-y-3">
+            <div className="rounded-lg border bg-muted p-3 space-y-3">
               <Label className="text-xs">Filter Produk</Label>
               <ProductFilterEditor
                 value={ctaFilter}
@@ -348,10 +352,10 @@ export default function BannerSectionForm({
                 Hasil Link
               </Label>
               <div className="flex items-center gap-2">
-                <input
+                <Input
                   id="cta-built-url"
                   readOnly
-                  className="flex h-9 flex-1 rounded-md border border-input bg-muted/40 px-3 py-2 text-sm font-mono text-muted-foreground"
+                  className="flex-1 font-mono"
                   value={builtCtaUrl}
                 />
                 <Button
@@ -384,12 +388,12 @@ export default function BannerSectionForm({
             Interval Auto-Rotate (detik)
           </Label>
           <div className="flex items-center gap-3">
-            <input
+            <Input
               id="interval"
               type="number"
               min={MIN_INTERVAL_SEC}
               max={MAX_INTERVAL_SEC}
-              className="flex h-10 w-24 rounded-md border border-input bg-background px-3 py-2 text-sm"
+              className="w-24"
               value={banner.autoRotateIntervalSec ?? DEFAULT_INTERVAL_SEC}
               onChange={(e) =>
                 update({

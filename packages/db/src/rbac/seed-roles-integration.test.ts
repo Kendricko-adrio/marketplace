@@ -138,6 +138,27 @@ describe.skipIf(!reachable)("seeded RBAC state (fresh reset+seed)", () => {
     ).toBe(true);
   });
 
+  it("assigns hqmanager to a local HQ branch without stock or demo transactions", async () => {
+    const [hqUser] = await d!.select({ branchId: schema.users.branchId })
+      .from(schema.users)
+      .where(eq(schema.users.username, "hqmanager"));
+    expect(hqUser?.branchId).toBeTruthy();
+
+    const [hqBranch] = await d!.select().from(schema.branches)
+      .where(eq(schema.branches.id, hqUser!.branchId!));
+    expect(hqBranch).toMatchObject({
+      name: "HQ", code: "HQ", status: "aktif", jubelioLocationId: null,
+    });
+    expect(await d!.select().from(schema.branchStocks)
+      .where(eq(schema.branchStocks.branchId, hqBranch.id))).toEqual([]);
+    expect(await d!.select().from(schema.orders)
+      .where(eq(schema.orders.branchId, hqBranch.id))).toEqual([]);
+    expect(await d!.select().from(schema.cartItems)
+      .where(eq(schema.cartItems.branchId, hqBranch.id))).toEqual([]);
+    expect(await d!.select().from(schema.checkoutAttempts)
+      .where(eq(schema.checkoutAttempts.branchId, hqBranch.id))).toEqual([]);
+  });
+
   it("assigns the seeded Admin/HQ users through roleId", async () => {
     // The seeded users are identified by their known emails; runtime rows
     // (deactivated E2E users, custom Role assignments) are legitimate data

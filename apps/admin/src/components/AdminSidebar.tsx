@@ -12,11 +12,13 @@ import {
   LayoutTemplate,
   FileText,
   Shield,
+  ShieldQuestion,
   LogOut,
   Loader2,
   ChevronDown,
   PanelBottom,
   Bell,
+  Tag,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -64,9 +66,12 @@ export default function AdminSidebar() {
 
   const links: SidebarLink[] = [
     { href: "/admin/products", label: "Produk", icon: Package, module: "products" },
+    { href: "/admin/products/harga", label: "Harga SKU", icon: Tag, module: "prices" },
     { href: "/admin/orders", label: "Pesanan", icon: ShoppingBag, module: "orders" },
+    { href: "/admin/orders/reviews", label: "Review Jubelio", icon: ShieldQuestion, module: "orders" },
     { href: "/admin/customers", label: "Customer", icon: UserRoundSearch, module: "customers" },
     { href: "/admin/notifications", label: "Notifikasi", icon: Bell, module: "notifications" },
+    { href: "/admin/discounts", label: "Diskon", icon: Tag, module: "discounts" },
     { href: "/admin/branches", label: "Cabang", icon: Store, module: "branches" },
     { href: "/admin/analytics", label: "Analitik", icon: BarChart3, module: "analytics" },
     { href: "/admin/homepage", label: "Homepage", icon: LayoutTemplate, module: "homepage" },
@@ -86,6 +91,12 @@ export default function AdminSidebar() {
     if (!link.module) return false;
     return hasPermission(link.module, "view");
   });
+
+  // Choose one most-specific visible route, with segment boundaries so
+  // /orders/reviews does not also activate /orders (or match /reviews-extra).
+  const activeHref = visibleLinks
+    .filter((link) => pathname === link.href || (link.href !== "/admin" && pathname.startsWith(`${link.href}/`)))
+    .sort((a, b) => b.href.length - a.href.length)[0]?.href;
 
   const handleLogout = async () => {
     setLoggingOut(true);
@@ -134,22 +145,21 @@ export default function AdminSidebar() {
     : "";
 
   return (
-    <aside className="w-64 h-screen bg-card text-muted-foreground flex flex-col sticky top-0 border-r">
-      <div className="p-6 text-xl font-bold text-foreground border-b">
+    <aside className="w-full md:w-64 md:shrink-0 md:h-full bg-card text-muted-foreground flex flex-col border-r">
+      <div className="p-6 text-xl font-bold text-foreground border-b shrink-0">
         Admin<span className="text-primary">Panel</span>
       </div>
 
-      <nav className="flex-1 p-4 flex flex-col gap-2">
+      {/* The nav is the only scrollable region of the sidebar: with many
+          modules (or a short viewport) the list scrolls instead of pushing
+          the brand header and the account footer out of view. */}
+      <nav className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-wrap md:flex-col md:flex-nowrap gap-2">
         {visibleLinks.map((link) => {
           const Icon = link.icon;
-          // Exact match for /admin, startsWith for sub-routes
-          const isActive =
-            link.href === "/admin"
-              ? pathname === "/admin"
-              : pathname.startsWith(link.href);
+          const isActive = link.href === activeHref;
 
           return (
-            <Link key={link.href} href={link.href}>
+            <Link key={link.href} href={link.href} aria-current={isActive ? "page" : undefined}>
               <Button
                 variant="ghost"
                 className={cn(
@@ -168,7 +178,7 @@ export default function AdminSidebar() {
         })}
       </nav>
 
-      <div className="p-4 border-t">
+      <div className="p-4 border-t shrink-0">
         {mounted ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

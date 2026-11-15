@@ -62,11 +62,17 @@ preview/place-order sebagai `promoSelection`.
 ### Susunan review pembayaran
 
 Review memakai satu kolom dengan kelompok terpisah: produk, detail pengiriman/
-pengambilan, kontak pemesan, promo, informasi Midtrans, rincian pembayaran, dan
-konfirmasi. Sidebar ringkasan hanya ada pada langkah sebelumnya, bukan diduplikasi
-pada pembayaran. Cabang asal dan layanan kurir memiliki label terpisah. Nama
-penerima, telepon, alamat, dan kode pos ditampilkan per baris; field panjang wrap
-dan kolom detail/kontak menjadi vertikal pada mobile.
+pengambilan, kontak pemesan, promo, rincian pembayaran, dan konfirmasi. Sidebar
+ringkasan hanya ada pada langkah sebelumnya, bukan diduplikasi pada pembayaran.
+Cabang asal dan layanan kurir memiliki label terpisah. Nama penerima, telepon,
+alamat, dan kode pos ditampilkan per baris; field panjang wrap dan kolom
+detail/kontak menjadi vertikal pada mobile. Review tidak lagi memuat blok
+informasi payment gateway: identitas gateway dan daftar metode pembayaran
+(QRIS/GoPay/VA/kartu) tidak ditampilkan di UI customer-facing, karena metode
+mengikuti konfigurasi gateway. Pengingat pickup di review diringkas menjadi satu
+baris dengan detail di `InfoHint`, dan checkbox persetujuan memakai satu kalimat
+komitmen (memeriksa pesanan, menyetujui syarat & ketentuan, menyebutkan nomor
+telepon dan email saat mengambil).
 
 Rincian biaya menampilkan ongkir **sebelum subsidi**, lalu satu baris subsidi
 negatif. Contoh: barang Rp150.000 + PPN Rp16.500 + ongkir Rp30.000 − subsidi

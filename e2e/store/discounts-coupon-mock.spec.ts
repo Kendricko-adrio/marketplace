@@ -4,7 +4,10 @@
  * Real app HTTP + real PostgreSQL (disposable `marketplace_discounts_test_*`),
  * provider boundaries pointed at the loopback mock. Assertions memakai literal
  * independen dari spec §4.4: goods150000, fixed25000 → net goods125000,
- * PPN13750, total138750; provider line disc_amount25000/amount125000.
+ * PPN13750, total138750. Kontrak provider3 (tax spec: `items[].amount` = gross
+ * whole-line − disc_amount + tax_amount) membuat line provider disc_amount25000
+ * / tax_amount13750 / amount138750 dan `grand_total` 138750, sedangkan
+ * `net_line_amount` tersimpan tetap 125000 (net sebelum pajak).
  *
  * Mencakup:
  * - picker publik: Offer eligible + Offer minimum tampil disabled dengan alasan;
@@ -84,8 +87,10 @@ const PICKUP_TIME = "10:00";
 
 const GOODS = 150_000;
 const COUPON = 25_000;
-const NET_GOODS = 125_000;
 const PPN = 13_750;
+// Total customer = net sebelum pajak + PPN. Pada provider3 angka ini juga
+// dipakai `items[].amount` dan `grand_total` Sales Order (pajak ada di line
+// item), sedangkan net sebelum pajak tetap dibaca dari `net_line_amount`.
 const TOTAL = 138_750;
 // Literal independen untuk penggantian (ticket 08):
 // benefit 10000 → net 140000, PPN 15400, total 155400; selisih +16650.
@@ -99,7 +104,6 @@ const TOTAL_WITHOUT_PROMO = 166_500;
 // Percentage 10% atas150000 = 15000 (cap20000 belum mengikat):
 // net135000, PPN14850, total149850.
 const PERCENT_BENEFIT = 15_000;
-const PERCENT_NET = 135_000;
 const PERCENT_PPN = 14_850;
 const PERCENT_TOTAL = 149_850;
 
@@ -635,7 +639,7 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
       reserved_amount: "25000.00",
     });
 
-    // === Provider line: price source, disc_amount Markdown+Coupon sekali ===
+    // === Provider line: price source, disc_amount sekali, PPN di line item ===
     const requests = (await mockControl("GET", "/__control/requests")).data as Array<{
       method: string;
       path: string;
@@ -648,8 +652,34 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     );
     expect(create, "Sales-Order create POST was not captured").toBeTruthy();
     const items = (create!.body as { items: Array<Record<string, unknown>> }).items;
-    expect(items[0]).toMatchObject({ price: GOODS, qty_in_base: 1, disc_amount: COUPON, amount: NET_GOODS });
-    expect(Number((create!.body as { grand_total: number }).grand_total)).toBe(NET_GOODS);
+    // Provider3: amount = gross150000 − disc25000 + tax13750 = 138750, yaitu
+    // total customer; net sebelum pajak tetap 125000.
+    expect(items[0]).toMatchObject({
+      price: GOODS,
+      qty_in_base: 1,
+      disc_amount: COUPON,
+      tax_amount: PPN,
+      amount: TOTAL,
+    });
+    expect(Number((create!.body as { grand_total: number }).grand_total)).toBe(TOTAL);
+
+    // === Data pajak tersimpan: net sebelum pajak tetap 125000 ===
+    const stored = await pool.query(
+      `SELECT o.discount, o.ppn_amount, o.total,
+              i.goods_discount_amount, i.net_line_amount
+         FROM orders o JOIN order_item i ON i.order_id = o.id
+        WHERE o.id=$1`,
+      [orderId]
+    );
+    expect(stored.rows).toEqual([
+      {
+        discount: "25000.00",
+        ppn_amount: "13750.00",
+        total: "138750.00",
+        goods_discount_amount: "25000.00",
+        net_line_amount: "125000.00",
+      },
+    ]);
 
     // === Customer order detail is honest about the reserved promo ===
     await page.goto(`/account/orders/${orderId}`);
@@ -663,11 +693,14 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     await page.route("**/api/discounts/available", async route => {
       const body = route.request().postDataJSON();
       const current = body.page ?? 1;
+      // AC-12 (plan improve-checkout-copy-density, D3): fixture promo
+      // memakai angka acuan yang sama di seluruh spec mock store — baseline
+      // 166.500, promo barang 20.000, total 144.300, hemat total 22.200.
       const items = Array.from({ length: 27 }, (_, i) => ({
         offerId: `pagination-${i}`, name: `Promo halaman ${i + 1}`,
-        benefitAmount: "10000", benefitKind: "fixed_goods", rate: null, capAmount: null,
+        benefitAmount: "20000", benefitKind: "fixed_goods", rate: null, capAmount: null,
         minSubtotal: "0", endsAt: null, eligible: true, reason: null, reasonMessage: null,
-        estimatedSavings: "11100", estimatedTotal: "155400", recommended: i === 0,
+        estimatedSavings: "22200", estimatedTotal: "144300", recommended: i === 0,
       }));
       await route.fulfill({ json: { success: true, data: {
         items: items.slice((current - 1) * 10, current * 10), page: current,
@@ -680,6 +713,9 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     await page.getByRole("button", { name: "Pilih promo", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Pilih promo", exact: true });
     await expect(dialog.getByRole("radio")).toHaveCount(10);
+    // Label “Potongan” dan “Hemat total” berbeda makna dan tidak dihapus.
+    await expect(dialog.getByText("Potongan Rp 20.000", { exact: true }).first()).toBeVisible();
+    await expect(dialog.getByText("Hemat total Rp 22.200", { exact: true }).first()).toBeVisible();
     await expect(dialog.getByRole("button", { name: "Gunakan promo" })).toBeDisabled();
     await dialog.getByRole("radio").first().check();
     const list = dialog.getByRole("region", { name: "Daftar promo" });
@@ -917,12 +953,15 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     );
     expect(create).toBeTruthy();
     const items = (create!.body as { items: Array<Record<string, unknown>> }).items;
+    // Provider3: amount = gross150000 − disc15000 + tax14850 = 149850.
     expect(items[0]).toMatchObject({
       price: GOODS,
       qty_in_base: 1,
       disc_amount: PERCENT_BENEFIT,
-      amount: PERCENT_NET,
+      tax_amount: PERCENT_PPN,
+      amount: PERCENT_TOTAL,
     });
+    expect(Number((create!.body as { grand_total: number }).grand_total)).toBe(PERCENT_TOTAL);
 
     await page.goto(`/account/orders/${orderId}`);
     await expect(page.getByText(/Diskon promo \(Mock Persen 10 \(maks 20rb\)\)/)).toBeVisible();
@@ -1020,12 +1059,15 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     );
     expect(create).toBeTruthy();
     const items = (create!.body as { items: Array<Record<string, unknown>> }).items;
+    // Provider3: amount = gross150000 − disc15000 + tax14850 = 149850.
     expect(items[0]).toMatchObject({
       price: GOODS,
       qty_in_base: 1,
       disc_amount: PERCENT_BENEFIT,
-      amount: PERCENT_NET,
+      tax_amount: PERCENT_PPN,
+      amount: PERCENT_TOTAL,
     });
+    expect(Number((create!.body as { grand_total: number }).grand_total)).toBe(PERCENT_TOTAL);
 
     await page
       .waitForURL("**/checkout/payment-test**", { timeout: 15_000 })

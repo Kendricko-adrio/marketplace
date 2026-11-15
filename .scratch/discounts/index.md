@@ -49,6 +49,7 @@ Plan Done yang dahulu sudah dihapus tidak direkonstruksi; outcome dan docs tetap
 
 ### research
 
+- [Follow-up: literal provider line di spec coupon masih kontrak provider2](research/follow-up-coupon-provider-contract-literal.md) — **dikerjakan 2026-11-15 (test-only)**: assertion `amount` 125000/135000 (provider2) diganti kontrak provider3 (`disc_amount` + `tax_amount` 13750/14850 + `amount` 138750/149850, `grand_total` sama) untuk Coupon publik, percentage publik, dan manual×percentage; ditambah pemeriksaan data pajak tersimpan (`orders.ppn_amount` 13750/`total` 138750, `net_line_amount` tetap 125000). Evidence: RED 3 kasus (aktual 138750/149850) → GREEN 3 kasus → full spec **16 passed** pada DB disposable `marketplace_discounts_test_copydensity_20261114` + Jubelio mock loopback. Header spec dan `docs/testing/README.md` diselaraskan; tanpa perubahan pricing/pajak/provider, tanpa commit. Bukan regresi plan checkout-copy-density.
 - [Audit kepatuhan AC01–AC20](research/ac-coverage-audit-2026-11-09.md) — **0 Verified, 6 Sebagian, 14 Pending**; daftar/create/editor masih UI lama dan melanggar spec §4/§6/§7.1.
 - [Pemulihan error 500 schema Diskon lokal](research/local-discounts-schema-mismatch.md) — reset/push/seed/import 100 produk atas instruksi pengguna; query revision dan API list authenticated kembali berhasil (200).
 

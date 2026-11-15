@@ -89,6 +89,15 @@ interface PendingCheckout {
   requestKey: string;
   body: Record<string, unknown>;
 }
+
+/**
+ * Body checkout versi lama membawa tujuan inline (`newAddress`) + save-intent.
+ * Kontrak baru hanya menerima `addressId`, jadi body seperti itu tidak pernah
+ * dikirim ulang: ia hanya boleh dibaca (lookup) lalu diganti pilihan eksplisit.
+ */
+function legacyIntentInBody(body: Record<string, unknown> | null | undefined): boolean {
+  return Boolean(body && ("newAddress" in body || "saveAddress" in body || "saveRequestId" in body));
+}
 interface CheckoutPricing extends ReturnType<typeof calculateOrderPricing> {
   /** Additive Markdown snapshot fields from the versioned preview. */
   sourceGoodsSubtotal?: string;
@@ -361,19 +370,17 @@ export default function CheckoutPage() {
   const [deliveryPending, setDeliveryPending] = useState(false);
   // Ticket 04: the approval needs the chosen address + the reprice sync.
   const [deliveryAddressId, setDeliveryAddressId] = useState<string | null>(null);
-  const [deliveryNewAddress, setDeliveryNewAddress] = useState<import("@/lib/client-addresses").ClientAddressInput | null>(null);
-  const [deliverySaveAddress, setDeliverySaveAddress] = useState(false);
-  const [saveRequestId, setSaveRequestId] = useState(() => crypto.randomUUID());
-  const newAddressFingerprint = useRef<string | null>(null);
-  const handleNewAddressChange = useCallback((value: import("@/lib/client-addresses").ClientAddressInput | null) => {
-    const fingerprint = value ? JSON.stringify(value) : null;
-    if (fingerprint !== newAddressFingerprint.current) {
-      newAddressFingerprint.current = fingerprint;
-      setSaveRequestId(crypto.randomUUID());
-    }
-    setDeliveryNewAddress(value);
-  }, []);
+  // Alamat create/edit yang belum selesai: tidak boleh quote/Lanjut/submit
+  // order sementara mutation alamat masih unresolved.
+  const [deliveryAddressPending, setDeliveryAddressPending] = useState(false);
   const [deliveryAddressPreview, setDeliveryAddressPreview] = useState<DeliveryAddressPreview | null>(null);
+  /**
+   * Pending body versi lama (masih membawa `newAddress`/save-intent). Hanya
+   * dibaca: setelah lookup definitif 404 sesudah cutover, customer memilih
+   * alamat tersimpan dan me-review ulang dengan request key baru. Body lama
+   * tidak pernah dikirim ulang.
+   */
+  const [legacyPendingBody, setLegacyPendingBody] = useState(false);
   const [repriceSync, setRepriceSync] = useState<{
     services: DeliveryQuoteService[];
     selected: DeliveryQuoteService | null;
@@ -434,6 +441,10 @@ export default function CheckoutPage() {
             } else if (!cancelled && result.success && result.data && result.data.version !== 2 && result.data.orderId) {
               if (requestStorageKey) sessionStorage.removeItem(requestStorageKey);
               router.replace(`/account/orders/${result.data.orderId}`);
+            } else if (!cancelled && lookup.status === 404 && legacyIntentInBody(stored.body)) {
+              // Lookup definitif tanpa hasil untuk body inline lama: jangan
+              // mengirim ulang body itu, minta customer memilih alamat tersimpan.
+              setLegacyPendingBody(true);
             }
           } catch { /* Panel recovery tetap memakai key yang sama. */ }
           return;
@@ -510,7 +521,7 @@ export default function CheckoutPage() {
   // is still re-checked at place-order; this call never reserves anything.
   // Pilihan yang hilang/tidak eligible TIDAK dihapus: ia menjadi state gugur
   // dengan alasan aman (ticket 08) agar tidak ada diskon palsu yang dipertahankan.
-  const promoContextKey = JSON.stringify([selectedItems, fulfillmentMethod, deliveryService, deliveryAddressId, deliveryNewAddress, phone, email, pickupDate, pickupTime]);
+  const promoContextKey = JSON.stringify([selectedItems, fulfillmentMethod, deliveryService, deliveryAddressId, phone, email, pickupDate, pickupTime]);
   const promoContextRef = useRef(promoContextKey);
   const loadPromos = useCallback(async (page = 1) => {
     if (cart?.pricingContractVersion !== 1 || selectedItems.length === 0) return;
@@ -740,7 +751,7 @@ export default function CheckoutPage() {
   // delivery never sends slots.
   const handleNextFromFulfillment = async () => {
     if (fulfillmentMethod === "delivery") {
-      if (deliveryPending || !deliveryService) return;
+      if (deliveryPending || deliveryAddressPending || !deliveryService) return;
       // Delivery memakai email akun + telepon penerima alamat; tidak ada
       // langkah kontak terpisah, jadi validasinya di sini.
       if (!validateDeliveryContact()) return;
@@ -808,8 +819,7 @@ export default function CheckoutPage() {
       contactPhone: (deliveryAddressPreview?.phone ?? phone).trim(),
       contactEmail: (email || sessionUser?.email || "").trim(),
       fulfillmentMethod: "delivery",
-      ...(deliveryNewAddress ? { newAddress: deliveryNewAddress, saveAddress: deliverySaveAddress, saveRequestId }
-        : { addressId: deliveryAddressId }),
+      ...(deliveryAddressId ? { addressId: deliveryAddressId } : {}),
       courierId: deliveryService.courierId, serviceId: deliveryService.serviceId,
       // Approval = NET customer yang terakhir direview (subsidi sudah masuk);
       // service quote original tetap dibekukan di delivery snapshot server.
@@ -1093,7 +1103,7 @@ export default function CheckoutPage() {
    */
   async function goToPayment() {
     if (reviewing) return;
-    if (fulfillmentMethod === "delivery" && (deliveryPending || !deliveryService)) { setStep(1); return; }
+    if (fulfillmentMethod === "delivery" && (deliveryPending || deliveryAddressPending || !deliveryService)) { setStep(1); return; }
     setConfirmed(false);
     if (cart?.pricingContractVersion === 1) {
       setReviewing(true);
@@ -1149,6 +1159,24 @@ export default function CheckoutPage() {
   function clearPendingRequest() {
     if (requestStorageKey) sessionStorage.removeItem(requestStorageKey);
     setPendingRequest(null);
+  }
+
+  /**
+   * Setelah lookup definitif 404, pending body lama dibuang dan customer memulai
+   * review/request key BARU dengan alamat tersimpan — bukan mengirim body lama.
+   */
+  function startAddressOnlyCheckout() {
+    // Body lama dibuang dari pending lokal; halaman dimuat ulang supaya langkah
+    // input (dan keranjang) terbaca lagi. Tidak ada POST/order yang dikirim.
+    setLegacyPendingBody(false);
+    setAttemptFeedback(null);
+    setSubmitError(null);
+    setLookupNotice(null);
+    setCheckState("idle");
+    setReview(null);
+    setConfirmed(false);
+    clearPendingRequest();
+    window.location.replace("/checkout");
   }
 
   async function submitVersioned(record: PendingCheckout) {
@@ -1375,7 +1403,7 @@ export default function CheckoutPage() {
       return;
     }
     if (fulfillmentMethod === "delivery") {
-      if (deliveryPending || !deliveryService || (!deliveryAddressId && !deliveryNewAddress)) return;
+      if (deliveryPending || deliveryAddressPending || !deliveryService || !deliveryAddressId) return;
       setSubmitting(true);
       try {
         // Ticket 04 — the approval body: ONLY the approval; every money field
@@ -1388,7 +1416,7 @@ export default function CheckoutPage() {
             contactPhone: phone,
             contactEmail: email,
             fulfillmentMethod: "delivery",
-            ...(deliveryNewAddress ? { newAddress: deliveryNewAddress, saveAddress: deliverySaveAddress, saveRequestId } : { addressId: deliveryAddressId }),
+            addressId: deliveryAddressId,
             courierId: deliveryService.courierId,
             serviceId: deliveryService.serviceId,
             approvedPricing: deliveryService.pricing,
@@ -1528,6 +1556,16 @@ export default function CheckoutPage() {
             {lookupNotice}
           </p>
         )}
+        {legacyPendingBody && (
+          <div role="alert" className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
+            <p className="font-medium">
+              Alamat checkout perlu dipilih ulang. Pilih alamat tersimpan dan periksa kembali pesanan.
+            </p>
+            <Button type="button" variant="outline" size="sm" onClick={startAddressOnlyCheckout}>
+              Pilih alamat dan review ulang
+            </Button>
+          </div>
+        )}
         {!attemptFeedback && <Button variant="outline" onClick={() => router.push("/cart")}>Kembali ke keranjang</Button>}
       </CardContent></Card>
     </div>;
@@ -1655,6 +1693,26 @@ export default function CheckoutPage() {
                 </div>
 
                 {/* Fulfillment method */}
+                {legacyPendingBody && (
+                  <div
+                    role="alert"
+                    className="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100"
+                  >
+                    <p className="font-medium">
+                      Alamat checkout perlu dipilih ulang. Pilih alamat tersimpan dan
+                      periksa kembali pesanan.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-3"
+                      onClick={startAddressOnlyCheckout}
+                    >
+                      Pilih alamat dan review ulang
+                    </Button>
+                  </div>
+                )}
                 <div className="mb-6 grid gap-3 sm:grid-cols-2">
                   <button
                     type="button"
@@ -1715,11 +1773,8 @@ export default function CheckoutPage() {
                       }}
                       onAddressChange={setDeliveryAddressId}
                       onAddressSelected={setDeliveryAddressPreview}
-                      onNewAddressChange={handleNewAddressChange}
-                      onSaveAddressChange={setDeliverySaveAddress}
+                      onAddressPendingChange={setDeliveryAddressPending}
                       initialAddressId={deliveryAddressId}
-                      initialNewAddress={deliveryNewAddress}
-                      initialSaveAddress={deliverySaveAddress}
                       repriceSync={repriceSync}
                     />
                   </>
@@ -2031,7 +2086,7 @@ export default function CheckoutPage() {
                     disabled={
                       reviewing ||
                       (fulfillmentMethod === "delivery" &&
-                        (deliveryPending || !deliveryService))
+                        (deliveryPending || deliveryAddressPending || !deliveryService))
                     }
                   >
                     {reviewing ? (

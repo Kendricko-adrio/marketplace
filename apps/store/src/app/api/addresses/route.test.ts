@@ -13,7 +13,12 @@ import { describe, expect, it, vi } from "vitest";
 const CLIENT_ID = "client-1";
 
 const { sent } = vi.hoisted(() => ({
-  sent: [] as Array<{ action: string; payload: unknown }>,
+  sent: [] as Array<{
+    action: string;
+    payload: unknown;
+    requestKey?: string;
+    context?: string;
+  }>,
 }));
 
 vi.mock("@/lib/address-api", () => ({
@@ -22,20 +27,36 @@ vi.mock("@/lib/address-api", () => ({
     run: (
       book: {
         list: (userId: string) => Promise<unknown>;
-        create: (userId: string, input: unknown) => Promise<unknown>;
+        create: (
+          userId: string,
+          input: unknown,
+          options?: { requestKey?: string }
+        ) => Promise<unknown>;
       },
-      userId: string
-    ) => Promise<unknown>
+      userId: string,
+      context: { requestKey?: string }
+    ) => Promise<unknown>,
+    request?: Request
   ) => {
+    // Route only forwards the header; the boundary owns normalization.
+    expect(request === undefined || request instanceof Request).toBe(true);
+    const headerKey = request?.headers.get("idempotency-key") ?? undefined;
+    const context: { requestKey?: string } =
+      headerKey === undefined ? {} : { requestKey: headerKey };
     const data = await run(
       {
         list: async (userId: string) => ({ owner: userId, addresses: [] }),
-        create: async (userId: string, input: unknown) => {
-          sent.push({ action, payload: input });
-          return { owner: userId, input };
+        create: async (
+          userId: string,
+          input: unknown,
+          options?: { requestKey?: string }
+        ) => {
+          sent.push({ action, payload: input, requestKey: options?.requestKey, context: context.requestKey });
+          return { owner: userId, input, requestKey: options?.requestKey };
         },
       },
-      CLIENT_ID
+      CLIENT_ID,
+      context
     );
     return new Response(JSON.stringify({ success: true, data: data ?? null }), {
       status: 200,
@@ -94,10 +115,10 @@ function canonicalUuid(value: unknown): string {
 }
 
 /** Request POST sederhana; body JSON dibaca oleh handler, bukan oleh wrapper. */
-function createRequest(body: unknown): Request {
+function createRequest(body: unknown, headers: Record<string, string> = {}): Request {
   return new Request("http://localhost/api/addresses", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
 }
@@ -141,7 +162,9 @@ describe("/api/addresses wrapper", () => {
         success: true,
         data: { owner: CLIENT_ID, input },
       });
-      expect(sent).toEqual([{ action: "create", payload: input }]);
+      expect(sent).toEqual([
+        { action: "create", payload: input, requestKey: undefined, context: undefined },
+      ]);
 
       const requestId = canonicalUuid(response.headers.get("x-request-id"));
 
@@ -152,6 +175,17 @@ describe("/api/addresses wrapper", () => {
     } finally {
       restore();
     }
+  });
+
+  it("meneruskan header Idempotency-Key dan request ke boundary create", async () => {
+    sent.length = 0;
+    const input = { recipientName: "Budi", phone: "+628111111111" };
+    const key = "b1200000-0000-4000-8000-0000000000aa";
+    const response = await POST(createRequest(input, { "Idempotency-Key": key }));
+    expect(response.status).toBe(200);
+    expect(sent).toEqual([
+      { action: "create", payload: input, requestKey: key, context: key },
+    ]);
   });
 
   it("memberi requestId berbeda untuk dua request dan tidak meneruskan requestId klien", async () => {

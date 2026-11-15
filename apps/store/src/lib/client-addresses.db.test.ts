@@ -6,7 +6,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "@marketplace/db/src/schema";
 import { clients } from "@marketplace/db/src/schema";
-import { createClientAddressBook } from "./client-addresses";
+import { createClientAddressBook, ClientAddressError } from "./client-addresses";
 
 // =========================================================
 // Ticket 02 (pengiriman-ke-rumah-jubelio) — client address book seam,
@@ -79,6 +79,9 @@ type RegionGateway = Parameters<typeof createClientAddressBook>[1];
 type RegionGatewayInput = Parameters<RegionGateway["validateAddress"]>[0];
 type RegionCanonical = Awaited<ReturnType<RegionGateway["validateAddress"]>>;
 
+/** Setiap panggilan provider wilayah dicatat: replay TIDAK boleh memanggilnya lagi. */
+const regionCalls: RegionGatewayInput[] = [];
+
 /**
  * Stand-in for the external Shipment region provider. It validates the
  * area–postal relation against the fixture hierarchy (an independent literal,
@@ -89,6 +92,7 @@ function fixtureRegionGateway() {
     async validateAddress(
       input: RegionGatewayInput
     ): Promise<RegionCanonical> {
+      regionCalls.push(input);
       const verified =
         input.provinceId === FIXTURE_REGION.provinceId &&
         input.cityId === FIXTURE_REGION.cityId &&
@@ -424,6 +428,101 @@ describe("client address book seam (PostgreSQL-backed)", () => {
         )
       );
       await expectExactlyOneDefault(targetIds, ALICE_ID);
+    }
+  );
+
+  it.skipIf(!dbReady)(
+    "create with the same requestKey replays one row without re-applying the first default and without a second region call",
+    async () => {
+      if (!book) return;
+      await resetFixtureClients();
+      const key = "c1200000-0000-4000-8000-0000000000aa";
+      const input = makeInput("Budi Tes Alamat", "081200000001", "Jl. DB Test No. 1", true);
+      regionCalls.length = 0;
+      const first = await book.create(ALICE_ID, input, { requestKey: key });
+      expect(regionCalls).toHaveLength(1);
+      expect(first.isDefault).toBe(true);
+
+      // Operasi lain menjadikan alamat kedua utama; retry TIDAK boleh membatalkannya.
+      const other = await book.create(
+        ALICE_ID,
+        makeInput("Sari Tes Alamat", "081200000002", "Jl. DB Test No. 2")
+      );
+      await book.setDefault(ALICE_ID, other.id);
+      regionCalls.length = 0;
+
+      const replay = await book.create(ALICE_ID, input, { requestKey: key });
+      expect(replay.id).toBe(first.id);
+      expect(replay.isDefault, "status default terkini, bukan pilihan create pertama").toBe(false);
+      expect(regionCalls, "replay tidak memanggil region provider lagi").toHaveLength(0);
+      const rows = await book.list(ALICE_ID);
+      expect(rows).toHaveLength(2);
+      expect(rows.filter((row) => row.isDefault).map((row) => row.id)).toEqual([other.id]);
+
+      // Bukan dedupe: penambahan sengaja dengan key BARU tetap menjadi row baru.
+      const added = await book.create(ALICE_ID, input, { requestKey: "c1200000-0000-4000-8000-0000000000bb" });
+      expect(added.id).not.toBe(first.id);
+      expect(await book.list(ALICE_ID)).toHaveLength(3);
+    }
+  );
+
+  it.skipIf(!dbReady)(
+    "the same requestKey with a different destination is a conflict and writes nothing",
+    async () => {
+      if (!book) return;
+      await resetFixtureClients();
+      const key = "c1200000-0000-4000-8000-0000000000cc";
+      const first = await book.create(
+        ALICE_ID,
+        makeInput("Budi Tes Alamat", "081200000001", "Jl. DB Test No. 1"),
+        { requestKey: key }
+      );
+      await expect(
+        book.create(
+          ALICE_ID,
+          makeInput("Budi Tes Alamat", "081200000001", "Jl. DB Test No. 9"),
+          { requestKey: key }
+        )
+      ).rejects.toMatchObject({ code: "REQUEST_KEY_CONFLICT" });
+      const rows = await book.list(ALICE_ID);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: first.id, fullAddress: "Jl. DB Test No. 1" });
+    }
+  );
+
+  it.skipIf(!dbReady)(
+    "an invalid Idempotency-Key is rejected before any write",
+    async () => {
+      if (!book) return;
+      await resetFixtureClients();
+      regionCalls.length = 0;
+      const error = await book
+        .create(ALICE_ID, makeInput("Budi Tes Alamat", "081200000001", "Jl. DB Test No. 1"), {
+          requestKey: "not-a-uuid",
+        })
+        .catch((thrown: unknown) => thrown);
+      expect(error).toBeInstanceOf(ClientAddressError);
+      expect(error).toMatchObject({ code: "INPUT_INVALID" });
+      expect(regionCalls, "header invalid tidak boleh sampai ke provider").toHaveLength(0);
+      expect(await book.list(ALICE_ID)).toHaveLength(0);
+    }
+  );
+
+  it.skipIf(!dbReady)(
+    "concurrent creates with one requestKey store exactly one address",
+    async () => {
+      if (!book) return;
+      await resetFixtureClients();
+      const key = "c1200000-0000-4000-8000-0000000000dd";
+      const input = makeInput("Budi Tes Alamat", "081200000001", "Jl. DB Test No. 1");
+      const results = await Promise.all([
+        book.create(ALICE_ID, input, { requestKey: key }),
+        book.create(ALICE_ID, input, { requestKey: key }),
+        book.create(ALICE_ID, input, { requestKey: key }),
+      ]);
+      const ids = new Set(results.map((row) => row.id));
+      expect(ids.size).toBe(1);
+      expect(await book.list(ALICE_ID)).toHaveLength(1);
     }
   );
 });

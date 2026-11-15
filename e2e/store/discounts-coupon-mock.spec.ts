@@ -813,7 +813,7 @@ test.describe("Coupon publik pickup (ticket 07)", () => {
     // Render the agreed peer dialog for main-agent cross-pattern visual review.
     await page.getByRole("button", { name: "Kembali", exact: true }).click();
     await page.getByText("Kirim ke alamat", { exact: true }).click();
-    await page.getByRole("button", { name: "Gunakan alamat baru", exact: true }).click();
+    await page.getByRole("button", { name: "Tambah alamat", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Alamat baru", exact: true })).toBeVisible();
     for (const width of [360, 1440]) {
       await page.setViewportSize({ width, height: 850 });

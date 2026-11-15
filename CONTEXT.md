@@ -140,6 +140,20 @@ _Avoid_: remote HQ pickup, all-branch pickup override
 The Action that permits modifying data and, where scope can authorize a new target, creating data in a Module. Creating a branch is an explicit all-branch operation.
 _Avoid_: update-only permission
 
+### Alamat Pengiriman Customer
+
+**Draft Alamat**:
+Calon alamat pengiriman yang belum dikonfirmasi customer dan belum menjadi bagian dari Buku Alamat.
+_Avoid_: alamat tersimpan, alamat yang sudah dibuat
+
+**Alamat Tersimpan**:
+Alamat penerima dalam Buku Alamat milik customer yang tetap tersedia terlepas dari apakah checkout dilanjutkan atau order terbentuk.
+_Avoid_: draft alamat, alamat milik order
+
+**Alamat Utama**:
+Alamat Tersimpan yang menjadi pilihan awal tujuan pengiriman customer pada checkout berikutnya. Status utama merupakan pilihan customer, bukan konsekuensi otomatis dari menambahkan alamat baru.
+_Avoid_: alamat terbaru, alamat wajib untuk semua order
+
 ### Pemenuhan Order Delivery
 
 **Order Selesai**:

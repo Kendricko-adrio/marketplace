@@ -75,6 +75,19 @@ describe("place-order method-aware input contract", () => {
   ])("rejects invalid delivery approval %#", (body) => {
     expect(parsePlaceOrderBody(body, "delivery").success).toBe(false);
   });
+  it("rejects the removed inline destination so checkout cannot write the address book", () => {
+    const inlineDestination = {
+      recipientName: "Customer", phone: "081234567890", fullAddress: "Destination",
+      provinceId: "01", cityId: "0101", districtId: "010101", areaId: "01010101",
+      postalCode: "01234", isDefault: true,
+    };
+    const withoutAddressId = { ...delivery } as Record<string, unknown>;
+    delete withoutAddressId.addressId;
+    expect(parsePlaceOrderBody({ ...withoutAddressId, newAddress: inlineDestination, saveAddress: true,
+      saveRequestId: "b1200000-0000-4000-8000-000000000008" }, "delivery").success).toBe(false);
+    // Payload inline lama tidak boleh masuk lewat body approval biasa.
+    expect(parsePlaceOrderBody({ ...delivery, newAddress: inlineDestination }, "delivery").success).toBe(false);
+  });
   it("keeps non-delivery method values on the legacy pickup parser", () => {
     expect(parsePlaceOrderBody(pickup, "unknown").success).toBe(true);
     expect(parsePlaceOrderBody({ ...pickup, fulfillmentMethod: "pickup" }, "pickup").success).toBe(false);

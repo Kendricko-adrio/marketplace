@@ -21,6 +21,14 @@ export interface CheckoutAttemptSnapshot {
   cart: Array<{ itemId: string; cartId: string; variantId: string; branchId: string;
     quantity: number; updatedAt: string }>;
   createRequest: JubelioSalesOrderCreateRequest;
+  /**
+   * @deprecated Read-compatibility only. The previous checkout version wrote a
+   * checkout address-book save-intent here; the current contract is "the
+   * address book is written only by address operations", so new snapshots
+   * always store `null`. Historic rows keep their stored value so the JSON
+   * version stays readable, and every reader treats a non-null intent as a
+   * fail-closed legacy case (never an instruction to write an address).
+   */
   addressToSave: Omit<typeof addresses.$inferInsert, "id" | "userId" | "createdAt" | "updatedAt"> | null;
 }
 

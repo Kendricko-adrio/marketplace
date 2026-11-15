@@ -1,6 +1,6 @@
 # Client address book (delivery foundation)
 
-Store clients manage their own recipient addresses at `/account/addresses` or enter a new delivery destination directly in checkout. Checkout offers independent **Simpan alamat** and **Jadikan alamat utama** choices: the latter is only available when saving. An unchecked save option leaves the address book unchanged while the order retains an immutable destination snapshot. An approved order saves the chosen new address atomically with the local order row; a quote or rejected pricing approval never saves it. Repeated accepted save requests with the same client-scoped UUID reuse that address row (not a second row); this is address-save deduplication, not a claim that retrying the entire checkout creates no second order. The current default address is preselected on the next checkout, but can be replaced. All endpoints require an onboarded store session; admin authentication is not accepted. Address changes do not constitute delivery activation: branch origin/master parcel data and the later checkout/fulfillment tickets remain prerequisites.
+Store clients manage their own recipient addresses at `/account/addresses`. Checkout sekarang **selalu menyimpan** alamat lewat konfirmasi tombol (D1/D2): modal **Tambah alamat** menulis ke buku alamat sebelum ada order, jadi alamat tetap tersedia walaupun checkout ditinggalkan atau pembayaran tidak dilanjutkan. Tidak ada lagi checkbox **Simpan alamat** maupun mode tujuan sekali pakai; mengetik atau **Batal** sebelum submit tidak membuat row. Place-order, quote, review, promotion, dan recovery checkout **tidak pernah** menulis buku alamat — order hanya merujuk `address_id` dan menyimpan snapshot tujuan sendiri, sehingga edit/hapus buku alamat tidak mengubah tujuan order historis (`ON DELETE SET NULL`). **Jadikan alamat utama** opsional dan tidak dicentang saat tambah; alamat pertama/terbaru tidak otomatis menjadi utama, dan alamat utama yang ada dipilih otomatis pada checkout berikutnya. Semua endpoint memerlukan sesi store onboarded; sesi admin bukan sesi store. Domain: [glossary](../../CONTEXT.md#alamat-pengiriman-customer).
 
 ## API
 
@@ -12,9 +12,19 @@ Store clients manage their own recipient addresses at `/account/addresses` or en
 
 Create/update input: `recipientName`, `phone`, `fullAddress`, `provinceId`, `cityId`, `districtId`, `areaId`, `postalCode`, `isDefault`. Unknown properties are rejected. Region IDs and postal codes are strings, preserving leading zeros. Labels are resolved server-side from Shipment, not trusted from the browser. Invalid hierarchy/postcode rejects the write. Foreign/unknown address IDs return 404 without mutation. At most one default is enforced by a partial unique index; every mutation locks the client row inside a transaction. Removing the default does not automatically promote another address. Legacy addresses require verified region selection before they can be used for delivery.
 
+### Retry key create (opsional, terbatas)
+
+`POST /api/addresses` menerima header opsional **`Idempotency-Key`** berisi UUID; body tetap strict `ClientAddressInput` dan consumer Buku Alamat yang tidak mengirim header berperilaku sama seperti sebelumnya. Checkout selalu mengirim satu key per konfirmasi "Simpan dan gunakan" dan mempertahankannya saat retry setelah respons tidak pasti.
+
+- Identitas row deterministik per client + key (`address-create:` + SHA-256 pasangan client/key), memakai primary key text yang sudah ada — tanpa tabel atau kolom baru. Tidak ada key global lintas customer.
+- Replay di bawah lock owner mengembalikan row yang sama **tanpa** memanggil provider wilayah lagi dan **tanpa** menerapkan ulang pilihan default create pertama; status default yang berlaku adalah status terkini.
+- Key yang sama dengan tujuan berbeda menghasilkan `409 REQUEST_KEY_CONFLICT`; key/body tidak pernah diganti diam-diam. Key tidak valid = `400 INPUT_INVALID` tanpa mutation.
+- Jaminan berlaku selama row-nya masih ada. Ini **bukan** dedupe alamat serupa dari penambahan yang sengaja diulang, bukan receipt permanen setelah row dihapus, dan bukan idempotency universal untuk PATCH.
+- PATCH dengan respons tidak pasti tidak di-fallback ke POST: UI memakai **Periksa alamat** (GET daftar) untuk membaca row yang sama.
+
 `GET /api/shipment/regions?level=provinces` lists provinces. Use `level=cities|districts|areas&parentId={stringId}` for children. `JUBELIO_SHIPMENT_URL` configures the separate Shipment host, never the Omnichannel host. GET region lookups require no provider token. Failures never fabricate a postcode or silently reuse an old hierarchy.
 
-The form clears all descendant selections and postcode when a parent changes. Save is disabled until required fields are supplied; server validation remains authoritative. Structured API logs exclude recipient names, phones, street addresses and raw provider responses.
+Checkout memvalidasi lebih awal sebelum mengirim: nama/telepon/alamat wajib, panjang sesuai batas schema, seluruh rantai wilayah lengkap, kode pos tersedia, dan nomor penerima memenuhi aturan kontak checkout **8–15 digit**. Ini menjaga create tidak berhasil lalu langsung ditolak "Lanjut"; aturan global API/Buku Alamat tetap 5–25 karakter dan validasi kontak server place-order tidak dilemahkan. Saat edit, checkbox utama diisi dari status alamat yang diedit dan uncheck tidak mempromosikan alamat lain. Form clears all descendant selections and postcode when a parent changes. Save is disabled until required fields are supplied; server validation remains authoritative. Structured API logs exclude recipient names, phones, street addresses and raw provider responses.
 
 ## Branch origin and per-SKU parcels
 
@@ -29,3 +39,7 @@ IT configures `system_config` keys `shipment.parcelFallback` (JSON `{ "weight": 
 ## Verification
 
 `client-addresses.db.test.ts` uses real PostgreSQL for ownership, CRUD and concurrent default changes. `shipment-regions.test.ts` checks canonical string IDs/postcodes, parent mismatch and postal mismatch. `e2e/store/addresses-mock.spec.ts`, run through `playwright.mock.config.ts`, exercises creation, editing, default changes/deletion and cross-client API isolation using local region fixtures. No live Jubelio writes are necessary.
+
+## Verification
+
+`client-addresses.db.test.ts` (real PostgreSQL) membuktikan ownership, CRUD, default concurrent, serta kontrak retry create: key sama → satu row dan tanpa panggilan provider wilayah lagi, default tidak dipromosikan ulang, key sama dengan tujuan berbeda → `REQUEST_KEY_CONFLICT`, key invalid tanpa mutation, dan tiga create concurrent dengan satu key tetap satu row. `address-api.test.ts` mengunci batas HTTP (header diteruskan, 409 konflik, 400 invalid, 404/503). `e2e/store/addresses-mock.spec.ts` tetap membuktikan consumer Buku Alamat tanpa header baru.

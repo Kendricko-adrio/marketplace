@@ -154,6 +154,42 @@ npm run db:push            # skema development (JANGAN db:migrate di dev)
 SEED_MODE=demo npm run db:seed
 ```
 
+### Database test bersama: siapkan sekali, pakai berulang
+
+Membuat database baru untuk setiap sesi tidak perlu. Container dev sudah memuat
+satu database test tetap, `marketplace_discounts_test_e2e_shared`, yang
+**berulang kali dipakai** oleh semua spec mock ber-guard disposable. Alasannya
+aman: setiap spec mengembalikan gate `discounts.contractVersion` yang
+dinaikkannya dan hanya menghapus fixture miliknya sendiri (urutan FK), sementara
+isinya bukan state kerja developer — kalau sebuah run mati di tengah, DB ini
+boleh di-`db:push` + `SEED_MODE=demo db:seed` ulang tanpa kehilangan apa pun.
+
+```bash
+# sekali saja ketika container dev baru (sudah disiapkan 2026-11-15)
+docker exec storefront-postgres psql -U postgres -c \
+  'CREATE DATABASE marketplace_discounts_test_e2e_shared'
+DATABASE_URL="postgresql://postgres:<pw>@localhost:5432/marketplace_discounts_test_e2e_shared" \
+  npm run db:push
+SEED_MODE=demo DATABASE_URL="postgresql://postgres:<pw>@localhost:5432/marketplace_discounts_test_e2e_shared" \
+  npm run db:seed
+
+# setiap kali menjalankan spec mock ber-guard disposable
+export DATABASE_URL="postgresql://postgres:<pw>@localhost:5432/marketplace_discounts_test_e2e_shared"
+npm run verify:batch:e2e -- e2e/store/checkout-review-mock.spec.ts
+```
+
+Dua kegagalan pra-syarat yang paling sering muncul dan bukan regresi kode:
+
+- **`refuses database "storefront"`** — `DATABASE_URL` masih menunjuk DB dev.
+  Pakai database di atas; jangan mengubah guard atau `.env`.
+- **`the seeded admin must have an active Jubelio-linked Home Branch`** — seed
+  memakai `SEED_MODE=jubelio` dari `.env` root, sedangkan mode itu memang tidak
+  membuat branch toko. Seed ulang dengan `SEED_MODE=demo` (baris perintah di
+  atas sudah menyertakannya).
+
+Keduanya muncul sebagai kegagalan test **pertama** diikuti `did not run` pada
+sisa file, karena guard berjalan di `beforeAll` sebelum satu assertion pun.
+
 Gate `discounts.contractVersion` ditulis seeder sebagai baris **eksplisit** dengan
 value `0` (system config, kedua `SEED_MODE`); baris yang absen tetap dibaca legacy
 `0`. Test gate `1` wajib menyetel nilai sendiri lalu mengembalikannya ke `0` pada

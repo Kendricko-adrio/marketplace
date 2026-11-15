@@ -1,7 +1,6 @@
 import {
   loadQuoteOriginBranch,
   loadRevalidatedDestination,
-  loadRevalidatedNewDestination,
   loadShipmentParcelConfig,
 } from "@/lib/delivery-quote-data";
 import { QuoteDeliveryError, quoteDelivery } from "@/lib/delivery-quote";
@@ -47,7 +46,6 @@ export async function placeDeliveryQuote({
   let pricing: OrderPricing;
   let deliverySnapshot: DeliverySnapshotPayload | null = null;
   let pricingSnapshot: PricingSnapshot | null = null;
-  let verifiedNewAddress: Awaited<ReturnType<typeof loadRevalidatedNewDestination>> | null = null;
   let offerCandidate: PublicOfferCandidate | null = null;
   let promo: CheckoutReviewPromo = { kind: "none" };
   // Fresh authoritative requote BEFORE anything local (no order, no
@@ -56,10 +54,12 @@ export async function placeDeliveryQuote({
   // quote, not from a cache) + the provider `rates`.
   try {
     const originBranch = await loadQuoteOriginBranch(branchId);
-    const destination = "addressId" in deliveryBody!
-      ? await loadRevalidatedDestination(sessionUserId, deliveryBody.addressId)
-      : await loadRevalidatedNewDestination(deliveryBody!.newAddress);
-    if ("newAddress" in deliveryBody!) verifiedNewAddress = destination;
+    // Destination is ALWAYS an owned stored address: the fresh quote can never
+    // create or edit an address row from an inline payload.
+    const destination = await loadRevalidatedDestination(
+      sessionUserId,
+      deliveryBody!.addressId
+    );
     const parcelConfig = await loadShipmentParcelConfig();
     const quote = await quoteDelivery(
       {
@@ -186,7 +186,7 @@ export async function placeDeliveryQuote({
       },
       pricing,
     });
-    return { ok: true as const, pricing, deliverySnapshot, pricingSnapshot, verifiedNewAddress, offerCandidate, promo };
+    return { ok: true as const, pricing, deliverySnapshot, pricingSnapshot, offerCandidate, promo };
   } catch (requoteError) {
     const decision = classifyPlaceOrderError("delivery", requoteError);
     if (decision.kind === "delivery-data") {

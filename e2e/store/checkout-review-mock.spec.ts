@@ -353,6 +353,10 @@ test.beforeAll(async ({ browser }) => {
     [homeBranchId, FIXTURE_VARIANT_ID, MOCK_STOCK_UNITS]
   );
 
+  // Fixture buku alamat milik spec ini (dipakai quote/review/order): baris lama
+  // dari run sebelumnya dibuang supaya pemilih alamat tetap deterministik.
+  await pool.query("DELETE FROM address WHERE full_address LIKE 'Jl. Shipping Fixture%'");
+  await pool.query("DELETE FROM address WHERE full_address = 'Jl. Review Fixture No. 1'");
   await pool.query(`UPDATE product_variant SET parcel_dimensions='{"weight":1000,"length":10,"width":10,"height":10}' WHERE id=$1`, [FIXTURE_VARIANT_ID]);
   await pool.query(`INSERT INTO branch (id,name,code,status,jubelio_location_id,city,address,
     shipping_phone,shipping_address,shipping_postal_code,shipping_area_id,
@@ -856,16 +860,20 @@ test.describe("mock-only checkout review preview (ticket 02)", () => {
     await mockControl("POST", "/__control/reset");
     await mockControl("POST", "/__control/stocks/ensure", { locationId: DELIVERY_LOCATION_ID, itemId: MOCK_ITEM_ID, onHand: 5 });
     await mockControl("PUT", "/__control/shipment", { scenario: "rate-normal", rates: 30000 });
-    const destination = { recipientName: "Review Fixture", phone: CONTACT_PHONE, fullAddress: "Jl. Review Fixture No. 1",
-      provinceId: "01", cityId: "0101", districtId: "010101", areaId: "01010101", postalCode: "01234", isDefault: false };
+    // Alamat dibuat DULU lewat buku alamat; quote/review/order hanya addressId.
+    const createdAddress = await storeContext.request.post("/api/addresses", { data: {
+      recipientName: "Review Fixture", phone: CONTACT_PHONE, fullAddress: "Jl. Review Fixture No. 1",
+      provinceId: "01", cityId: "0101", districtId: "010101", areaId: "01010101", postalCode: "01234", isDefault: false,
+    } });
+    expect(createdAddress.status(), await createdAddress.text()).toBe(200);
+    const addressId = (await createdAddress.json()).data.id as string;
     const quoteResponse = await storeContext.request.post("/api/checkout/delivery-quote", {
-      data: { itemIds: [cart.data.items[0].id], newAddress: destination },
+      data: { itemIds: [cart.data.items[0].id], addressId },
     });
     expect(quoteResponse.status()).toBe(200);
     const service = (await quoteResponse.json()).data.services[0];
     const intent = { fulfillmentMethod: "delivery", itemIds: [cart.data.items[0].id], contactPhone: CONTACT_PHONE,
-      contactEmail: CONTACT_EMAIL, newAddress: destination, saveAddress: false,
-      saveRequestId: "b1200000-0000-4000-8000-000000000008", courierId: service.courierId, serviceId: service.serviceId,
+      contactEmail: CONTACT_EMAIL, addressId, courierId: service.courierId, serviceId: service.serviceId,
       originFingerprint: service.originFingerprint, approvedPricing: service.pricing, promoSelection: { kind: "none" } };
     const previewResponse = await storeContext.request.post(PREVIEW_PATH, { data: intent });
     expect(previewResponse.status()).toBe(200);
@@ -1507,8 +1515,17 @@ test.describe("shipping subsidy delivery (ticket 11)", () => {
       locationId: DELIVERY_LOCATION_ID, itemId: MOCK_ITEM_ID, onHand: 5,
     });
     await mockControl("PUT", "/__control/shipment", { scenario: "rate-normal", rates: 30000 });
+    // Fixture buku alamat: satu row per jalan, dipakai ulang antar viewport.
+    const existingAddress = ((await (await storeContext.request.get("/api/addresses")).json()).data as Array<{ id: string; fullAddress: string }>)
+      .find((row) => row.fullAddress === DESTINATION.fullAddress);
+    let addressId = existingAddress?.id ?? "";
+    if (!addressId) {
+      const addressResponse = await storeContext.request.post("/api/addresses", { data: DESTINATION });
+      expect(addressResponse.status(), await addressResponse.text()).toBe(200);
+      addressId = (await addressResponse.json()).data.id as string;
+    }
     const quoteResponse = await storeContext.request.post("/api/checkout/delivery-quote", {
-      data: { itemIds: [cart.data.items[0].id], newAddress: DESTINATION },
+      data: { itemIds: [cart.data.items[0].id], addressId },
     });
     expect(quoteResponse.status()).toBe(200);
     const service = (await quoteResponse.json()).data.services[0];
@@ -1517,9 +1534,7 @@ test.describe("shipping subsidy delivery (ticket 11)", () => {
       itemIds: [cart.data.items[0].id],
       contactPhone: CONTACT_PHONE,
       contactEmail: CONTACT_EMAIL,
-      newAddress: DESTINATION,
-      saveAddress: false,
-      saveRequestId: "b1200000-0000-4000-8000-0000000000aa",
+      addressId,
       courierId: service.courierId,
       serviceId: service.serviceId,
       originFingerprint: service.originFingerprint,
@@ -1531,9 +1546,8 @@ test.describe("shipping subsidy delivery (ticket 11)", () => {
   for (const width of [1280, 390]) {
     test(`delivery payment review exposes working promo and readable sections (${width}px)`, async () => {
       const intent = await deliveryIntent({ kind: "none" });
-      const addressResponse = await storeContext.request.post("/api/addresses", { data: DESTINATION });
-      expect(addressResponse.ok()).toBe(true);
-      const address = (await addressResponse.json()).data;
+      const address = (await (await storeContext.request.get("/api/addresses")).json()).data
+        .find((row: { id: string }) => row.id === intent.addressId);
       const page = await storeContext.newPage();
       await page.setViewportSize({ width, height: 900 });
       await page.addInitScript((ids) => {

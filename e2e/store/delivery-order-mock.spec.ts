@@ -352,6 +352,11 @@ test.beforeAll(async ({ browser }) => {
   gateBefore = (await pool.query("SELECT value, type, description FROM system_config WHERE key='discounts.contractVersion'")).rows;
   await pool.query("INSERT INTO system_config (key,value,type) VALUES ('discounts.contractVersion','0','number') ON CONFLICT (key) DO UPDATE SET value='0',type='number'");
 
+  // Bukti "tanpa mutation" menghitung row, jadi fixture alamat milik spec ini
+  // dibersihkan dulu agar run berulang tetap deterministik.
+  await pool.query(`DELETE FROM address WHERE full_address LIKE 'Jl. Delivery Order E2E No.%'`);
+  await pool.query(`DELETE FROM address WHERE full_address LIKE 'Jl. Tanpa Simpan No.%'`);
+  await pool.query(`DELETE FROM address WHERE full_address LIKE 'Jl. Checkout Baru No.%'`);
   // Heal leftovers from interrupted runs (own markers only — seeded rows and
   // real data are never reset).
   const stale = await pool.query<{ id: string }>(
@@ -562,7 +567,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     }
   });
 
-  test("places delivery to an unsaved checkout address with an immutable snapshot", async () => {
+  test("saves the checkout address before the order and keeps the delivery snapshot immutable", async () => {
     const add = await johnContext!.request.post("/api/cart/items", {
       data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
     });
@@ -574,7 +579,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     await page.getByRole("button", { name: "Checkout" }).click();
     await page.waitForURL("**/checkout");
     await page.getByText("Kirim ke alamat", { exact: true }).click();
-    await page.getByRole("button", { name: "Gunakan alamat baru" }).click();
+    await page.getByRole("button", { name: "Tambah alamat" }).click();
     await page.getByLabel("Nama Penerima").fill("Penerima Baru Checkout");
     await page.getByLabel("Telepon Penerima").fill("081300000009");
     await page.getByLabel("Alamat Lengkap").fill("Jl. Tanpa Simpan No. 10");
@@ -582,8 +587,12 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
       ["Provinsi", "Fixture Province"], ["Kota/Kabupaten", "Fixture City"],
       ["Kecamatan", "Fixture District"], ["Kelurahan/Area", "Fixture Area"],
     ]) await pickSelectOption(page, label, option);
-    // Alamat baru baru dipakai setelah modal dikonfirmasi.
-    await page.getByRole("button", { name: "Gunakan alamat ini" }).click();
+    // Alamat tersimpan SEBELUM order/pembayaran dibuat.
+    await page.getByRole("button", { name: "Simpan dan gunakan" }).click();
+    const savedRows = (await (await orderContext!.request.get("/api/addresses")).json()).data as Array<{ id: string; fullAddress: string }>;
+    const saved = savedRows.filter((row) => row.fullAddress === "Jl. Tanpa Simpan No. 10");
+    expect(saved).toHaveLength(1);
+    expect(savedRows.length).toBe(before.data.length + 1);
     await expect(page.getByText("JNE REG Fixture")).toBeVisible({ timeout: 20_000 });
     await page.getByText("JNE REG Fixture").click();
     await page.getByRole("button", { name: "Lanjut" }).click();
@@ -597,14 +606,15 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     await page.getByRole("button", { name: "Bayar Sekarang" }).click();
     await expect.poll(() => body?.success).toBe(true);
     const row = await orderRow(body!.orderId);
-    expect(row.address_id).toBeNull();
+    expect(row.address_id).toBe(saved[0].id);
     expect(JSON.stringify(row.delivery_snapshot)).toContain("Jl. Tanpa Simpan No. 10");
+    // Place-order tidak menulis buku alamat lagi.
     const after = await (await orderContext!.request.get("/api/addresses")).json();
-    expect(after.data).toEqual(before.data);
+    expect(after.data).toHaveLength(savedRows.length);
     await page.close();
   });
 
-  test("saves a new checkout address as the sole default only after accepted order", async () => {
+  test("saves a checkout address as the sole default before the order and never duplicates it", async () => {
     const add = await johnContext!.request.post("/api/cart/items", {
       data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
     });
@@ -615,7 +625,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     await page.getByRole("button", { name: "Checkout" }).click();
     await page.waitForURL("**/checkout");
     await page.getByText("Kirim ke alamat", { exact: true }).click();
-    await page.getByRole("button", { name: "Gunakan alamat baru" }).click();
+    await page.getByRole("button", { name: "Tambah alamat" }).click();
     await page.getByLabel("Nama Penerima").fill("Penerima Default Checkout");
     await page.getByLabel("Telepon Penerima").fill("081300000009");
     const street = "Jl. Delivery Order E2E No. New Default";
@@ -624,9 +634,8 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
       ["Provinsi", "Fixture Province"], ["Kota/Kabupaten", "Fixture City"],
       ["Kecamatan", "Fixture District"], ["Kelurahan/Area", "Fixture Area"],
     ]) await pickSelectOption(page, label, option);
-    await page.getByLabel("Simpan alamat", { exact: true }).check();
     await page.getByLabel("Jadikan alamat utama").check();
-    await page.getByRole("button", { name: "Gunakan alamat ini" }).click();
+    await page.getByRole("button", { name: "Simpan dan gunakan" }).click();
     await expect(page.getByText("JNE REG Fixture")).toBeVisible({ timeout: 20_000 });
     await page.getByText("JNE REG Fixture").click();
     await page.getByRole("button", { name: "Lanjut" }).click();
@@ -644,6 +653,7 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     const rows = (await (await orderContext!.request.get("/api/addresses")).json()).data as Array<{ id: string; fullAddress: string; isDefault: boolean }>;
     expect(rows.filter((row) => row.isDefault).map((row) => row.fullAddress)).toEqual([street]);
     const savedId = rows.find((row) => row.fullAddress === street)?.id;
+    expect(savedId, "alamat tersimpan sebelum order").toBeTruthy();
     expect((await orderRow(body!.orderId)).address_id).toBe(savedId);
     // A repeated save intent after an accepted order reuses its address row;
     // a fresh cart/order must not generate a second book entry for the retry.
@@ -654,12 +664,12 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     const cart = await (await johnContext!.request.get("/api/cart")).json();
     const itemId = cart.data.items.find((item: { variantId: string }) => item.variantId === FIXTURE_VARIANT_ID)?.id;
     const quote = await orderContext!.request.post("/api/checkout/delivery-quote", {
-      data: { itemIds: [itemId], newAddress: submitted!.newAddress },
+      data: { itemIds: [itemId], addressId: savedId },
     });
     expect(quote.ok()).toBe(true);
     const services = (await quote.json()).data.services as Array<{ courierId: number; serviceId: number; pricing: unknown; originFingerprint: string }>;
     const retried = await orderContext!.request.post("/api/checkout/place-order", {
-      data: { ...submitted, itemIds: [itemId], courierId: services[0].courierId,
+      data: { ...submitted, itemIds: [itemId], addressId: savedId, courierId: services[0].courierId,
         serviceId: services[0].serviceId, approvedPricing: services[0].pricing, originFingerprint: services[0].originFingerprint },
     });
     expect(retried.ok(), await retried.text()).toBe(true);
@@ -674,15 +684,19 @@ test.describe("mock-only delivery order + settlement (ticket 04)", () => {
     const nextCart = await (await johnContext!.request.get("/api/cart")).json();
     const nextItemId = nextCart.data.items.find((item: { variantId: string }) => item.variantId === FIXTURE_VARIANT_ID)?.id;
     const otherStreet = "Jl. Delivery Order E2E No. Non Default";
-    const otherAddress = { ...(submitted!.newAddress as Record<string, unknown>), fullAddress: otherStreet, isDefault: false };
+    const created = await orderContext!.request.post("/api/addresses", { data: {
+      recipientName: "Penerima Non Default", phone: "081300000009", fullAddress: otherStreet,
+      ...ADDRESS_CHAIN, isDefault: false,
+    } });
+    expect(created.ok(), await created.text()).toBe(true);
+    const otherId = (await created.json()).data.id as string;
     const otherQuote = await orderContext!.request.post("/api/checkout/delivery-quote", {
-      data: { itemIds: [nextItemId], newAddress: otherAddress },
+      data: { itemIds: [nextItemId], addressId: otherId },
     });
     expect(otherQuote.ok()).toBe(true);
     const otherService = (await otherQuote.json()).data.services[0];
     const otherOrder = await orderContext!.request.post("/api/checkout/place-order", {
-      data: { ...submitted, itemIds: [nextItemId], newAddress: otherAddress,
-        saveRequestId: crypto.randomUUID(), courierId: otherService.courierId,
+      data: { ...submitted, itemIds: [nextItemId], addressId: otherId, courierId: otherService.courierId,
         serviceId: otherService.serviceId, approvedPricing: otherService.pricing, originFingerprint: otherService.originFingerprint },
     });
     expect(otherOrder.ok(), await otherOrder.text()).toBe(true);

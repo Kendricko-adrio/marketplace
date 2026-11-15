@@ -10,10 +10,19 @@
  *   drizzle instance (`@/db`) and the Shipment region gateway.
  *
  *     list(clientId)                       → Promise<ClientAddressView[]>
- *     create(clientId, input)              → Promise<ClientAddressView>
+ *     create(clientId, input, options?)    → Promise<ClientAddressView>
  *     update(clientId, addressId, input)   → Promise<ClientAddressView>
  *     remove(clientId, addressId)          → Promise<void>
  *     setDefault(clientId, addressId)      → Promise<ClientAddressView>
+ *
+ * Optional create identity (`options.requestKey`, a UUID): the checkout sends
+ * one key per confirmed "Simpan dan gunakan" so a retry after a lost response
+ * never creates a second address. The row identity is deterministic per
+ * client + key; a replay returns the stored row WITHOUT a second region HTTP
+ * call and WITHOUT re-applying the first request's default choice. The same
+ * key with a different destination is `REQUEST_KEY_CONFLICT`, never a silent
+ * second write. The guarantee is scoped to one key while its row still exists —
+ * it is not address de-duplication.
  *
  * Contract:
  * - Input is validated with a strict zod schema before anything else; region
@@ -40,7 +49,7 @@
  *   columns. Legacy rows (region columns NULL, legacy "first last" split)
  *   read back with empty-string region IDs and joined recipient names.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { and, desc, eq, ne } from "drizzle-orm";
 import type { ExtractTablesWithRelations, InferSelectModel } from "drizzle-orm";
 import type {
@@ -92,9 +101,21 @@ export interface ClientAddressView extends ClientAddressRegionCanonical {
   isDefault: boolean;
 }
 
+export interface ClientAddressCreateOptions {
+  /**
+   * Optional retry identity (UUID) for one confirmed create. Callers that do
+   * not send one keep the previous behaviour: every call inserts a new row.
+   */
+  requestKey?: string;
+}
+
 export interface ClientAddressBook {
   list(clientId: string): Promise<ClientAddressView[]>;
-  create(clientId: string, input: ClientAddressInput): Promise<ClientAddressView>;
+  create(
+    clientId: string,
+    input: ClientAddressInput,
+    options?: ClientAddressCreateOptions
+  ): Promise<ClientAddressView>;
   update(
     clientId: string,
     addressId: string,
@@ -107,7 +128,8 @@ export interface ClientAddressBook {
 export type ClientAddressErrorCode =
   | "NOT_FOUND" // foreign or unknown address (also unknown client)
   | "INPUT_INVALID"
-  | "REGION_INVALID"; // the region gateway rejected the chain
+  | "REGION_INVALID" // the region gateway rejected the chain
+  | "REQUEST_KEY_CONFLICT"; // the same create key was reused with another destination
 
 export class ClientAddressError extends Error {
   readonly code: ClientAddressErrorCode;
@@ -164,6 +186,12 @@ export const clientAddressInputSchema = z.strictObject({
   isDefault: z.boolean(),
 });
 
+/** Optional create identity: canonical UUID, normalized before hashing. */
+const addressRequestKeySchema = z.string().trim().uuid("Idempotency-Key harus UUID");
+
+/** Namespace that keeps a create-replay row distinguishable from ordinary rows. */
+const ADDRESS_CREATE_NAMESPACE = "address-create:";
+
 // ---------------------------------------------------------------------------
 // Row mapping
 // ---------------------------------------------------------------------------
@@ -196,6 +224,42 @@ function toView(row: AddressRow): ClientAddressView {
   };
 }
 
+/**
+ * Deterministic create identity scoped by client AND key (never a global key):
+ * the address primary key is text, so no new column/table is needed.
+ */
+function createAddressId(ownerId: string, requestKey: string): string {
+  return `${ADDRESS_CREATE_NAMESPACE}${createHash("sha256")
+    .update(`${ownerId}:${requestKey}`)
+    .digest("hex")}`;
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const direct = (error as { code?: unknown }).code;
+  const cause = (error as { cause?: { code?: unknown } }).cause;
+  return direct === "23505" || cause?.code === "23505";
+}
+
+/**
+ * Same normalized destination? Region IDs and the postcode are compared as the
+ * validated strings; the browser-supplied region LABELS are not part of the
+ * identity. `isDefault` is deliberately absent: it was a choice on the first
+ * create, not an instruction to replay.
+ */
+function sameDestination(row: AddressRow, input: ClientAddressInput): boolean {
+  return (
+    recipientNameOf(row) === input.recipientName &&
+    row.phone === input.phone &&
+    row.fullAddress === input.fullAddress &&
+    (row.provinceId ?? "") === input.provinceId &&
+    (row.cityId ?? "") === input.cityId &&
+    (row.districtId ?? "") === input.districtId &&
+    (row.areaId ?? "") === input.areaId &&
+    row.postalCode === input.postalCode
+  );
+}
+
 function toRowValues(input: ClientAddressInput, canonical: ClientAddressRegionCanonical) {
   // Persist the CANONICAL values (the gateway-verified chain), not the raw
   // input, wherever the canonical block carries them.
@@ -221,6 +285,43 @@ export function createClientAddressBook(
   regionGateway: ClientRegionGateway
 ): ClientAddressBook {
   // --- input gate (fail-closed before any gateway call or transaction) -----
+  /** Rejects a malformed create key before ANY mutation (400, no write). */
+  function requireRequestKey(value: string | undefined): string | null {
+    if (value === undefined) return null;
+    const parsed = addressRequestKeySchema.safeParse(value);
+    if (!parsed.success) {
+      throw new ClientAddressError(
+        "INPUT_INVALID",
+        "Idempotency-Key harus berupa UUID"
+      );
+    }
+    return parsed.data.toLowerCase();
+  }
+
+  /**
+   * Replay answer for an already-stored create key. Returns the row's CURRENT
+   * default state (a later setDefault must not be undone by a retry).
+   */
+  function replayOf(
+    ownerId: string,
+    row: AddressRow,
+    input: ClientAddressInput
+  ): ClientAddressView {
+    if (row.userId !== ownerId) {
+      throw new ClientAddressError(
+        "NOT_FOUND",
+        `address create key milik client lain tidak ditemukan`
+      );
+    }
+    if (!sameDestination(row, input)) {
+      throw new ClientAddressError(
+        "REQUEST_KEY_CONFLICT",
+        "Idempotency-Key yang sama dipakai untuk tujuan berbeda"
+      );
+    }
+    return toView(row);
+  }
+
   function requireValidInput(input: ClientAddressInput): ClientAddressInput {
     const parsed = clientAddressInputSchema.safeParse(input);
     if (!parsed.success) {
@@ -313,23 +414,64 @@ export function createClientAddressBook(
     return rows.map(toView);
   }
 
-  async function create(ownerId: string, input: ClientAddressInput): Promise<ClientAddressView> {
+  async function create(
+    ownerId: string,
+    input: ClientAddressInput,
+    options: ClientAddressCreateOptions = {}
+  ): Promise<ClientAddressView> {
     const validated = requireValidInput(input);
+    const requestKey = requireRequestKey(options.requestKey);
+    const stableId = requestKey ? createAddressId(ownerId, requestKey) : null;
+
+    // Replay read BEFORE the region gateway: a committed row is already proof
+    // of the earlier write, so a retry needs no provider round trip.
+    if (stableId) {
+      const [prior] = await db
+        .select()
+        .from(addresses)
+        .where(eq(addresses.id, stableId))
+        .limit(1);
+      if (prior) return replayOf(ownerId, prior, validated);
+    }
+
     const canonical = await requireVerifiedRegion(validated);
-    return db.transaction(async (tx) => {
-      await lockOwner(tx, ownerId);
-      if (validated.isDefault) await clearPriorDefaults(tx, ownerId);
-      const inserted = await tx
-        .insert(addresses)
-        .values({
-          id: randomUUID(),
-          userId: ownerId,
-          ...toRowValues(validated, canonical),
-          isDefault: validated.isDefault,
-        })
-        .returning();
-      return toView(inserted[0]);
-    });
+    try {
+      return await db.transaction(async (tx) => {
+        await lockOwner(tx, ownerId);
+        // Re-check under the owner lock so two concurrent retries of the same
+        // key cannot both insert; the loser replays the winner's row.
+        if (stableId) {
+          const [prior] = await tx
+            .select()
+            .from(addresses)
+            .where(eq(addresses.id, stableId))
+            .limit(1);
+          if (prior) return replayOf(ownerId, prior, validated);
+        }
+        if (validated.isDefault) await clearPriorDefaults(tx, ownerId);
+        const inserted = await tx
+          .insert(addresses)
+          .values({
+            id: stableId ?? randomUUID(),
+            userId: ownerId,
+            ...toRowValues(validated, canonical),
+            isDefault: validated.isDefault,
+          })
+          .returning();
+        return toView(inserted[0]);
+      });
+    } catch (error) {
+      // Backstop for a primary-key race that bypassed the lock ordering.
+      if (stableId && isUniqueViolation(error)) {
+        const [prior] = await db
+          .select()
+          .from(addresses)
+          .where(eq(addresses.id, stableId))
+          .limit(1);
+        if (prior) return replayOf(ownerId, prior, validated);
+      }
+      throw error;
+    }
   }
 
   async function update(

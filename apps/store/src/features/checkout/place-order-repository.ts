@@ -15,9 +15,6 @@ import {
   branchStocks,
 } from "@/db";
 import { eq, and, asc, inArray, sql } from "drizzle-orm";
-import { createHash } from "node:crypto";
-import type { DeliveryPlaceOrderData } from "./place-order-input";
-import type { loadRevalidatedNewDestination } from "@/lib/delivery-quote-data";
 import type { CheckoutRequestIdentity } from "@/lib/checkout-request";
 
 export type PlaceOrderTx = Pick<Parameters<Parameters<typeof db.transaction>[0]>[0], "select" | "insert" | "update" | "delete">;
@@ -124,20 +121,6 @@ export function loadFreshCartItems(tx: PlaceOrderTx, cartId: string, ids: string
     .orderBy(asc(cartItems.id)).for("update");
 }
 
-export function lockCheckoutAddressOwner(tx: PlaceOrderTx, clientId: string) {
-  return tx.select({ id: clients.id }).from(clients)
-    .where(eq(clients.id, clientId)).for("update").limit(1);
-}
-
-export function loadSavedCheckoutAddress(tx: PlaceOrderTx, stableAddressId: string) {
-  return tx.select().from(addresses).where(eq(addresses.id, stableAddressId)).limit(1);
-}
-
-export function clearDefaultAddress(tx: PlaceOrderTx, clientId: string) {
-  return tx.update(addresses).set({ isDefault: false, updatedAt: new Date() })
-    .where(and(eq(addresses.userId, clientId), eq(addresses.isDefault, true)));
-}
-
 export function holdBranchStock(tx: PlaceOrderTx, branchId: string, variantId: string, quantity: number, observedAt: Date) {
   return tx
     .update(branchStocks)
@@ -230,63 +213,7 @@ export function deleteCheckedOutCartItem(tx: PlaceOrderTx, itemId: string, cartI
 export function insertOrder(tx: PlaceOrderTx, values: typeof orders.$inferInsert) { return tx.insert(orders).values(values); }
 export function insertOrderItem(tx: PlaceOrderTx, values: typeof orderItems.$inferInsert) { return tx.insert(orderItems).values(values); }
 export function insertCheckoutRequest(tx: PlaceOrderTx, values: typeof checkoutRequests.$inferInsert) { return tx.insert(checkoutRequests).values(values); }
-export function insertCheckoutAddress(tx: PlaceOrderTx, values: typeof addresses.$inferInsert) { return tx.insert(addresses).values(values); }
 
 export { recordJubelioSalesIntent as recordSalesIntent } from "@/lib/jubelio-sales-operations";
-
-export interface SaveCheckoutAddressInput {
-  tx: PlaceOrderTx;
-  step: <T>(query: () => PromiseLike<T>) => Promise<T>;
-  clientId: string;
-  isDelivery: boolean;
-  deliveryBody: DeliveryPlaceOrderData | null;
-  verifiedNewAddress: Awaited<ReturnType<typeof loadRevalidatedNewDestination>> | null;
-}
-
-export async function saveCheckoutAddress({ tx, step, clientId, isDelivery, deliveryBody, verifiedNewAddress }: SaveCheckoutAddressInput): Promise<string | null> {
-  let savedAddressId: string | null = null;
-  if (isDelivery && deliveryBody && "newAddress" in deliveryBody && deliveryBody.saveAddress && verifiedNewAddress) {
-    const [owner] = await step(() => lockCheckoutAddressOwner(tx, clientId));
-    if (!owner) throw new Error("Address owner no longer exists");
-    // A stable, scoped ID makes a repeated accepted save request reuse
-    // its own address instead of creating duplicate book entries.
-    savedAddressId = `checkout:${createHash("sha256")
-      .update(`${clientId}:${deliveryBody.saveRequestId}`).digest("hex")}`;
-    const canonical = verifiedNewAddress.canonical;
-    const stableAddressId = savedAddressId;
-    const [prior] = await step(() => loadSavedCheckoutAddress(tx, stableAddressId));
-    if (prior) {
-      const identical = prior.userId === clientId && prior.firstName === verifiedNewAddress.recipientName &&
-        prior.phone === verifiedNewAddress.phone && prior.fullAddress === verifiedNewAddress.fullAddress &&
-        prior.provinceId === canonical.provinceId && prior.cityId === canonical.cityId &&
-        prior.districtId === canonical.districtId && prior.areaId === canonical.areaId &&
-        prior.postalCode === canonical.postalCode;
-      if (!identical) throw new Error("Checkout address save request reused with a different destination");
-    } else {
-      if (deliveryBody.newAddress.isDefault) {
-        await step(() => clearDefaultAddress(tx, clientId));
-      }
-      await step(() => insertCheckoutAddress(tx, {
-        id: stableAddressId,
-        userId: clientId,
-        firstName: verifiedNewAddress.recipientName,
-        lastName: "",
-        phone: verifiedNewAddress.phone,
-        fullAddress: verifiedNewAddress.fullAddress,
-        provinceId: canonical.provinceId,
-        province: canonical.province,
-        cityId: canonical.cityId,
-        city: canonical.city,
-        districtId: canonical.districtId,
-        district: canonical.district,
-        areaId: canonical.areaId,
-        area: canonical.area,
-        postalCode: canonical.postalCode,
-        isDefault: deliveryBody.newAddress.isDefault,
-      }));
-    }
-  }
-  return savedAddressId;
-}
 
 export type PlaceOrderSelectedItem = Awaited<ReturnType<typeof loadCartItems>>[number];

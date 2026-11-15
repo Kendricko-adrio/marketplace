@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { and, eq, inArray, asc } from "drizzle-orm";
 import { db, carts, cartItems, clients } from "@/db";
-import { clientAddressInputSchema } from "./client-addresses";
-import { loadOwnedQuoteCartItems, loadQuoteOriginBranch, loadRevalidatedDestination, loadRevalidatedNewDestination, loadShipmentParcelConfig, DeliveryQuoteDataError } from "./delivery-quote-data";
+import { loadOwnedQuoteCartItems, loadQuoteOriginBranch, loadRevalidatedDestination, loadShipmentParcelConfig, DeliveryQuoteDataError } from "./delivery-quote-data";
 import { getPpnRatePercent } from "./config";
 import { quoteDelivery, QuoteDeliveryError } from "./delivery-quote";
 import { createJubelioShipmentGateway } from "./jubelio-shipment-client";
@@ -98,13 +97,18 @@ const base = z.object({
   previous: previousReviewSchema.optional(),
   acknowledgeInvalidation: z.boolean().optional(),
 });
-export const deliveryReviewSchema = z.union([
-  base.extend({ addressId: z.string().min(1).max(128) }).strict(),
-  base.extend({ newAddress: clientAddressInputSchema, saveAddress: z.boolean(), saveRequestId: z.string().uuid() }).strict(),
-]).refine((value) => value.acknowledgeInvalidation !== true || value.previous != null, {
-  message: "acknowledgeInvalidation requires the previous review",
-  path: ["acknowledgeInvalidation"],
-});
+// Review delivery hanya menerima Alamat Tersimpan (`addressId`). Payload inline
+// `newAddress` ditolak schema: review tidak membuat/mengubah row alamat.
+export const deliveryReviewSchema = base
+  .extend({ addressId: z.string().min(1).max(128) })
+  .strict()
+  .refine(
+    (value) => value.acknowledgeInvalidation !== true || value.previous != null,
+    {
+      message: "acknowledgeInvalidation requires the previous review",
+      path: ["acknowledgeInvalidation"],
+    }
+  );
 
 function reviewPricingOf(value: PricingSnapshot): CheckoutReviewPricing {
   return {
@@ -196,8 +200,7 @@ export async function previewDeliveryReview(
     markdownRevisionId: item.markdownRevisionId ?? null }));
   buildPricingSnapshot({ fulfillmentMethod: "delivery", ppnRatePercent, lines, providerTax });
   const origin = await loadQuoteOriginBranch(branchId);
-  const destination = "addressId" in input ? await loadRevalidatedDestination(clientId, input.addressId)
-    : await loadRevalidatedNewDestination(input.newAddress);
+  const destination = await loadRevalidatedDestination(clientId, input.addressId);
   const parcelConfig = await loadShipmentParcelConfig();
   const quote = await quoteDelivery({ pricingContractVersion: 1, branch: origin, items,
     destination: { postalCode: destination.postalCode, areaId: destination.areaId },

@@ -240,14 +240,22 @@ describe("place-order legacy and attempt orchestration parity", () => {
     expect(state.attemptInputs).toEqual([]);
     expect(state.events).toEqual([]);
   });
-  it("saves a verified new destination under a stable scoped address id in the order transaction", async () => {
+  it("rejects the removed inline destination and never writes the address book from place-order", async () => {
     const { addressId: _address, ...body } = delivery;
     void _address;
     const response = await submit({ ...body, saveAddress: true, saveRequestId: "a1200000-0000-4000-8000-000000000023", newAddress: { recipientName: "Customer", phone: "081234567890", fullAddress: "Destination", provinceId: "01", cityId: "0101", districtId: "010101", areaId: "01010101", postalCode: "01234", isDefault: false } });
-    expect(response.status).toBe(200);
-    const id = "checkout:305ee4abf0594cbf0b74382b9fb1a31bd9dfb8a1763cdfea030121e45a821912";
-    expect(state.writes.find((write) => write.table === "address")?.values).toMatchObject({ id, userId: "client", firstName: "Customer", fullAddress: "Destination", postalCode: "01234" });
-    expect(state.writes.find((write) => write.table === "orders")?.values).toMatchObject({ addressId: id });
+    expect(response.status).toBe(400);
+    expect(state.writes.filter((write) => write.table === "address" || write.table === "orders")).toEqual([]);
+    expect(state.events).toEqual([]);
+  });
+  it("keeps place-order delivery address-only and writes no address book rows", async () => {
+    state.contract = 1;
+    const response = await submit(reviewedDelivery());
+    expect(response.status).toBe(201);
+    expect(state.writes.filter((write) => write.table === "address")).toEqual([]);
+    expect(state.attemptInputs[0]).toMatchObject({
+      snapshot: { order: { addressId: "address", fulfillmentMethod: "delivery" }, addressToSave: null },
+    });
   });
   it("persists an approved legacy delivery snapshot and original quoted shipping", async () => {
     const response = await submit(delivery);

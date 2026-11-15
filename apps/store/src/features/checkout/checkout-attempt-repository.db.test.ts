@@ -6,6 +6,7 @@ import { claimCheckoutPayment, recordCheckoutPaymentEvidence, readOwnedCheckoutA
 import { recordJubelioSalesIntent, getJubelioSalesOperation } from "@/lib/jubelio-sales-operations";
 import { placeCheckout } from "./place-order-service";
 import { recoverCheckoutAttempts } from "./recover-checkout-service";
+import { createDeliverySnapshot } from "@/lib/delivery-order";
 import { JubelioSalesGatewayError } from "@/lib/jubelio-sales-client";
 
 const url = process.env.DATABASE_URL;
@@ -192,6 +193,37 @@ describe.skipIf(!enabled)("checkout stock reservation and definitive rejection (
     requestKey: "b1200000-0000-4000-8000-000000000023", fingerprint: "a".repeat(64), reservedOrderId: "not-an-order-yet",
     paymentStartedAt: anchor, expiresAt: new Date("2040-01-01T00:15:00Z"), stockObservedAt: anchor, offerCandidate: null,
     snapshot: { ...snapshot, order: { ...snapshot.order, pickupDate: "2040-01-01T17:00:00.000Z", pickupTime: "14:00" } }, now: anchor });
+
+  const deliverySnapshotOf = () => createDeliverySnapshot({
+    address: { recipientName: "Fixture", phone: "0800000000", fullAddress: "Fixture street",
+      provinceId: "01", province: "Province", cityId: "0101", city: "City",
+      districtId: "010101", district: "District", areaId: "01010101", area: "Area", postalCode: "01234" },
+    origin: { branchId: "attempt-fixture-branch", name: "Fixture", phone: "0800000000",
+      address: "Branch address", zipcode: "01234", areaId: "01010101" },
+    parcel: { weight: 1000, items: [{ item_name: "Fixture shoes", quantity: 1, value: 100000,
+      weight: 1000, length: 10, width: 10, height: 10 }] },
+    service: { courierId: 1, serviceId: 2, name: "Reguler", shippingCost: "0" },
+    pricing: { subtotal: "100000", discount: "0", taxableBase: "100000", shippingCost: "0",
+      serviceFee: "0", ppnRatePercent: "11", ppnAmount: "11000", total: "111000" },
+  });
+
+  const deliveryInput = () => ({
+    ...input(),
+    snapshot: { ...input().snapshot, order: { ...input().snapshot.order,
+      fulfillmentMethod: "delivery" as const, deliverySnapshot: deliverySnapshotOf(),
+      addressId: "attempt-address", pickupDate: null, pickupTime: null } },
+  });
+
+  async function prepareDeliveryAttempt() {
+    await pool.query("UPDATE branch SET shipping_phone='0800000000', shipping_address='Branch address', shipping_postal_code='01234', shipping_area_id='01010101' WHERE id='attempt-fixture-branch'");
+    await pool.query("INSERT INTO address (id,user_id,first_name,last_name,phone,full_address,province_id,city_id,district_id,area_id,province,city,district,area,postal_code,is_default) VALUES ('attempt-address','attempt-fixture-owner','Fixture','','0800000000','Fixture street','01','0101','010101','01010101','Province','City','District','Area','01234',true)");
+  }
+
+  async function markAttemptReady() {
+    await pool.query("UPDATE jubelio_sales_operation SET status='confirmed',sales_order_id=42,hold_accounted_at=$1 WHERE checkout_attempt_id='attempt-fixture'", [anchor]);
+    await pool.query("UPDATE checkout_attempt SET stock_hold_state='mirrored',payment_state='ready',payment_token='fixture-token',payment_redirect_url='https://payment.example.test/session',payment_dispatched_at=$1,state='processing' WHERE id='attempt-fixture'", [anchor]);
+    await pool.query("UPDATE branch_stock SET pending_remote_stock=0,available_stock=4 WHERE branch_id='attempt-fixture-branch'");
+  }
   beforeEach(async () => {
     await pool.query("INSERT INTO client (id,name,email,email_verified) VALUES ('attempt-fixture-owner','Fixture','attempt-owner@example.test',true)");
     const hours = Object.fromEntries(["monday","tuesday","wednesday","thursday","friday","saturday","sunday"].map((day) => [day,{open:"09:00",close:"21:00"}]));
@@ -208,6 +240,7 @@ describe.skipIf(!enabled)("checkout stock reservation and definitive rejection (
     await pool.query("DELETE FROM order_item WHERE order_id='not-an-order-yet'");
     await pool.query("DELETE FROM checkout_attempt WHERE id='attempt-fixture'");
     await pool.query("DELETE FROM orders WHERE id='not-an-order-yet'");
+    await pool.query("DELETE FROM address WHERE user_id='attempt-fixture-owner'");
     await pool.query("DELETE FROM cart WHERE id='cart'");
     await pool.query("DELETE FROM branch_stock WHERE branch_id='attempt-fixture-branch'");
     await pool.query("DELETE FROM product_variant WHERE id='fixture-variant'");
@@ -402,5 +435,65 @@ describe.skipIf(!enabled)("checkout stock reservation and definitive rejection (
     await expect(reserveCheckoutAttempt(input(), paymentDatabase)).rejects.toMatchObject({ code: "CHECKOUT_REVIEW_REQUIRED" });
     expect((await pool.query("SELECT count(*)::int AS count FROM checkout_attempt WHERE id='attempt-fixture'")).rows).toEqual([{ count: 0 }]);
     expect((await pool.query("SELECT count(*)::int AS count FROM jubelio_sales_operation WHERE checkout_attempt_id='attempt-fixture'")).rows).toEqual([{ count: 0 }]);
+  });
+
+  it("refuses a legacy address save-intent before reserving anything", async () => {
+    const legacy = { ...input(),
+      snapshot: { ...input().snapshot, addressToSave: { firstName: "Legacy", lastName: "", phone: "0800000000",
+        fullAddress: "Legacy street", city: "City", district: "District", postalCode: "01234", isDefault: true } } };
+    await expect(reserveCheckoutAttempt(legacy, paymentDatabase)).rejects.toMatchObject({ code: "CHECKOUT_REVIEW_REQUIRED" });
+    expect((await pool.query("SELECT count(*)::int AS count FROM checkout_attempt WHERE id='attempt-fixture'")).rows).toEqual([{ count: 0 }]);
+    expect((await pool.query("SELECT count(*)::int AS count FROM address WHERE user_id='attempt-fixture-owner'")).rows).toEqual([{ count: 0 }]);
+  });
+
+  it("holds a legacy save-intent attempt for review instead of completing it", async () => {
+    await reserveCheckoutAttempt(input(), paymentDatabase);
+    await pool.query(`UPDATE checkout_attempt SET snapshot = jsonb_set(snapshot, '{addressToSave}', $1::jsonb), updated_at='2039-12-31T00:00:00Z' WHERE id='attempt-fixture'`,
+      [JSON.stringify({ firstName: "Legacy", lastName: "", phone: "0800000000", fullAddress: "Legacy street",
+        city: "City", district: "District", postalCode: "01234", isDefault: true })]);
+    const summary = await recoverCheckoutAttempts({ limit: 10, cutoff: new Date("2040-01-01T00:00:00Z"), now: new Date("2040-01-01T00:01:00Z") }, paymentDatabase);
+    expect(summary.promoted).toBe(0);
+    expect(summary.held).toBeGreaterThanOrEqual(1);
+    expect(await readOwnedCheckoutAttempt({ clientId: "attempt-fixture-owner", requestKey: input().requestKey }, paymentDatabase))
+      .toMatchObject({ state: "manual_review", orderId: null });
+    // Evidence tetap ada; worker tidak membuat alamat maupun order.
+    expect((await pool.query("SELECT count(*)::int AS count FROM checkout_attempt WHERE id='attempt-fixture'")).rows).toEqual([{ count: 1 }]);
+    expect((await pool.query("SELECT count(*)::int AS count FROM address WHERE user_id='attempt-fixture-owner'")).rows).toEqual([{ count: 0 }]);
+    expect((await pool.query("SELECT count(*)::int AS count FROM orders WHERE id='not-an-order-yet'")).rows).toEqual([{ count: 0 }]);
+  });
+
+  it("promotes a delivery attempt against the stored address without touching the address book", async () => {
+    await prepareDeliveryAttempt();
+    const before = (await pool.query("SELECT id,is_default,updated_at,full_address FROM address WHERE user_id='attempt-fixture-owner' ORDER BY id")).rows;
+    await reserveCheckoutAttempt(deliveryInput(), paymentDatabase);
+    await markAttemptReady();
+    expect(await promoteCheckoutAttempt({ attemptId: "attempt-fixture" }, paymentDatabase)).toMatchObject({ orderId: "not-an-order-yet" });
+    expect((await pool.query("SELECT address_id FROM orders WHERE id='not-an-order-yet'")).rows).toEqual([{ address_id: "attempt-address" }]);
+    expect((await pool.query("SELECT id,is_default,updated_at,full_address FROM address WHERE user_id='attempt-fixture-owner' ORDER BY id")).rows).toEqual(before);
+  });
+
+  it("keeps the delivery snapshot when the stored address is deleted after reservation", async () => {
+    await prepareDeliveryAttempt();
+    await reserveCheckoutAttempt(deliveryInput(), paymentDatabase);
+    await pool.query("DELETE FROM address WHERE id='attempt-address'");
+    await markAttemptReady();
+    expect(await promoteCheckoutAttempt({ attemptId: "attempt-fixture" }, paymentDatabase)).toMatchObject({ orderId: "not-an-order-yet" });
+    expect((await pool.query("SELECT address_id FROM orders WHERE id='not-an-order-yet'")).rows).toEqual([{ address_id: null }]);
+    expect((await pool.query("SELECT delivery_snapshot->'address'->>'fullAddress' AS street FROM orders WHERE id='not-an-order-yet'")).rows)
+      .toEqual([{ street: "Fixture street" }]);
+    expect((await pool.query("SELECT count(*)::int AS count FROM address WHERE user_id='attempt-fixture-owner'")).rows).toEqual([{ count: 0 }]);
+  });
+
+  it("blocks promotion of a legacy address save-intent without deleting the attempt", async () => {
+    await reserveCheckoutAttempt(input(), paymentDatabase);
+    await markAttemptReady();
+    await pool.query(`UPDATE checkout_attempt SET snapshot = jsonb_set(snapshot, '{addressToSave}', $1::jsonb) WHERE id='attempt-fixture'`,
+      [JSON.stringify({ firstName: "Legacy", lastName: "", phone: "0800000000", fullAddress: "Legacy street",
+        city: "City", district: "District", postalCode: "01234", isDefault: true })]);
+    // Fail closed: promotion ditolak (pesan generik ke pemanggil) dan evidence tetap.
+    await expect(promoteCheckoutAttempt({ attemptId: "attempt-fixture" }, paymentDatabase)).rejects.toThrow("Checkout promotion unavailable");
+    expect((await pool.query("SELECT count(*)::int AS count FROM orders WHERE id='not-an-order-yet'")).rows).toEqual([{ count: 0 }]);
+    expect((await pool.query("SELECT count(*)::int AS count FROM checkout_attempt WHERE id='attempt-fixture'")).rows).toEqual([{ count: 1 }]);
+    expect((await pool.query("SELECT count(*)::int AS count FROM address WHERE user_id='attempt-fixture-owner'")).rows).toEqual([{ count: 0 }]);
   });
 });

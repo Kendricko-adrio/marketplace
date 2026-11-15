@@ -1,12 +1,13 @@
 /**
  * POST /api/checkout/delivery-quote — backend quote for the checkout delivery
- * choice (ticket 03). STRICT body {itemIds, addressId} or
- * {itemIds, newAddress}. The browser NEVER supplies money/weights/branches:
- * the route loads the owned cart rows (with
- * current variant prices and parcel dims), the single origin branch with its
- * configured local sender block, the owned or inline address (region chain
- * revalidated against the Shipment region gateway BEFORE the provider), the parcel config
- * and the PPN rate, then quotes via the Jubelio Shipment rates/all adapter.
+ * choice (ticket 03). STRICT body {itemIds, addressId}: the destination is
+ * ALWAYS an owned address book row, so a quote can never create or edit an
+ * address. The browser NEVER supplies money/weights/branches: the route loads
+ * the owned cart rows (with current variant prices and parcel dims), the single
+ * origin branch with its configured local sender block, the owned address
+ * (region chain revalidated against the Shipment region gateway BEFORE the
+ * provider), the parcel config and the PPN rate, then quotes via the Jubelio
+ * Shipment rates/all adapter.
  *
  * Current ticket is the QUOTE PREVIEW only: no order/payment is created.
  *
@@ -23,12 +24,10 @@ import {
   loadOwnedQuoteCartItems,
   loadQuoteOriginBranch,
   loadRevalidatedDestination,
-  loadRevalidatedNewDestination,
   loadShipmentParcelConfig,
 } from "@/lib/delivery-quote-data";
 import { QuoteDeliveryError, quoteDelivery } from "@/lib/delivery-quote";
 import { createJubelioShipmentGateway } from "@/lib/jubelio-shipment-client";
-import { clientAddressInputSchema } from "@/lib/client-addresses";
 import { getDiscountsContractVersion } from "@/lib/config";
 import { buildPricingSnapshot, PricingContractError } from "@/lib/versioned-pricing";
 import { readCheckoutJson, CheckoutInputError } from "@/lib/checkout-input";
@@ -54,10 +53,10 @@ class RouteLogError extends Error {
 
 const itemIdsSchema = z.array(z.string().min(1).max(128)).min(1).max(50)
   .refine((ids) => new Set(ids).size === ids.length, "Duplicate selected cart item IDs");
-const quoteRequestSchema = z.union([
-  z.strictObject({ itemIds: itemIdsSchema, addressId: z.string().min(1).max(128) }),
-  z.strictObject({ itemIds: itemIdsSchema, newAddress: clientAddressInputSchema }),
-]);
+const quoteRequestSchema = z.strictObject({
+  itemIds: itemIdsSchema,
+  addressId: z.string().min(1).max(128),
+});
 
 async function quoteCheckoutDelivery(request: NextRequest): Promise<Response> {
   try {
@@ -89,9 +88,7 @@ async function quoteCheckoutDelivery(request: NextRequest): Promise<Response> {
         markdownRevisionId: item.markdownRevisionId ?? null })),
     });
     const branch = await loadQuoteOriginBranch(owned.branchId);
-    const destination = "addressId" in parsed.data
-      ? await loadRevalidatedDestination(clientId, parsed.data.addressId)
-      : await loadRevalidatedNewDestination(parsed.data.newAddress);
+    const destination = await loadRevalidatedDestination(clientId, parsed.data.addressId);
     const parcelConfig = await loadShipmentParcelConfig();
 
     const quote = await quoteDelivery(

@@ -13,9 +13,19 @@ async function listAddresses(): Promise<Response> {
   return addressApi("list", (book, userId) => book.list(userId));
 }
 
+/**
+ * Create menerima header opsional `Idempotency-Key` (UUID) dari checkout. Header
+ * diteruskan apa adanya ke boundary `addressApi`; normalisasi/validasi UUID dan
+ * penolakan 400 tanpa mutation dimiliki seam persistence alamat. Consumer Buku
+ * Alamat yang tidak mengirim header tetap kompatibel (create biasa).
+ */
 async function createAddress(request: Request): Promise<Response> {
-  return addressApi("create", async (book, userId) =>
-    book.create(userId, await request.json())
+  return addressApi(
+    "create",
+    async (book, userId, context) =>
+      book.create(userId, await request.json(),
+        context.requestKey === undefined ? {} : { requestKey: context.requestKey }),
+    request
   );
 }
 

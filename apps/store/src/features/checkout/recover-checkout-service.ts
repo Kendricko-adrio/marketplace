@@ -41,6 +41,15 @@ export async function recoverCheckoutAttempts(
   const summary: CheckoutRecoverySummary = { scanned: rows.length, promoted: 0, rejected: 0, held: 0 };
   for (const attempt of rows) {
     try {
+      // Fail closed: a legacy snapshot still owes an address-book save that only
+      // the previous version may perform. Keep the evidence and hand it to an
+      // operator instead of promoting a half-finished checkout.
+      if (attempt.snapshot.addressToSave) {
+        await markCheckoutAttemptForManualReview({ attemptId: attempt.id }, database);
+        summary.held++;
+        log.warn(`Checkout attempt ${attempt.id}: recovery held by a legacy address save-intent`);
+        continue;
+      }
       if (attempt.state === "preparing" && attempt.paymentState === "none" &&
         attempt.stockHoldState === "held" && attempt.expiresAt.getTime() <= now.getTime()) {
         await finalizeExpiredCheckoutAttempt({ attemptId: attempt.id, now }, database);

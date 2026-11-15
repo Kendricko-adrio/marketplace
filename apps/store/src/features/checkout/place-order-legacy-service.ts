@@ -24,7 +24,6 @@ import {
   toInitializationOutcome,
 } from "@/features/payments/initialize-order-payment-service";
 import { recordOrderPaymentIntent } from "@/features/payments/order-payment-repository";
-import { loadRevalidatedNewDestination } from "@/lib/delivery-quote-data";
 import type { DeliverySnapshotPayload } from "@marketplace/db/src/schema";
 import type { OrderPricing } from "@/lib/order-pricing";
 import { dispatchJubelioSalesCreate } from "@/lib/jubelio-sales-lifecycle";
@@ -46,7 +45,6 @@ import {
   insertOrderItem,
   insertCheckoutRequest,
   recordSalesIntent,
-  saveCheckoutAddress,
 } from "@/features/checkout/place-order-repository";
 import { runCheckoutTransaction } from "@/lib/checkout-transaction";
 import { finalizeRejectedCheckoutCreate } from "@/lib/checkout-recovery";
@@ -69,7 +67,6 @@ export interface PlaceOrderLegacyInput {
   branchId: string; branch: Awaited<ReturnType<typeof loadBranch>>;
   pricingSnapshot: PricingSnapshot | null; pricing: OrderPricing; offerCandidate: PublicOfferCandidate | null;
   isDelivery: boolean; deliverySnapshot: DeliverySnapshotPayload | null; deliveryBody: DeliveryPlaceOrderData | null;
-  verifiedNewAddress: Awaited<ReturnType<typeof loadRevalidatedNewDestination>> | null;
   pickupDate: string | null; pickupTime: string | null; phone: string; email: string;
   effectiveOf: (item: { variantId: string; variantPrice: string }) => string;
   markdownRevisionOf: (item: { variantId: string }) => string | null;
@@ -94,7 +91,6 @@ export async function placeOrderLegacy({
   isDelivery,
   deliverySnapshot,
   deliveryBody,
-  verifiedNewAddress,
   pickupDate,
   pickupTime,
   phone,
@@ -168,7 +164,7 @@ export async function placeOrderLegacy({
           if (freshBranch.name !== origin.name || freshBranch.shippingPhone !== origin.phone ||
               freshBranch.shippingAddress !== origin.address || freshBranch.shippingPostalCode !== origin.zipcode ||
               freshBranch.shippingAreaId !== origin.areaId) throw new CheckoutReviewRequiredError();
-          if (deliveryBody && "addressId" in deliveryBody) {
+          if (deliveryBody) {
             const addressId = deliveryBody.addressId;
             const [currentAddress] = await step(() => loadAddress(tx, addressId, actor.id));
             const address = deliverySnapshot.address;
@@ -209,15 +205,14 @@ export async function placeOrderLegacy({
           }
         }
       }
-      // Save only after the final quote has been approved, atomically with
-      // the order. A failed quote never mutates the address book.
-      const savedAddressId = await saveCheckoutAddress({ tx, step, clientId: actor.id, isDelivery, deliveryBody, verifiedNewAddress });
       // ===== Create the order =====
+      // Place-order NEVER writes the address book: the order only references the
+      // already-stored `addressId` (its own delivery snapshot stays immutable).
       await step(() => insertOrder(tx, {
         id: orderId,
         userId: actor.id,
         branchId,
-        addressId: savedAddressId ?? (isDelivery && deliveryBody && "addressId" in deliveryBody ? deliveryBody.addressId : null),
+        addressId: deliveryBody ? deliveryBody.addressId : null,
         status: "pending_payment",
         paymentMethod: null,
         paymentStatus: "pending",

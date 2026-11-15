@@ -618,3 +618,70 @@ test("gate1 delivery keeps PPN on goods only and the provider payable on net goo
     await page.close();
   }
 });
+
+// AC16 — pending body versi lama (masih membawa `newAddress`) hanya boleh dibaca.
+// Setelah lookup definitif 404, customer memilih alamat tersimpan dan me-review
+// ulang dengan request key baru; body lama tidak pernah dikirim ulang.
+test("a legacy pending checkout body is looked up read-only and replaced by an explicit address choice", async () => {
+  await mockControl("/__control/reset", {});
+  expect((await mockControl("/__control/shipment", { scenario: "rate-normal", rates: 30000 }, "PUT")).status).toBe("ok");
+  expect((await mockControl("/__control/stocks/ensure", { locationId: deliveryLocationId, itemId: 920001, onHand: 5 })).status).toBe("ok");
+  await context.request.delete("/api/cart");
+  expect((await context.request.post("/api/cart/items", { data: { variantId, branchId: deliveryOriginBranchId, quantity: 1 } })).ok()).toBe(true);
+  const cart = (await (await context.request.get("/api/cart")).json()).data;
+  const itemIds = [cart.items.find((item: { variantId: string }) => item.variantId === variantId).id];
+  expect(itemIds[0]).toBeTruthy();
+
+  const legacyRequestKey = "c1200000-0000-4000-8000-00000000c0de";
+  const legacyBody = {
+    fulfillmentMethod: "delivery",
+    itemIds,
+    contactPhone: "+6208120000001",
+    contactEmail: TEST_USERS.store.email,
+    newAddress: {
+      recipientName: "Legacy Fixture", phone: "+6208120000001",
+      fullAddress: "Jl. Legacy Pending No. 1",
+      provinceId: "01", cityId: "0101", districtId: "010101", areaId: "01010101",
+      postalCode: "01234", isDefault: false,
+    },
+    saveAddress: true,
+    saveRequestId: "c1200000-0000-4000-8000-00000000c0df",
+    courierId: 13, serviceId: 1327, approvedPricing: {}, originFingerprint: "a".repeat(64),
+    requestKey: legacyRequestKey,
+  };
+  const page = await context.newPage();
+  const placeOrderPosts: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().endsWith("/api/checkout/place-order")) {
+      placeOrderPosts.push(request.postData() ?? "");
+    }
+  });
+  try {
+    const sessionId = (await (await context.request.get("/api/auth/get-session")).json()).user.id as string;
+    // Storage ditanam sebelum app mount; penanda mencegah record ditanam ulang
+    // setelah aksi "Pilih alamat dan review ulang" memuat ulang halaman.
+    await page.addInitScript((record) => {
+      if (sessionStorage.getItem("__legacyPendingSeeded")) return;
+      sessionStorage.setItem("__legacyPendingSeeded", "1");
+      sessionStorage.setItem("checkoutRequest:" + record.sessionId, JSON.stringify(record.pending));
+      sessionStorage.setItem("checkoutSelectedItemIds", JSON.stringify(record.itemIds));
+    }, { sessionId, pending: { requestKey: legacyRequestKey, body: legacyBody }, itemIds });
+    await page.goto(`${storeUrl}/checkout`);
+    const notice = page.getByText(/Alamat checkout perlu dipilih ulang/);
+    await expect(notice).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByRole("button", { name: "Pilih alamat dan review ulang" })).toBeVisible();
+    // Lookup read-only: body lama TIDAK pernah dikirim ulang sebagai order.
+    expect(placeOrderPosts).toHaveLength(0);
+    await page.getByRole("button", { name: "Pilih alamat dan review ulang" }).click();
+    await expect(notice).toHaveCount(0);
+    // Kembali ke langkah input dengan metode delivery; body lama dibuang.
+    await expect(page.getByText("Kirim ke alamat", { exact: true })).toBeVisible();
+    await expect.poll(async () => page.evaluate(() => {
+      const ids = Object.keys(sessionStorage).filter((key) => key.startsWith("checkoutRequest:"));
+      return ids.map((key) => sessionStorage.getItem(key));
+    })).toEqual([]);
+    expect(placeOrderPosts).toHaveLength(0);
+  } finally {
+    await page.close();
+  }
+});

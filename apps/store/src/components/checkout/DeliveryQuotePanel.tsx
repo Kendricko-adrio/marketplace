@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Loader2, RefreshCw, Truck } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -18,46 +17,35 @@ import {
   getDeliveryOptionsPage,
   type DeliveryCategoryFilter,
 } from "@/lib/delivery-options";
-import type { ClientAddressInput } from "@/lib/client-addresses";
-import type { RegionLevel, ShipmentRegion } from "@/lib/shipment-regions";
-import { Input } from "@/components/ui/input";
-import { ReadOnlyInput } from "@/components/ui/read-only-input";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import type { ClientAddressView } from "@/lib/client-addresses";
+import CheckoutAddressCard from "./CheckoutAddressCard";
+import CheckoutAddressDialog from "./CheckoutAddressDialog";
 
 // =========================================================
 // DeliveryQuotePanel — the checkout step-1 delivery block:
-// address combobox + refresh ongkir di header + service list (vendor `rates`,
-// never `final_rates`). Selected-service PPN/total live in the page summary.
-// The page hides, rather than unmounts, this panel during contact/review.
+// stored-address picker + full destination card + Tambah/Ubah alamat + refresh
+// ongkir di header + service list (vendor `rates`, never `final_rates`).
+// Selected-service PPN/total live in the page summary. The page hides, rather
+// than unmounts, this panel during contact/review.
 //
-// Fail-closed + stale-proof: changing the address/items key clears the
-// selection and the money immediately, then AUTO-fetches a new quote with an
-// AbortController + request generation (a late response never overwrites a
-// newer one). A failed or empty quote never shows money — it offers
-// "Coba lagi" (explicit retry) while the pickup method stays available.
-// Display current per-service ongkir and arrival dates in a compact, five-row
-// paginated picker. Only an explicitly selected service updates the checkout
-// summary. Category/page navigation preserves selection; new quotes reset to
-// all categories, page one. Category groups come from provider metadata only.
+// Kontrak alamat: tujuan pengiriman HANYA berupa `addressId` milik customer.
+// Panel tidak membuat alamat sendiri — create/edit berjalan lewat modal
+// (CheckoutAddressDialog) yang menulis API alamat, lalu card memakai
+// `ClientAddressView` hasil server. Tidak ada mode sekali pakai atau
+// save-intent di quote/review/place-order.
+//
+// Fail-closed + stale-proof: changing the destination (including an edit that
+// keeps the same id) clears the selection and the money immediately, then
+// AUTO-fetches a new quote with an AbortController + request generation (a late
+// response never overwrites a newer one). A failed or empty quote never shows
+// money — it offers "Coba lagi" (explicit retry) while the pickup method stays
+// available.
 // =========================================================
 
 const QUOTE_ENDPOINT = "/api/checkout/delivery-quote";
 
-export interface DeliveryAddressPreview {
-  id: string;
-  recipientName: string;
-  phone: string;
-  fullAddress: string;
-  postalCode: string;
-}
-type AddressOption = DeliveryAddressPreview & { regionReady: boolean };
+/** Canonical stored-address data the card/form need; `id` is a book row id. */
+export type DeliveryAddressPreview = ClientAddressView;
 
 export interface DeliveryQuotePanelProps {
   /** Owned selected cart-item ids for the quote request. */
@@ -69,14 +57,16 @@ export interface DeliveryQuotePanelProps {
   itemsKey: string;
   onServiceChange: (service: DeliveryQuoteService | null) => void;
   onPendingChange: (pending: boolean) => void;
-  /** Emits the chosen destination (the approval body + ticket-04 state). */
+  /** Emits the chosen stored destination id (the approval body). */
   onAddressChange?: (addressId: string | null) => void;
+  /** Emits the full stored destination so the page can check the contact. */
   onAddressSelected?: (address: DeliveryAddressPreview | null) => void;
-  onNewAddressChange?: (address: ClientAddressInput | null) => void;
-  onSaveAddressChange?: (save: boolean) => void;
+  /**
+   * True while an address create/edit is still unresolved. The page must not
+   * offer "Lanjut" (or submit a delivery order) in that state.
+   */
+  onAddressPendingChange?: (pending: boolean) => void;
   initialAddressId?: string | null;
-  initialNewAddress?: ClientAddressInput | null;
-  initialSaveAddress?: boolean;
   /**
    * Ticket-04 reprice sync: after a 409 DELIVERY_REPRICE_REQUIRED the page
    * pushes the FRESH quote list plus the matched (re-approved) service; the
@@ -90,66 +80,23 @@ export interface DeliveryQuotePanelProps {
 }
 
 type QuotePhase = "idle" | "loading" | "ready" | "error";
-const emptyAddress: ClientAddressInput = {
-  recipientName: "", phone: "", fullAddress: "", provinceId: "", cityId: "",
-  districtId: "", areaId: "", postalCode: "", isDefault: false,
-};
-const regionLevels: RegionLevel[] = ["provinces", "cities", "districts", "areas"];
-const regionFields = ["provinceId", "cityId", "districtId", "areaId"] as const;
-const regionLabels = ["Provinsi", "Kota/Kabupaten", "Kecamatan", "Kelurahan/Area"];
 
-/** Satu-satunya definisi "alamat siap dipakai" untuk draft maupun alamat terpakai. */
-function isCompleteAddress(address: ClientAddressInput | null): boolean {
+interface AddressEditorState {
+  open: boolean;
+  mode: "create" | "edit";
+  initial: ClientAddressView | null;
+  trigger: HTMLButtonElement | null;
+}
+
+/** Alamat lama tanpa rantai wilayah tidak bisa di-quote dan tidak dipilih diam-diam. */
+function regionReady(address: ClientAddressView): boolean {
   return Boolean(
-    address &&
-      address.recipientName.trim() &&
-      address.phone.trim() &&
-      address.fullAddress.trim() &&
-      address.provinceId &&
+    address.provinceId &&
       address.cityId &&
       address.districtId &&
       address.areaId &&
       address.postalCode
   );
-}
-
-function CheckoutRegion({ index, parentId, value, onPick }: {
-  index: number; parentId?: string; value: string; onPick: (value: string, postalCode?: string) => void;
-}) {
-  const [options, setOptions] = useState<ShipmentRegion[]>([]);
-  const [error, setError] = useState(false);
-  const [retry, setRetry] = useState(0);
-  useEffect(() => {
-    const controller = new AbortController();
-    if (index > 0 && !parentId) return () => controller.abort();
-    fetch(`/api/shipment/regions?level=${regionLevels[index]}${parentId ? `&parentId=${encodeURIComponent(parentId)}` : ""}`, { signal: controller.signal })
-      .then(async (res) => { if (!res.ok) throw new Error("Region unavailable"); return res.json(); })
-      .then((body) => { if (!controller.signal.aborted) { setOptions(body.data); setError(false); } })
-      .catch(() => { if (!controller.signal.aborted) setError(true); });
-    return () => controller.abort();
-  }, [index, parentId, retry]);
-  return <div className="space-y-1">
-    <Label id={`checkout-${regionFields[index]}-label`} htmlFor={`checkout-${regionFields[index]}`} required>{regionLabels[index]}</Label>
-    {/* Shared `Select` (bukan `<select>` native) supaya prompt kosong memakai
-        token `--placeholder` dan permukaannya `bg-field` seperti field lain di
-        dialog ini. Tanpa `required` native, status wajib diekspos lewat
-        `aria-required` pada trigger agar tetap diumumkan ke assistive tech. */}
-    <Select value={value} disabled={(index > 0 && !parentId) || error}
-      onValueChange={(id) => onPick(id, options.find((row) => row.id === id)?.postalCode)}>
-      <SelectTrigger
-        id={`checkout-${regionFields[index]}`}
-        className="checkout-prompt"
-        aria-labelledby={`checkout-${regionFields[index]}-label`}
-        aria-required="true"
-      >
-        <SelectValue placeholder={`Pilih ${regionLabels[index]}`} />
-      </SelectTrigger>
-      <SelectContent>
-        {options.map((row) => <SelectItem key={row.id} value={row.id}>{row.name}</SelectItem>)}
-      </SelectContent>
-    </Select>
-    {error && <Button type="button" variant="outline" size="sm" onClick={() => setRetry((n) => n + 1)}>Coba lagi wilayah</Button>}
-  </div>;
 }
 
 export default function DeliveryQuotePanel({
@@ -159,32 +106,31 @@ export default function DeliveryQuotePanel({
   onPendingChange,
   onAddressChange,
   onAddressSelected,
-  onNewAddressChange,
-  onSaveAddressChange,
+  onAddressPendingChange,
   initialAddressId,
-  initialNewAddress,
-  initialSaveAddress,
   repriceSync,
 }: DeliveryQuotePanelProps) {
-  const [addresses, setAddresses] = useState<AddressOption[] | null>(null);
-  // Alamat baru hidup sebagai DRAFT di modal sampai customer menekan
-  // "Gunakan alamat ini"; hanya alamat terpakai yang ikut quote.
-  const [appliedNewAddress, setAppliedNewAddress] = useState<ClientAddressInput | null>(initialNewAddress ?? null);
-  const [saveAddress, setSaveAddress] = useState(initialSaveAddress ?? false);
-  const [addressModalOpen, setAddressModalOpen] = useState(false);
-  const [draftAddress, setDraftAddress] = useState<ClientAddressInput>(initialNewAddress ?? emptyAddress);
-  const [draftSaveAddress, setDraftSaveAddress] = useState(initialSaveAddress ?? false);
+  const [addresses, setAddresses] = useState<ClientAddressView[] | null>(null);
   const [addressLoadError, setAddressLoadError] = useState(false);
   const [addressRetry, setAddressRetry] = useState(0);
   const [addressId, setAddressId] = useState<string | null>(initialAddressId ?? null);
   const userSelectedAddress = useRef(Boolean(initialAddressId));
+  // Alamat yang dibuat/diubah di sesi panel ini — batas aksi "Ubah alamat" (D3).
+  const [sessionAddressIds, setSessionAddressIds] = useState<string[]>([]);
+  const [addressBusy, setAddressBusy] = useState(false);
+  const [addressStatus, setAddressStatus] = useState<string | null>(null);
+  const [editor, setEditor] = useState<AddressEditorState>({
+    open: false,
+    mode: "create",
+    initial: null,
+    trigger: null,
+  });
   const [services, setServices] = useState<DeliveryQuoteService[] | null>(null);
   const [selected, setSelected] = useState<DeliveryQuoteService | null>(null);
   const [page, setPage] = useState(1);
   const [category, setCategory] = useState<DeliveryCategoryFilter>("all");
   const serviceGroupName = useId();
   const serviceOptionsId = useId();
-  const newAddressDialogId = useId();
   const [phase, setPhase] = useState<QuotePhase>("idle");
   const [error, setError] = useState<string | null>(null);
   // Alamat berubah = quote/pilihan/acknowledgement lama tidak berlaku; customer
@@ -192,43 +138,32 @@ export default function DeliveryQuotePanel({
   const [destinationNotice, setDestinationNotice] = useState(false);
   const previousDestinationKey = useRef<string | null>(null);
   const hadSelection = useRef(false);
-  // Fokus kembali ke tombol yang membuka modal, bukan hilang ke body.
-  const addressTriggerRef = useRef<HTMLButtonElement | null>(null);
   // Request generation + AbortController so a slow/stale quote can never
   // overwrite a newer one (address/items changed mid-flight).
   const generationRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Fetch the customer's owned address book once (addresses only from the
-  // protected API). No money is trusted from anywhere here — the panel only
-  // sends {itemIds, addressId}.
+  // Fetch the customer's owned address book (addresses only from the protected
+  // API). No money is trusted from anywhere here — the panel only sends
+  // {itemIds, addressId}, and the list is re-read after every mutation.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/addresses");
+        const res = await fetch("/api/addresses", { cache: "no-store" });
         const data = await res.json();
         if (!res.ok || !data.success || !Array.isArray(data.data)) {
           throw new Error("Address list unavailable");
         }
         if (!cancelled) {
-          const rows = data.data as Array<Record<string, unknown>>;
-          setAddresses(rows.map((row) => ({
-            id: String(row.id),
-            recipientName: String(row.recipientName ?? ""),
-            phone: String(row.phone ?? ""),
-            fullAddress: String(row.fullAddress ?? ""),
-            postalCode: String(row.postalCode ?? ""),
-            regionReady: Boolean(row.provinceId && row.cityId && row.districtId && row.areaId && row.postalCode),
-          })));
+          const rows = data.data as ClientAddressView[];
+          setAddresses(rows);
           setAddressLoadError(false);
           if (!userSelectedAddress.current) {
-            const defaultAddress = rows.find((row) => row.isDefault === true && row.provinceId && row.cityId && row.districtId && row.areaId && row.postalCode);
-            if (defaultAddress) {
-              const id = String(defaultAddress.id);
-              setAddressId(id);
-              onAddressChange?.(id);
-            }
+            const defaultAddress = rows.find(
+              (row) => row.isDefault === true && regionReady(row)
+            );
+            if (defaultAddress) setAddressId(defaultAddress.id);
           }
         }
       } catch {
@@ -238,45 +173,40 @@ export default function DeliveryQuotePanel({
     return () => {
       cancelled = true;
     };
-  }, [onAddressChange, addressRetry]);
+  }, [addressRetry]);
 
-  const readyNewAddress = isCompleteAddress(appliedNewAddress);
-  const draftReady = isCompleteAddress(draftAddress);
-  const destinationKey = readyNewAddress && appliedNewAddress ? JSON.stringify(appliedNewAddress) : addressId;
-  const destination = readyNewAddress && appliedNewAddress
-    ? { newAddress: appliedNewAddress }
-    : addressId
-      ? { addressId }
-      : null;
+  const selectedAddress =
+    addresses?.find((address) => address.id === addressId) ?? null;
+
   useEffect(() => {
-    onAddressSelected?.(readyNewAddress && appliedNewAddress
-      ? { id: "", recipientName: appliedNewAddress.recipientName, phone: appliedNewAddress.phone,
-        fullAddress: appliedNewAddress.fullAddress, postalCode: appliedNewAddress.postalCode }
-      : (addresses?.find((address) => address.id === addressId) ?? null));
-    onNewAddressChange?.(readyNewAddress ? appliedNewAddress : null);
-    onSaveAddressChange?.(readyNewAddress && saveAddress);
-  }, [addresses, addressId, appliedNewAddress, readyNewAddress, saveAddress, onAddressSelected, onNewAddressChange, onSaveAddressChange]);
+    onAddressSelected?.(selectedAddress);
+    onAddressChange?.(selectedAddress?.id ?? null);
+  }, [selectedAddress, onAddressSelected, onAddressChange]);
 
-  function openAddressModal(trigger?: HTMLButtonElement | null) {
-    if (trigger) addressTriggerRef.current = trigger;
-    setDraftAddress(appliedNewAddress ?? emptyAddress);
-    setDraftSaveAddress(saveAddress);
-    setAddressModalOpen(true);
-  }
+  useEffect(() => {
+    onAddressPendingChange?.(addressBusy);
+  }, [addressBusy, onAddressPendingChange]);
 
-  function applyDraftAddress() {
-    if (!draftReady) return;
-    userSelectedAddress.current = true;
-    setAppliedNewAddress(draftAddress);
-    setSaveAddress(draftSaveAddress);
-    setAddressId(null);
-    onAddressChange?.(null);
-    setAddressModalOpen(false);
-  }
+  // Invalidation key menyertakan ISI alamat: edit yang mempertahankan id yang
+  // sama tetap harus membuang layanan/review/ongkir lama.
+  const destinationKey = selectedAddress
+    ? JSON.stringify([
+        selectedAddress.id,
+        selectedAddress.recipientName,
+        selectedAddress.phone,
+        selectedAddress.fullAddress,
+        selectedAddress.provinceId,
+        selectedAddress.cityId,
+        selectedAddress.districtId,
+        selectedAddress.areaId,
+        selectedAddress.postalCode,
+      ])
+    : null;
+  const destination = selectedAddress ? { addressId: selectedAddress.id } : null;
 
   const runQuote = useCallback(
-    async (generation: number, destination: { addressId: string } | { newAddress: ClientAddressInput } | null) => {
-      if (!destination || itemIds.length === 0) return;
+    async (generation: number, target: { addressId: string } | null) => {
+      if (!target || itemIds.length === 0) return;
       onServiceChange(null);
       onPendingChange(true);
       setPhase("loading");
@@ -291,7 +221,7 @@ export default function DeliveryQuotePanel({
         const res = await fetch(QUOTE_ENDPOINT, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ itemIds, ...destination }),
+          body: JSON.stringify({ itemIds, ...target }),
           signal: abort.signal,
         });
         const data = (await res.json()) as {
@@ -328,8 +258,8 @@ export default function DeliveryQuotePanel({
     [itemIds, onPendingChange, onServiceChange]
   );
 
-  // The quote key: destination address + everything that changes the server
-  // request (items, quantities, prices, branch). Any change clears the
+  // The quote key: destination address content + everything that changes the
+  // server request (items, quantities, prices, branch). Any change clears the
   // selection and the money (no stale pricing), then re-quotes.
   useEffect(() => {
     setPage(1);
@@ -358,7 +288,7 @@ export default function DeliveryQuotePanel({
       abortRef.current?.abort();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- itemsKey is intentionally part of the requote key
-  }, [destinationKey, readyNewAddress, itemsKey, itemIds.length]);
+  }, [destinationKey, itemsKey, itemIds.length]);
 
   function pickService(service: DeliveryQuoteService) {
     hadSelection.current = true;
@@ -389,9 +319,54 @@ export default function DeliveryQuotePanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sync only on the reprice push
   }, [repriceSync]);
 
+  function openCreateAddress(trigger: HTMLButtonElement | null) {
+    setEditor({ open: true, mode: "create", initial: null, trigger });
+  }
+
+  function openEditAddress(address: ClientAddressView, trigger: HTMLButtonElement | null) {
+    setEditor({ open: true, mode: "edit", initial: address, trigger });
+  }
+
+  /** Tombol pemicu = elemen yang sedang fokus (klik maupun Enter/Space). */
+  function currentTrigger(): HTMLButtonElement | null {
+    const active = document.activeElement;
+    return active instanceof HTMLButtonElement ? active : null;
+  }
+
+  /**
+   * Simpan/ubah sukses: pilih ID hasil server, pakai `ClientAddressView` yang
+   * dikembalikan sebagai sumber card, lalu rekonsiliasi daftar dari server
+   * tanpa mengembalikan pilihan/data ke respons lama.
+   */
+  function handleAddressSaved(address: ClientAddressView, kind: "created" | "updated") {
+    userSelectedAddress.current = true;
+    setSessionAddressIds((ids) =>
+      ids.includes(address.id) ? ids : [...ids, address.id]
+    );
+    setAddresses((rows) => {
+      const rest = (rows ?? []).filter((row) => row.id !== address.id);
+      const next = [address, ...rest];
+      return address.isDefault
+        ? next.map((row) =>
+            row.id === address.id || !row.isDefault ? row : { ...row, isDefault: false }
+          )
+        : next;
+    });
+    setAddressId(address.id);
+    setAddressLoadError(false);
+    setAddressStatus(kind === "created" ? "Alamat disimpan." : "Alamat diperbarui.");
+    setEditor((current) => ({ ...current, open: false }));
+    setAddressRetry((n) => n + 1);
+  }
+
   const optionsPage = getDeliveryOptionsPage(services ?? [], page, category);
-  const selectedOnPage = optionsPage.options.some((service) =>
-    selected?.courierId === service.courierId && selected?.serviceId === service.serviceId
+  const selectedOnPage = optionsPage.options.some(
+    (service) =>
+      selected?.courierId === service.courierId &&
+      selected?.serviceId === service.serviceId
+  );
+  const canEditSelected = Boolean(
+    selectedAddress && sessionAddressIds.includes(selectedAddress.id)
   );
 
   return (
@@ -399,92 +374,101 @@ export default function DeliveryQuotePanel({
       <div>
         <h3 className="mb-3 text-base font-semibold">Alamat Pengiriman</h3>
         {addresses === null && !addressLoadError && (
-          <p role="status" className="mb-3 text-sm text-muted-foreground">Memuat alamat tersimpan…</p>
+          <p role="status" className="mb-3 text-sm text-muted-foreground">
+            Memuat alamat tersimpan…
+          </p>
         )}
-        {addresses && addresses.length === 0 && !addressLoadError && !readyNewAddress && (
+        {addressLoadError && (
+          <p role="alert" className="mb-3 text-sm text-destructive">
+            Alamat belum dapat dimuat.{" "}
+            <Button
+              type="button"
+              variant="link"
+              className="h-auto p-0"
+              onClick={() => setAddressRetry((n) => n + 1)}
+            >
+              Coba lagi
+            </Button>
+          </p>
+        )}
+        {addresses && addresses.length === 0 && !addressLoadError && (
           <div className="mb-3 rounded-lg border bg-muted/30 p-4">
             <p className="text-sm font-medium">Belum ada alamat tersimpan.</p>
-            <p className="mt-1 text-sm text-muted-foreground">Tambahkan alamat pengiriman lewat tombol di bawah.</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Tambahkan alamat pengiriman untuk melanjutkan.
+            </p>
           </div>
         )}
-        {addresses && addresses.length > 0 && <Select
-          value={addressId ?? ""}
-          onValueChange={(value) => {
-            userSelectedAddress.current = true;
-            setAppliedNewAddress(null);
-            setAddressId(value);
-            onAddressChange?.(value);
-          }}
-        >
-          <SelectTrigger
-            id="deliveryAddress"
-            aria-label="Alamat Pengiriman"
-            className="checkout-prompt h-auto min-h-10 w-full items-start py-2 text-left"
+        {addresses && addresses.length > 0 && !addressLoadError && (
+          <Select
+            value={addressId ?? ""}
+            onValueChange={(value) => {
+              userSelectedAddress.current = true;
+              setAddressId(value);
+            }}
           >
-            <SelectValue placeholder="Pilih alamat pengiriman" />
-          </SelectTrigger>
-          {/* Daftar alamat panjang: penerima dan alamat membungkus, tinggi
-              popup dibatasi viewport, dan alasan disabled tertulis. */}
-          <SelectContent className="max-h-[min(20rem,var(--radix-select-content-available-height))] w-[min(32rem,calc(100vw-2rem))] min-w-[var(--radix-select-trigger-width)]">
-            {(addresses ?? []).map((address) => (
-              <SelectItem
-                key={address.id}
-                value={address.id}
-                disabled={!address.regionReady}
-                className="items-start py-2 pr-2"
-              >
-                <span className="min-w-0 space-y-0.5 whitespace-normal break-words">
-                  <span className="block font-medium">
-                    {address.recipientName || "Nama penerima belum diisi"}
-                  </span>
-                  <span className="block text-xs text-muted-foreground">
-                    {address.fullAddress}
-                  </span>
-                  {!address.regionReady && (
-                    <span className="block text-xs font-medium text-amber-700 dark:text-amber-300">
-                      Wilayah belum lengkap — perbarui di Buku Alamat
+            <SelectTrigger
+              id="deliveryAddress"
+              aria-label="Alamat Pengiriman"
+              className="checkout-prompt h-auto min-h-10 w-full items-start py-2 text-left"
+            >
+              <SelectValue placeholder="Pilih alamat pengiriman" />
+            </SelectTrigger>
+            {/* Daftar alamat panjang: penerima dan alamat membungkus, tinggi
+                popup dibatasi viewport, dan alasan disabled tertulis. */}
+            <SelectContent className="max-h-[min(20rem,var(--radix-select-content-available-height))] w-[min(32rem,calc(100vw-2rem))] min-w-[var(--radix-select-trigger-width)]">
+              {addresses.map((address) => (
+                <SelectItem
+                  key={address.id}
+                  value={address.id}
+                  disabled={!regionReady(address)}
+                  className="items-start py-2 pr-2"
+                >
+                  <span className="min-w-0 space-y-0.5 whitespace-normal break-words">
+                    <span className="block font-medium">
+                      {address.recipientName || "Nama penerima belum diisi"}
                     </span>
-                  )}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>}
-        {addressLoadError && (
-          <p role="alert" className="mt-1.5 text-sm text-destructive">
-            Alamat belum dapat dimuat. <Button type="button" variant="link" className="h-auto p-0" onClick={() => setAddressRetry((n) => n + 1)}>Coba lagi</Button>
-          </p>
+                    <span className="block text-xs text-muted-foreground">
+                      {address.fullAddress}
+                    </span>
+                    {!regionReady(address) && (
+                      <span className="block text-xs font-medium text-amber-700 dark:text-amber-300">
+                        Wilayah belum lengkap — perbarui di Buku Alamat
+                      </span>
+                    )}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {selectedAddress && (
+          <CheckoutAddressCard
+            address={selectedAddress}
+            onEdit={
+              canEditSelected
+                ? () => openEditAddress(selectedAddress, currentTrigger())
+                : undefined
+            }
+          />
         )}
         <Button
           type="button"
           variant="outline"
           className="mt-3 w-full sm:w-auto"
           aria-haspopup="dialog"
-          aria-expanded={addressModalOpen}
-          aria-controls={newAddressDialogId}
-          onClick={(event) => openAddressModal(event.currentTarget)}
+          aria-expanded={editor.open}
+          onClick={(event) => openCreateAddress(event.currentTarget)}
         >
-          <span aria-hidden="true" className="text-lg leading-none">+</span>
-          Gunakan alamat baru
+          <span aria-hidden="true" className="text-lg leading-none">
+            +
+          </span>
+          Tambah alamat
         </Button>
-        {readyNewAddress && appliedNewAddress && (
-          <div role="group" aria-label="Alamat baru terpakai" className="mt-4 rounded-lg border bg-muted/30 p-4 text-sm">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0 space-y-1">
-                <p className="text-xs font-medium text-muted-foreground">Alamat pengiriman baru</p>
-                <p className="break-words font-medium">{appliedNewAddress.recipientName}</p>
-                <p className="break-words">{appliedNewAddress.phone}</p>
-                <p className="break-words">{appliedNewAddress.fullAddress}</p>
-                <p className="break-words text-muted-foreground">Kode pos {appliedNewAddress.postalCode}</p>
-                <p className="text-xs text-muted-foreground">
-                  {saveAddress ? "Akan disimpan di buku alamat." : "Tidak disimpan di buku alamat."}
-                </p>
-              </div>
-              <Button type="button" variant="outline" size="sm" onClick={(event) => openAddressModal(event.currentTarget)}>
-                Ubah alamat
-              </Button>
-            </div>
-          </div>
+        {addressStatus && (
+          <p role="status" className="mt-2 text-sm text-muted-foreground">
+            {addressStatus}
+          </p>
         )}
       </div>
 
@@ -577,7 +561,10 @@ export default function DeliveryQuotePanel({
                     }`}
                   >
                     {filter.label}
-                    <span aria-hidden="true" className={`tabular-nums ${active ? "opacity-80" : "opacity-60"}`}>
+                    <span
+                      aria-hidden="true"
+                      className={`tabular-nums ${active ? "opacity-80" : "opacity-60"}`}
+                    >
                       {count}
                     </span>
                   </button>
@@ -586,7 +573,8 @@ export default function DeliveryQuotePanel({
             </div>
             <div id={serviceOptionsId} className="overflow-hidden rounded-xl border bg-background">
               {optionsPage.options.map((service) => {
-                const isSelected = selected?.courierId === service.courierId &&
+                const isSelected =
+                  selected?.courierId === service.courierId &&
                   selected?.serviceId === service.serviceId;
                 return (
                   <label
@@ -645,7 +633,10 @@ export default function DeliveryQuotePanel({
                 >
                   <ChevronLeft className="h-4 w-4" aria-hidden="true" />
                 </Button>
-                <span className="px-2 text-xs tabular-nums" aria-label={`Halaman ${optionsPage.page} dari ${optionsPage.pageCount}`}>
+                <span
+                  className="px-2 text-xs tabular-nums"
+                  aria-label={`Halaman ${optionsPage.page} dari ${optionsPage.pageCount}`}
+                >
                   {optionsPage.page} / {optionsPage.pageCount}
                 </span>
                 <Button
@@ -662,70 +653,25 @@ export default function DeliveryQuotePanel({
             )}
           </div>
           {selected && !selectedOnPage && (
-            <p className="rounded-lg bg-primary/5 px-3 py-2 text-xs font-medium text-primary" role="status">
+            <p
+              className="rounded-lg bg-primary/5 px-3 py-2 text-xs font-medium text-primary"
+              role="status"
+            >
               Terpilih: {selected.name}
             </p>
           )}
         </div>
       )}
 
-      <Dialog open={addressModalOpen} onOpenChange={setAddressModalOpen}>
-        <DialogContent
-          id={newAddressDialogId}
-          closeButtonSize="comfortable"
-          className="max-h-[90dvh] gap-0 overflow-hidden p-0 sm:max-w-2xl"
-          onCloseAutoFocus={(event) => {
-            // Escape/Batal/X mengembalikan fokus ke tombol yang membuka modal.
-            event.preventDefault();
-            addressTriggerRef.current?.focus();
-          }}
-        >
-          <div className="flex max-h-[90dvh] min-h-0 flex-col">
-          <DialogHeader className="p-6 pb-3">
-            <DialogTitle>Alamat baru</DialogTitle>
-            <DialogDescription>
-              Lengkapi alamat penerima, lalu tekan “Gunakan alamat ini” untuk menghitung ongkir ke alamat tersebut.
-            </DialogDescription>
-          </DialogHeader>
-          {/* Body scrolls; aksi utama tetap terlihat di footer (mobile 390px). */}
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
-            {/* Legenda bintang: penanda wajib harus punya arti tertulis, bukan
-                hanya konvensi warna/simbol. Kode Pos tidak bertanda bintang
-                karena terkunci dan terisi otomatis dari Kelurahan/Area. */}
-            <p className="mb-3 text-xs text-muted-foreground">
-              <span aria-hidden="true">*</span> Wajib diisi
-            </p>
-            <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2"><Label htmlFor="checkout-recipient" required>Nama Penerima</Label><Input id="checkout-recipient" required autoComplete="shipping name" value={draftAddress.recipientName} onChange={(e) => setDraftAddress((prev) => ({ ...prev, recipientName: e.target.value }))} /></div>
-            <div className="space-y-2"><Label htmlFor="checkout-phone" required>Telepon Penerima</Label><Input id="checkout-phone" required type="tel" autoComplete="shipping tel" value={draftAddress.phone} onChange={(e) => setDraftAddress((prev) => ({ ...prev, phone: e.target.value }))} /></div>
-            {regionFields.map((field, index) => <CheckoutRegion key={`${field}:${index > 0 ? draftAddress[regionFields[index - 1]] : "root"}`}
-              index={index} value={draftAddress[field]} parentId={index > 0 ? draftAddress[regionFields[index - 1]] : undefined}
-              onPick={(id, postalCode) => setDraftAddress((prev) => {
-                const next = { ...prev, [field]: id, postalCode: postalCode ?? "" };
-                for (let n = index + 1; n < regionFields.length; n++) next[regionFields[n]] = "";
-                return next;
-              })} />)}
-            <div className="space-y-2"><Label htmlFor="checkout-postal">Kode Pos</Label><ReadOnlyInput id="checkout-postal" value={draftAddress.postalCode} hint="Terisi otomatis dari Kelurahan/Area." /></div>
-            <div className="space-y-2 sm:col-span-2"><Label htmlFor="checkout-street" required>Alamat Lengkap</Label><Input id="checkout-street" className="checkout-prompt" required value={draftAddress.fullAddress} placeholder="Jalan, nomor rumah, unit, dan patokan" onChange={(e) => setDraftAddress((prev) => ({ ...prev, fullAddress: e.target.value }))} /></div>
-            <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={draftSaveAddress} onChange={(e) => {
-              setDraftSaveAddress(e.target.checked);
-              if (!e.target.checked) setDraftAddress((prev) => ({ ...prev, isDefault: false }));
-            }} />Simpan alamat</label>
-            {draftSaveAddress && <label className="flex items-center gap-2 text-sm sm:col-span-2"><input type="checkbox" checked={draftAddress.isDefault} onChange={(e) => setDraftAddress((prev) => ({ ...prev, isDefault: e.target.checked }))} />Jadikan alamat utama</label>}
-            </div>
-          </div>
-          <DialogFooter className="gap-2 border-t p-6 pt-4">
-            {!draftReady && (
-              <p className="mr-auto self-center text-xs text-muted-foreground">
-                Lengkapi nama, telepon, wilayah, dan alamat untuk memakai alamat ini.
-              </p>
-            )}
-            <Button type="button" variant="outline" onClick={() => setAddressModalOpen(false)}>Batal</Button>
-            <Button type="button" onClick={applyDraftAddress} disabled={!draftReady}>Gunakan alamat ini</Button>
-          </DialogFooter>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <CheckoutAddressDialog
+        open={editor.open}
+        mode={editor.mode}
+        initialAddress={editor.initial}
+        triggerElement={editor.trigger}
+        onOpenChange={(next) => setEditor((current) => ({ ...current, open: next }))}
+        onBusyChange={setAddressBusy}
+        onSaved={handleAddressSaved}
+      />
     </section>
   );
 }

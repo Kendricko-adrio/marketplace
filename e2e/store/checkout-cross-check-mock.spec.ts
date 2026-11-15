@@ -523,7 +523,7 @@ test("dialog alamat dan promo memberi target Close nyaman dan fokus kembali", as
   await page.goto("/checkout");
   await page.getByRole("button", { name: "Kirim ke alamat" }).click();
 
-  const trigger = page.getByRole("button", { name: "Gunakan alamat baru" });
+  const trigger = page.getByRole("button", { name: "Tambah alamat" });
   await trigger.scrollIntoViewIfNeeded();
   await trigger.click();
 

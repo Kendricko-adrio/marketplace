@@ -2,8 +2,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { Pool, type PoolClient } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "@marketplace/db/src/schema";
-import { loadBranch, loadCart, loadCartItems, loadAddress, holdBranchStock, loadHoldStockSnapshot, loadFreshVariants, saveCheckoutAddress } from "./place-order-repository";
+import { loadBranch, loadCart, loadCartItems, loadAddress, holdBranchStock, loadHoldStockSnapshot, loadFreshVariants } from "./place-order-repository";
 import { placeOrderLegacy, type PlaceOrderLegacyInput } from "./place-order-legacy-service";
+import { createDeliverySnapshot } from "@/lib/delivery-order";
 import { InsufficientStockError } from "./place-order-errors";
 
 const provider = vi.hoisted(() => ({
@@ -30,9 +31,17 @@ let connection: PoolClient;
 const database = () => drizzle(connection, { schema });
 
 const anchor = new Date("2040-01-01T00:00:00Z");
-const destination = { recipientName: "Customer", phone: "081234567890", fullAddress: "Destination", postalCode: "01234", areaId: "01010101", canonical: { provinceId: "01", province: "Province", cityId: "0101", city: "City", districtId: "010101", district: "District", areaId: "01010101", area: "Area", postalCode: "01234" } };
-const newAddressBody = { fulfillmentMethod: "delivery" as const, contactPhone: "081234567890", contactEmail: "test@example.invalid", itemIds: ["item"], courierId: 1, serviceId: 2, approvedPricing: {}, originFingerprint: "a".repeat(64), saveAddress: true, saveRequestId: "a1200000-0000-4000-8000-000000000023", newAddress: { recipientName: "Customer", phone: "081234567890", fullAddress: "Destination", provinceId: "01", cityId: "0101", districtId: "010101", areaId: "01010101", postalCode: "01234", isDefault: true } };
-const step = <T>(query: () => PromiseLike<T>) => Promise.resolve(query());
+const deliverySnapshot = createDeliverySnapshot({
+  address: { recipientName: "Owner", phone: "0800000000", fullAddress: "Address",
+    provinceId: "01", province: "Province", cityId: "0101", city: "City",
+    districtId: "010101", district: "District", areaId: "01010101", area: "Area", postalCode: "01234" },
+  origin: { branchId: "place-write-branch", name: "Branch", phone: null, address: null, zipcode: null, areaId: null },
+  parcel: { weight: 1000, items: [{ item_name: "Shoes", quantity: 2, value: 1000,
+    weight: 1000, length: 10, width: 10, height: 10 }] },
+  service: { courierId: 1, serviceId: 2, name: "Reguler", shippingCost: "0" },
+  pricing: { subtotal: "2000.00", discount: "0.00", taxableBase: "2000.00", shippingCost: "0.00",
+    serviceFee: "0.00", ppnRatePercent: "11", ppnAmount: "220.00", total: "2220.00" },
+});
 
 describe.skipIf(!enabled)("place-order persistence boundary (PostgreSQL)", () => {
   beforeAll(async () => { await pool.query("SELECT 1"); });
@@ -76,14 +85,6 @@ describe.skipIf(!enabled)("place-order persistence boundary (PostgreSQL)", () =>
   it("locks source variants in sorted order rather than caller selection order", async () => {
     await connection.query("INSERT INTO product_variant(id,product_id,sku,price) VALUES ('place-read-a','place-read-product','PLACE-READ-A',1000)");
     expect((await loadFreshVariants(database(), ["place-read-variant", "place-read-a"])).map((row) => row.id)).toEqual(["place-read-a", "place-read-variant"]);
-  });
-  it("deduplicates a stable address save and refuses reusing it for a different destination", async () => {
-    const input = { tx: database(), step, clientId: "place-read-owner", isDelivery: true, deliveryBody: newAddressBody, verifiedNewAddress: destination };
-    const first = await saveCheckoutAddress(input);
-    expect(first).toMatch(/^checkout:[a-f0-9]{64}$/);
-    expect(await saveCheckoutAddress(input)).toBe(first);
-    expect((await connection.query("SELECT count(*)::int AS count FROM address WHERE user_id='place-read-owner' AND is_default=true")).rows).toEqual([{ count: 1 }]);
-    await expect(saveCheckoutAddress({ ...input, verifiedNewAddress: { ...destination, fullAddress: "Different" } })).rejects.toThrow("Checkout address save request reused with a different destination");
   });
   it("retains branch config and missing-branch semantics", async () => {
     expect(await loadBranch("place-read-branch", database())).toMatchObject([{ id: "place-read-branch", status: "aktif", jubelioLocationId: 99123, operatingHours: {} }]);
@@ -136,7 +137,7 @@ describe.skipIf(!enabled)("place-order legacy atomicity and concurrency (Postgre
       selectedItems: await loadCartItems("place-write-cart"), selectedItemIds: ["place-write-item"], cart: { id: "place-write-cart" },
       branchId: "place-write-branch", branch: await loadBranch("place-write-branch"),
       pricingSnapshot: null, pricing: { subtotal: "2000.00", discount: "0.00", shippingCost: "0.00", taxableBase: "2000.00", serviceFee: "0.00", ppnRatePercent: "11", ppnAmount: "220.00", total: "2220.00" }, offerCandidate: null,
-      isDelivery: false, deliverySnapshot: null, deliveryBody: null, verifiedNewAddress: null,
+      isDelivery: false, deliverySnapshot: null, deliveryBody: null,
       pickupDate: "2040-01-01", pickupTime: "10:00", phone: "081234567890", email: "test@example.invalid",
       effectiveOf: (item) => item.variantPrice, markdownRevisionOf: () => null,
       orderId, createReference: `reference:${orderId}`, createRequest: { contactId: -1, customerName: "Customer", locationId: 1, note: `reference:${orderId}`, items: [{ itemId: 1, quantity: 2, price: 1000, discAmount: 0, taxAmount: 0, unit: "Buah", taxId: 1 }] },
@@ -158,6 +159,21 @@ describe.skipIf(!enabled)("place-order legacy atomicity and concurrency (Postgre
     expect((await pool.query("SELECT pending_remote_stock FROM branch_stock WHERE branch_id='place-write-branch'")).rows).toEqual([{ pending_remote_stock: 0 }]);
     expect((await pool.query("SELECT count(*)::int AS count FROM cart_item WHERE id='place-write-item'")).rows).toEqual([{ count: 1 }]);
     expect(provider.create).not.toHaveBeenCalled();
+  });
+  it("places a legacy delivery order against the stored address without mutating the address book", async () => {
+    await pool.query("INSERT INTO address(id,user_id,first_name,last_name,phone,full_address,province_id,city_id,district_id,area_id,province,city,district,area,postal_code,is_default) VALUES ('place-write-address','place-write-owner','Owner','','0800000000','Address','01','0101','010101','01010101','Province','City','District','Area','01234',true)");
+    const before = (await pool.query("SELECT id,is_default,updated_at FROM address WHERE user_id='place-write-owner' ORDER BY id")).rows;
+    const request = await input("place-write-order-delivery");
+    const result = await placeOrderLegacy({ ...request, isDelivery: true, deliverySnapshot,
+      deliveryBody: { fulfillmentMethod: "delivery", contactPhone: "0800000000", contactEmail: "test@example.invalid",
+        itemIds: ["place-write-item"], addressId: "place-write-address", courierId: 1, serviceId: 2,
+        approvedPricing: {}, originFingerprint: "a".repeat(64) } });
+    expect(result.kind).toBe("legacy-success");
+    expect((await pool.query("SELECT address_id, fulfillment_method FROM orders WHERE id='place-write-order-delivery'")).rows)
+      .toEqual([{ address_id: "place-write-address", fulfillment_method: "delivery" }]);
+    // Bukti zero mutation buku alamat: isi, status default, dan timestamp tetap.
+    expect((await pool.query("SELECT id,is_default,updated_at FROM address WHERE user_id='place-write-owner' ORDER BY id")).rows).toEqual(before);
+    await pool.query("DELETE FROM address WHERE id='place-write-address'");
   });
   it("allows only one of two concurrent checkouts to hold the remaining units", async () => {
     const requests = await Promise.all([input("place-write-order-a"), input("place-write-order-b")]);

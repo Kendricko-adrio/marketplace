@@ -348,6 +348,17 @@ test.afterAll(async () => {
     await pool.query(
       `DELETE FROM address WHERE full_address LIKE 'Jl. Delivery Quote E2E No.%'`
     );
+    // Alamat hasil modal pada spec ini ikut dibersihkan supaya assertion
+    // "satu row per tujuan" tetap deterministik antar run.
+    for (const street of [
+      "Jl. Tujuan Pertama No.%",
+      "Jl. Modal Baru No.%",
+      "Jl. Modal Batal No.%",
+      "Jl. Checkout Baru No.%",
+      "Jl. Alamat Baru No.%",
+    ]) {
+      await pool.query(`DELETE FROM address WHERE full_address LIKE '${street}'`);
+    }
     if (oldPackaging) await pool.query("UPDATE system_config SET value=$1,type=$2,description=$3 WHERE key='shipment.packagingWeightGrams'", [oldPackaging.value, oldPackaging.type, oldPackaging.description]);
     else await pool.query("DELETE FROM system_config WHERE key='shipment.packagingWeightGrams'");
     if (oldGate) await pool.query("UPDATE system_config SET value=$1,type=$2,description=$3 WHERE key='discounts.contractVersion'", [oldGate.value, oldGate.type, oldGate.description]);
@@ -819,7 +830,7 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     });
   }
 
-  test("quote accepts a verified new address without adding it to the address book", async () => {
+  test("quote rejects the removed inline destination and never writes the address book", async () => {
     const before = await (await johnContext!.request.get("/api/addresses")).json();
     const cartAdd = await johnContext!.request.post("/api/cart/items", {
       data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
@@ -827,24 +838,21 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     expect(cartAdd.ok()).toBe(true);
     const cart = await (await johnContext!.request.get("/api/cart")).json();
     const itemId = cart.data.items.find((row: { variantId: string }) => row.variantId === FIXTURE_VARIANT_ID)?.id;
-    const quote = await johnContext!.request.post("/api/checkout/delivery-quote", {
+    const inline = await johnContext!.request.post("/api/checkout/delivery-quote", {
       data: { itemIds: [itemId], newAddress: {
         recipientName: "Penerima Baru", phone: "081300000009", fullAddress: "Jl. Alamat Baru No. 10",
         ...ADDRESS_CHAIN, isDefault: false,
       } },
     });
-    expect(quote.ok(), await quote.text()).toBe(true);
-    const quoteBody = await quote.json();
+    expect(inline.status(), "tujuan inline tidak lagi bagian kontrak quote").toBe(400);
+    const owned = await johnContext!.request.post("/api/checkout/delivery-quote", {
+      data: { itemIds: [itemId], addressId: addressIdOne },
+    });
+    expect(owned.ok(), await owned.text()).toBe(true);
+    const quoteBody = await owned.json();
     expect(quoteBody.data.services[0]).toMatchObject({
       serviceCategoryId: 1, shippingCost: 20000,
     });
-    const invalid = await johnContext!.request.post("/api/checkout/delivery-quote", {
-      data: { itemIds: [itemId], newAddress: {
-        recipientName: "Penerima Baru", phone: "081300000009", fullAddress: "Jl. Alamat Baru No. 10",
-        ...ADDRESS_CHAIN, areaId: "99999999", isDefault: false,
-      } },
-    });
-    expect(invalid.status()).toBe(400);
     const after = await (await johnContext!.request.get("/api/addresses")).json();
     expect(after.data).toEqual(before.data);
   });
@@ -864,7 +872,7 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
         await page.waitForURL("**/checkout");
         await page.getByText(OPTION_DELIVERY, { exact: true }).click();
         const addressSelect = page.getByRole("combobox", { name: "Alamat Pengiriman" });
-        const newAddressButton = page.getByRole("button", { name: "Gunakan alamat baru" });
+        const newAddressButton = page.getByRole("button", { name: "Tambah alamat" });
         await expect(addressSelect).toBeVisible();
         await expect(newAddressButton).toHaveCSS("border-top-width", "1px");
         await newAddressButton.focus();
@@ -877,10 +885,20 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
         await page.getByRole("button", { name: "Batal", exact: true }).click();
         await expect(page.getByRole("heading", { name: "Alamat baru", exact: true })).toHaveCount(0);
         await expect(newAddressButton).toHaveAttribute("aria-expanded", "false");
-        await expect(page.getByRole("group", { name: "Alamat baru terpakai" })).toHaveCount(0);
+        await expect(page.getByRole("group", { name: "Alamat terpilih" })).toHaveCount(0);
         await addressSelect.click();
         await page.getByRole("option", { name: new RegExp(ADDRESS_STREETS[0]) }).click();
         await expect(page.getByLabel("Nama Penerima")).toHaveCount(0);
+        // Card lengkap untuk alamat existing yang dipilih (AC10): nama, telepon,
+        // jalan, wilayah, dan kode pos.
+        const card = page.getByRole("group", { name: "Alamat terpilih" });
+        await expect(card).toBeVisible();
+        await expect(card.getByText(ADDRESS_STREETS[0], { exact: true })).toBeVisible();
+        await expect(card.getByText("Fixture Area, Fixture District", { exact: true })).toBeVisible();
+        await expect(card.getByText(/Fixture City, Fixture Province · Kode pos 01234/)).toBeVisible();
+        await expect(card.getByText(/^0\d{8,}$/).first()).toBeVisible();
+        // Aksi edit hanya untuk alamat hasil sesi panel ini (D3).
+        await expect(card.getByRole("button", { name: "Ubah alamat" })).toHaveCount(0);
         await page.route("**/api/addresses", (route) => route.fulfill({ json: { success: true, data: [] } }));
         await page.reload();
         await page.getByText(OPTION_DELIVERY, { exact: true }).click();
@@ -893,7 +911,7 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       }
     });
 
-  test(`a customer with no saved addresses quotes a modal address without saving it (${viewport.width}px)`, async ({ browser }) => {
+  test(`a customer with no saved addresses saves the modal address before the order (${viewport.width}px)`, async ({ browser }) => {
     const id = "e2e-delivery-quote-empty-client";
     const email = "e2e-delivery-quote-empty@example.test";
     const password = "fixture-password-123";
@@ -923,7 +941,7 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       await page.getByText(OPTION_DELIVERY, { exact: true }).click();
       await expect(page.getByText("Belum ada alamat tersimpan.", { exact: true })).toBeVisible();
       await expect(page.getByRole("combobox", { name: "Alamat Pengiriman" })).toHaveCount(0);
-      const newAddressButton = page.getByRole("button", { name: "Gunakan alamat baru" });
+      const newAddressButton = page.getByRole("button", { name: "Tambah alamat" });
       await expect(newAddressButton).toHaveCSS("border-top-style", "solid");
       await expect(newAddressButton).toHaveCSS("border-top-width", "1px");
       await expect(newAddressButton).toHaveAttribute("aria-expanded", "false");
@@ -931,7 +949,7 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       await page.keyboard.press("Enter");
       await expect(page.getByRole("dialog")).toBeVisible();
       await expect(page.getByRole("heading", { name: "Alamat baru", exact: true })).toBeVisible();
-      await expect(page.getByRole("button", { name: "Gunakan alamat ini" })).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Simpan dan gunakan" })).toBeDisabled();
       await page.getByLabel("Nama Penerima").fill("Penerima Pertama");
       await page.getByLabel("Telepon Penerima").fill("081300000009");
       await page.getByLabel("Alamat Lengkap").fill("Jl. Tujuan Pertama No. 10");
@@ -943,13 +961,33 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
         ["Provinsi", "Fixture Province"], ["Kota/Kabupaten", "Fixture City"],
         ["Kecamatan", "Fixture District"], ["Kelurahan/Area", "Fixture Area"],
       ]) await pickSelectOption(page, label, option);
-      await page.getByRole("button", { name: "Gunakan alamat ini" }).click();
+      await page.getByRole("button", { name: "Simpan dan gunakan" }).click();
       await expect(page.getByRole("heading", { name: "Alamat baru", exact: true })).toHaveCount(0);
+      await expect(page.getByRole("group", { name: "Alamat terpilih" })).toBeVisible();
       await expect(page.getByText(SERVICE_LABEL)).toBeVisible({ timeout: 20_000 });
       await page.getByRole("radio", { name: /JNE REG Fixture/ }).check();
       await expect(page.getByRole("button", { name: "Lanjut", exact: true })).toBeEnabled();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-      expect((await (await context.request.get("/api/addresses")).json()).data).toEqual([]);
+      // Alamat sudah tersimpan SEBELUM order/pembayaran dibuat.
+      const saved = (await (await context.request.get("/api/addresses")).json()).data;
+      expect(saved).toHaveLength(1);
+      expect(saved[0]).toMatchObject({ recipientName: "Penerima Pertama",
+        fullAddress: "Jl. Tujuan Pertama No. 10", isDefault: false });
+      // Reload tidak mengirim POST otomatis: hanya memuat daftar dari server.
+      const createPosts: string[] = [];
+      page.on("request", (request) => {
+        if (request.method() === "POST" && request.url().endsWith("/api/addresses")) {
+          createPosts.push(request.postData() ?? "");
+        }
+      });
+      await page.reload();
+      await page.getByText(OPTION_DELIVERY, { exact: true }).click();
+      await expect(page.getByLabel(ADDRESS_SELECT_LABEL)).toBeVisible();
+      await page.getByLabel(ADDRESS_SELECT_LABEL).click();
+      await expect(page.getByRole("option", { name: /Jl. Tujuan Pertama No. 10/ })).toBeVisible();
+      await page.keyboard.press("Escape");
+      expect(createPosts, "reload tidak boleh membuat alamat baru").toHaveLength(0);
+      expect((await (await context.request.get("/api/addresses")).json()).data).toHaveLength(1);
     } finally {
       await context.close();
       await pool.query("DELETE FROM client WHERE id=$1", [id]);
@@ -958,7 +996,7 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
 
   }
 
-  test("a new address is entered in a modal and only applied after confirmation", async () => {
+  test("a new address is entered in a modal and saved to the book before the order", async () => {
     test.setTimeout(90_000);
     const add = await johnContext!.request.post("/api/cart/items", {
       data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
@@ -977,12 +1015,12 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
       await page.getByRole("button", { name: "Checkout" }).click();
       await page.waitForURL("**/checkout");
       await page.getByText(OPTION_DELIVERY, { exact: true }).click();
-      const newAddressButton = page.getByRole("button", { name: "Gunakan alamat baru" });
+      const newAddressButton = page.getByRole("button", { name: "Tambah alamat" });
       await expect(newAddressButton).toHaveAttribute("aria-expanded", "false");
       await newAddressButton.click();
       const dialog = page.getByRole("dialog");
       await expect(dialog.getByRole("heading", { name: "Alamat baru", exact: true })).toBeVisible();
-      const apply = dialog.getByRole("button", { name: "Gunakan alamat ini" });
+      const apply = dialog.getByRole("button", { name: "Simpan dan gunakan" });
       await expect(apply).toBeDisabled();
       // Penanda wajib: setiap field wajib membawa bintang + legenda, dan kontrak
       // wajibnya tetap diumumkan lewat kontrolnya (nama aksesibel tetap bersih
@@ -1014,32 +1052,70 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
         ["Kecamatan", "Fixture District"], ["Kelurahan/Area", "Fixture Area"],
       ]) await pickSelectOption(page, label, option);
       await expect(apply).toBeEnabled();
-      // Draft only: nothing is quoted and no service list appears yet.
+      // AC07: nomor penerima harus memenuhi aturan kontak checkout (8–15 digit),
+      // diperiksa di modal supaya create tidak berhasil lalu ditolak "Lanjut".
+      // 5 digit: lolos format dasar tapi gagal aturan kontak checkout 8–15.
+      await page.getByLabel("Telepon Penerima").fill("12345");
+      await apply.click();
+      await expect(dialog.getByText("Nomor telepon penerima harus berisi 8–15 angka.")).toBeVisible();
+      // Dialog tetap terbuka dan tidak ada row yang dibuat sebelum valid.
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await page.getByLabel("Telepon Penerima").fill("081300000009");
+      await expect(dialog.getByText("Nomor telepon penerima harus berisi 8–15 angka.")).toHaveCount(1);
+      // AC10/AC18: alamat panjang membungkus, bukan terpotong.
+      const longAddress = "Jl. Modal Baru No. 10, Blok C, unit 12B, patokan depan masjid sebelah warung";
+      await page.getByLabel("Alamat Lengkap").fill(longAddress);
+      await expect(page.getByLabel("Alamat Lengkap")).toHaveValue(longAddress);
+      // AC08: saving terlihat dan submit ganda dicegah.
+      await page.route("**/api/addresses", async (route) => {
+        if (route.request().method() === "POST") await new Promise((resolve) => setTimeout(resolve, 900));
+        await route.fallback();
+      });
+      // Tidak ada quote untuk draft yang belum dikonfirmasi.
       expect(quoteRequests).toHaveLength(0);
       await expect(page.getByRole("radio", { name: new RegExp(SERVICE_LABEL) })).toHaveCount(0);
       await apply.click();
+      await expect(dialog.getByText("Menyimpan alamat…").first()).toBeVisible();
+      // Batal ditahan selama request berjalan (bukan klaim rollback).
+      await expect(dialog.getByRole("button", { name: "Batal", exact: true })).toBeDisabled();
       await expect(page.getByRole("dialog")).toHaveCount(0);
       await expect(newAddressButton).toHaveAttribute("aria-expanded", "false");
-      const applied = page.getByRole("group", { name: "Alamat baru terpakai" });
+      const applied = page.getByRole("group", { name: "Alamat terpilih" });
       await expect(applied.getByText("Penerima Modal", { exact: true })).toBeVisible();
-      await expect(applied.getByText("Jl. Modal Baru No. 10", { exact: true })).toBeVisible();
-      await expect(applied.getByText("Tidak disimpan di buku alamat.", { exact: true })).toBeVisible();
+      await expect(applied.getByText(/Jl. Modal Baru No. 10/)).toBeVisible();
+      await expect(applied.getByText(/Fixture City, Fixture Province · Kode pos 01234/)).toBeVisible();
+      await expect(page.getByRole("status").filter({ hasText: "Alamat disimpan." })).toBeVisible();
       await expect(page.getByText(SERVICE_LABEL)).toBeVisible({ timeout: 20_000 });
-      // Re-opening shows the applied draft; Batal leaves it untouched.
+      // Alamat sudah menjadi row buku alamat sebelum ada order.
+      const saved = (await (await johnContext!.request.get("/api/addresses")).json()).data
+        .filter((row: { fullAddress: string }) => row.fullAddress.startsWith("Jl. Modal Baru No. 10"));
+      expect(saved).toHaveLength(1);
+      // Membuka ulang menampilkan alamat tersimpan; Batal tidak mengubah server.
       await applied.getByRole("button", { name: "Ubah alamat" }).click();
-      await expect(page.getByLabel("Alamat Lengkap")).toHaveValue("Jl. Modal Baru No. 10");
+      await expect(page.getByLabel("Alamat Lengkap")).toHaveValue(/Jl. Modal Baru No. 10/);
       await page.getByLabel("Alamat Lengkap").fill("Jl. Modal Batal No. 11");
       await page.getByRole("button", { name: "Batal", exact: true }).click();
-      await expect(applied.getByText("Jl. Modal Baru No. 10", { exact: true })).toBeVisible();
+      await expect(applied.getByText(/Jl. Modal Baru No. 10/)).toBeVisible();
       await expect(page.getByRole("radio", { name: new RegExp(SERVICE_LABEL) })).toBeVisible();
-      expect((await (await johnContext!.request.get("/api/addresses")).json()).data)
-        .not.toContainEqual(expect.objectContaining({ fullAddress: "Jl. Modal Baru No. 10" }));
+      const unchanged = (await (await johnContext!.request.get("/api/addresses")).json()).data
+        .find((row: { id: string }) => row.id === saved[0].id);
+      expect(String(unchanged.fullAddress).startsWith("Jl. Modal Baru No. 10")).toBe(true);
+      // Koreksi memakai id yang sama (PATCH), bukan row kedua.
+      await applied.getByRole("button", { name: "Ubah alamat" }).click();
+      await page.getByLabel("Alamat Lengkap").fill("Jl. Modal Baru No. 12");
+      await page.getByRole("button", { name: "Simpan perubahan" }).click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(applied.getByText("Jl. Modal Baru No. 12", { exact: true })).toBeVisible();
+      const edited = (await (await johnContext!.request.get("/api/addresses")).json()).data
+        .filter((row: { fullAddress: string }) => row.fullAddress === "Jl. Modal Baru No. 12");
+      expect(edited).toHaveLength(1);
+      expect(edited[0].id).toBe(saved[0].id);
     } finally {
       await page.close();
     }
   });
 
-  test("a modal address keeps its draft and save intent across steps", async () => {
+  test("the saved address and selection survive step navigation", async () => {
     const add = await johnContext!.request.post("/api/cart/items", {
       data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
     });
@@ -1051,7 +1127,7 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     await page.waitForURL("**/checkout");
     await page.getByText(OPTION_DELIVERY, { exact: true }).click();
     await expect(page.getByRole("combobox", { name: "Alamat Pengiriman" })).toBeVisible();
-    const newAddressButton = page.getByRole("button", { name: "Gunakan alamat baru" });
+    const newAddressButton = page.getByRole("button", { name: "Tambah alamat" });
     await expect(newAddressButton).toHaveCSS("border-top-width", "1px");
     await newAddressButton.click();
     await expect(page.getByRole("heading", { name: "Alamat baru", exact: true })).toBeVisible();
@@ -1065,24 +1141,25 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     ]) {
       await pickSelectOption(page, label, option);
     }
-    await page.getByLabel("Simpan alamat", { exact: true }).check();
     await page.getByLabel("Jadikan alamat utama").check();
-    await page.getByRole("button", { name: "Gunakan alamat ini" }).click();
+    await page.getByRole("button", { name: "Simpan dan gunakan" }).click();
     await expect(page.getByText(SERVICE_LABEL)).toBeVisible({ timeout: 20_000 });
-    const applied = page.getByRole("group", { name: "Alamat baru terpakai" });
+    const applied = page.getByRole("group", { name: "Alamat terpilih" });
     await expect(applied.getByText("Jl. Checkout Baru No. 10", { exact: true })).toBeVisible();
-    await expect(applied.getByText("Akan disimpan di buku alamat.", { exact: true })).toBeVisible();
+    // Alamat benar-benar tersimpan dan menjadi default sesuai pilihan customer.
+    const savedRows = (await (await johnContext!.request.get("/api/addresses")).json()).data
+      .filter((row: { fullAddress: string }) => row.fullAddress === "Jl. Checkout Baru No. 10");
+    expect(savedRows).toHaveLength(1);
+    expect(savedRows[0].isDefault).toBe(true);
     await page.getByRole("radio", { name: /JNE REG Fixture/ }).check();
-    // Navigation preserves the applied address, its save intent and the service.
+    // Navigation preserves the stored address and the service.
     await page.getByRole("button", { name: "Lanjut", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Pembayaran", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Kembali", exact: true }).click();
     await expect(applied.getByText("Jl. Checkout Baru No. 10", { exact: true })).toBeVisible();
-    await expect(applied.getByText("Akan disimpan di buku alamat.", { exact: true })).toBeVisible();
     await expect(page.getByRole("radio", { name: /JNE REG Fixture/ })).toBeChecked();
     // A cancelled edit leaves the applied destination and selection untouched.
     await applied.getByRole("button", { name: "Ubah alamat" }).click();
-    await expect(page.getByLabel("Simpan alamat", { exact: true })).toBeChecked();
     await expect(page.getByLabel("Jadikan alamat utama")).toBeChecked();
     await page.getByLabel("Alamat Lengkap").fill("Jl. Checkout Baru No. 11");
     await page.getByRole("button", { name: "Batal", exact: true }).click();
@@ -1093,11 +1170,91 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     await expect(page.getByLabel("Alamat Lengkap")).toHaveValue("Jl. Checkout Baru No. 10");
     await page.getByLabel("Alamat Lengkap").fill("Jl. Checkout Baru No. 11");
     // Applying the edit re-quotes and drops the previous service selection.
-    await page.getByRole("button", { name: "Gunakan alamat ini" }).click();
+    await page.getByRole("button", { name: "Simpan perubahan" }).click();
     await expect(applied.getByText("Jl. Checkout Baru No. 11", { exact: true })).toBeVisible();
     await expect(page.getByRole("radio", { name: /JNE REG Fixture/ })).not.toBeChecked();
     await expect(page.getByText(SERVICE_LABEL)).toBeVisible({ timeout: 20_000 });
+    // Edit memakai id yang sama, bukan menambah row kedua.
+    const editedRows = (await (await johnContext!.request.get("/api/addresses")).json()).data
+      .filter((row: { fullAddress: string }) => row.fullAddress === "Jl. Checkout Baru No. 11");
+    expect(editedRows).toHaveLength(1);
+    expect(editedRows[0].id).toBe(savedRows[0].id);
     await page.close();
+  });
+
+  test("an edit whose response is lost reconciles by reading the address book, never by writing again", async () => {
+    const add = await johnContext!.request.post("/api/cart/items", {
+      data: { variantId: FIXTURE_VARIANT_ID, branchId: ORIGIN_BRANCH_ID, quantity: 1 },
+    });
+    expect(add.ok()).toBe(true);
+    const page = await johnContext!.newPage();
+    const patches: string[] = [];
+    const posts: string[] = [];
+    let addressReads = 0;
+    page.on("request", (request) => {
+      const target = request.url();
+      if (!target.includes("/api/addresses")) return;
+      if (request.method() === "PATCH") patches.push(target);
+      if (request.method() === "POST") posts.push(target);
+      if (request.method() === "GET") addressReads++;
+    });
+    const street = "Jl. Modal Baru No. 21";
+    try {
+      await page.goto("/cart");
+      await page.getByRole("checkbox").first().check();
+      await page.getByRole("button", { name: "Checkout" }).click();
+      await page.waitForURL("**/checkout");
+      await page.getByText(OPTION_DELIVERY, { exact: true }).click();
+      await page.getByRole("button", { name: "Tambah alamat" }).click();
+      const dialog = page.getByRole("dialog");
+      await dialog.getByLabel("Nama Penerima").fill("Penerima Unknown Edit");
+      await dialog.getByLabel("Telepon Penerima").fill("081300000012");
+      await dialog.getByLabel("Alamat Lengkap").fill(street);
+      for (const [label, option] of [
+        ["Provinsi", "Fixture Province"], ["Kota/Kabupaten", "Fixture City"],
+        ["Kecamatan", "Fixture District"], ["Kelurahan/Area", "Fixture Area"],
+      ]) await pickSelectOption(page, label, option);
+      await dialog.getByRole("button", { name: "Simpan dan gunakan" }).click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      const applied = page.getByRole("group", { name: "Alamat terpilih" });
+      await expect(applied.getByText(street, { exact: true })).toBeVisible();
+
+      // PATCH berikutnya kehilangan respons: status menjadi tidak pasti.
+      await page.route("**/api/addresses/*", async (route) => {
+        if (route.request().method() === "PATCH") {
+          await route.abort("connectionreset");
+          return;
+        }
+        await route.fallback();
+      });
+      await applied.getByRole("button", { name: "Ubah alamat" }).click();
+      await dialog.getByLabel("Alamat Lengkap").fill("Jl. Modal Baru No. 22");
+      await dialog.getByRole("button", { name: "Simpan perubahan" }).click();
+      await expect(dialog.getByText(/Status perubahan belum dapat dipastikan/)).toBeVisible();
+      expect(patches, "tepat satu PATCH dicoba").toHaveLength(1);
+      // Tutup tidak mengklaim perubahan dibatalkan.
+      await expect(dialog.getByRole("button", { name: "Tutup" })).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "Batal", exact: true })).toHaveCount(0);
+
+      // Rekonsiliasi hanya membaca daftar; nol PATCH/POST baru. Karena tujuan
+      // tersimpan masih berbeda, dialog menampilkan keadaan server untuk
+      // konfirmasi ulang (bukan menutup seolah perubahan sudah tersimpan).
+      await dialog.getByRole("button", { name: "Periksa alamat" }).click();
+      await expect(dialog.getByText(/Alamat tersimpan masih berbeda/)).toBeVisible();
+      await expect(dialog.getByLabel("Alamat Lengkap")).toHaveValue(street);
+      expect(patches, "Periksa alamat tidak mengulang PATCH").toHaveLength(1);
+      expect(posts, "Periksa alamat tidak membuat alamat baru").toHaveLength(1);
+      expect(addressReads).toBeGreaterThan(0);
+      const rows = (await (await johnContext!.request.get("/api/addresses")).json()).data as Array<{ id: string; fullAddress: string }>;
+      expect(rows.filter((row) => row.fullAddress === "Jl. Modal Baru No. 22")).toHaveLength(0);
+      expect(rows.filter((row) => row.fullAddress === street)).toHaveLength(1);
+      // Menutup dialog tidak mengubah tujuan aktif yang tersimpan.
+      await dialog.getByRole("button", { name: "Batal", exact: true }).click();
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(applied.getByText(street, { exact: true })).toBeVisible();
+    } finally {
+      await page.close();
+    }
   });
 
   test("an address-list failure is not mistaken for an empty book and can be retried", async () => {
@@ -1293,6 +1450,9 @@ test.describe("mock-only delivery quote checkout (ticket 03)", () => {
     await pickDeliveryMethodAndAddress(page, ADDRESS_STREETS[1]);
     await expect(page.getByRole("button", { name: RETRY_LABEL })).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(ONGKIR_LABEL, { exact: true })).toHaveCount(0);
+    // AC12: kegagalan quote tidak me-rollback alamat yang sudah tersimpan.
+    const bookAfterFailure = (await (await johnContext!.request.get("/api/addresses")).json()).data as Array<{ fullAddress: string }>;
+    expect(bookAfterFailure.map((row) => row.fullAddress)).toContain(ADDRESS_STREETS[1]);
     // The pickup alternative stays selectable — never forced onto delivery.
     await expect(page.getByText(OPTION_PICKUP)).toBeVisible();
     await mockControl("PUT", "/__control/shipment", { scenario: "rate-empty" });

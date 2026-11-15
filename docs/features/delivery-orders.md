@@ -4,11 +4,11 @@ Delivery placement uses the existing Sales Order checkout pipeline, never a seco
 
 ## Approval and immutable data
 
-`POST /api/checkout/place-order` accepts delivery input `{ itemIds, contactPhone, contactEmail, fulfillmentMethod: "delivery", addressId, courierId, serviceId, approvedPricing }`, or replaces `addressId` with `{ newAddress, saveAddress, saveRequestId }` for a new inline destination. `saveRequestId` is a UUID unique to that destination attempt, used to avoid duplicate saved address rows on a repeated request. No pickup slots are accepted for delivery. The server reloads owned cart/current prices, stock, branch origin, owned canonical address or revalidated inline destination, parcel parameters and current rates. Browser pricing is approval only, not the source of money.
+`POST /api/checkout/place-order` accepts delivery input `{ itemIds, contactPhone, contactEmail, fulfillmentMethod: "delivery", addressId, courierId, serviceId, approvedPricing, originFingerprint }` **saja**. Bentuk inline `{ newAddress, saveAddress, saveRequestId }` sudah dihapus dan ditolak strict schema (`400`, tanpa side effect): place-order tidak pernah membuat atau mengubah row `address`. No pickup slots are accepted for delivery. The server reloads owned cart/current prices, stock, branch origin, owned canonical address, parcel parameters and current rates; foreign/missing address tetap ditolak tanpa membocorkan ownership. Browser pricing is approval only, not the source of money.
 
 A changed price/tax/shipping breakdown or unavailable selected service returns 409 `DELIVERY_REPRICE_REQUIRED` before local order/reservation/SO/Snap writes, with fresh services. Review shows the new money and "Ongkir telah berubah. Periksa kembali rincian pesanan sebelum melanjutkan." Confirmation is cleared; placement requires another explicit click. A vanished service returns the customer to service selection. Failed/empty rates never become zero shipping.
 
-Approved orders persist `fulfillment_method: delivery` and JSONB `delivery_snapshot` with five deep-independent blocks: canonical address, origin sender, measured parcel, courier service and website pricing. IDs/postcodes remain strings. Order items separately retain goods prices/quantities. An unsaved checkout destination has a null address FK and the same immutable snapshot. Saving is optional and happens inside the approved local order transaction; a rejected reprice/quote does not create a book row. Address-book deletion only nulls the address FK; editing/deleting the book, changing branch/master/config or later rates cannot rewrite the snapshot or order money. Customer review/detail show the destination and service, not pickup instructions.
+Approved orders persist `fulfillment_method: delivery` and JSONB `delivery_snapshot` with five deep-independent blocks: canonical address, origin sender, measured parcel, courier service and website pricing. IDs/postcodes remain strings. Order items separately retain goods prices/quantities. `address_id` hanya merujuk row yang sudah tersimpan (dibuat lewat operasi Buku Alamat); jika row dihapus, FK menjadi `null` seperti perilaku `ON DELETE SET NULL` existing, sedangkan `delivery_snapshot` tetap utuh. Editing/deleting the book, changing branch/master/config or later rates cannot rewrite the snapshot or order money. Customer review/detail show the destination and service, not pickup instructions.
 
 ## Two ledgers and payment (LEGACY — gate `0`)
 
@@ -81,6 +81,35 @@ Sisa sebelum gate dinaikkan adalah matriks kompatibilitas §8
 [versioned-checkout-pricing.md](versioned-checkout-pricing.md); selama itu belum
 terbukti, `discounts.contractVersion` tetap `0`.
 
+## Invarian: buku alamat bukan bagian checkout
+
+Hanya operasi Buku Alamat (`POST/PATCH/DELETE /api/addresses`) yang membuat atau
+mengubah row `address`. Quote, review, place-order, reservation, promotion,
+replay, dan worker recovery **tidak** menulis tabel alamat dan tidak mengganti
+default. Test lifecycle membandingkan isi buku alamat/default sebelum dan sesudah
+gate 0 maupun gate 1.
+
+Snapshot `checkout_attempt.snapshot.addressToSave` dipertahankan **hanya untuk
+kompatibilitas baca** (histori JSON). Snapshot baru selalu `null`. Snapshot lama
+yang masih membawa save-intent diperlakukan fail closed: reservation menolak
+sebelum side effect, promotion berhenti, dan recovery memindahkan attempt ke
+`manual_review` tanpa menghapus evidence dan tanpa membuat alamat dari worker.
+
+### Cutover dan runbook rollout
+
+Versi lama tidak dipertahankan di kode baru. Prasyarat aktivasi (operasional, di
+luar wewenang implementasi):
+
+1. Hentikan penerimaan checkout lama dan tunggu request berjalan selesai.
+2. Periksa attempt nonterminal yang menyimpan `addressToSave` non-null, termasuk
+   `manual_review`; tuntaskan dengan versi lama dan bukti sah. Jangan menghapus
+   snapshot, membatalkan payment, atau menandai rejected karena timeout.
+3. **Blokir cutover** selama masih ada kewajiban save lama yang belum selesai.
+4. Setelah cutover, body inline ditolak schema. Pending body lama di browser
+   hanya di-lookup read-only; bila hasilnya 404, customer memakai aksi
+   **Pilih alamat dan review ulang** (request key baru), bukan mengirim ulang
+   body lama. Kegagalan lookup tidak dianggap "tidak ada order".
+
 ## Verification
 
-`delivery-order.test.ts` verifies deep-independent JSON snapshots and approval comparisons. Settlement/Midtrans unit tests cover delivery's pickup exclusion and the shipping line sum. `delivery-order-mock.spec.ts` uses isolated local providers plus real PostgreSQL for SO ledger/confirmation, inline unsaved/saved destinations, save-intent deduplication, snapshot drift/deletion, repayment, order-time reprice approval, normal settlement and ambiguous settlement. It also checks review/detail destination display and that delivery detail omits pickup instructions. No live provider write is part of verification.
+`delivery-order.test.ts` verifies deep-independent JSON snapshots and approval comparisons. Settlement/Midtrans unit tests cover delivery's pickup exclusion and the shipping line sum. `delivery-order-mock.spec.ts` uses isolated local providers plus real PostgreSQL for SO ledger/confirmation, alamat yang tersimpan sebelum order (termasuk default sesuai pilihan), snapshot drift/deletion, repayment, order-time reprice approval, normal settlement and ambiguous settlement. `checkout-attempt-repository.db.test.ts` menambahkan bukti promotion/recovery tanpa mutasi buku alamat, FK `null` ketika row dihapus setelah reservation dengan snapshot tetap utuh, dan guard save-intent legacy. It also checks review/detail destination display and that delivery detail omits pickup instructions. No live provider write is part of verification.

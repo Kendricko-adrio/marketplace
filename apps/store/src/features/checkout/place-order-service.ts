@@ -78,6 +78,16 @@ async function continuePlacement(
     return { ...current, replayed };
   }
 
+  // Fail closed BEFORE any provider/recovery/promotion work: a snapshot that
+  // still carries a legacy checkout address save-intent may only be finished by
+  // the previous version. Nothing is written to the address book here, and the
+  // attempt is kept (manual review) instead of being silently ignored.
+  if (work.snapshot.addressToSave) {
+    log.warn(`Checkout attempt ${work.attemptId}: legacy address save-intent blocks placement`);
+    await markCheckoutAttemptForManualReview({ attemptId: work.attemptId }, database);
+    return { ...(await read()), replayed };
+  }
+
   // ===== SO create: never a second POST once a claim exists =====
   const createOp = await getJubelioSalesOperation(database as never, { owner, type: "create" });
   if (createOp?.status === "rejected") {

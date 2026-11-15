@@ -30,7 +30,6 @@ import {
 import { createModuleLogger } from "@/lib/logger";
 import { verifyAndAdjustCheckoutStock } from "@/features/checkout/verify-checkout-stock-service";
 import { checkoutStockAdjustmentMessage } from "@/lib/checkout-stock-adjustment";
-import { loadRevalidatedNewDestination } from "@/lib/delivery-quote-data";
 import type { DeliverySnapshotPayload } from "@marketplace/db/src/schema";
 import { buildJubelioSalesCreateRequest } from "@/features/checkout/place-order-jubelio-request";
 import { checkoutIntentFingerprint, findAcceptedCheckout, type CheckoutRecovery } from "@/lib/checkout-request";
@@ -353,12 +352,11 @@ export async function placeCheckoutOrder({
   const subtotal = calculatePlaceOrderSubtotal(selectedItems, pricingSnapshot);
   let pricing: OrderPricing;
   let deliverySnapshot: DeliverySnapshotPayload | null = null;
-  let verifiedNewAddress: Awaited<ReturnType<typeof loadRevalidatedNewDestination>> | null = null;
   if (isDelivery) {
     const delivery = await placeDeliveryQuote({ contractVersion, branchId, branch: branch[0], deliveryBody: deliveryBody!,
       sessionUserId: actor.id, selectedItems, ppnRatePercent, providerTax, effectiveOf, markdownRevisionOf });
     if (!delivery.ok) return { kind: "delivery-failure" as const, result: delivery };
-    ({ pricing, deliverySnapshot, pricingSnapshot, verifiedNewAddress, offerCandidate, promo } = delivery);
+    ({ pricing, deliverySnapshot, pricingSnapshot, offerCandidate, promo } = delivery);
   } else {
     pricing = buildLegacyPickupPricing(subtotal, ppnRatePercent);
   }
@@ -442,7 +440,7 @@ export async function placeCheckoutOrder({
           version: 1,
           order: {
             branchId,
-            addressId: deliveryBody && "addressId" in deliveryBody ? deliveryBody.addressId : null,
+            addressId: deliveryBody ? deliveryBody.addressId : null,
             contactPhone: phone, contactEmail: email,
             subtotal: pricing.subtotal, shippingCost: pricing.shippingCost, discount: pricing.discount,
             serviceFee: pricing.serviceFee, ppnRate: pricing.ppnRatePercent, ppnAmount: pricing.ppnAmount,
@@ -466,15 +464,9 @@ export async function placeCheckoutOrder({
           cart: selectedItems.map((item) => ({ itemId: item.cartItemId, cartId: cart.id, variantId: item.variantId,
             branchId: item.branchId!, quantity: item.quantity, updatedAt: item.cartItemUpdatedAt.toISOString() })),
           createRequest,
-          addressToSave: isDelivery && deliveryBody && "newAddress" in deliveryBody && deliveryBody.saveAddress && verifiedNewAddress
-            ? { firstName: verifiedNewAddress.recipientName, lastName: "", phone: verifiedNewAddress.phone,
-                fullAddress: verifiedNewAddress.fullAddress, provinceId: verifiedNewAddress.canonical.provinceId,
-                province: verifiedNewAddress.canonical.province, cityId: verifiedNewAddress.canonical.cityId,
-                city: verifiedNewAddress.canonical.city, districtId: verifiedNewAddress.canonical.districtId,
-                district: verifiedNewAddress.canonical.district, areaId: verifiedNewAddress.canonical.areaId,
-                area: verifiedNewAddress.canonical.area, postalCode: verifiedNewAddress.canonical.postalCode,
-                isDefault: deliveryBody.newAddress.isDefault }
-            : null,
+          // Checkout tidak pernah menulis buku alamat: field dipertahankan null
+          // agar bentuk JSON versi snapshot existing tetap terbaca (deprecated).
+          addressToSave: null,
         },
       }, {
         initializePayment: initializeCheckoutPayment,
@@ -510,7 +502,6 @@ export async function placeCheckoutOrder({
     isDelivery,
     deliverySnapshot,
     deliveryBody,
-    verifiedNewAddress,
     pickupDate,
     pickupTime,
     phone,

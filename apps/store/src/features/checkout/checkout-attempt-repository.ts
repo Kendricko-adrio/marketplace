@@ -178,6 +178,13 @@ export async function reserveCheckoutAttempt(
       await tx.execute(sql`SET LOCAL statement_timeout = '5s'`);
       const [client] = await tx.select().from(clients).where(eq(clients.id, input.clientId)).for("update");
       if (!client) return reviewRequired();
+      // Fail closed: only the previous checkout version wrote `addressToSave`.
+      // Reservation never creates the address here, and the intent is not
+      // silently discarded — such a snapshot must be finished by that version.
+      if (input.snapshot.addressToSave) {
+        log.warn(`Checkout attempt ${input.attemptId}: legacy address save-intent rejected before reservation`);
+        return reviewRequired();
+      }
       const [existing] = await tx.select().from(checkoutAttempts).where(and(
         eq(checkoutAttempts.clientId, input.clientId), eq(checkoutAttempts.requestKey, input.requestKey),
       )).limit(1);
@@ -489,21 +496,16 @@ export async function promoteCheckoutAttempt(
         operations.some((operation) => operation.type === "cancel")) throw new Error("Checkout promotion lacks confirmed Sales Order");
       const now = new Date();
       const { pickupDate, ...draft } = attempt.snapshot.order;
-      let addressId = draft.addressId ?? null;
+      // Fail closed: a snapshot created by the previous checkout version may
+      // still carry an address save-intent. Promotion never creates or edits an
+      // address book row, and silently ignoring the intent would lose it — the
+      // attempt stays intact for the legacy/operator runbook instead.
       if (attempt.snapshot.addressToSave) {
-        addressId ??= `checkout:${attempt.id}`;
-        const [prior] = await tx.select().from(addresses).where(eq(addresses.id, addressId)).limit(1);
-        const requested = attempt.snapshot.addressToSave;
-        if (prior) {
-          if (prior.userId !== attempt.clientId || prior.firstName !== requested.firstName || prior.phone !== requested.phone ||
-            prior.fullAddress !== requested.fullAddress || prior.areaId !== requested.areaId || prior.postalCode !== requested.postalCode) {
-            throw new Error("Checkout saved address conflicts with the approved snapshot");
-          }
-        } else {
-          if (requested.isDefault) await tx.update(addresses).set({ isDefault: false, updatedAt: now }).where(eq(addresses.userId, attempt.clientId));
-          await tx.insert(addresses).values({ ...requested, id: addressId, userId: attempt.clientId, createdAt: now, updatedAt: now });
-        }
-      } else if (addressId) {
+        log.warn(`Checkout attempt ${attempt.id}: promotion blocked by a legacy address save-intent`);
+        throw new Error("Checkout promotion blocked by a legacy address save-intent");
+      }
+      let addressId = draft.addressId ?? null;
+      if (addressId) {
         const [existing] = await tx.select({ id: addresses.id }).from(addresses)
           .where(and(eq(addresses.id, addressId), eq(addresses.userId, attempt.clientId))).limit(1);
         if (!existing) addressId = null; // Equivalent to the existing address FK ON DELETE SET NULL.

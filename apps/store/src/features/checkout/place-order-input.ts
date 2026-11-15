@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { clientAddressInputSchema } from "@/lib/client-addresses";
 
 export const selectedIdsSchema = z.array(z.string().min(1).max(128))
   .min(1, "Select at least one item to checkout").max(50)
@@ -56,6 +55,9 @@ export const placeOrderSchema = z.object({
 // Ticket 04 — the delivery approval body. ONLY an approval: every money
 // field is re-derived server-side (fresh quote) and compared; `pickupDate`/
 // `pickupTime` are deliberately absent from a delivery submission.
+// The destination is ALWAYS a stored address book row (`addressId`). An inline
+// `newAddress` payload is rejected by the strict schema: checkout may not create
+// or edit address rows through place-order.
 export const REPRICE_REQUIRED_MESSAGE =
   "Ongkir telah berubah. Periksa kembali rincian pesanan sebelum melanjutkan.";
 
@@ -74,10 +76,9 @@ export const deliveryPlaceOrderBase = z
     approvedPricing: z.record(z.string(), z.union([z.string(), z.number()])),
     originFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   });
-export const deliveryPlaceOrderSchema = z.union([
-  deliveryPlaceOrderBase.extend({ addressId: z.string().min(1).max(128) }).strict(),
-  deliveryPlaceOrderBase.extend({ newAddress: clientAddressInputSchema, saveAddress: z.boolean(), saveRequestId: z.string().uuid() }).strict(),
-]);
+export const deliveryPlaceOrderSchema = deliveryPlaceOrderBase
+  .extend({ addressId: z.string().min(1).max(128) })
+  .strict();
 
 export type DeliveryPlaceOrderData = z.infer<typeof deliveryPlaceOrderSchema>;
 

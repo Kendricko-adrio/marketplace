@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildSalesOrderPayload,
   createJubelioSalesGateway,
+  resolveJubelioSalesRuntime,
   type JubelioSalesGateway,
 } from "./jubelio-sales-client";
 import { JubelioRequestQueueError } from "./jubelio-request-scheduler";
@@ -198,6 +199,13 @@ function canceledSnapshot(
 }
 
 describe("resolveJubelioSalesRuntime (default-OFF fail-closed, pinned live hosts)", () => {
+  it("uses only test-account traffic for a production Node build deployed to staging", () => {
+    expect(resolveJubelioSalesRuntime({
+      NODE_ENV: "production", APP_ENV: "staging",
+      JUBELIO_API_BASE_URL: "https://api2.jubelio.com",
+      JUBELIO_SALES_TEST_ACCOUNT_ENABLED: "true", JUBELIO_STOCK_WRITES_ENABLED: "false",
+    })).toEqual({ mode: "live", baseUrl: "https://api2.jubelio.com", liveSource: "test-account" });
+  });
   it("allows an explicit non-production E2E loopback seam without enabling live writes", () => {
     const gateway = createJubelioSalesGateway({ env: {
       NODE_ENV: "development", E2E_PROVIDER_MOCKS: "true",
@@ -220,7 +228,7 @@ describe("resolveJubelioSalesRuntime (default-OFF fail-closed, pinned live hosts
       JUBELIO_SALES_TEST_ACCOUNT_ENABLED: "true", JUBELIO_API_BASE_URL: "https://api2.jubelio.com",
     } })).toThrow();
   });
-  it.each([{ NODE_ENV: "production", APP_ENV: "production" }, { NODE_ENV: "development", APP_ENV: "production" }])("never unlocks E2E mocks in production %o", (environment) => {
+  it.each([{ NODE_ENV: "production", APP_ENV: "production" }, { NODE_ENV: "development", APP_ENV: "production" }, { NODE_ENV: "production", APP_ENV: "staging" }])("never unlocks E2E mocks in production %o", (environment) => {
     expect(() => createJubelioSalesGateway({ env: {
       ...environment, E2E_PROVIDER_MOCKS: "true", JUBELIO_SALES_MOCK_API_BASE_URL: "http://127.0.0.1:3112",
       JUBELIO_STOCK_WRITES_ENABLED: "true", JUBELIO_API_BASE_URL: "https://api2.jubelio.com",

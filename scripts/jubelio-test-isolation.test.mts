@@ -8,9 +8,10 @@ describe("isolasi fixture Jubelio dari development dan deployment", () => {
   it("staging tidak mendefinisikan service, dependency, atau URL mock", () => {
     const compose = read("deployment/staging/docker-compose.yml");
     expect(compose).not.toMatch(/jubelio-mock|JUBELIO_MOCK_API_BASE_URL/);
-    // Penghapusan mock tidak boleh mengubah mode maupun izin write existing.
-    expect(compose).toContain("APP_ENV: production");
-    expect(compose).toContain('JUBELIO_STOCK_WRITES_ENABLED: "true"');
+    // Cutover sandbox yang disetujui: Node production bukan tenant production.
+    expect(compose).toContain("APP_ENV: staging");
+    expect(compose).toContain('JUBELIO_SALES_TEST_ACCOUNT_ENABLED: "true"');
+    expect(compose).toContain('JUBELIO_STOCK_WRITES_ENABLED: "false"');
     expect(compose).toContain("JUBELIO_EMAIL: ${JUBELIO_EMAIL}");
   });
 

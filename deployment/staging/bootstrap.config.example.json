@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "expectedDatabase": "qadfstore",
+  "systemConfig": {
+    "discountImport": {
+      "maxRows": 1000,
+      "maxFileBytes": 5242880,
+      "maxExpandedBytes": 26214400
+    }
+  }
+}

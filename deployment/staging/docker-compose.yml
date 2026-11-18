@@ -5,7 +5,7 @@
 #   store  — Next.js storefront  (internal :3000, behind Caddy)
 #   admin  — Next.js admin        (internal :3001, behind Caddy)
 #   caddy  — reverse proxy + auto-HTTPS (Let's Encrypt PRODUCTION)
-#   migrate — one-shot (profile: tools) — drizzle-kit migrate + seed
+#   migrate/bootstrap — one-shot (profile: tools), tanpa seed demo
 #
 # Postgres berjalan BARE-METAL di VPS (di luar compose), diakses via
 # host.docker.internal yang di-map ke host gateway lewat extra_hosts.
@@ -63,10 +63,10 @@ services:
     environment:
       <<: *pg-conn
       NODE_ENV: production
-      # NOTE (VPS staging): sengaja diset `production` + stock writes enabled —
-      # operator diizinkan memotong stok langsung ke Jubelio live dari env ini.
-      # Lihat docs/deployment-docs/jubelio-sync.md (A.1).
-      APP_ENV: production
+      # Tenant sandbox lokal; NODE_ENV tidak menentukan tenant provider.
+      APP_ENV: staging
+      APP_RELEASE: ${APP_RELEASE:?APP_RELEASE wajib diisi}
+      JUBELIO_SALES_TEST_ACCOUNT_ENABLED: "true"
       # Store hanya diakses lewat Caddy (port tidak dipublish). Caddy menimpa
       # X-Real-IP/X-Forwarded-For dengan remote_host, jadi admission checkout
       # boleh memakai IP itu; tanpa flag ini preview/place-order gagal tertutup
@@ -85,7 +85,7 @@ services:
       # Midtrans payment (sandbox for staging)
       MIDTRANS_SERVER_KEY: ${MIDTRANS_SERVER_KEY}
       MIDTRANS_CLIENT_KEY: ${MIDTRANS_CLIENT_KEY}
-      MIDTRANS_IS_PRODUCTION: ${MIDTRANS_IS_PRODUCTION:-false}
+      MIDTRANS_IS_PRODUCTION: "false"
       MIDTRANS_PAYMENT_MODE: ${MIDTRANS_PAYMENT_MODE:-snap}
       # Cron secret for the stock-reservation sweep endpoint
       # (POST /api/cron/sweep-reservations, header X-Cron-Secret).
@@ -100,11 +100,14 @@ services:
       JUBELIO_SHIPMENT_WEBHOOK_SECRET: ${JUBELIO_SHIPMENT_WEBHOOK_SECRET:-}
       JUBELIO_WEBHOOK_SECRET: ${JUBELIO_WEBHOOK_SECRET}
       JUBELIO_SYNC_CONCURRENCY: ${JUBELIO_SYNC_CONCURRENCY:-5}
-      JUBELIO_SYNC_MAX_PRODUCTS: ${JUBELIO_SYNC_MAX_PRODUCTS:-}
-      # Stock writes — live Jubelio: operator mengizinkan write langsung dari
-      # environment ini (APP_ENV=production + JUBELIO_API_BASE_URL live).
-      # Gateway production menuntut NODE_ENV=production + host api2.jubelio.com.
-      JUBELIO_STOCK_WRITES_ENABLED: "true"
+      JUBELIO_SYNC_MAX_PRODUCTS: ""
+      JUBELIO_SYNC_START_PAGE: ""
+      JUBELIO_PAYMENT_ACCOUNT_ID: ${JUBELIO_PAYMENT_ACCOUNT_ID:-}
+      JUBELIO_PAYMENT_TYPE: ${JUBELIO_PAYMENT_TYPE:-}
+      JUBELIO_ITEM_UNIT: ${JUBELIO_ITEM_UNIT:-Buah}
+      JUBELIO_ITEM_TAX_ID: ${JUBELIO_ITEM_TAX_ID:-}
+      # Direct adjustment production tidak boleh menjadi fallback staging.
+      JUBELIO_STOCK_WRITES_ENABLED: "false"
       JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID: ${JUBELIO_ADJUSTMENT_PLUS_ACCOUNT_ID:-}
       JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID: ${JUBELIO_ADJUSTMENT_MINUS_ACCOUNT_ID:-}
       JUBELIO_STOCK_TIMEOUT_MS: ${JUBELIO_STOCK_TIMEOUT_MS:-8000}
@@ -152,6 +155,8 @@ services:
     environment:
       <<: *pg-conn
       NODE_ENV: production
+      APP_ENV: staging
+      APP_RELEASE: ${APP_RELEASE:?APP_RELEASE wajib diisi}
       # Better Auth (admin) — secret MUST be identical to store's so the
       # shared-HMAC verify-pickup handshake works between admin and store.
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
@@ -168,7 +173,8 @@ services:
       JUBELIO_PASSWORD: ${JUBELIO_PASSWORD}
       JUBELIO_CHANNEL_ID: ${JUBELIO_CHANNEL_ID:-64}
       JUBELIO_SYNC_CONCURRENCY: ${JUBELIO_SYNC_CONCURRENCY:-5}
-      JUBELIO_SYNC_MAX_PRODUCTS: ${JUBELIO_SYNC_MAX_PRODUCTS:-}
+      JUBELIO_SYNC_MAX_PRODUCTS: ""
+      JUBELIO_SYNC_START_PAGE: ""
       # Shipment packing/booking uses separate credentials, never Omnichannel.
       JUBELIO_SHIPMENT_URL: ${JUBELIO_SHIPMENT_URL:-https://api-shipment.jubelio.com}
       JUBELIO_SHIPMENT_CLIENT_ID: ${JUBELIO_SHIPMENT_CLIENT_ID:-}
@@ -226,11 +232,46 @@ services:
       dockerfile: deployment/common/migrate/Dockerfile
     environment:
       <<: *pg-conn
-      NODE_ENV: staging
+      NODE_ENV: production
+      APP_ENV: staging
+      APP_RELEASE: ${APP_RELEASE:?APP_RELEASE wajib diisi}
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Safe default runs migrations only. Seed explicitly when staging data is desired:
-    # docker compose --profile tools run --rm migrate npx tsx src/seed.ts
+    # Default hanya migration resmi. Jangan gunakan seed.ts/reset.ts saat cutover.
+
+  bootstrap:
+    profiles: ["tools"]
+    logging: *journald-logging
+    build:
+      context: ../..
+      dockerfile: deployment/common/migrate/Dockerfile
+    entrypoint: ["npx", "tsx", "src/production-bootstrap.ts"]
+    command: ["preflight", "--config", "/bootstrap/bootstrap.config.json", "--phase", "before-migrate"]
+    environment:
+      <<: *pg-conn
+      NODE_ENV: production
+      APP_ENV: staging
+      APP_RELEASE: ${APP_RELEASE:?APP_RELEASE wajib diisi}
+      # Tools hanya memperoleh credentials master-read sandbox.
+      JUBELIO_API_BASE_URL: ${JUBELIO_API_BASE_URL:-https://api2.jubelio.com}
+      JUBELIO_EMAIL: ${JUBELIO_EMAIL}
+      JUBELIO_PASSWORD: ${JUBELIO_PASSWORD}
+      JUBELIO_SYNC_CONCURRENCY: ${JUBELIO_SYNC_CONCURRENCY:-2}
+      JUBELIO_SYNC_MAX_RETRIES: ${JUBELIO_SYNC_MAX_RETRIES:-5}
+      JUBELIO_SYNC_TIMEOUT_MS: ${JUBELIO_SYNC_TIMEOUT_MS:-30000}
+      JUBELIO_SYNC_REQUESTS_PER_MINUTE: ${JUBELIO_SYNC_REQUESTS_PER_MINUTE:-120}
+      JUBELIO_SYNC_MAX_PRODUCTS: ""
+      JUBELIO_SYNC_START_PAGE: ""
+    volumes:
+      - type: bind
+        source: ./bootstrap.config.json
+        target: /bootstrap/bootstrap.config.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - ${BOOTSTRAP_REPORT_DIR:-/home/ops/log/marketplace-bootstrap/staging}:/reports
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   uploads:        # shared by store + admin for /app/uploads

@@ -22,6 +22,30 @@ describe("stock-only provider observation boundary", () => {
     expect(selectObservedStock(response([{ location_id: 15, on_hand: 8, on_order: 0, available: 7 }]), requested, mapped)).toEqual([]);
   });
 
+  it.each([
+    { label: "omitted reserved", row: { location_id: 15, on_hand: 0, on_order: 1, available: -1 }, reserved: 0 },
+    { label: "explicit reserved", row: { location_id: 15, on_hand: 1, on_order: 2, reserved: 1, available: -2 }, reserved: 1 },
+  ])("normalizes consistent negative availability with $label to zero sellable units", ({ row, reserved }) => {
+    expect(selectObservedStock(response([row]), requested, mapped)).toEqual([
+      { itemId: 101, locationId: 15, onHand: row.on_hand, onOrder: row.on_order, reserved, available: 0 },
+    ]);
+  });
+
+  it.each([
+    { location_id: 15, on_hand: 0, on_order: 1, reserved: 0, available: -2 },
+    { location_id: 15, on_hand: 0, on_order: 1, available: -2 },
+    { location_id: 15, on_hand: -1, on_order: 0, reserved: 0, available: -1 },
+    { location_id: 15, on_hand: 0, on_order: 2, reserved: -1, available: -1 },
+    { location_id: 15, on_hand: 0, on_order: 1, reserved: 0, available: -0.5 },
+  ])("does not hide invalid raw stock by clamping negative availability: %j", (row) => {
+    expect(selectObservedStock(response([row]), requested, mapped)).toEqual([]);
+  });
+
+  it("still rejects duplicate negative observations instead of inventing coverage", () => {
+    const row = { location_id: 15, on_hand: 0, on_order: 1, available: -1 };
+    expect(selectObservedStock(response([row, row]), requested, mapped)).toEqual([]);
+  });
+
   it("refuses missing or malformed liability, mismatched totals and duplicate observations", () => {
     const valid = { location_id: 15, on_hand: 4, on_order: 1, reserved: 1, available: 2 };
     for (const row of [

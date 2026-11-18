@@ -166,6 +166,25 @@ the token and auto re-logins on 401. Env: `JUBELIO_EMAIL`, `JUBELIO_PASSWORD`,
    carry. The webhook path checks our DB first and only fetches the Jubelio
    tree when the product's category is actually missing.
 
+## Resume CLI tanpa mengganti jam cabang
+
+Jalur import existing tanpa `--full` mendukung `JUBELIO_SYNC_START_PAGE` dan cap kosong. Opsi `--preserve-branch-hours` mempertahankan jam cabang existing, tidak memasukkan default07:00–22:00. Tanpa opsi ini perilaku legacy tetap sama. Contoh operasional hanya untuk target/credentials yang sudah dipastikan:
+
+```bash
+JUBELIO_SYNC_START_PAGE=23 JUBELIO_SYNC_MAX_PRODUCTS= \
+  npm run db:import-jubelio -- --preserve-branch-hours
+```
+
+Ini resume halaman23→akhir, **bukan** full report dari halaman1. `--full` tetap menolak start-page>1; jangan menghapus guard atau menyatakan tail-only sebagai bukti seluruh katalog lengkap. Checkpoint adalah halaman terakhir yang produk/SKU/stoknya selesai, bukan halaman terakhir yang baru diminta. Upsert tidak menghapus atau menduplikasi data sebelumnya. Retry408 tidak berubah oleh opsi ini.
+
+Untuk container staging, Compose memaksa start/cap kosong sehingga override harus disuplai pada `compose run -e`; jangan menjalankan contoh lokal langsung ke server atau mengaktifkan importer kedua. Gunakan [runbook staging](../deployment-docs/staging-phase-2-deployment.md) dan metadata run aktual untuk source/target/monitoring.
+
+## Normalisasi stock refresh berkala
+
+`selectObservedStock()` memvalidasi series mentah sebelum menyamakan nilai sellable dengan importer. Contoh provider `on_hand=0`, `on_order=1`, `available=-1` yang konsisten dinormalisasi menjadi `available=0`; barang tetap tidak bisa dijual. `reserved` yang tidak dikirim hanya dianggap0 jika series eksplisit membuktikannya, bukan untuk menutupi liability yang belum diketahui.
+
+Normalisasi hanya dilakukan **setelah** safe-integer checks dan formula mentah `on_hand-on_order-reserved=available` lolos. On-hand/liability negatif, nilai pecahan/malformed, jumlah tidak konsisten, missing observation dan pasangan duplikat tetap ditolak. Tidak menciptakan row untuk SKU×cabang yang tidak dikirim provider, tidak mengubah data Jubelio dan tidak melepaskan local holds. Refresh yang berhasil hanya memperbarui mirror/timestamp dengan conditional-update concurrency guard existing.
+
 ## Env
 
 | Var | Purpose | Default |

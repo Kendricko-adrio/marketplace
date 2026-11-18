@@ -1,5 +1,6 @@
 export type JubelioImportOptions = {
   itemName?: string;
+  preserveBranchHours?: boolean;
   full: boolean;
   expectedDatabase?: string;
   reportFile?: string;
@@ -36,6 +37,7 @@ export function parseJubelioImportArgs(
   const options: JubelioImportOptions = {
     full: argv.includes("--full"),
   };
+  if (argv.includes("--preserve-branch-hours")) options.preserveBranchHours = true;
 
   const expectedDatabase = readInlineFlag(argv, "--expected-database");
   if (expectedDatabase !== undefined) {

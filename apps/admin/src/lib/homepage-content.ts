@@ -70,3 +70,35 @@ export function validateContent(type: string, content: unknown): unknown {
       return content;
   }
 }
+
+function isContentRecord(content: unknown): content is Record<string, unknown> {
+  return typeof content === "object" && content !== null && !Array.isArray(content);
+}
+
+/**
+ * The carousel mode the editor is working in. Only an explicit `"filter"`
+ * selects filter mode: absent content (fresh form) and legacy sections that
+ * predate the mode field are manual, because the junction table is what holds
+ * their products. The API still rejects an unknown stored mode; this helper
+ * never forwards it.
+ */
+export function resolveCarouselMode(content: unknown): "manual" | "filter" {
+  return isContentRecord(content) && content.mode === "filter"
+    ? "filter"
+    : "manual";
+}
+
+/**
+ * Builds the carousel `content` the form submits. The editor starts from
+ * `{}` and the manual picker does not write a mode, so without this the API
+ * rejects a save made straight from the default mode with
+ * "Invalid content shape for section type". Filter content and any other
+ * stored manual fields are preserved.
+ */
+export function normalizeCarouselContentForSave(
+  content: unknown
+): Record<string, unknown> {
+  if (!isContentRecord(content)) return { mode: "manual" };
+  if (content.mode === "filter") return content;
+  return { ...content, mode: "manual" };
+}

@@ -7,20 +7,20 @@
 # mengirim email yang due (maksimal empat attempt per job). Dijalankan setiap
 # menit pada deployment yang mengaktifkannya; script ini TIDAK memasang cron.
 #
-# Dipanggil oleh cron (user `ops`), bisa juga dijalankan manual untuk test.
+# Dipanggil oleh cron (staging: user `deploy`), bisa juga dijalankan manual untuk test.
 # Tugas script:
 #   1. POST ke endpoint sweep dengan header `X-Cron-Secret`. Secret dibaca dari
 #      env `CRON_SECRET` atau dari file `.env` (`--env-file`) — sehingga secret
 #      tidak perlu ditulis di crontab.
 #   2. Menambahkan satu baris hasil ke file log harian:
-#      <log-dir>/marketplace-sweep-YYYY-MM-DD.log
+#      <log-dir>/marketplace-order-comms-YYYY-MM-DD.log
 #   3. Housekeeping: menghapus file log harian yang lebih tua dari
 #      `--retention-days` (default 7 hari) supaya log tidak menumpuk.
 #
 # Pemakaian:
-#   sweep-reservations.sh --url https://dev-store.adfsport.cloud \
+#   process-order-communications.sh --url https://dev-store.adfsport.cloud \
 #     --env-file /home/ops/marketplace/deployment/staging/.env \
-#     --log-dir /home/ops/logs/marketplace-order-comms/staging
+#     --log-dir /home/ops/log/marketplace-order-comms/staging
 #
 # Konfigurasi via argumen CLI atau env var (argumen menang atas env):
 #   --url URL                  | SWEEP_URL            | URL store (wajib)

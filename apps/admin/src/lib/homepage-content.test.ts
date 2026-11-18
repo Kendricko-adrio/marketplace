@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { validateContent, productFilterSchema } from "./homepage-content";
+import {
+  validateContent,
+  productFilterSchema,
+  normalizeCarouselContentForSave,
+  resolveCarouselMode,
+} from "./homepage-content";
 
 // Backs POST /api/admin/homepage and PATCH /api/admin/homepage/{id} content
 // validation. Limits from docs/features/homepage-cms.md.
@@ -104,6 +109,47 @@ describe("validateContent", () => {
     expect(() =>
       validateContent("announcement_bar", { message: "x", variant: "loud" })
     ).toThrow();
+  });
+});
+
+// The form must send an explicit mode: the API rejects carousel content
+// without one, and the manual picker is the default UI mode (bug: selecting
+// products and saving straight from the default mode returned HTTP 400).
+describe("carousel save normalization", () => {
+  it("adds manual mode to empty content from a fresh form", () => {
+    expect(normalizeCarouselContentForSave({})).toEqual({ mode: "manual" });
+    expect(resolveCarouselMode({})).toBe("manual");
+  });
+
+  it("keeps a filter-mode carousel untouched", () => {
+    const content = {
+      mode: "filter",
+      filter: { brand: "puma" },
+      limit: 8,
+    };
+    expect(resolveCarouselMode(content)).toBe("filter");
+    expect(normalizeCarouselContentForSave(content)).toEqual(content);
+  });
+
+  it("preserves other manual fields while adding the mode", () => {
+    expect(normalizeCarouselContentForSave({ limit: 5 })).toEqual({
+      mode: "manual",
+      limit: 5,
+    });
+  });
+
+  it("treats an unknown stored mode as manual instead of forwarding it", () => {
+    expect(resolveCarouselMode({ mode: "bogus" })).toBe("manual");
+    expect(
+      normalizeCarouselContentForSave({ mode: "bogus", limit: 3 })
+    ).toEqual({ mode: "manual", limit: 3 });
+  });
+
+  it("normalizes non-object content to manual mode", () => {
+    expect(normalizeCarouselContentForSave(null)).toEqual({ mode: "manual" });
+    expect(normalizeCarouselContentForSave(undefined)).toEqual({
+      mode: "manual",
+    });
   });
 });
 

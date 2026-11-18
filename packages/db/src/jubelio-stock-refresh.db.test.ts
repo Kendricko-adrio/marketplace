@@ -15,6 +15,7 @@ const db = drizzle(pool, { schema });
 const prefix = "refresh-test-";
 const id = 9_998_877;
 let previousCursor: string | undefined;
+let capturedCursor = false;
 
 async function fixture() {
   await pool.query("DELETE FROM product WHERE id = $1", [prefix + "product"]);
@@ -24,7 +25,10 @@ async function fixture() {
   await pool.query("INSERT INTO branch (id,name,code,city,address,jubelio_location_id) VALUES ($1,'Stock refresh','REFRESH-TEST','Test','Test',$2)", [prefix + "branch", id]);
   await pool.query("INSERT INTO branch_stock (branch_id,product_variant_id,stock,available_stock,pending_remote_stock,provider_stock_synced_at) VALUES ($1,$2,5,5,1,NOW() - INTERVAL '16 minutes')", [prefix + "branch", prefix + "variant"]);
   const cursor = await pool.query("SELECT value FROM system_config WHERE key = 'jubelio.stockRefreshCursor'");
-  previousCursor = cursor.rows[0]?.value;
+  if (!capturedCursor) {
+    previousCursor = cursor.rows[0]?.value;
+    capturedCursor = true;
+  }
   await pool.query("INSERT INTO system_config (key,value) VALUES ('jubelio.stockRefreshCursor',$1) ON CONFLICT (key) DO UPDATE SET value = excluded.value", [String(id - 1)]);
 }
 const getRow = async () => (await pool.query("SELECT * FROM branch_stock WHERE branch_id = $1", [prefix + "branch"])).rows[0];
@@ -66,6 +70,26 @@ describe("stock-only refresh against PostgreSQL", () => {
     const again = await refreshMappedJubelioStock(db, { maxPages: 1, fetch: async () => good() });
     expect(again.observed).toBe(1);
     expect((await getRow()).pending_remote_stock).toBe(2);
+  });
+
+  it.skipIf(!reachable)("refreshes a consistent negative available as zero without releasing local holds", async () => {
+    await fixture();
+    const before = await getRow();
+    const result = await refreshMappedJubelioStock(db, { maxPages: 1, fetch: async () => ({
+      locations: [{ location_id: id, location_name: "Test" }],
+      data: [{ item_id: id, location_stocks: [{ location_id: id, on_hand: 0, on_order: 1, available: -1 }] }],
+    }) });
+    expect(result).toEqual({ pages: 1, items: 1, observed: 1, missing: 0, failed: 0 });
+    const row = await getRow();
+    expect(row.stock).toBe(0);
+    expect(row.on_order_stock).toBe(1);
+    expect(row.provider_reserved_stock).toBe(0);
+    expect(row.available_stock).toBe(0);
+    expect(row.pending_remote_stock).toBe(1);
+    expect(row.reserved_stock).toBe(before.reserved_stock);
+    expect(row.provider_stock_synced_at.getTime()).toBeGreaterThan(before.provider_stock_synced_at.getTime());
+    expect(isFreshStockSnapshot(row.provider_stock_synced_at)).toBe(true);
+    expect(sellableUnits({ availableStock: row.available_stock, pendingRemoteStock: row.pending_remote_stock })).toBe(0);
   });
 });
 

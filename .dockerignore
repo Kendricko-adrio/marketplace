@@ -18,7 +18,20 @@
 # Env files — NEVER leak secrets into image
 .env
 .env.*
+**/.env
+**/.env.*
 !.env.example
+!**/.env.example
+
+# Manifest aktual dan secret operasional tidak boleh menjadi build input.
+**/bootstrap.config*.json
+!**/bootstrap.config.example.json
+**/secrets
+**/*.password
+**/*.secret
+.scratch
+playwright
+.pi
 
 # Docker build artifacts
 deployment/staging/caddy/data

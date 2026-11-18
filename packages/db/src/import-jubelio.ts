@@ -120,7 +120,7 @@ async function runFullImport(): Promise<number> {
 }
 
 async function runDevelopmentImport(): Promise<void> {
-  const { itemName } = parseJubelioImportArgs(rawArgv);
+  const { itemName, preserveBranchHours } = parseJubelioImportArgs(rawArgv);
   const concurrency = Math.max(
     1,
     Number(process.env.JUBELIO_SYNC_CONCURRENCY || 5)
@@ -135,7 +135,7 @@ async function runDevelopmentImport(): Promise<void> {
   console.log(
     `🔧 concurrency=${concurrency} | maxProducts=${
       cap === Infinity ? "ALL" : cap
-    } | startPage=${startPage}${
+    } | startPage=${startPage} | preserveBranchHours=${preserveBranchHours === true}${
       itemName ? ` | exactItemName="${itemName}"` : ""
     }`
   );
@@ -155,7 +155,7 @@ async function runDevelopmentImport(): Promise<void> {
     const branchCount = await upsertJubelioBranches(db, locations, {
       onProgress: logProgress,
       // All locations are imported; status mirrors Jubelio is_active.
-      operatingHours: {
+      operatingHours: preserveBranchHours ? undefined : {
         monday: { open: "07:00", close: "22:00" },
         tuesday: { open: "07:00", close: "22:00" },
         wednesday: { open: "07:00", close: "22:00" },

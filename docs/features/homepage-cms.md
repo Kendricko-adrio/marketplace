@@ -68,6 +68,11 @@ covers how the homepage CMS uses it.
   when `type === "carousel_product"` **and** `mode !== "filter"`.
 - `PATCH` clears and re-inserts junction rows when `productIds` is provided
   (again skipped in filter mode).
+- The admin form always submits an explicit carousel `mode`: content without
+  a mode (fresh form, legacy manual sections) is normalized to `"manual"` by
+  `normalizeCarouselContentForSave` before the request, so saving straight
+  from the default picker works. The API validator is unchanged and still
+  rejects an unknown mode.
 
 ### Image lifecycle
 
@@ -91,6 +96,16 @@ covers how the homepage CMS uses it.
 - `preview-products` forwards a whitelist of filter params to the storefront
   `/api/products` (server-to-server, no CORS) so the admin editor can preview
   filter-mode results.
+- Manual mode needs no extra endpoint: the editor caches the rows the product
+  picker already loaded and resolves a saved pick the picker never loaded
+  (e.g. reopening a section) through `GET /api/admin/products/{id}`, at most
+  four lookups at a time. Cards follow the pick order, so paging or searching
+  the picker never changes the preview, and the inline "Preview Produk Pilihan"
+  block and the "Preview Section" dialog render the same cards. A product the
+  admin may not see (403/404) is reported as unavailable without disclosing the
+  reason; a transient failure keeps the pick and offers "Coba lagi".
+  Cards hydrated from the detail endpoint have no gender/collection label —
+  only the picker rows carry the resolved names.
 - The admin preview page (`/admin/homepage/preview`) rewrites `/uploads/...`
   image paths to the store origin (`toStoreUrl`) because the admin app does
   not serve them, and renders with `preview` mode (announcement bar not
@@ -122,6 +137,10 @@ covers how the homepage CMS uses it.
   forms (`BannerSectionForm`, `CarouselProductSectionForm`,
   `PromoCardsSectionForm`, `AnnouncementBarSectionForm`,
   `StoreBannerSectionForm`).
+- `CarouselProductSectionForm` manual mode renders "Preview Produk Pilihan"
+  under "Urutan Tampil"; `useCarouselManualPreview` (with the pure helpers in
+  `apps/admin/src/lib/carousel-manual-preview.ts`) owns the card cache and
+  lookup state, and `HomepageSectionForm` shares those cards with the dialog.
 - `ProductFilterEditor` — shared filter editor used by carousel filter mode
   and per promo card: search, category, brand, sort, price range,
   hasDiscount (brand sourced from `/api/admin/brands`; `showBrand` /
@@ -158,10 +177,13 @@ covers how the homepage CMS uses it.
 - Admin: create each section type → edit → toggle active → reorder via drag →
   delete; check the list reflects changes and the preview page renders both
   active and inactive (badge "Nonaktif").
-- Carousel manual: pick products → save → storefront shows them in order;
-  switch to filter mode with brand/sort/hasDiscount → save → storefront
-  carousel matches `/products` results for the same filter (see
-  [product-filters.md](product-filters.md)).
+- Carousel manual: pick products (including one from another picker page) →
+  the inline preview shows them in pick order → reorder → save → storefront
+  shows them in order; reopen the editor and the preview still shows them
+  without searching. Switch to filter mode with brand/sort/hasDiscount → save →
+  storefront carousel matches `/products` results for the same filter (see
+  [product-filters.md](product-filters.md)). Automated coverage:
+  `e2e/admin/homepage-carousel-manual-mock.spec.ts`.
 - Promo cards: card with a filter links to `/products?brand=…` with
   the right results; card without a filter is not clickable.
 - Image cleanup: replace a banner slide image → the old file disappears from

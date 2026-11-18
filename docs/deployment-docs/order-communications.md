@@ -16,6 +16,14 @@ untuk kontrak perilaku.
    `NEXT_PUBLIC_APP_URL` menunjuk origin storefront yang benar — link email
    memakai nilai itu, bukan origin admin.
 
+## Cutover staging fase 2
+
+Ikuti [runbook sandbox/data baru](staging-phase-2-deployment.md). Scheduler staging
+milik user `deploy`, log `/home/ops/log/marketplace-order-comms/staging` (bukan
+`/home/ops/logs`). Pasang setelah tenant sandbox dan DB bersih terbukti; tidak
+menambahkan order/email fixture untuk menguji cron. Dua eksekusi scheduler no-op
+membuktikan transport/job, bukan actual email delivery atau settlement provider.
+
 ## Wrapper dan jadwal
 
 | Berkas | Isi |

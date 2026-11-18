@@ -1,0 +1,2 @@
+# Crontab user deploy; pasang setelah DB bersih dan sandbox terverifikasi.
+* * * * * /home/ops/marketplace/deployment/common/cron/sweep-reservations.sh --url https://dev-store.adfsport.cloud --env-file /home/ops/marketplace/deployment/staging/.env --log-dir /home/ops/log/marketplace-sweep/staging

@@ -20,7 +20,9 @@ import type {
   ProductFilterConfig,
 } from "@marketplace/ui";
 import { toStoreUrl } from "@/lib/store-url";
+import { PREVIEW_COPY } from "@/lib/carousel-manual-preview";
 import ProductFilterEditor from "./ProductFilterEditor";
+import type { CarouselManualPreview } from "./use-carousel-manual-preview";
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 20;
@@ -32,9 +34,18 @@ interface CarouselProductSectionFormProps {
   onChange: (content: unknown) => void;
   selectedProductIds: string[];
   onSelectedIdsChange: (ids: string[]) => void;
+  /**
+   * Cards for the manual-mode preview, resolved by the parent form from the
+   * picks plus the rows this picker has loaded. Rendering them here keeps the
+   * preview next to the order editor; the parent reuses the same cards for the
+   * "Preview Section" dialog.
+   */
+  preview: CarouselManualPreview;
+  /** Reports the rows of the current picker page so the parent can cache them. */
+  onLoadedProducts?: (rows: AdminProduct[]) => void;
 }
 
-interface AdminProduct {
+export interface AdminProduct {
   id: string;
   name: string;
   slug: string;
@@ -82,6 +93,8 @@ export default function CarouselProductSectionForm({
   onChange,
   selectedProductIds,
   onSelectedIdsChange,
+  preview,
+  onLoadedProducts,
 }: CarouselProductSectionFormProps) {
   const carousel = normalizeContent(content);
   const mode = carousel.mode;
@@ -112,6 +125,9 @@ export default function CarouselProductSectionForm({
         const data: AdminProductsResponse = await res.json();
         if (data.success) {
           setAllProducts(data.data);
+          // These rows are already cards' worth of data; handing them to the
+          // parent keeps picks visible after the admin changes page or search.
+          onLoadedProducts?.(data.data);
           if (data.pagination) {
             setTotalPages(data.pagination.totalPages);
             setTotal(data.pagination.total);
@@ -124,7 +140,7 @@ export default function CarouselProductSectionForm({
       }
     };
     fetchProducts();
-  }, [mode, page, search]);
+  }, [mode, page, search, onLoadedProducts]);
 
   // Fetch preview sample whenever filter/limit changes (filter mode only)
   useEffect(() => {
@@ -211,27 +227,6 @@ export default function CarouselProductSectionForm({
     onSelectedIdsChange(newIds);
   };
 
-  const selectedPreviewProducts: HomepageProduct[] = selectedProductIds
-    .map((id): HomepageProduct | null => {
-      // We only have full product info for currently-loaded page; cross-page selections
-      // are preserved as id-only entries without a card preview.
-      const p = allProducts.find((ap) => ap.id === id);
-      if (!p) return null;
-      const variant = p.variants?.find((v) => v.isDefault);
-      const price = variant?.price ?? p.basePrice;
-      return {
-        id: p.id,
-        name: p.name,
-        slug: p.slug,
-        price: parseFloat(price),
-        basePrice: parseFloat(p.basePrice),
-        image: toStoreUrl(p.images?.[0]?.url) || null,
-        collection: p.collection ?? null,
-        gender: p.gender ?? null,
-      };
-    })
-    .filter((x): x is HomepageProduct => x !== null);
-
   const previewSection: HomepageSectionData = {
     id: "preview",
     type: "carousel_product",
@@ -240,7 +235,18 @@ export default function CarouselProductSectionForm({
     content: {},
     displayOrder: 0,
     isActive: true,
-    products: mode === "manual" ? selectedPreviewProducts : previewProducts,
+    products: previewProducts,
+  };
+
+  const manualPreviewSection: HomepageSectionData = {
+    id: "manual-preview",
+    type: "carousel_product",
+    title: null,
+    subtitle: null,
+    content: {},
+    displayOrder: 0,
+    isActive: true,
+    products: preview.products,
   };
 
   return (
@@ -376,8 +382,10 @@ export default function CarouselProductSectionForm({
               <Label>Urutan Tampil ({selectedProductIds.length} produk dipilih)</Label>
               <div className="space-y-1">
                 {selectedProductIds.map((id, index) => {
-                  // Look up name from any loaded page we still hold in state.
+                  // Name comes from the resolved preview card, so picks made on
+                  // another picker page still read as products, not ids.
                   const product = allProducts.find((p) => p.id === id);
+                  const previewName = preview.products.find((p) => p.id === id)?.name;
                   return (
                     <div
                       key={id}
@@ -387,13 +395,14 @@ export default function CarouselProductSectionForm({
                         {index + 1}
                       </span>
                       <span className="flex-1 truncate">
-                        {product?.name ?? id}
+                        {previewName ?? product?.name ?? id}
                       </span>
                       <Button
                         type="button"
                         variant="ghost"
                         size="icon"
                         className="h-6 w-6"
+                        aria-label={`Naikkan urutan ${previewName ?? product?.name ?? id}`}
                         onClick={() => moveUp(index)}
                         disabled={index === 0}
                       >
@@ -404,6 +413,7 @@ export default function CarouselProductSectionForm({
                         variant="ghost"
                         size="icon"
                         className="h-6 w-6"
+                        aria-label={`Turunkan urutan ${previewName ?? product?.name ?? id}`}
                         onClick={() => moveDown(index)}
                         disabled={index === selectedProductIds.length - 1}
                       >
@@ -418,6 +428,55 @@ export default function CarouselProductSectionForm({
               </p>
             </div>
           )}
+
+          <div className="rounded-lg border bg-card p-4 space-y-2">
+            <p className="text-xs text-muted-foreground">Preview Produk Pilihan</p>
+            {preview.status === "loading" && (
+              <p
+                className="flex items-center gap-2 text-xs text-muted-foreground"
+                role="status"
+              >
+                <Loader2 className="h-4 w-4 animate-spin" /> {PREVIEW_COPY.loading}
+              </p>
+            )}
+            {preview.products.length > 0 && (
+              <div
+                className="rounded-md overflow-hidden"
+                data-testid="carousel-manual-preview"
+              >
+                <CarouselProductSection section={manualPreviewSection} preview />
+              </div>
+            )}
+            {preview.status === "empty" && (
+              <p className="text-sm text-muted-foreground">{PREVIEW_COPY.empty}</p>
+            )}
+            {preview.products.length === 0 &&
+              preview.status !== "loading" &&
+              preview.status !== "empty" &&
+              preview.message && (
+                <p className="text-sm text-muted-foreground" role="status">
+                  {preview.message}
+                </p>
+              )}
+            {preview.status === "partial" && preview.message && (
+              <p className="text-xs text-muted-foreground" role="status">
+                {preview.message}
+              </p>
+            )}
+            {preview.status === "ready" && preview.products.length > 0 && (
+              <p className="text-xs text-muted-foreground">{PREVIEW_COPY.ready}</p>
+            )}
+            {preview.canRetry && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={preview.retry}
+              >
+                Coba lagi
+              </Button>
+            )}
+          </div>
         </>
       ) : (
         <>

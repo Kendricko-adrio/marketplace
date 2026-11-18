@@ -44,17 +44,14 @@ JUBELIO_STOCK_MAX_QUEUED=1000
 JUBELIO_STOCK_QUEUE_TIMEOUT_MS=5000
 ```
 
-> **KONFIGURASI VPS STAGING SAAT INI (sengaja menyimpang dari default
-> repo):** di server, `deployment/staging/docker-compose.yml` di-set
-> `APP_ENV=production` + `JUBELIO_STOCK_WRITES_ENABLED=true` — keputusan
-> operasional karena operator **diizinkan memotong stok langsung ke
-> Jubelio live** dari environment ini. Konsekuensinya: checkout di staging
-> mengurangi stok Jubelio **nyata**; perlakukan staging seperti production
-> untuk alur stok (uji data disposable jangan menyentuh alur checkout
-> stok). Gateway live tetap menuntut `NODE_ENV=production` + host HTTPS
-> `https://api2.jubelio.com`. Konfigurasi repo staging tetap memakai mode dan
-> izin write tersebut; penghapusan mock tidak mengubahnya. Keadaan server
-> harus diverifikasi operator secara terpisah, bukan diasumsikan dari repo.
+> **Riwayat staging-live, bukan izin saat ini:** staging lama memakai
+> `APP_ENV=production` dan credential production. Cutover fase 2 menggantinya
+> dengan sandbox dari env lokal; credential server lama **tidak boleh** dipakai
+> untuk login/GET/write. Compose staging kini memakai `APP_ENV=staging`,
+> `NODE_ENV=production`, test-account opt-in dan direct stock-write `false`.
+> Host API yang sama bukan bukti tenant sama. Ikuti
+> [runbook staging fase 2](staging-phase-2-deployment.md); status runtime aktual
+> harus dibuktikan melalui perbandingan secret terfilter dan evidence deployment.
 
 Production sets `APP_ENV=production`, but live writes remain disabled until
 this explicit value is changed and the store container is restarted:
@@ -78,9 +75,10 @@ kecuali `JUBELIO_SALES_TEST_ACCOUNT_ENABLED=true` dengan URL eksplisit
 isolasinya telah dikonfirmasi. Jalur production tetap menuntut
 `APP_ENV=production`, `NODE_ENV=production`, URL tersebut, serta
 `JUBELIO_STOCK_WRITES_ENABLED=true`; flag akun test tidak dapat melewatinya.
-Jangan tambahkan flag akun test ke Compose production. Compose staging tidak
-meneruskannya dan tetap memakai pengaturan write mode production (lihat
-peringatan di atas). Fixture testing bukan pengaman koneksi staging.
+Jangan tambahkan flag akun test ke Compose production. Compose staging meneruskan
+opt-in test-account secara eksplisit setelah credentials sandbox diverifikasi;
+mode production stock-write tidak menjadi fallback. Fixture testing bukan
+pengaman koneksi staging.
 
 Pengaman konfigurasi bukan approval go-live. Isolasi akun test harus dikonfirmasi
 pemilik akun, bukan disimpulkan dari hostname. Mock hanya tersedia melalui
@@ -113,7 +111,11 @@ Host cron templates: `deployment/staging/stock-refresh.cron` and
 `deployment/production/stock-refresh.cron`. Install as user `deploy` after
 migration 0022 and owner deployment approval, using
 `deployment/common/cron/refresh-jubelio-stock.sh` (reads the same CRON_SECRET
-as the store, `flock` avoids overlap, logs HTTP failures). Check logs under
+as the store, `flock` avoids overlap, logs HTTP failures). Wrapper mendukung
+`--runs 1..12` (default 1), serial di bawah satu lock; kapasitas staging ditetapkan
+`max(1, ceil(eligibleIds / 20000))` dan diverifikasi dengan freshness seluruh mapped
+pairs. Jadwal host staging 02:00 UTC. Manual run bukan bukti scheduler harian.
+Check logs under
 `/home/ops/log/marketplace-stock-refresh/<environment>/` and alert on any
 FAIL, incomplete 503, overlapping run, or mapped positive row older than
 one day. Check age with:

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Loader2, Eye } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -28,11 +28,18 @@ import {
   type CarouselContent,
 } from "@marketplace/ui";
 import BannerSectionForm from "./BannerSectionForm";
-import CarouselProductSectionForm from "./CarouselProductSectionForm";
+import CarouselProductSectionForm, {
+  type AdminProduct,
+} from "./CarouselProductSectionForm";
+import { useCarouselManualPreview } from "./use-carousel-manual-preview";
 import PromoCardsSectionForm from "./PromoCardsSectionForm";
 import AnnouncementBarSectionForm from "./AnnouncementBarSectionForm";
 import StoreBannerSectionForm from "./StoreBannerSectionForm";
 import { toStoreUrl } from "@/lib/store-url";
+import {
+  normalizeCarouselContentForSave,
+  resolveCarouselMode,
+} from "@/lib/homepage-content";
 
 interface HomepageSectionFormProps {
   mode: "create" | "edit";
@@ -48,15 +55,6 @@ interface HomepageSectionFormProps {
     products?: { id: string; name: string; slug: string; displayOrder: number }[];
   };
   onSubmit: (data: Record<string, unknown>) => Promise<void>;
-}
-
-interface AdminProduct {
-  id: string;
-  name: string;
-  slug: string;
-  basePrice: string;
-  variants?: { id: string; price: string; isDefault: boolean }[];
-  images?: { url: string }[];
 }
 
 interface StoreProduct {
@@ -111,6 +109,22 @@ export default function HomepageSectionForm({
   // Preview branches for store_banner modal — fetched when the modal opens.
   const [previewBranches, setPreviewBranches] = useState<HomepageBranch[]>([]);
   const [previewBranchesLoading, setPreviewBranchesLoading] = useState(false);
+  // Rows the product picker has loaded. They become preview cards without an
+  // extra lookup and stay cached after the admin changes picker page/search.
+  const [pickerRows, setPickerRows] = useState<AdminProduct[]>([]);
+  const handleLoadedProducts = useCallback((rows: AdminProduct[]) => {
+    setPickerRows((previous) => {
+      const known = new Set(previous.map((row) => row.id));
+      const added = rows.filter((row) => !known.has(row.id));
+      return added.length > 0 ? [...previous, ...added] : previous;
+    });
+  }, []);
+  const carouselMode = resolveCarouselMode(content);
+  const manualPreview = useCarouselManualPreview({
+    enabled: type === "carousel_product" && carouselMode === "manual",
+    ids: productIds,
+    seedRows: pickerRows,
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -125,14 +139,13 @@ export default function HomepageSectionForm({
         isActive,
       };
       if (type === "carousel_product") {
-        const carouselContent = (content ?? {}) as Partial<CarouselContent>;
-        if (carouselContent.mode === "filter") {
-          // Filter mode: don't send productIds — clear them so the API empties the junction.
-          payload.productIds = [];
-        } else {
-          // Manual mode: send the selected product ids.
-          payload.productIds = productIds;
-        }
+        // The editor starts from an empty object in manual mode and the picker
+        // does not write a mode, while the API rejects carousel content without
+        // one. Normalize here so saving from the default mode works.
+        const carouselContent = normalizeCarouselContentForSave(content);
+        payload.content = carouselContent;
+        payload.productIds =
+          resolveCarouselMode(carouselContent) === "filter" ? [] : productIds;
       }
       await onSubmit(payload);
       toast.success(
@@ -194,9 +207,11 @@ export default function HomepageSectionForm({
       displayOrder: 0,
       isActive: true,
     };
-    // For carousel sections, attach preview products (fetched on modal open).
+    // For carousel sections, attach preview products: the same resolved cards
+    // the inline manual preview shows, or the filter sample.
     if (type === "carousel_product") {
-      section.products = previewProducts;
+      section.products =
+        carouselMode === "manual" ? manualPreview.products : previewProducts;
     }
     // For store_banner sections, attach preview branches (fetched on modal
     // open). Without this the renderer receives no branches and renders null.
@@ -219,57 +234,32 @@ export default function HomepageSectionForm({
       setPreviewLoading(true);
       try {
         const carouselContent = (content ?? {}) as Partial<CarouselContent>;
-        if (carouselContent.mode === "filter") {
-          // Filter mode: query the admin-side proxy that forwards to the
-          // store /api/products endpoint with the saved filter + limit.
-          const filter = carouselContent.filter ?? {};
-          const limit = carouselContent.limit ?? 10;
-          const qs = buildStoreFilterQuery(filter, limit);
-          const res = await fetch(`/api/admin/homepage/preview-products?${qs}`, {
-            cache: "no-store",
-          });
-          const data: StoreProductsResponse = await res.json();
-          if (!cancelled && data.success) {
-            setPreviewProducts(
-              data.data.map((p) => ({
-                id: p.id,
-                name: p.name,
-                slug: p.slug,
-                price: parseFloat(p.price),
-                basePrice: parseFloat(p.basePrice),
-                image: p.image ? toStoreUrl(p.image) : null,
-              }))
-            );
-          }
-        } else {
-          // Manual mode: hydrate preview products from the admin products API
-          // using the selected product ids (preserve their order).
-          if (productIds.length === 0) {
-            setPreviewProducts([]);
-            return;
-          }
-          const res = await fetch(`/api/admin/products?limit=100`, { cache: "no-store" });
-          const data: { success: boolean; data: AdminProduct[] } = await res.json();
-          if (!cancelled && data.success) {
-            // Preserve selected order from productIds.
-            const map = new Map(data.data.map((p) => [p.id, p]));
-            const products: HomepageProduct[] = [];
-            for (const id of productIds) {
-              const p = map.get(id);
-              if (!p) continue;
-              const variant = p.variants?.find((v) => v.isDefault);
-              const price = variant?.price ?? p.basePrice;
-              products.push({
-                id: p.id,
-                name: p.name,
-                slug: p.slug,
-                price: parseFloat(price),
-                basePrice: parseFloat(p.basePrice),
-                image: toStoreUrl(p.images?.[0]?.url) || null,
-              });
-            }
-            setPreviewProducts(products);
-          }
+        // Manual mode needs no fetch here: the inline preview already resolved
+        // the same cards (ordered picks), and the renderer below reads them.
+        if (carouselContent.mode !== "filter") {
+          setPreviewProducts([]);
+          return;
+        }
+        // Filter mode: query the admin-side proxy that forwards to the
+        // store /api/products endpoint with the saved filter + limit.
+        const filter = carouselContent.filter ?? {};
+        const limit = carouselContent.limit ?? 10;
+        const qs = buildStoreFilterQuery(filter, limit);
+        const res = await fetch(`/api/admin/homepage/preview-products?${qs}`, {
+          cache: "no-store",
+        });
+        const data: StoreProductsResponse = await res.json();
+        if (!cancelled && data.success) {
+          setPreviewProducts(
+            data.data.map((p) => ({
+              id: p.id,
+              name: p.name,
+              slug: p.slug,
+              price: parseFloat(p.price),
+              basePrice: parseFloat(p.basePrice),
+              image: p.image ? toStoreUrl(p.image) : null,
+            }))
+          );
         }
       } catch (error) {
         console.error("Error fetching preview products:", error);
@@ -388,6 +378,8 @@ export default function HomepageSectionForm({
               onChange={setContent}
               selectedProductIds={productIds}
               onSelectedIdsChange={setProductIds}
+              preview={manualPreview}
+              onLoadedProducts={handleLoadedProducts}
             />
           )}
           {type === "promo_cards" && (
@@ -440,7 +432,10 @@ export default function HomepageSectionForm({
             <DialogTitle>Preview Section</DialogTitle>
           </DialogHeader>
           <div className="flex-1 overflow-y-auto bg-background">
-            {type === "carousel_product" && previewLoading ? (
+            {type === "carousel_product" &&
+            (carouselMode === "filter"
+              ? previewLoading
+              : manualPreview.status === "loading") ? (
               <div className="flex flex-col items-center justify-center py-20 gap-3">
                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                 <p className="text-sm text-muted-foreground">
@@ -448,13 +443,28 @@ export default function HomepageSectionForm({
                 </p>
               </div>
             ) : type === "carousel_product" &&
-              previewProducts.length === 0 ? (
+              (carouselMode === "filter"
+                ? previewProducts.length === 0
+                : manualPreview.products.length === 0) ? (
               <div className="flex flex-col items-center justify-center py-20 gap-2 text-center px-4">
                 <p className="text-sm text-muted-foreground">
-                  {((content ?? {}) as Partial<CarouselContent>).mode === "filter"
+                  {carouselMode === "filter"
                     ? "Tidak ada produk yang cocok dengan filter. Sesuaikan filter atau limit lalu coba lagi."
-                    : "Belum ada produk yang dipilih. Pilih produk di form terlebih dahulu."}
+                    : (manualPreview.message ??
+                      "Belum ada produk yang dipilih. Pilih produk di form terlebih dahulu.")}
                 </p>
+                {type === "carousel_product" &&
+                  carouselMode === "manual" &&
+                  manualPreview.canRetry && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={manualPreview.retry}
+                    >
+                      Coba lagi
+                    </Button>
+                  )}
               </div>
             ) : type === "store_banner" && previewBranchesLoading ? (
               <div className="flex flex-col items-center justify-center py-20 gap-3">

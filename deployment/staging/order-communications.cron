@@ -8,4 +8,4 @@
 # Setiap menit: polling mengambil batch terbatas (urutan due-time/id stabil) dan
 # mengecualikan pekerjaan yang sudah sent/failed/superseded, sehingga retry lima
 # menit dan sisa attempt tetap terhormati.
-* * * * * /home/ops/marketplace/deployment/common/cron/process-order-communications.sh --url https://dev-store.adfsport.cloud --env-file /home/ops/marketplace/deployment/staging/.env --log-dir /home/ops/logs/marketplace-order-comms/staging
+* * * * * /home/ops/marketplace/deployment/common/cron/process-order-communications.sh --url https://dev-store.adfsport.cloud --env-file /home/ops/marketplace/deployment/staging/.env --log-dir /home/ops/log/marketplace-order-comms/staging

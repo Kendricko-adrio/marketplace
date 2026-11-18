@@ -18,6 +18,13 @@ const CLEAN_FULL_ENV = {
 };
 
 describe("Jubelio item-name import options", () => {
+  it("resume CLI dapat meminta jam cabang dipertahankan tanpa mengubah mode full", () => {
+    expect(parseJubelioImportArgs(["--preserve-branch-hours"])).toEqual({
+      full: false,
+      preserveBranchHours: true,
+    });
+  });
+
   it("reads the exact product name from the public CLI option", () => {
     expect(parseJubelioImportArgs(["--item-name=Wild Glide 38"])).toEqual({
       itemName: "Wild Glide 38",

@@ -30,9 +30,13 @@ export function selectObservedStock(resp: unknown, requested: ReadonlySet<number
       // explicit available and both other series prove it; do not mask a
       // positive unreported provider liability.
       const reserved = row.reserved ?? (onHand === undefined || onOrder === undefined || available === undefined || onHand - onOrder !== available ? NaN : 0);
-      const good = [onHand, onOrder, reserved, available].every((n) => Number.isSafeInteger(n) && n! >= 0);
+      const good = [onHand, onOrder, reserved].every((n) => Number.isSafeInteger(n) && n! >= 0)
+        && Number.isSafeInteger(available);
+      // Validate the raw signed observation before clamping. A consistent
+      // negative available is zero sellable, as in the catalog importer;
+      // clamping first would hide mismatched totals or missing liabilities.
       if (!good || onHand! - onOrder! - reserved !== available) { seen.set(key, null); continue; }
-      seen.set(key, { itemId: item.item_id, locationId: row.location_id, onHand: onHand!, onOrder: onOrder!, reserved, available: available! });
+      seen.set(key, { itemId: item.item_id, locationId: row.location_id, onHand: onHand!, onOrder: onOrder!, reserved, available: Math.max(0, available!) });
     }
   }
   return [...seen.values()].filter((row): row is Observation => row !== null);

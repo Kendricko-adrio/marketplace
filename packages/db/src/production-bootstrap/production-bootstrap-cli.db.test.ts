@@ -174,7 +174,10 @@ describeDb("production bootstrap CLI (disposable database)", () => {
     expect(result.output).toContain("PRODUCTION_TARGET_MISMATCH");
   });
 
-  it("accepts the migrated release in the after-migrate preflight", () => {
+  it.each([
+    { APP_ENV: "production", NODE_ENV: "production" },
+    { APP_ENV: "staging", NODE_ENV: "production" },
+  ])("accepts the migrated release in the after-migrate preflight: %o", (environment) => {
     const config = writeConfig();
     const result = runCli([
       "preflight",
@@ -182,7 +185,7 @@ describeDb("production bootstrap CLI (disposable database)", () => {
       config,
       "--phase",
       "after-migrate",
-    ]);
+    ], environment);
 
     expect(result.output).toContain("PREFLIGHT_OK");
     expect(result.status).toBe(0);

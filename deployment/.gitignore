@@ -2,6 +2,16 @@
 # Template `.env.example` tetap di-commit (di-reinclude oleh root .gitignore).
 staging/.env
 production/.env
+staging/.env.*
+!staging/.env.example
+
+# Manifest aktual staging dan secret bootstrap tidak boleh masuk Git.
+staging/bootstrap.config.json
+staging/bootstrap.config.*.json
+!staging/bootstrap.config.example.json
+staging/secrets/
+staging/*.password
+staging/*.secret
 
 # Manifest bootstrap production yang sudah terisi (non-secret, tetap lokal).
 # Template bootstrap.config.example.json tetap di-commit.

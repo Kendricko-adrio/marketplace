@@ -62,6 +62,13 @@ deployment/
 | 23 | [order-communications.md](order-communications.md) | Cron komunikasi order (proyeksi fakta + antrean email/retry) |
 | 24 | [first-production-deployment.md](first-production-deployment.md) | Bootstrap production pertama: preflight → migrate → seed referensi → Owner → full import Jubelio → verifier, recovery dan gate go-live |
 
+## Cutover staging fase 2
+
+Untuk upgrade staging lama ke tenant sandbox dengan data baru, ikuti
+[deployment staging fase 2](staging-phase-2-deployment.md). Quick start di bawah
+bukan prosedur cutover: jangan menyalakan aplikasi sebelum migration/config siap,
+dan jangan memakai seed demo atau credentials Jubelio server lama.
+
 ## Quick start (staging)
 
 ```bash

@@ -4,6 +4,11 @@ Semua perintah di bawah dijalankan dari folder env (`deployment/staging` atau
 `deployment/production`). Contoh pakai staging; ganti `staging` → `production`
 dan `--env-file .env` (di folder production) untuk production.
 
+> **Cutover staging fase 2:** gunakan [runbook sandbox/data baru](staging-phase-2-deployment.md),
+> bukan urutan redeploy/seed/reset umum di bawah. Credential Jubelio server lama
+> tidak boleh digunakan. Writer/jobs berhenti sebelum migration/reset; checkout
+> tetap paused sampai input operasional dan konfirmasi aktivasi lengkap.
+
 ## Re-deploy setelah ada update code
 
 ```bash

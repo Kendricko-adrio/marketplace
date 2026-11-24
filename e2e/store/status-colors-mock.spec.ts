@@ -270,8 +270,8 @@ async function openHistory(page: Page) {
       json: { success: true, data: HISTORY.map(listOrder) },
     });
   });
-  await page.goto("/account");
-  await expect(page.getByText("Pesanan Saya")).toBeVisible();
+  await page.goto("/account?tab=orders");
+  await expect(page.getByRole("heading", { name: "Riwayat Pesanan" })).toBeVisible();
 }
 
 async function openDetail(
@@ -322,10 +322,8 @@ test("riwayat pesanan membedakan seluruh status order dan tidak menyamakan ready
   // Nilai asing tidak membocorkan identifier mentah ke customer.
   await expect(page.getByText("awaiting_marketplace_review")).toHaveCount(0);
 
-  // Badge non-status (member tier) tidak ikut menjadi indikator status.
-  const member = page.getByText("Member Silver", { exact: true });
-  await expect(member).toBeVisible();
-  await expect(member).not.toHaveAttribute("data-status-tone", /.+/);
+  // Pastikan badge "Member Silver" (dead UI) sudah dihapus pada Slice 2.
+  await expect(page.getByText("Member Silver", { exact: true })).toHaveCount(0);
 });
 
 test("badge status pasif tetap stabil saat hover dan memakai palet dark yang disepakati", async ({

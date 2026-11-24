@@ -11,7 +11,7 @@ export default function DiscountsPage() {
   return (
     <div className="min-w-0 space-y-6">
       <div className="max-w-3xl space-y-1">
-        <h1 className="text-2xl font-bold text-foreground">Diskon</h1>
+        <h2 className="text-2xl font-bold text-foreground">Diskon</h2>
         <p className="text-sm text-muted-foreground">
           Kelola kupon publik dan kode promo.
         </p>

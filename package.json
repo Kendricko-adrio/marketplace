@@ -41,6 +41,7 @@
     "lint:admin": "cd apps/admin && npm run lint",
     "test": "npm run test:unit && npm run test:e2e",
     "test:unit": "vitest run",
+    "test:unit:docker": "node scripts/test-unit-docker.mjs",
     "test:unit:watch": "vitest",
     "verify:types:store": "npm run build:logging && cd apps/store && npx tsc --noEmit",
     "verify:types:admin": "npm run build:logging && cd apps/admin && npx tsc --noEmit",

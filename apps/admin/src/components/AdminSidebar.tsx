@@ -18,10 +18,19 @@ import {
   ChevronDown,
   PanelBottom,
   Bell,
-  Tag,
+  BadgeDollarSign,
+  Percent,
+  Menu,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import {
   Avatar,
   AvatarFallback,
@@ -49,44 +58,44 @@ function useIsMounted(): boolean {
   );
 }
 
-export default function AdminSidebar() {
+type SidebarLink = {
+  href: string;
+  label: string;
+  icon: React.ComponentType<{ size?: number }>;
+  /** Gating grant: policy-driven UI affordance only (server stays authoritative). */
+  module?: ModuleKey;
+};
+
+const SIDEBAR_LINKS: SidebarLink[] = [
+  { href: "/admin/products", label: "Produk", icon: Package, module: "products" },
+  { href: "/admin/products/harga", label: "Harga SKU", icon: BadgeDollarSign, module: "prices" },
+  { href: "/admin/orders", label: "Pesanan", icon: ShoppingBag, module: "orders" },
+  { href: "/admin/orders/reviews", label: "Review Jubelio", icon: ShieldQuestion, module: "orders" },
+  { href: "/admin/customers", label: "Customer", icon: UserRoundSearch, module: "customers" },
+  { href: "/admin/notifications", label: "Notifikasi", icon: Bell, module: "notifications" },
+  { href: "/admin/discounts", label: "Diskon", icon: Percent, module: "discounts" },
+  { href: "/admin/branches", label: "Cabang", icon: Store, module: "branches" },
+  { href: "/admin/analytics", label: "Analitik", icon: BarChart3, module: "analytics" },
+  { href: "/admin/homepage", label: "Homepage", icon: LayoutTemplate, module: "homepage" },
+  { href: "/admin/pages", label: "Halaman", icon: FileText, module: "pages" },
+  { href: "/admin/users", label: "Pengguna", icon: Users, module: "users" },
+  { href: "/admin/footer", label: "Footer", icon: PanelBottom, module: "footer" },
+  { href: "/admin/roles", label: "Hak Akses", icon: Shield, module: "roles" },
+];
+
+function AdminNavContent({ onNavigate }: { onNavigate?: () => void }) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, hasPermission, permissionsLoading, branch, policy } = useAuth();
   const [loggingOut, setLoggingOut] = useState(false);
   const mounted = useIsMounted();
 
-  type SidebarLink = {
-    href: string;
-    label: string;
-    icon: React.ComponentType<{ size?: number }>;
-    /** Gating grant: policy-driven UI affordance only (server stays authoritative). */
-    module?: ModuleKey;
-  };
-
-  const links: SidebarLink[] = [
-    { href: "/admin/products", label: "Produk", icon: Package, module: "products" },
-    { href: "/admin/products/harga", label: "Harga SKU", icon: Tag, module: "prices" },
-    { href: "/admin/orders", label: "Pesanan", icon: ShoppingBag, module: "orders" },
-    { href: "/admin/orders/reviews", label: "Review Jubelio", icon: ShieldQuestion, module: "orders" },
-    { href: "/admin/customers", label: "Customer", icon: UserRoundSearch, module: "customers" },
-    { href: "/admin/notifications", label: "Notifikasi", icon: Bell, module: "notifications" },
-    { href: "/admin/discounts", label: "Diskon", icon: Tag, module: "discounts" },
-    { href: "/admin/branches", label: "Cabang", icon: Store, module: "branches" },
-    { href: "/admin/analytics", label: "Analitik", icon: BarChart3, module: "analytics" },
-    { href: "/admin/homepage", label: "Homepage", icon: LayoutTemplate, module: "homepage" },
-    { href: "/admin/pages", label: "Halaman", icon: FileText, module: "pages" },
-    { href: "/admin/users", label: "Pengguna", icon: Users, module: "users" },
-    { href: "/admin/footer", label: "Footer", icon: PanelBottom, module: "footer" },
-    { href: "/admin/roles", label: "Hak Akses", icon: Shield, module: "roles" },
-  ];
-
   // Navigation is gated by the client policy mirror, never by Role names:
   // global modules (footer, roles) use their global view grant like every
   // other module. While the policy is loading, links render as a skeleton;
   // when the policy is unavailable/no-access, protected links disappear
   // (stale navigation never survives a failed refresh).
-  const visibleLinks = links.filter((link) => {
+  const visibleLinks = SIDEBAR_LINKS.filter((link) => {
     if (permissionsLoading) return true; // show skeleton until policy loads
     if (!link.module) return false;
     return hasPermission(link.module, "view");
@@ -145,7 +154,7 @@ export default function AdminSidebar() {
     : "";
 
   return (
-    <aside className="w-full md:w-64 md:shrink-0 md:h-full bg-card text-muted-foreground flex flex-col border-r">
+    <>
       <div className="p-6 text-xl font-bold text-foreground border-b shrink-0">
         Admin<span className="text-primary">Panel</span>
       </div>
@@ -153,27 +162,33 @@ export default function AdminSidebar() {
       {/* The nav is the only scrollable region of the sidebar: with many
           modules (or a short viewport) the list scrolls instead of pushing
           the brand header and the account footer out of view. */}
-      <nav className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-wrap md:flex-col md:flex-nowrap gap-2">
+      <nav aria-label="Navigasi admin" className="flex-1 min-h-0 overflow-y-auto p-4 flex flex-col gap-2">
         {visibleLinks.map((link) => {
           const Icon = link.icon;
           const isActive = link.href === activeHref;
 
           return (
-            <Link key={link.href} href={link.href} aria-current={isActive ? "page" : undefined}>
-              <Button
-                variant="ghost"
-                className={cn(
-                  "w-full justify-start gap-3",
-                  isActive
-                    ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
-                    : "hover:bg-accent hover:text-accent-foreground",
-                  permissionsLoading && link.module && "opacity-60"
-                )}
+            <Button
+              key={link.href}
+              asChild
+              variant="ghost"
+              className={cn(
+                "w-full justify-start gap-3",
+                isActive
+                  ? "bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground"
+                  : "hover:bg-accent hover:text-accent-foreground",
+                permissionsLoading && link.module && "opacity-60"
+              )}
+            >
+              <Link
+                href={link.href}
+                aria-current={isActive ? "page" : undefined}
+                onClick={onNavigate}
               >
                 <Icon size={20} />
                 <span>{link.label}</span>
-              </Button>
-            </Link>
+              </Link>
+            </Button>
           );
         })}
       </nav>
@@ -182,7 +197,7 @@ export default function AdminSidebar() {
         {mounted ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="flex items-center gap-3 w-full text-left hover:bg-accent rounded-md p-2 transition-colors">
+              <button type="button" className="flex items-center gap-3 w-full text-left hover:bg-accent rounded-md p-2 transition-colors">
                 <Avatar className="h-10 w-10">
                   <AvatarFallback className="bg-primary text-primary-foreground font-bold">
                     {initial}
@@ -242,6 +257,41 @@ export default function AdminSidebar() {
           </div>
         )}
       </div>
+    </>
+  );
+}
+
+export default function AdminSidebar() {
+  return (
+    <aside className="hidden md:flex md:w-64 md:shrink-0 md:h-full bg-card text-muted-foreground flex-col border-r">
+      <AdminNavContent />
     </aside>
+  );
+}
+
+export function AdminMobileNavTrigger() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger asChild>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="md:hidden shrink-0"
+          aria-label="Buka menu navigasi"
+        >
+          <Menu className="h-5 w-5" aria-hidden />
+        </Button>
+      </SheetTrigger>
+      <SheetContent side="left" className="w-72 p-0 flex flex-col bg-card text-muted-foreground">
+        <SheetTitle className="sr-only">Menu navigasi admin</SheetTitle>
+        <SheetDescription className="sr-only">
+          Daftar modul administrasi dan menu akun admin.
+        </SheetDescription>
+        <AdminNavContent onNavigate={() => setOpen(false)} />
+      </SheetContent>
+    </Sheet>
   );
 }

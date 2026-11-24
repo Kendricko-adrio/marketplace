@@ -38,13 +38,12 @@ Ekspresi SQL yang setara: `apps/store/src/lib/variant-price-projection.ts`
 `/admin/products/harga` (gate halaman `prices:view`):
 
 1. Tampilan **Harga coret** langsung memuat satu tabel SKU terpaginasikan:
-   base Jubelio, harga website (base dicoret saat aktif), target tersimpan,
-   status, dan aksi **Ubah / Restore / Riwayat**. Search SKU/nama, selection,
-   dan toolbar digunakan bersama oleh manual, bulk, restore, dan export.
-2. **Ubah manual** membuka dialog target fixed untuk satu/beberapa SKU;
-   **Ubah massal (% dari base)** membuka shortcut persen (server membekukan
+   harga dasar Jubelio, harga website (harga dasar dicoret saat aktif), target tersimpan,
+   status (`Aktif` / `Target nonaktif` / `Belum disetup` / `Harga dasar invalid`), dan aksi **Ubah** plus menu lainnya (**Riwayat harga** / **Hapus harga coret**). Pencarian SKU/nama bersifat auto-debounced + Enter, sementara contextual bulk bar hanya muncul saat ≥1 SKU dipilih.
+2. **Ubah nominal** membuka dialog target fixed untuk satu/beberapa SKU;
+   **Diskon (%)** membuka shortcut persen (server membekukan
    target fixed dari source terbaru, half-up; 85% dari 100001 → 85001).
-   Restore memiliki dialog konfirmasi tanpa target; pilihan tanpa target
+   **Hapus harga coret** memiliki dialog konfirmasi tanpa target; pilihan tanpa target
    dilewati dengan jumlah yang dijelaskan. Aksi baris hanya menargetkan SKU itu,
    tidak menghapus selection SKU lain.
 3. Review menampilkan source saat stage, effective kini, target, dampak
@@ -55,40 +54,38 @@ Ekspresi SQL yang setara: `apps/store/src/lib/variant-price-projection.ts`
    immutable + current pointer + hasil row + audit. Tidak ada provider/HTTP di
    dalam transaksi.
 5. Hasil row `applied` / `unchanged` / `failed` dan pending dibaca dari server.
-   **Hasil perubahan** membuka ulang review/hasil aktif untuk resume; histori
-   dibuka dari aksi **Riwayat**. Menutup dialog bukan rollback. Bila respons
+   **Hasil perubahan** / **Lanjutkan review** membuka ulang review/hasil aktif untuk resume; riwayat
+   dibuka dari menu aksi baris (**Riwayat harga**). Menutup dialog bukan rollback. Bila respons
    apply hilang, batch dan request key tetap tersedia untuk retry tanpa revision
    ganda; perubahan baru ditahan selama batch yang pernah di-apply masih pending.
 
-Filter **Status harga coret** di dekat pencarian menyediakan:
+Filter **Status** di dekat pencarian menyediakan:
 
 - **Semua** (default): seluruh SKU yang cocok dengan pencarian.
 - **Sudah disetup** (`markdownStatus=configured`): SKU dengan target harga coret
   tersimpan saat ini, baik aktif maupun nonaktif.
+- **Target nonaktif** (`markdownStatus=inactive`): SKU dengan target tersimpan
+  yang saat ini nonaktif karena harga dasar Jubelio ≤ target. Jika ada > 0 SKU
+  nonaktif di katalog, banner 1 baris di atas tabel menyediakan pintasan `Lihat`
+  untuk langsung memfilter tabel utama.
 - **Belum disetup** (`markdownStatus=unconfigured`): SKU tanpa target saat ini,
   termasuk SKU yang targetnya sudah di-restore; bukan berarti tidak pernah
   memiliki riwayat perubahan harga.
 
 Filter digabung dengan pencarian SKU/nama pada backend, sebelum pagination dan
 count. Mengganti filter kembali ke halaman pertama tanpa menghapus pilihan SKU.
-Tombol pagination tabel utama dan bagian target nonaktif memakai label **Previous**
-dan **Next**, konsisten dengan halaman Products.
-Contoh: source Rp75.000 dan target Rp80.000 tetap masuk **Sudah disetup** meski
-harga coret tidak aktif. Hasil kosong menampilkan “Tidak ada SKU yang cocok dengan
-pencarian dan filter.” Reload halaman mengembalikan filter ke **Semua**.
+Tombol pagination memakai label **Sebelumnya** dan **Berikutnya**, konsisten
+dengan halaman Products dan Discounts.
+Contoh: source Rp75.000 dan target Rp80.000 tetap masuk **Sudah disetup** dan
+**Target nonaktif** meski harga coret tidak aktif. Hasil kosong menampilkan
+“Tidak ada SKU yang cocok dengan pencarian dan filter.” dengan tombol **Reset filter**.
+Reload halaman mengembalikan filter ke **Semua**.
 
-Bagian **Target nonaktif (base ≤ target)** di bawah tabel menampilkan jumlah dan
-SKU lintas katalog melalui query `markdownStatus=inactive`, dengan pagination
-tersendiri; bukan hanya hasil dari halaman tabel utama. Contoh source Rp150.000
-/ target Rp200.000: website Rp150.000, target nonaktif tetap Rp200.000. Source
-legacy yang invalid tidak dimasukkan ke daftar ini. Loading/error tidak disebut
-sebagai total nol.
-
-**Import & batch** adalah tampilan lokal terpisah pada URL yang sama. Selection
-serta hasil aktif dipertahankan saat berpindah tampilan, tetapi reload penuh
-belum memulihkan state UI. Data batch durable tidak dihapus. Tidak ada arsip
-upload atau daftar histori seluruh batch baru. Theme, shell, dan Current Policy
-admin existing tetap digunakan; tidak membawa banner/persona/mock prototype.
+**Import Excel** adalah tampilan lokal terpisah pada URL yang sama dengan dropzone
+`.xlsx` dan dialog **Panduan format** on-demand. Selection serta hasil aktif
+dipertahankan saat berpindah tampilan, tetapi reload penuh belum memulihkan state UI.
+Data batch durable tidak dihapus. Tidak ada arsip upload atau daftar histori
+seluruh batch baru. Theme, shell, dan Current Policy admin existing tetap digunakan.
 
 Idempotensi:
 

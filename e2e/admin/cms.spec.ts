@@ -28,7 +28,7 @@ test.beforeAll(async () => {
   const row = await pool.query(
     `SELECT data, data->>'brandName' AS brand FROM footer_config LIMIT 1`
   );
-  originalBrandName = row.rows[0]?.brand ?? "StoreFront";
+  originalBrandName = row.rows[0]?.brand ?? "ADFSport";
   originalFooterConfig = row.rows[0]?.data;
 });
 

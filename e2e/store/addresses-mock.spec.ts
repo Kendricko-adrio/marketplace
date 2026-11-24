@@ -366,6 +366,7 @@ test.describe("mock-only client address book (ticket 02)", () => {
   test("editable fields read as inputs while auto-filled fields read as locked", async () => {
     const page = await aliceContext!.newPage();
     await page.goto("/account/addresses");
+    await expect(page).toHaveURL(/\/account\?tab=addresses$/);
     await openAddressForm(page);
 
     const editable = page.getByLabel("Nama Penerima");
@@ -475,7 +476,32 @@ test.describe("mock-only client address book (ticket 02)", () => {
     const page = await aliceContext!.newPage();
     await page.goto("/account");
     await page.getByRole("button", { name: "Buku Alamat" }).click();
-    await expect(page).toHaveURL(/\/account\/addresses$/);
+    await expect(page).toHaveURL(/\/account\?tab=addresses$/);
+    await expect(page.getByRole("button", { name: "Profil Saya" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Pesanan Saya" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Keluar" })).toBeVisible();
+    await expect(page.getByRole("link", { name: /akun saya/i })).toHaveCount(0);
+
+    // Tab switching round-trip keeps the account shell intact.
+    await page.getByRole("button", { name: "Pesanan Saya" }).click();
+    await expect(page).toHaveURL(/\/account\?tab=orders$/);
+    await expect(page.getByRole("heading", { name: "Riwayat Pesanan" })).toBeVisible();
+    await page.getByRole("button", { name: "Profil Saya" }).click();
+    await expect(page).toHaveURL(/\/account$/);
+    await expect(page.getByText("Kelola informasi profil anda")).toBeVisible();
+    await page.getByRole("button", { name: "Buku Alamat" }).click();
+    await expect(page).toHaveURL(/\/account\?tab=addresses$/);
+
+    // No horizontal overflow on desktop (1280px) or mobile (390px).
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 800 });
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth > document.documentElement.clientWidth
+      );
+      expect(overflow, `no horizontal overflow at ${width}px`).toBe(false);
+    }
+    await page.setViewportSize({ width: 1280, height: 800 });
+
     await fillAndSaveAddress(page, ALICE_FIRST);
 
     // The saved card renders the canonical region chain + postal + street.

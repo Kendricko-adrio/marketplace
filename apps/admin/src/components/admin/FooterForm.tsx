@@ -293,7 +293,7 @@ export function FooterForm({ initialData }: FooterFormProps) {
                 id="brandName"
                 value={formData.brandName}
                 onChange={(e) => updateBrandName(e.target.value)}
-                placeholder="StoreFront"
+                placeholder="ADFSport"
                 required
               />
             </div>
@@ -476,7 +476,7 @@ export function FooterForm({ initialData }: FooterFormProps) {
               id="copyrightText"
               value={formData.copyrightText}
               onChange={(e) => updateCopyright(e.target.value)}
-              placeholder="© 2026 StoreFront. All rights reserved."
+              placeholder="© 2026 ADFSport. All rights reserved."
               required
             />
           </div>

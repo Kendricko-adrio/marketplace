@@ -179,7 +179,7 @@ test("daftar order admin memisahkan payment, tahap delivery, dan review stok", a
     await expectStatusTone(badge(page, "Booking belum pasti"), "progress");
     await expectStatusTone(badge(page, "Selesai manual"), "neutral");
     await expectStatusTone(badge(page, "Menunggu pembayaran"), "waiting");
-    await expectStatusTone(badge(page, "Stock review"), "progress");
+    await expectStatusTone(badge(page, "Review stok"), "progress");
 
     // Payment memakai domainnya sendiri, bukan tone tahap delivery.
     await expectStatusTone(
@@ -243,9 +243,9 @@ test("tab pickup memakai mapping order yang sama dengan store dan aman di mobile
     });
     await page.goto("/admin/orders?tab=pickup");
 
-    await expectStatusTone(badge(page, "Ready for Pickup"), "ready");
-    await expectStatusTone(badge(page, "Payment Failed"), "error");
-    await expectStatusTone(badge(page, "Cancelled"), "cancelled");
+    await expectStatusTone(badge(page, "Siap Diambil"), "ready");
+    await expectStatusTone(badge(page, "Pembayaran Gagal"), "error");
+    await expectStatusTone(badge(page, "Dibatalkan"), "cancelled");
 
     const overflow = await page.evaluate(
       () =>
@@ -379,8 +379,8 @@ test("daftar customer memakai onboarding, bukan email verification", async () =>
         .first(),
       "waiting"
     );
-    // Kategori (Registered customers / Total orders) tidak menjadi status.
-    const registered = page.getByText("Registered customers", { exact: true });
+    // Kategori (Customer terdaftar / Total pesanan) tidak menjadi status.
+    const registered = page.getByText("Customer terdaftar", { exact: true });
     await expect(registered).toBeVisible();
     await expect(registered).not.toHaveAttribute("data-status-tone", /.+/);
   } finally {
@@ -887,10 +887,10 @@ test("markdown harga memakai empat tone kondisi existing", async () => {
     );
     await page.goto("/admin/products/harga");
 
-    await expectStatusTone(badge(page, "Source tidak valid"), "error");
+    await expectStatusTone(badge(page, "Harga dasar invalid"), "error");
     await expectStatusTone(badge(page, "Aktif"), "success");
     await expectStatusTone(badge(page, "Target nonaktif"), "progress");
-    await expectStatusTone(badge(page, "Tanpa markdown"), "neutral");
+    await expectStatusTone(badge(page, "Belum disetup"), "neutral");
   } finally {
     await page.close();
   }
@@ -992,7 +992,7 @@ test("import harga: baris dan agregat memakai tone sesuai hasil, bukan statusMes
     );
 
     await page.goto("/admin/products/harga");
-    await page.getByRole("tab", { name: /Import & batch/ }).click();
+    await page.getByRole("tab", { name: /Import Excel/ }).click();
 
     await page.locator("#excel-file").setInputFiles({
       name: "harga.xlsx",
@@ -1003,9 +1003,10 @@ test("import harga: baris dan agregat memakai tone sesuai hasil, bukan statusMes
     await page.getByTestId("excel-upload").click();
 
     await expect(page.getByTestId("excel-batch-summary")).toBeVisible();
-    await expectStatusTone(badge(page, "applied"), "success");
-    await expectStatusTone(badge(page, "unchanged"), "neutral");
-    await expectStatusTone(badge(page, "failed"), "error");
+    const rowTable = page.getByTestId("excel-row-table");
+    await expectStatusTone(rowTable.locator("[data-status-tone]").filter({ hasText: "Diterapkan" }).first(), "success");
+    await expectStatusTone(rowTable.locator("[data-status-tone]").filter({ hasText: "Tanpa perubahan" }).first(), "neutral");
+    await expectStatusTone(rowTable.locator("[data-status-tone]").filter({ hasText: "Gagal" }).first(), "error");
 
     // Agregat: sebagian gagal tanpa pending → progress (statusMessage lama
     // memberi error untuk kondisi ini).

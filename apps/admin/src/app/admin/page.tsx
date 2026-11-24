@@ -6,6 +6,7 @@ import {
   authorizeLoaded,
   loadPolicy,
 } from "@/lib/rbac/resolver";
+import { resolveAdminLandingRoute } from "@/lib/rbac/landing";
 
 // Force dynamic rendering so the RSC payload (which may contain a redirect to
 // /login when unauthenticated) is never cached by the Next.js client-side
@@ -13,23 +14,6 @@ import {
 // replayed right after a successful login, making the login appear to fail
 // until the user clicks the button a second time.
 export const dynamic = "force-dynamic";
-
-// Landing module preference order (only modules that have an /admin route;
-// audit_log has no dedicated page). The first module the Current Policy
-// authorizes for `view` wins.
-const LANDING_MODULES = [
-  "products",
-  "orders",
-  "notifications",
-  "branches",
-  "analytics",
-  "customers",
-  "homepage",
-  "pages",
-  "users",
-  "roles",
-  "footer",
-] as const;
 
 // Redirect to the first module the user's Current Policy allows viewing.
 // If no module is viewable, render a no-access screen.
@@ -51,10 +35,11 @@ export default async function AdminDashboard() {
     }).admitted;
 
   if (admitted && policy) {
-    for (const moduleName of LANDING_MODULES) {
-      if (authorizeLoaded(policy, moduleName, "view").allowed) {
-        redirect(`/admin/${moduleName}`);
-      }
+    const target = resolveAdminLandingRoute(
+      (moduleName) => authorizeLoaded(policy, moduleName, "view").allowed
+    );
+    if (target) {
+      redirect(target);
     }
   }
 

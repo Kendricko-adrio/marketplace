@@ -19,7 +19,7 @@ tech stack, how each app talks to the database, and path aliases.
 ```
 marketplace/
 ├── apps/
-│   ├── store/      # Storefront (customers)      — http://localhost:3000
+│   ├── store/      # ADFSport (customers)        — http://localhost:3000
 │   │   └── src/{app,components,db,lib,providers,proxy.ts}
 │   └── admin/      # Admin dashboard (ops)       — http://localhost:3001
 │       └── src/{app,components,db,lib,providers,proxy.ts}

@@ -7,22 +7,30 @@ import {
   useState,
   type FormEvent,
 } from "react";
-import { Download, Search } from "lucide-react";
+import {
+  AlertTriangle,
+  Download,
+  Loader2,
+  MoreHorizontal,
+  Search,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
+import { getStatusToneClassName } from "@marketplace/ui/src/lib/status-styles";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { InfoHint } from "@/components/ui/info-hint";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -40,6 +48,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useAuth } from "@/providers/auth-provider";
+import { cn } from "@/lib/utils";
 import {
   loadBatchRows,
   reviewDigest,
@@ -57,6 +66,7 @@ import {
   type PriceHistory,
 } from "./price-change-dialog";
 import { PriceChangeExcelClient } from "./price-change-excel-client";
+import { PriceRulesGuideButton } from "./price-change-guides";
 
 const PAGE_SIZE = 25;
 
@@ -111,12 +121,10 @@ function PageControls({
   pagination,
   busy,
   onPage,
-  prefix,
 }: {
   pagination: Pagination | undefined;
   busy: boolean;
   onPage: (page: number) => void;
-  prefix: string;
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-muted-foreground">
@@ -129,24 +137,24 @@ function PageControls({
         <Button
           variant="outline"
           size="sm"
-          data-testid={`${prefix}-prev-page`}
-          aria-label={`${prefix === "bulk" ? "SKU" : "Target nonaktif"} halaman sebelumnya`}
+          data-testid="bulk-prev-page"
+          aria-label="Halaman sebelumnya"
           disabled={busy || !pagination || pagination.page <= 1}
           onClick={() => pagination && onPage(pagination.page - 1)}
         >
-          Previous
+          Sebelumnya
         </Button>
         <Button
           variant="outline"
           size="sm"
-          data-testid={`${prefix}-next-page`}
-          aria-label={`${prefix === "bulk" ? "SKU" : "Target nonaktif"} halaman berikutnya`}
+          data-testid="bulk-next-page"
+          aria-label="Halaman berikutnya"
           disabled={
             busy || !pagination || pagination.page >= pagination.totalPages
           }
           onClick={() => pagination && onPage(pagination.page + 1)}
         >
-          Next
+          Berikutnya
         </Button>
       </div>
     </div>
@@ -162,11 +170,10 @@ export function PriceChangeClient() {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
   const [markdownStatus, setMarkdownStatus] = useState("all");
-  const [inactivePage, setInactivePage] = useState(1);
   const [revision, setRevision] = useState(0);
   const [selected, setSelected] = useState<Map<string, Candidate>>(new Map());
   const candidates = useCandidates(search, page, revision, markdownStatus);
-  const inactive = useCandidates("", inactivePage, revision, "inactive");
+  const inactive = useCandidates("", 1, revision, "inactive");
   const refresh = useCallback(() => setRevision((value) => value + 1), []);
   const [dialog, setDialog] = useState<PriceDialogKind | null>(null);
   const [targets, setTargets] = useState<Candidate[]>([]);
@@ -188,12 +195,24 @@ export function PriceChangeClient() {
   const applyKey = useRef<string | null>(null);
   const pendingApply = applied && (batch?.pendingCount ?? 0) > 0;
 
+  // Debounce search input like /admin/products so typing triggers backend search smoothly.
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (trimmed === search) return;
+    const handle = setTimeout(() => {
+      setSearch(trimmed);
+      setPage(1);
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [query, search]);
+
   function rememberFocus() {
     focusReturn.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
   }
+
   function openAction(
     kind: "manual" | "bulk" | "restore",
     values = [...selected.values()],
@@ -219,6 +238,7 @@ export function PriceChangeClient() {
     stageReceipt.current = null;
     setDialog(kind);
   }
+
   async function openHistory(row: Candidate) {
     if (busy) return;
     rememberFocus();
@@ -234,16 +254,17 @@ export function PriceChangeClient() {
       );
       const payload = await response.json();
       if (!response.ok || !payload.success)
-        throw new Error(payload.error ?? "Gagal memuat histori harga");
+        throw new Error(payload.error ?? "Gagal memuat riwayat harga");
       setHistory(payload.data as PriceHistory);
     } catch (error) {
       setDialogError(
-        error instanceof Error ? error.message : "Gagal memuat histori harga",
+        error instanceof Error ? error.message : "Gagal memuat riwayat harga",
       );
     } finally {
       setBusy(false);
     }
   }
+
   async function readRows(next: Batch) {
     setRowsReady(false);
     setBatchRows(next.rows);
@@ -251,6 +272,7 @@ export function PriceChangeClient() {
     setBatchRows(all);
     setRowsReady(all.length === next.rowCount);
   }
+
   async function stage() {
     if (busy || !canEdit || targets.length === 0) return;
     if (
@@ -315,6 +337,7 @@ export function PriceChangeClient() {
       setBusy(false);
     }
   }
+
   async function reloadBatch() {
     if (!batch || busy) return;
     setBusy(true);
@@ -337,6 +360,7 @@ export function PriceChangeClient() {
       setBusy(false);
     }
   }
+
   function receiveImportBatch(next: Batch) {
     setImportBatch(next);
     setSelected((current) => {
@@ -361,6 +385,7 @@ export function PriceChangeClient() {
       return updated;
     });
   }
+
   async function applyOnce() {
     if (!batch || busy || !canEdit || !rowsReady) return;
     setBusy(true);
@@ -410,12 +435,13 @@ export function PriceChangeClient() {
       setDialogError(
         error instanceof Error
           ? error.message
-          : "Gagal menerapkan harga; hasil committed tidak dibatalkan.",
+          : "Gagal menerapkan harga; perubahan yang sudah tersimpan tidak dibatalkan.",
       );
     } finally {
       setBusy(false);
     }
   }
+
   const rows = candidates.data?.rows ?? [];
   const selectable = rows.filter((row) => row.basePrice !== null);
   const allSelected =
@@ -423,7 +449,7 @@ export function PriceChangeClient() {
     selectable.every((row) => selected.has(row.variantId));
   const someSelected = selectable.some((row) => selected.has(row.variantId));
   const noEditReason = !canEdit
-    ? "Anda hanya memiliki akses lihat untuk harga."
+    ? "Anda hanya memiliki akses lihat untuk halaman ini."
     : pendingApply
       ? "Selesaikan batch aktif melalui Hasil perubahan."
       : selected.size === 0
@@ -457,6 +483,7 @@ export function PriceChangeClient() {
       setBusy(false);
     }
   }
+
   function openImportResults() {
     setView("import");
     requestAnimationFrame(() => {
@@ -474,6 +501,7 @@ export function PriceChangeClient() {
       return next;
     });
   }
+
   function searchSkus(event: FormEvent) {
     event.preventDefault();
     setSearch(query.trim());
@@ -481,503 +509,527 @@ export function PriceChangeClient() {
     refresh();
   }
 
+  const inactiveCount = inactive.data?.pagination.total ?? 0;
+
   return (
     <div className="min-w-0 space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="max-w-3xl space-y-1">
           <h1 className="text-2xl font-bold text-foreground">Harga SKU</h1>
           <p className="text-sm text-muted-foreground">
-            Kelola harga coret per SKU atau import dari Excel.
+            Atur harga coret per SKU atau import massal dari Excel.
           </p>
         </div>
-        <Badge variant="outline">Harga global · semua cabang</Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant="outline">Harga global · semua cabang</Badge>
+          <PriceRulesGuideButton />
+        </div>
       </div>
-      <Tabs value={view} onValueChange={(value) => setView(value === "import" ? "import" : "prices")} className="min-w-0 space-y-6">
+
+      {!canEdit && (
+        <div className="rounded-md border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">
+          Anda hanya memiliki akses lihat untuk halaman ini.
+        </div>
+      )}
+
+      <Tabs
+        value={view}
+        onValueChange={(value) =>
+          setView(value === "import" ? "import" : "prices")
+        }
+        className="min-w-0 space-y-6"
+      >
         <div className="max-w-full overflow-x-auto">
           <TabsList aria-label="Pengelolaan harga">
             <TabsTrigger value="prices">Harga coret</TabsTrigger>
-            <TabsTrigger value="import">Import &amp; batch</TabsTrigger>
+            <TabsTrigger value="import">Import Excel</TabsTrigger>
           </TabsList>
         </div>
-      <TabsContent value="prices" forceMount hidden={view !== "prices"} className="min-w-0 space-y-6">
-        <Card>
-          <CardHeader>
-            <CardTitle><h2>Harga coret</h2></CardTitle>
-            <CardDescription>Periksa perubahan sebelum menerapkan harga baru.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="flex flex-wrap items-end gap-3">
-              <form
-                onSubmit={searchSkus}
-                className="flex min-w-0 flex-1 basis-full gap-2 sm:max-w-md sm:basis-auto"
-              >
-                <div className="relative min-w-0 flex-1">
-                  <Search className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+
+        <TabsContent
+          value="prices"
+          forceMount
+          hidden={view !== "prices"}
+          className="min-w-0 space-y-4"
+        >
+          <Card>
+            <CardContent className="space-y-4 pt-6">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <form
+                  onSubmit={searchSkus}
+                  className="relative min-w-0 flex-1 basis-full sm:max-w-sm sm:basis-auto"
+                >
+                  <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                   <Input
                     type="search"
                     data-testid="bulk-search"
                     aria-label="Cari SKU atau nama produk"
-                    placeholder="Cari SKU atau nama produk"
+                    placeholder="Cari SKU atau nama produk..."
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
-                    className="pl-9"
+                    className={cn("pl-9", query ? "pr-9" : "")}
                   />
+                  {query && (
+                    <button
+                      type="button"
+                      aria-label="Hapus pencarian"
+                      onClick={() => {
+                        setQuery("");
+                        setSearch("");
+                        setPage(1);
+                      }}
+                      className="absolute right-2.5 top-2.5 rounded-sm text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <X className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  )}
+                </form>
+
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2 text-sm">
+                    <span className="text-muted-foreground">Status</span>
+                    <Select
+                      value={markdownStatus}
+                      onValueChange={(value) => {
+                        setMarkdownStatus(value);
+                        setPage(1);
+                      }}
+                    >
+                      <SelectTrigger
+                        id="markdown-status"
+                        aria-label="Status harga coret"
+                        className="w-44"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Semua</SelectItem>
+                        <SelectItem value="configured">Sudah disetup</SelectItem>
+                        <SelectItem value="inactive">Target nonaktif</SelectItem>
+                        <SelectItem value="unconfigured">Belum disetup</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </label>
+
+                  {importBatch && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={openImportResults}
+                    >
+                      Hasil import
+                    </Button>
+                  )}
                 </div>
-                <Button variant="outline" type="submit" aria-label="Cari SKU">
-                  <Search className="h-4 w-4 sm:hidden" />
-                  <span className="hidden sm:inline">Cari SKU</span>
-                </Button>
-              </form>
-              <div className="flex w-full flex-col gap-1.5 sm:w-48">
-                <Label htmlFor="markdown-status">Status harga coret</Label>
-                <Select
-                  value={markdownStatus}
-                  onValueChange={(value) => {
-                    setMarkdownStatus(value);
-                    setPage(1);
-                  }}
-                >
-                  <SelectTrigger id="markdown-status">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="all">Semua</SelectItem>
-                    <SelectItem value="configured">Sudah disetup</SelectItem>
-                    <SelectItem value="unconfigured">Belum disetup</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
-              <Badge variant="secondary" data-testid="bulk-selection-count">
-                Terpilih: {selected.size} SKU
-              </Badge>
-            </div>
-            <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border bg-muted/30 p-3">
-              <div role="group" aria-label="Perubahan harga" className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                disabled={
-                  busy || pendingApply || !canEdit || selected.size === 0
-                }
-                title={noEditReason}
-                onClick={() => openAction("manual")}
-              >
-                Ubah manual
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={
-                  busy || pendingApply || !canEdit || selected.size === 0
-                }
-                title={noEditReason}
-                onClick={() => openAction("bulk")}
-              >
-                Ubah massal (% dari base)
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={
-                  busy ||
-                  pendingApply ||
-                  !canEdit ||
-                  ![...selected.values()].some(
-                    (row) => row.storedTarget !== null,
-                  )
-                }
-                onClick={() => openAction("restore")}
-              >
-                Restore terpilih
-              </Button>
-              {batch && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => {
-                    rememberFocus();
-                    setDialogError(null);
-                    setDialog("review");
-                  }}
+
+              {inactiveCount > 0 && markdownStatus !== "inactive" && (
+                <div
+                  role="status"
+                  className={cn(
+                    "flex flex-wrap items-center justify-between gap-2 rounded-md border px-3.5 py-2 text-sm",
+                    getStatusToneClassName("progress"),
+                  )}
                 >
-                  Hasil perubahan
-                </Button>
+                  <span className="flex items-center gap-2">
+                    <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span>
+                      <strong>{inactiveCount} SKU</strong> memiliki target nonaktif karena harga dasar Jubelio turun.
+                    </span>
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 bg-card text-foreground"
+                    onClick={() => {
+                      setMarkdownStatus("inactive");
+                      setPage(1);
+                    }}
+                  >
+                    Lihat
+                  </Button>
+                </div>
               )}
-              </div>
-              <div role="group" aria-label="File dan pilihan SKU" className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setView("import")}
-              >
-                Import Excel
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!importBatch}
-                title={
-                  !importBatch
-                    ? "Belum ada batch import pada sesi ini."
-                    : undefined
-                }
-                onClick={openImportResults}
-              >
-                Hasil import
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                data-testid="bulk-export"
-                disabled={busy || selected.size === 0}
-                onClick={() => void exportSelected()}
-              >
-                <Download className="h-4 w-4" />
-                Export terpilih
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={selected.size === 0}
-                onClick={() => setSelected(new Map())}
-              >
-                Bersihkan pilihan
-              </Button>
-              </div>
-            </div>
-            {candidates.error ? (
-              <div role="alert" className="text-sm text-destructive">
-                {candidates.error}{" "}
-                <Button size="sm" variant="outline" onClick={refresh}>
-                  Coba lagi
-                </Button>
-              </div>
-            ) : (
-              <>
+
+              {batch && (
+                <div
+                  role="status"
+                  className={cn(
+                    "flex flex-wrap items-center justify-between gap-2 rounded-md border px-3.5 py-2 text-sm",
+                    getStatusToneClassName(pendingApply ? "progress" : "info"),
+                  )}
+                >
+                  <span>
+                    {pendingApply
+                      ? `Ada batch perubahan yang belum selesai (${batch.pendingCount} SKU tersisa).`
+                      : `Ringkasan batch perubahan terakhir tersedia (${batch.rowCount} SKU).`}
+                  </span>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 bg-card text-foreground"
+                    onClick={() => {
+                      rememberFocus();
+                      setDialogError(null);
+                      setDialog("review");
+                    }}
+                  >
+                    {pendingApply ? "Lanjutkan review" : "Hasil perubahan"}
+                  </Button>
+                </div>
+              )}
+
+              {selected.size > 0 && (
                 <div
                   role="region"
-                  aria-label="Daftar harga SKU"
-                  tabIndex={0}
-                  className="rounded-md border [&>div]:max-h-[520px] [&>div]:overflow-auto"
+                  aria-label="Aksi SKU terpilih"
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-muted/40 px-3.5 py-2.5"
                 >
-                  <Table
-                    aria-label="Harga coret SKU"
-                    data-testid="bulk-candidate-table"
-                    aria-busy={candidates.loading}
-                    className="text-xs [&_td]:px-3 [&_td]:py-2 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:px-3 [&_th]:text-xs"
-                  >
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-10">
-                          <Checkbox
-                            data-testid="bulk-select-page"
-                            aria-label="Pilih halaman ini"
-                            checked={
-                              allSelected
-                                ? true
-                                : someSelected
-                                  ? "indeterminate"
-                                  : false
-                            }
-                            disabled={
-                              candidates.loading || selectable.length === 0
-                            }
-                            onCheckedChange={(checked) =>
-                              setSelected((current) => {
-                                const next = new Map(current);
-                                for (const row of selectable) {
-                                  if (checked) next.set(row.variantId, row);
-                                  else next.delete(row.variantId);
-                                }
-                                return next;
-                              })
-                            }
-                          />
-                        </TableHead>
-                        <TableHead>SKU</TableHead>
-                        <TableHead>Nama / variant</TableHead>
-                        <TableHead className="text-right">
-                          Base Jubelio
-                        </TableHead>
-                        <TableHead className="text-right">
-                          Harga website
-                        </TableHead>
-                        <TableHead className="text-right">
-                          Target tersimpan
-                        </TableHead>
-                        <TableHead>Status</TableHead>
-                        <TableHead className="text-right">Aksi</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {rows.map((row) => (
-                        <TableRow key={row.variantId}>
-                          <TableCell>
-                            <Checkbox
-                              aria-label={`Pilih SKU ${row.sku}`}
-                              checked={selected.has(row.variantId)}
-                              disabled={
-                                candidates.loading || row.basePrice === null
-                              }
-                              onCheckedChange={(checked) =>
-                                toggle(row, checked === true)
-                              }
-                            />
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap font-mono text-xs">
-                            {row.sku}
-                          </TableCell>
-                          <TableCell className="min-w-40 text-sm">
-                            {row.productName}
-                            {row.variantLabel && (
-                              <span className="block text-xs text-muted-foreground">
-                                {row.variantLabel}
-                              </span>
-                            )}
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap text-right tabular-nums">
-                            {rupiah(row.basePrice)}
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap text-right tabular-nums">
-                            <span className="font-medium">
-                              {rupiah(row.effectiveUnitPrice)}
-                            </span>
-                            {row.markdownActive && (
-                              <s className="ml-2 text-xs text-muted-foreground">
-                                {rupiah(row.basePrice)}
-                              </s>
-                            )}
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap text-right tabular-nums">
-                            {row.storedTarget !== null &&
-                            !row.markdownActive ? (
-                              <s className="text-muted-foreground">
-                                {rupiah(row.storedTarget)}
-                              </s>
-                            ) : (
-                              rupiah(row.storedTarget)
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <StatusBadge
-                              tone={getStatusTone(
-                                "markdown",
-                                row.basePrice === null
-                                  ? "invalid_source"
-                                  : row.markdownActive
-                                    ? "active"
-                                    : row.storedTarget !== null
-                                      ? "inactive_target"
-                                      : "absent"
-                              )}
-                              className="whitespace-nowrap"
-                            >
-                              {row.basePrice === null
-                                ? "Source tidak valid"
-                                : row.markdownActive
-                                  ? "Aktif"
-                                  : row.storedTarget !== null
-                                    ? "Target nonaktif"
-                                    : "Tanpa markdown"}
-                            </StatusBadge>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex justify-end gap-1">
-                              <Button
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                variant="outline"
-                                disabled={
-                                  busy ||
-                                  pendingApply ||
-                                  !canEdit ||
-                                  row.basePrice === null
-                                }
-                                onClick={() => openAction("manual", [row])}
-                              >
-                                Ubah
-                              </Button>
-                              <Button
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                variant="ghost"
-                                disabled={
-                                  busy ||
-                                  pendingApply ||
-                                  !canEdit ||
-                                  row.storedTarget === null ||
-                                  row.basePrice === null
-                                }
-                                onClick={() => openAction("restore", [row])}
-                              >
-                                Restore
-                              </Button>
-                              <Button
-                                size="sm"
-                                className="h-7 px-2 text-xs"
-                                variant="ghost"
-                                disabled={busy}
-                                onClick={() => void openHistory(row)}
-                              >
-                                Riwayat
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                      {rows.length === 0 && (
-                        <TableRow>
-                          <TableCell
-                            colSpan={8}
-                            className="h-24 text-center text-muted-foreground"
-                          >
-                            {candidates.loading
-                              ? "Memuat SKU…"
-                              : "Tidak ada SKU yang cocok dengan pencarian dan filter."}
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary" data-testid="bulk-selection-count">
+                      {selected.size} SKU terpilih
+                    </Badge>
+                    <InfoHint label="Informasi pilihan SKU">
+                      Pilihan dipertahankan lintas halaman. Checkbox header hanya memilih SKU pada halaman yang sedang tampil.
+                    </InfoHint>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      disabled={busy || pendingApply || !canEdit}
+                      title={noEditReason}
+                      onClick={() => openAction("manual")}
+                    >
+                      Ubah nominal
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy || pendingApply || !canEdit}
+                      title={noEditReason}
+                      onClick={() => openAction("bulk")}
+                    >
+                      Diskon (%)
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={
+                        busy ||
+                        pendingApply ||
+                        !canEdit ||
+                        ![...selected.values()].some(
+                          (row) => row.storedTarget !== null,
+                        )
+                      }
+                      onClick={() => openAction("restore")}
+                    >
+                      Hapus harga coret
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      data-testid="bulk-export"
+                      disabled={busy}
+                      onClick={() => void exportSelected()}
+                    >
+                      <Download className="h-4 w-4" aria-hidden="true" />
+                      Export Excel
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setSelected(new Map())}
+                    >
+                      Batal pilih
+                    </Button>
+                  </div>
                 </div>
-                <PageControls
-                  pagination={candidates.data?.pagination}
-                  busy={candidates.loading}
-                  onPage={setPage}
-                  prefix="bulk"
-                />
-              </>
-            )}
-            <p className="text-xs text-muted-foreground">
-              Pilihan dipertahankan lintas halaman. Checkbox header hanya
-              memilih halaman aktif, bukan seluruh hasil pencarian.
-            </p>
-            <details className="rounded-md border px-4 py-3 text-sm">
-              <summary className="cursor-pointer font-medium">Tentang harga coret</summary>
-              <div className="mt-3 space-y-2 text-muted-foreground">
-                <p>Harga sumber mengikuti Jubelio. Target harga coret berlaku untuk semua cabang, tanpa tanggal akhir.</p>
-                <p>Target tetap tersimpan saat harga sumber turun melewatinya, dan aktif kembali jika harga sumber naik di atas target.</p>
-                <p>Setiap baris yang berhasil diterapkan langsung berlaku. Satu batch dapat memiliki hasil berhasil, gagal, atau masih tertunda.</p>
-              </div>
-            </details>
-          </CardContent>
-        </Card>
-        <section aria-label="Target nonaktif">
-          <Card>
-            <CardHeader>
-              <CardTitle><h2>Target nonaktif</h2></CardTitle>
-              <CardDescription>
-                Harga sumber sama dengan atau lebih rendah dari target. Target tetap tersimpan.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {inactive.error ? (
-                <div role="alert" className="text-sm text-destructive">
-                  {inactive.error}{" "}
-                  <Button variant="outline" size="sm" onClick={refresh}>
+              )}
+
+              {candidates.error ? (
+                <div
+                  role="alert"
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive"
+                >
+                  <span>{candidates.error}</span>
+                  <Button size="sm" variant="outline" onClick={refresh}>
                     Coba lagi
                   </Button>
                 </div>
+              ) : candidates.loading && rows.length === 0 ? (
+                <div
+                  role="status"
+                  className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground"
+                >
+                  <Loader2 className="h-5 w-5 animate-spin text-primary" aria-hidden="true" />
+                  <span>Memuat daftar harga SKU…</span>
+                </div>
               ) : (
                 <>
-                  <p className="rounded-md border bg-muted/40 p-3 text-sm">
-                    {inactive.loading ? (
-                      "Memuat target nonaktif…"
-                    ) : (
-                      <>
-                        <strong>{inactive.data?.pagination.total} SKU</strong>{" "}
-                        memiliki target tersimpan yang tidak aktif di seluruh
-                        katalog.
-                      </>
-                    )}
-                  </p>
-                  <div className="rounded-md border [&>div]:max-h-80">
+                  <div
+                    role="region"
+                    aria-label="Daftar harga SKU"
+                    tabIndex={0}
+                    className="relative rounded-md border [&>div]:max-h-[540px] [&>div]:overflow-auto"
+                  >
                     <Table
-                      aria-label="SKU dengan target nonaktif"
-                      aria-busy={inactive.loading}
-                      className="text-xs [&_td]:py-2"
+                      aria-label="Harga coret SKU"
+                      data-testid="bulk-candidate-table"
+                      aria-busy={candidates.loading}
+                      className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted"
                     >
                       <TableHeader>
                         <TableRow>
-                          <TableHead>SKU</TableHead>
-                          <TableHead className="text-right">
-                            Base terbaru
+                          <TableHead className="w-10">
+                            <Checkbox
+                              data-testid="bulk-select-page"
+                              aria-label="Pilih halaman ini"
+                              checked={
+                                allSelected
+                                  ? true
+                                  : someSelected
+                                    ? "indeterminate"
+                                    : false
+                              }
+                              disabled={
+                                candidates.loading || selectable.length === 0
+                              }
+                              onCheckedChange={(checked) =>
+                                setSelected((current) => {
+                                  const next = new Map(current);
+                                  for (const row of selectable) {
+                                    if (checked) next.set(row.variantId, row);
+                                    else next.delete(row.variantId);
+                                  }
+                                  return next;
+                                })
+                              }
+                            />
                           </TableHead>
+                          <TableHead>SKU</TableHead>
+                          <TableHead>Produk / Varian</TableHead>
                           <TableHead className="text-right">
-                            Target tersimpan
+                            Harga dasar (Jubelio)
                           </TableHead>
                           <TableHead className="text-right">
                             Harga website
                           </TableHead>
+                          <TableHead className="text-right">
+                            Target tersimpan
+                          </TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead className="text-right">Aksi</TableHead>
                         </TableRow>
                       </TableHeader>
-                      <TableBody>
-                        {inactive.data?.rows.map((row) => (
+                      <TableBody
+                        className={cn(
+                          candidates.loading ? "opacity-60 transition-opacity" : "",
+                        )}
+                      >
+                        {rows.map((row) => (
                           <TableRow key={row.variantId}>
-                            <TableCell className="font-mono text-xs">
+                            <TableCell>
+                              <Checkbox
+                                aria-label={`Pilih SKU ${row.sku}`}
+                                checked={selected.has(row.variantId)}
+                                disabled={
+                                  candidates.loading || row.basePrice === null
+                                }
+                                onCheckedChange={(checked) =>
+                                  toggle(row, checked === true)
+                                }
+                              />
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap font-mono text-xs">
                               {row.sku}
                             </TableCell>
-                            <TableCell className="whitespace-nowrap text-right">
+                            <TableCell className="min-w-44">
+                              <span className="font-medium text-foreground">
+                                {row.productName}
+                              </span>
+                              {row.variantLabel && (
+                                <span className="block text-xs text-muted-foreground">
+                                  {row.variantLabel}
+                                </span>
+                              )}
+                            </TableCell>
+                            <TableCell className="whitespace-nowrap text-right tabular-nums">
                               {rupiah(row.basePrice)}
                             </TableCell>
-                            <TableCell className="whitespace-nowrap text-right">
-                              <s className="text-muted-foreground">
-                                {rupiah(row.storedTarget)}
-                              </s>
+                            <TableCell className="whitespace-nowrap text-right tabular-nums">
+                              <span className="font-medium">
+                                {rupiah(row.effectiveUnitPrice)}
+                              </span>
+                              {row.markdownActive && (
+                                <s className="ml-2 text-xs text-muted-foreground">
+                                  {rupiah(row.basePrice)}
+                                </s>
+                              )}
                             </TableCell>
-                            <TableCell className="whitespace-nowrap text-right font-medium">
-                              {rupiah(row.effectiveUnitPrice)}
+                            <TableCell className="whitespace-nowrap text-right tabular-nums">
+                              {row.storedTarget !== null &&
+                              !row.markdownActive ? (
+                                <s className="text-muted-foreground">
+                                  {rupiah(row.storedTarget)}
+                                </s>
+                              ) : (
+                                rupiah(row.storedTarget)
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              <StatusBadge
+                                tone={getStatusTone(
+                                  "markdown",
+                                  row.basePrice === null
+                                    ? "invalid_source"
+                                    : row.markdownActive
+                                      ? "active"
+                                      : row.storedTarget !== null
+                                        ? "inactive_target"
+                                        : "absent",
+                                )}
+                                className="whitespace-nowrap"
+                              >
+                                {row.basePrice === null
+                                  ? "Harga dasar invalid"
+                                  : row.markdownActive
+                                    ? "Aktif"
+                                    : row.storedTarget !== null
+                                      ? "Target nonaktif"
+                                      : "Belum disetup"}
+                              </StatusBadge>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex justify-end gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={
+                                    busy ||
+                                    pendingApply ||
+                                    !canEdit ||
+                                    row.basePrice === null
+                                  }
+                                  onClick={() => openAction("manual", [row])}
+                                >
+                                  Ubah
+                                </Button>
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-8 w-8 p-0"
+                                      aria-label={`Aksi lainnya untuk ${row.sku}`}
+                                      disabled={busy}
+                                    >
+                                      <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuItem
+                                      onClick={() => void openHistory(row)}
+                                    >
+                                      Riwayat harga
+                                    </DropdownMenuItem>
+                                    {row.storedTarget !== null && (
+                                      <DropdownMenuItem
+                                        disabled={
+                                          busy ||
+                                          pendingApply ||
+                                          !canEdit ||
+                                          row.basePrice === null
+                                        }
+                                        onClick={() =>
+                                          openAction("restore", [row])
+                                        }
+                                      >
+                                        Hapus harga coret
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </div>
                             </TableCell>
                           </TableRow>
                         ))}
-                        {!inactive.loading &&
-                          inactive.data?.rows.length === 0 && (
-                            <TableRow>
-                              <TableCell
-                                colSpan={4}
-                                className="text-center text-muted-foreground"
-                              >
-                                Tidak ada target nonaktif.
-                              </TableCell>
-                            </TableRow>
-                          )}
+                        {rows.length === 0 && (
+                          <TableRow>
+                            <TableCell
+                              colSpan={8}
+                              className="h-28 text-center text-muted-foreground"
+                            >
+                              <div className="flex flex-col items-center gap-2">
+                                <span>
+                                  {search || markdownStatus !== "all"
+                                    ? "Tidak ada SKU yang cocok dengan pencarian dan filter."
+                                    : "Belum ada SKU produk."}
+                                </span>
+                                {(search || markdownStatus !== "all") && (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      setQuery("");
+                                      setSearch("");
+                                      setMarkdownStatus("all");
+                                      setPage(1);
+                                    }}
+                                  >
+                                    Reset filter
+                                  </Button>
+                                )}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
                       </TableBody>
                     </Table>
                   </div>
-                  {(inactive.data?.pagination.totalPages ?? 0) > 1 && (
-                    <PageControls
-                      pagination={inactive.data?.pagination}
-                      busy={inactive.loading}
-                      onPage={setInactivePage}
-                      prefix="inactive"
-                    />
-                  )}
+                  <PageControls
+                    pagination={candidates.data?.pagination}
+                    busy={candidates.loading}
+                    onPage={setPage}
+                  />
                 </>
               )}
             </CardContent>
           </Card>
-        </section>
-      </TabsContent>
-      <TabsContent value="import" forceMount hidden={view !== "import"} className="min-w-0 space-y-4">
-        {selected.size > 0 ? <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-card px-4 py-3">
-          <span className="text-sm font-medium">{selected.size} SKU dipilih untuk export</span>
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => void exportSelected()}>
-            <Download className="h-4 w-4" />Export terpilih
-          </Button>
-        </div> : null}
-        <PriceChangeExcelClient onBatchChange={receiveImportBatch} onApplied={refresh} />
-      </TabsContent>
+        </TabsContent>
+
+        <TabsContent
+          value="import"
+          forceMount
+          hidden={view !== "import"}
+          className="min-w-0 space-y-4"
+        >
+          {selected.size > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border bg-card px-4 py-3">
+              <span className="text-sm font-medium">
+                {selected.size} SKU dipilih untuk export
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => void exportSelected()}
+              >
+                <Download className="h-4 w-4" aria-hidden="true" />
+                Export Excel
+              </Button>
+            </div>
+          )}
+          <PriceChangeExcelClient
+            onBatchChange={receiveImportBatch}
+            onApplied={refresh}
+          />
+        </TabsContent>
       </Tabs>
-      {!canEdit && (
-        <p className="text-sm text-muted-foreground">
-          Anda hanya memiliki akses lihat untuk harga.
-        </p>
-      )}
-      {pendingApply && (
-        <p className="text-sm text-muted-foreground">
-          Batch belum selesai. Buka Hasil perubahan untuk melanjutkan sebelum
-          membuat perubahan harga baru.
-        </p>
-      )}
+
       <PriceChangeDialog
         kind={dialog}
         targets={targets}

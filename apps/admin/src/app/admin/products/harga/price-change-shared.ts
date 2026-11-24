@@ -118,9 +118,22 @@ function warningLabel(warning: string): string {
     case "VARIANT_NOT_FOUND":
       return "SKU tidak ditemukan";
     case "SOURCE_PRICE_INVALID":
-      return "Harga sumber tidak valid";
+      return "Harga dasar tidak valid";
     default:
       return warning;
+  }
+}
+
+export function rowStateLabel(state: BatchRow["state"]): string {
+  switch (state) {
+    case "pending":
+      return "Siap diterapkan";
+    case "applied":
+      return "Diterapkan";
+    case "unchanged":
+      return "Tanpa perubahan";
+    case "failed":
+      return "Gagal";
   }
 }
 
@@ -129,8 +142,8 @@ export function rowStatus(row: BatchRow): string {
   if (row.action === "restore_base") {
     parts.push(
       row.preview.storedTargetBefore !== null
-        ? "melepas Markdown"
-        : "tidak ada Markdown aktif",
+        ? "hapus harga coret"
+        : "tidak ada harga coret aktif",
     );
   }
   for (const warning of row.preview.warnings) {

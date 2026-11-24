@@ -212,7 +212,7 @@ export function FooterLinkPicker({
                 </CommandGroup>
               )}
               {category === "static" && (
-                <CommandGroup heading="Rute Statis Storefront">
+                <CommandGroup heading="Rute Statis ADFSport">
                   {destinations!.static.map((d) => (
                     <CommandItem
                       key={d.href}

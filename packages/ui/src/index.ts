@@ -1,4 +1,5 @@
 export { cn } from "./lib/utils";
+export { sanitizeProductHtml } from "./lib/sanitize-html";
 
 export * from "./components/ui/avatar";
 export * from "./components/ui/badge";

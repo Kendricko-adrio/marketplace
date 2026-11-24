@@ -336,6 +336,7 @@ export default function CarouselProductSectionForm({
                       className="h-7 w-7"
                       onClick={() => setPage(Math.max(1, page - 1))}
                       disabled={page === 1}
+                      aria-label="Halaman sebelumnya"
                     >
                       <ChevronLeft className="h-3 w-3" />
                     </Button>
@@ -355,6 +356,7 @@ export default function CarouselProductSectionForm({
                               size="icon"
                               className="h-7 w-7"
                               onClick={() => setPage(p)}
+                              aria-label={`Halaman ${p}`}
                             >
                               {p}
                             </Button>
@@ -368,6 +370,7 @@ export default function CarouselProductSectionForm({
                       className="h-7 w-7"
                       onClick={() => setPage(Math.min(totalPages, page + 1))}
                       disabled={page === totalPages}
+                      aria-label="Halaman berikutnya"
                     >
                       <ChevronRight className="h-3 w-3" />
                     </Button>

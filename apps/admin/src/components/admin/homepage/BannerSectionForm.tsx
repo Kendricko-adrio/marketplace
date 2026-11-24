@@ -182,6 +182,7 @@ export default function BannerSectionForm({
                       className="h-6 w-6"
                       onClick={() => moveSlide(index, "up")}
                       disabled={index === 0}
+                      aria-label={`Naikkan slide ${index + 1}`}
                     >
                       <ChevronUp className="h-3 w-3" />
                     </Button>
@@ -192,6 +193,7 @@ export default function BannerSectionForm({
                       className="h-6 w-6"
                       onClick={() => moveSlide(index, "down")}
                       disabled={index === slides.length - 1}
+                      aria-label={`Turunkan slide ${index + 1}`}
                     >
                       <ChevronDown className="h-3 w-3" />
                     </Button>
@@ -201,6 +203,7 @@ export default function BannerSectionForm({
                       size="icon"
                       className="h-6 w-6 text-destructive"
                       onClick={() => removeSlide(index)}
+                      aria-label={`Hapus slide ${index + 1}`}
                     >
                       <X className="h-3 w-3" />
                     </Button>
@@ -377,7 +380,7 @@ export default function BannerSectionForm({
               </div>
               <p className="text-xs text-muted-foreground">
                 Tombol CTA akan mengarah ke URL ini. Klik &quot;Buka di Store&quot; untuk
-                pratinjau hasil filter di halaman storefront.
+                pratinjau hasil filter di halaman ADFSport.
               </p>
             </div>
           </div>

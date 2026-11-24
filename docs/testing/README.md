@@ -156,6 +156,22 @@ SEED_MODE=demo npm run db:seed
 
 ### Database test bersama: siapkan sekali, pakai berulang
 
+Untuk menjalankan seluruh unit suite, termasuk `*.db.test.ts`, dari root repo:
+
+```bash
+npm run test:unit:docker
+```
+
+Perintah ini memakai database tes lokal `marketplace_discounts_test_e2e_shared`
+dengan port dan kredensial default dari `docker-compose.yml`. Suite berjalan
+serial karena beberapa fixture mengubah konfigurasi diskon yang sama.
+`DATABASE_URL` hanya diganti untuk proses tes; `.env` dan database
+`storefront` tidak diubah. Perintah ini tidak menyalakan Docker, membuat
+database, atau menjalankan seed. Untuk Docker baru, ikuti setup satu kali
+di bawah. Jika port atau kredensial Docker berbeda dari default, set
+`DATABASE_URL` ke database tes Anda dan jalankan `npm run verify:batch:unit`
+secara langsung.
+
 Membuat database baru untuk setiap sesi tidak perlu. Container dev sudah memuat
 satu database test tetap, `marketplace_discounts_test_e2e_shared`, yang
 **berulang kali dipakai** oleh semua spec mock ber-guard disposable. Alasannya

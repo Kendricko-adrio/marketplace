@@ -127,12 +127,12 @@ export default function ProductCard({
         {(gender || collection) && (
           <div className="mb-3 flex flex-wrap gap-2">
             {gender && (
-              <span className="inline-flex items-center rounded-md bg-blue-500/15 text-blue-700 px-2 py-1 text-xs font-medium">
+              <span className="inline-flex items-center rounded-md bg-secondary text-secondary-foreground px-2 py-1 text-xs font-medium">
                 {gender}
               </span>
             )}
             {collection && (
-              <span className="inline-flex items-center rounded-md bg-amber-500/15 text-amber-700 px-2 py-1 text-xs font-medium">
+              <span className="inline-flex items-center rounded-md border border-border bg-accent/20 text-foreground px-2 py-1 text-xs font-medium">
                 {collection}
               </span>
             )}

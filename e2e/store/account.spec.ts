@@ -5,6 +5,11 @@ import { test, expect } from "@playwright/test";
 test("authenticated customer can open /account", async ({ page }) => {
   await page.goto("/account");
   await expect(
+    page.getByText("Kelola informasi profil anda untuk mengontrol, melindungi dan mengamankan akun.")
+  ).toBeVisible();
+
+  await page.goto("/account?tab=orders");
+  await expect(
     page.getByRole("heading", { name: "Riwayat Pesanan" })
   ).toBeVisible();
 });

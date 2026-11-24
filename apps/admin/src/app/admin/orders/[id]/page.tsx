@@ -530,10 +530,10 @@ export default function AdminOrderDetailPage() {
       </div>
 
       {isDeliveryOrder && (
-        <section aria-label="Langkah berikutnya" className="rounded-lg border border-teal-200 bg-teal-50/60 p-4 text-sm text-slate-900">
+        <section aria-label="Langkah berikutnya" className={`rounded-lg border p-4 text-sm ${getStatusToneClassName("ready")}`}>
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0 space-y-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-teal-800">Langkah berikutnya</h3>
+              <h3 className="text-xs font-semibold uppercase tracking-wider">Langkah berikutnya</h3>
               <p className="font-semibold">{order.workflow?.stage.guidance}</p>
               {order.workflow?.stage.label === "Siapkan barang" && <p>Periksa barang, jumlah, kondisi, dan kemasan sesuai layanan yang dipilih.</p>}
               {order.workflow?.stage.label === "Verifikasi tertunda" && <p>Barang belum dapat diproses karena verifikasi transaksi Jubelio belum selesai. Koordinasikan dengan Jubelio support; jangan meminta pembayaran ulang hanya karena blocker ini. Pemulihan dilakukan sistem, bukan verifikasi manual oleh admin.</p>}
@@ -666,7 +666,7 @@ export default function AdminOrderDetailPage() {
               markable BEFORE a booking exists; the failure blocks the normal
               CTAs (they require the unflagged state). */}
           {deliveryFailed && (
-            <p role="status" className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            <p role="status" className={`mt-3 rounded-lg border p-3 text-sm ${getStatusToneClassName("progress")}`}>
               Tidak dapat dipenuhi: {PACKING_FAILURE_REASON_LABELS[order.deliveryFailureCode ?? ''] ?? 'Kendala packing'}. Pesanan tetap paid; tindak lanjut dan komunikasi dilakukan staf di luar aplikasi.
             </p>
           )}
@@ -725,7 +725,7 @@ export default function AdminOrderDetailPage() {
           )}
 
           {canUseSpecial && order.workflow?.special?.release && shipmentState === "booking_unknown" && (
-            <div className="mt-3 space-y-2 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+            <div className={`mt-3 space-y-2 rounded-lg border p-4 text-sm ${getStatusToneClassName("progress")}`}>
               <p className="font-medium">Booking belum pasti — lepaskan hanya dengan konfirmasi Jubelio.</p>
               <p>Percobaan: {order.shipment?.attemptCount ?? "Belum tersedia"} · Dikirim: {order.shipment?.dispatchedAt ? new Date(order.shipment.dispatchedAt).toLocaleString("id-ID") : "Belum tercatat"}</p>
               <p className="text-xs">
@@ -853,7 +853,7 @@ export default function AdminOrderDetailPage() {
           {/* Ambiguity banner: the booking is uncertain — the repeat CTA is
               withheld entirely (no enabled Pesan pengiriman repeat). */}
           {bookingAmbiguous && (
-            <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            <div className={`mt-3 rounded-lg border p-3 text-sm ${getStatusToneClassName("progress")}`}>
               {order.workflow?.stage.guidance} Tidak ada POST ulang.
             </div>
           )}
@@ -864,7 +864,7 @@ export default function AdminOrderDetailPage() {
           {shipmentState === "booked" && (
             <div className="mt-3 flex flex-wrap items-center gap-2">
               {order.shipment?.handedOverAt ? (
-                <span className="text-sm font-medium text-emerald-700">
+                <span className="text-sm font-medium text-emerald-700 dark:text-emerald-300">
                   Serah terima dicatat: {new Date(order.shipment.handedOverAt).toLocaleString("id-ID")}
                 </span>
               ) : canUseSpecial && order.workflow?.tracking?.handoff && !["PICKED_UP", "ON_DELIVERY", "DELIVERED", "ON_HOLD", "RETURNED", "CANCELED", "SHIPMENT_ISSUE"].includes(order.shipment?.latestStatus ?? "") ? (
@@ -923,7 +923,7 @@ export default function AdminOrderDetailPage() {
                     <span className="text-muted-foreground">{event.statusDetail}</span>
                   )}
                   {!event.applied && (
-                    <span className="text-xs text-amber-700">
+                    <span className="text-xs text-amber-700 dark:text-amber-300">
                       dilewati ({event.ignoredReason ?? "—"})
                     </span>
                   )}
@@ -937,8 +937,8 @@ export default function AdminOrderDetailPage() {
               until ticket 06 verifies the AWB detail — never rendered 0). */}
           <section aria-label="Resi dan tracking" className="mt-3 space-y-2 rounded-lg border p-3 text-sm">
             <h3 className="font-semibold">Resi dan tracking</h3><p>No. AWB: <span className="font-mono font-medium">{order.shipment?.awb ?? "Belum tersedia"}</span></p>
-            <p>Tracking: {order.shipment?.trackingUrl && /^https?:\/\//i.test(order.shipment.trackingUrl) ? <a className="text-teal-800 underline" href={order.shipment.trackingUrl} target="_blank" rel="noopener noreferrer">Lihat tracking kurir</a> : "Belum tersedia"}</p>
-            <p>Bukti penerimaan: {order.shipment?.podUrl && /^https?:\/\//i.test(order.shipment.podUrl) ? <a className="text-teal-800 underline" href={order.shipment.podUrl} target="_blank" rel="noopener noreferrer">Lihat bukti penerimaan</a> : "Belum tersedia"}</p>
+            <p>Tracking: {order.shipment?.trackingUrl && /^https?:\/\//i.test(order.shipment.trackingUrl) ? <a className="text-primary underline" href={order.shipment.trackingUrl} target="_blank" rel="noopener noreferrer">Lihat tracking kurir</a> : "Belum tersedia"}</p>
+            <p>Bukti penerimaan: {order.shipment?.podUrl && /^https?:\/\//i.test(order.shipment.podUrl) ? <a className="text-primary underline" href={order.shipment.podUrl} target="_blank" rel="noopener noreferrer">Lihat bukti penerimaan</a> : "Belum tersedia"}</p>
           </section>
           <section aria-label="Keuangan pengiriman" className="mt-3 space-y-2 rounded-lg border bg-muted/30 p-3 text-sm">
             <h3 className="font-semibold">Keuangan pengiriman</h3>
@@ -967,7 +967,7 @@ export default function AdminOrderDetailPage() {
                       <div
                         className={`flex h-10 w-10 items-center justify-center rounded-full border-2 ${
                           isComplete
-                            ? "border-green-600 bg-green-600 text-white"
+                            ? "border-[var(--status-success-border)] bg-[var(--status-success-bg)] text-[var(--status-success-fg)]"
                             : isCurrent
                             ? "border-primary bg-primary text-primary-foreground"
                             : "border-muted bg-background text-muted-foreground"
@@ -990,7 +990,7 @@ export default function AdminOrderDetailPage() {
                     {i < statusSteps.length - 1 && (
                       <div
                         className={`flex-1 h-0.5 mx-2 ${
-                          isComplete ? "bg-green-600" : "bg-muted"
+                          isComplete ? "bg-[var(--status-success-border)]" : "bg-muted"
                         }`}
                       />
                     )}
@@ -1074,7 +1074,7 @@ export default function AdminOrderDetailPage() {
                         </StatusBadge>
                       </div>
                       {operation.lastError && !isDeliveryOrder && (
-                        <p className="mt-2 text-sm text-red-800">{operation.lastError}</p>
+                        <p className="mt-2 text-sm text-destructive">{operation.lastError}</p>
                       )}
                       <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
                         {operation.id}
@@ -1089,7 +1089,7 @@ export default function AdminOrderDetailPage() {
                         <Button
                           size="sm"
                           variant="outline"
-                          className="mt-2 h-8 border-red-300 bg-white text-red-800 hover:bg-red-100"
+                          className="mt-2 h-8 border-destructive/40 text-destructive hover:bg-destructive/10"
                           disabled={recheckingOperationId === operation.id}
                           onClick={() => handleStockRecheck(operation.id)}
                         >
@@ -1290,7 +1290,7 @@ export default function AdminOrderDetailPage() {
             </span>
           </div>
           {order.fulfillmentBlockedReason && (
-            <div className="rounded-md bg-amber-50 p-3 text-xs text-amber-800 border border-amber-200">
+            <div className={`rounded-md border p-3 text-xs ${getStatusToneClassName("progress")}`}>
               Pengambilan diblokir: {order.fulfillmentBlockedReason}
             </div>
           )}

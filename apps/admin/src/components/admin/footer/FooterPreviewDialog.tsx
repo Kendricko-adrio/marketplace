@@ -33,18 +33,18 @@ export function FooterPreviewDialog({
             Preview Footer
           </DialogTitle>
           <DialogDescription>
-            Tampilan footer pada lebar penuh, mirip layar storefront aktual.
+            Tampilan footer pada lebar penuh, mirip layar ADFSport aktual.
             Link tidak berfungsi di sini — ini hanya pratinjau visual.
           </DialogDescription>
         </DialogHeader>
 
-        {/* Scrollable body: mock storefront page with footer pinned at bottom */}
+        {/* Scrollable body: mock ADFSport page with footer pinned at bottom */}
         <div className="flex-1 overflow-y-auto bg-background">
-          {/* Mock storefront top nav */}
+          {/* Mock ADFSport top nav */}
           <div className="border-b bg-white">
             <div className="container mx-auto flex items-center justify-between px-4 h-16">
               <span className="text-lg font-bold text-primary">
-                {config.brandName || "StoreFront"}
+                {config.brandName || "ADFSport"}
               </span>
               <div className="hidden sm:flex items-center gap-6 text-sm text-muted-foreground">
                 <span>Beranda</span>

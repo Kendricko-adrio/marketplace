@@ -150,6 +150,7 @@ export default function PromoCardsSectionForm({
                   size="icon"
                   className="h-6 w-6 text-destructive"
                   onClick={() => removeCard(card.id)}
+                  aria-label={`Hapus kartu ${index + 1}`}
                 >
                   <Trash2 className="h-3 w-3" />
                 </Button>

@@ -316,6 +316,7 @@ export default function NotificationsPage() {
                               onClick={() => handleMarkRead(n.id)}
                               disabled={actionId === n.id}
                               title="Tandai dibaca"
+                              aria-label={`Tandai notifikasi ${n.title} dibaca`}
                             >
                               {actionId === n.id ? (
                                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -325,32 +326,35 @@ export default function NotificationsPage() {
                             </Button>
                           )}
                           {n.order?.fulfillmentMethod === "delivery" ? (
-                            <Link
-                              href={`/admin/orders/${n.orderId}`}
-                              aria-label={`Buka order ${n.orderId.slice(0, 8).toUpperCase()}`}
+                            <Button
+                              asChild
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
                             >
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8"
+                              <Link
+                                href={`/admin/orders/${n.orderId}`}
                                 title="Buka order"
-                                aria-label="Buka order"
+                                aria-label={`Buka order ${n.orderId.slice(0, 8).toUpperCase()}`}
                               >
                                 <ExternalLink className="h-4 w-4" />
-                              </Button>
-                            </Link>
+                              </Link>
+                            </Button>
                           ) : (
-                            <Link href={`/admin/orders/${n.orderId}?verify=1`}>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8"
+                            <Button
+                              asChild
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8"
+                            >
+                              <Link
+                                href={`/admin/orders/${n.orderId}?verify=1`}
                                 title="Verifikasi pickup"
-                                aria-label="Verifikasi pickup"
+                                aria-label={`Verifikasi pickup ${n.orderId.slice(0, 8).toUpperCase()}`}
                               >
                                 <Send className="h-4 w-4" />
-                              </Button>
-                            </Link>
+                              </Link>
+                            </Button>
                           )}
                           <Button
                             variant="ghost"
@@ -359,6 +363,7 @@ export default function NotificationsPage() {
                             onClick={() => handleDelete(n.id)}
                             disabled={actionId === n.id}
                             title="Hapus"
+                            aria-label={`Hapus notifikasi ${n.title}`}
                           >
                             {actionId === n.id ? (
                               <Loader2 className="h-4 w-4 animate-spin" />

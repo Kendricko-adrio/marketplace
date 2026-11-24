@@ -289,13 +289,14 @@ test.afterAll(async () => {
 test("UI dan template v2 menjelaskan action dan dua contoh nominal/persen", async () => {
   const page = await hqContext.newPage();
   await page.goto("/admin/products/harga");
-  await page.getByRole("button", { name: "Import Excel", exact: true }).click();
-  await page.getByText("Format file", { exact: true }).click();
-  await expect(page.getByText("markdown_v2", { exact: true })).toBeVisible();
-  await expect(page.getByText("set_price:", { exact: true })).toBeVisible();
-  await expect(page.getByText("restore_base:", { exact: true })).toBeVisible();
-  await expect(page.getByText("Template berisi 2 baris contoh.", { exact: false })).toBeVisible();
-  await expect(page.getByText("10 untuk 10%", { exact: false })).toBeVisible();
+  await page.getByRole("tab", { name: "Import Excel", exact: true }).click();
+  await expect(page.getByText("Ganti atau hapus 2 baris contoh di template sebelum unggah.", { exact: false })).toBeVisible();
+  await page.getByRole("button", { name: "Panduan format", exact: true }).click();
+  const guide = page.getByRole("dialog");
+  await expect(guide.getByText("markdown_v2", { exact: true })).toBeVisible();
+  await expect(guide.getByText("set_price", { exact: true }).first()).toBeVisible();
+  await expect(guide.getByText("restore_base", { exact: true })).toBeVisible();
+  await expect(guide.getByText("10 untuk 10%", { exact: false })).toBeVisible();
   await expect(page.locator("main")).not.toContainText(/okcir/i);
   await page.close();
   const response = await hqContext.request.get("/api/admin/price-changes/template");
@@ -335,7 +336,7 @@ test("upload staging, apply parsial, laporan dan subset gagal yang jujur", async
 
   const page = await hqContext.newPage();
   await page.goto("/admin/products/harga");
-  await page.getByRole("button", { name: "Import Excel", exact: true }).click();
+  await page.getByRole("tab", { name: "Import Excel", exact: true }).click();
   await page.getByTestId("excel-file").setInputFiles({
     name: "harga-e2e.xlsx",
     mimeType: XLSX_MIME,
@@ -346,7 +347,7 @@ test("upload staging, apply parsial, laporan dan subset gagal yang jujur", async
   const summary = page.getByTestId("excel-batch-summary");
   await expect(summary).toContainText("7 baris");
   await expect(summary).toContainText("3 gagal");
-  await expect(summary).toContainText("4 pending");
+  await expect(summary).toContainText("4 siap diterapkan");
 
   // STAGING only: the live price is untouched until apply.
   const stagedPrice = await pool.query<{ price: string }>(
@@ -371,7 +372,7 @@ test("upload staging, apply parsial, laporan dan subset gagal yang jujur", async
   await expect(summary).toContainText("2 diterapkan");
   await expect(summary).toContainText("1 tanpa perubahan");
   await expect(summary).toContainText("4 gagal");
-  await expect(summary).toContainText("0 pending");
+  await expect(summary).toContainText("0 siap diterapkan");
   await expect(summary).not.toContainText("Belum final");
   await expect(table).toContainText("VARIANT_NOT_FOUND");
 
@@ -427,7 +428,7 @@ test("koreksi subset gagal menjadi batch baru tertaut, tanpa mengulang baris lam
 
   const page = await hqContext.newPage();
   await page.goto("/admin/products/harga");
-  await page.getByRole("button", { name: "Import Excel", exact: true }).click();
+  await page.getByRole("tab", { name: "Import Excel", exact: true }).click();
   await page.getByTestId("excel-file").setInputFiles({
     name: "harga-e2e.xlsx",
     mimeType: XLSX_MIME,
@@ -454,7 +455,7 @@ test("koreksi subset gagal menjadi batch baru tertaut, tanpa mengulang baris lam
     buffer: correctedFile,
   });
   await page.getByTestId("excel-correction-upload").click();
-  await expect(page.getByTestId("excel-batch-summary")).toContainText("Koreksi tertaut");
+  await expect(page.getByText("Koreksi tertaut", { exact: true })).toBeVisible();
   await page.getByTestId("excel-apply").click();
   await expect(page.getByTestId("excel-batch-summary")).toContainText("1 diterapkan");
 
@@ -538,7 +539,7 @@ test("workbook fatal ditolak sebelum ada batch atau harga berubah", async () => 
 
   const page = await hqContext.newPage();
   await page.goto("/admin/products/harga");
-  await page.getByRole("button", { name: "Import Excel", exact: true }).click();
+  await page.getByRole("tab", { name: "Import Excel", exact: true }).click();
   await page.getByTestId("excel-file").setInputFiles({
     name: "macro.xlsm",
     mimeType: XLSX_MIME,
@@ -547,7 +548,7 @@ test("workbook fatal ditolak sebelum ada batch atau harga berubah", async () => 
   await page.getByTestId("excel-upload").click();
   const fatal = page.getByTestId("excel-fatal");
   await expect(fatal).toContainText("MACRO_UNSUPPORTED");
-  await expect(fatal).toContainText("Tidak ada baris yang di-stage");
+  await expect(fatal).toContainText("Tidak ada harga yang berubah.");
   await page.close();
 
   expect(await batchRowCount()).toBe(batchesBefore);
@@ -564,22 +565,22 @@ test("review v2 menampilkan input persen dan target serta contoh tertinggal tida
   ]));
   const page = await hqContext.newPage();
   await page.goto("/admin/products/harga");
-  await page.getByRole("button", { name: "Import Excel", exact: true }).click();
+  await page.getByRole("tab", { name: "Import Excel", exact: true }).click();
   await page.getByTestId("excel-file").setInputFiles({ name: "persen.xlsx", mimeType: XLSX_MIME, buffer: workbook });
   await page.getByTestId("excel-upload").click();
   const summary = page.getByTestId("excel-batch-summary");
-  await expect(summary).toContainText("1 pending");
+  await expect(summary).toContainText("1 siap diterapkan");
   await expect(summary).toContainText("2 gagal");
   const table = page.getByTestId("excel-row-table");
   const valid = table.getByRole("row").filter({ hasText: SKU_VALID }).first();
-  await expect(valid).toContainText("10% dari source");
+  await expect(valid).toContainText("10% dari harga dasar");
   await expect(valid).toContainText("Rp 270.000");
   await expect(table).toContainText("Ganti SKU contoh");
   await expect(table).toContainText("Isi diskon persen");
   await page.getByTestId("excel-apply").click();
   await expect(summary).toContainText("1 diterapkan");
   await expect(summary).toContainText("2 gagal");
-  await expect(summary).toContainText("0 pending");
+  await expect(summary).toContainText("0 siap diterapkan");
   await page.close();
 });
 

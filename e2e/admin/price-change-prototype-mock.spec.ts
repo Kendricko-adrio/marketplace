@@ -150,32 +150,34 @@ test("UX Harga memisahkan langkah import, memakai tabs konsisten, dan menjaga fi
     await expect(page.getByRole("heading", { name: "Harga SKU", exact: true })).toBeVisible();
     await page.getByTestId("bulk-search").fill("E2E Parity");
     await page.getByTestId("bulk-search").press("Enter");
+    // Saat 0 SKU terpilih, contextual bulk bar belum muncul.
+    await expect(page.getByRole("region", { name: "Aksi SKU terpilih", exact: true })).toBeHidden();
     await page.getByRole("checkbox", { name: `Pilih SKU ${skus[1]}` }).check();
+    await expect(page.getByRole("region", { name: "Aksi SKU terpilih", exact: true })).toBeVisible();
     const tabs = page.getByRole("tablist", { name: "Pengelolaan harga" });
     await expect(tabs).toHaveCSS("border-top-width", "1px");
     await page.screenshot({ path: testInfo.outputPath("prices-desktop.png"), fullPage: true, animations: "disabled" });
     await tabs.getByRole("tab", { name: "Harga coret", exact: true }).focus();
     await page.keyboard.press("ArrowRight");
-    await expect(tabs.getByRole("tab", { name: "Import & batch", exact: true })).toBeFocused();
-    await expect(tabs.getByRole("tab", { name: "Import & batch", exact: true })).toHaveAttribute("aria-selected", "true");
+    await expect(tabs.getByRole("tab", { name: "Import Excel", exact: true })).toBeFocused();
+    await expect(tabs.getByRole("tab", { name: "Import Excel", exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(page.getByRole("table", { name: "Harga coret SKU", exact: true })).toBeHidden();
-    await expect(page.getByRole("region", { name: "1. Siapkan file", exact: true })).toBeVisible();
-    await expect(page.getByRole("form", { name: "2. Unggah untuk review", exact: true })).toBeVisible();
-    await expect(page.getByRole("region", { name: "3. Review & terapkan", exact: true })).toBeVisible();
-    await expect(page.getByText("Upload belum mengubah harga.", { exact: true })).toBeVisible();
+    await expect(page.getByRole("form", { name: "Unggah file Excel", exact: true })).toBeVisible();
+    await expect(page.getByText("Harga belum berubah sebelum Anda klik Terapkan.", { exact: false })).toBeVisible();
     await expect(page.getByText("markdown_v2", { exact: true })).not.toBeVisible();
-    await page.getByText("Format file", { exact: true }).click();
-    await expect(page.getByText("markdown_v2", { exact: true })).toBeVisible();
-    await page.getByText("Format file", { exact: true }).click();
+    await page.getByRole("button", { name: "Panduan format", exact: true }).click();
+    await expect(page.getByRole("dialog").getByText("markdown_v2", { exact: true })).toBeVisible();
+    await page.getByRole("dialog").getByRole("button", { name: "Tutup", exact: true }).click();
     await page.getByTestId("excel-reason").fill("Catatan tetap tersimpan");
     await page.getByTestId("excel-file").setInputFiles({
       name: "harga-review.xlsx",
       mimeType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
       buffer: Buffer.from(buildWorkbookFixture([MARKER_ROW, HEADER_ROW])),
     });
+    await expect(page.getByText("harga-review.xlsx", { exact: true })).toBeVisible();
     await tabs.getByRole("tab", { name: "Harga coret", exact: true }).click();
-    await expect(page.getByTestId("bulk-selection-count")).toHaveText("Terpilih: 1 SKU");
-    await tabs.getByRole("tab", { name: "Import & batch", exact: true }).click();
+    await expect(page.getByTestId("bulk-selection-count")).toHaveText("1 SKU terpilih");
+    await tabs.getByRole("tab", { name: "Import Excel", exact: true }).click();
     await expect(page.getByTestId("excel-reason")).toHaveValue("Catatan tetap tersimpan");
     expect(await page.getByTestId("excel-file").evaluate((input: HTMLInputElement) => input.files?.[0]?.name)).toBe("harga-review.xlsx");
     await page.screenshot({ path: testInfo.outputPath("import-desktop.png"), fullPage: true, animations: "disabled" });
@@ -188,7 +190,7 @@ test("UX Harga memisahkan langkah import, memakai tabs konsisten, dan menjaga fi
   } finally { await page.close(); }
 });
 
-test("harga coret langsung memuat tabel terpadu, target tersimpan, dan target nonaktif lintas halaman", async () => {
+test("harga coret langsung memuat tabel terpadu, target tersimpan, dan target nonaktif lewat filter & banner", async () => {
   const page = await context.newPage();
   await page.goto(`${ADMIN_URL}/admin/products/harga`);
   const table = page.getByRole("table", {
@@ -199,15 +201,14 @@ test("harga coret langsung memuat tabel terpadu, target tersimpan, dan target no
   await expect(
     table.getByRole("columnheader", { name: "Target tersimpan", exact: true }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Ubah manual", exact: true }),
-  ).toBeVisible();
   await expect(page.getByLabel("Target harga website (Rp)")).toBeHidden();
   await expect(page.getByTestId("excel-upload")).toBeHidden();
   await page
     .getByRole("searchbox", { name: "Cari SKU atau nama produk" })
     .fill("E2E Parity");
-  await page.getByRole("button", { name: "Cari SKU", exact: true }).click();
+  await page
+    .getByRole("searchbox", { name: "Cari SKU atau nama produk" })
+    .press("Enter");
   const row = table.getByRole("row").filter({ hasText: skus[0] });
   await expect(
     row.getByRole("cell", { name: "Rp 150.000", exact: true }),
@@ -216,18 +217,16 @@ test("harga coret langsung memuat tabel terpadu, target tersimpan, dan target no
   await expect(
     row.getByRole("button", { name: "Ubah", exact: true }),
   ).toBeVisible();
-  const inactive = page.getByRole("region", {
-    name: "Target nonaktif",
-    exact: true,
-  });
-  await expect(
-    inactive.getByRole("cell", { name: skus[29], exact: true }),
-  ).toBeVisible();
-  await expect(
-    inactive.getByRole("cell", { name: "Rp 200.000", exact: true }),
-  ).toBeVisible();
+  // Banner target nonaktif clickable memfilter tabel utama langsung.
+  await page.getByRole("button", { name: "Lihat", exact: true }).click();
   await expect(
     table.getByRole("cell", { name: skus[29], exact: true }),
+  ).toBeVisible();
+  await expect(
+    table.getByRole("cell", { name: "Rp 200.000", exact: true }),
+  ).toBeVisible();
+  await expect(
+    table.getByRole("cell", { name: skus[0], exact: true }),
   ).toBeHidden();
   expect(
     (
@@ -246,10 +245,8 @@ test("filter harga coret menggabungkan search, setup aktif/nonaktif, pagination,
     const table = page.getByRole("table", { name: "Harga coret SKU", exact: true });
     const filter = page.getByRole("combobox", { name: "Status harga coret", exact: true });
     await expect(filter).toHaveText("Semua");
-    await expect(page.getByTestId("bulk-prev-page")).toHaveText("Previous");
-    await expect(page.getByTestId("bulk-next-page")).toHaveText("Next");
-    await expect(page.getByTestId("inactive-prev-page")).toHaveText("Previous");
-    await expect(page.getByTestId("inactive-next-page")).toHaveText("Next");
+    await expect(page.getByTestId("bulk-prev-page")).toHaveText("Sebelumnya");
+    await expect(page.getByTestId("bulk-next-page")).toHaveText("Berikutnya");
     await page.getByTestId("bulk-search").fill("e2e parity");
     await page.getByTestId("bulk-search").press("Enter");
     await expect(table).toHaveAttribute("aria-busy", "false");
@@ -263,7 +260,7 @@ test("filter harga coret menggabungkan search, setup aktif/nonaktif, pagination,
     await expect(table.getByRole("cell", { name: skus[29], exact: true })).toBeVisible();
     await expect(table).toContainText("Target nonaktif");
     await expect(page.getByText("Halaman 1 dari 1 · 2 SKU", { exact: true })).toBeVisible();
-    await expect(page.getByTestId("bulk-selection-count")).toHaveText("Terpilih: 1 SKU");
+    await expect(page.getByTestId("bulk-selection-count")).toHaveText("1 SKU terpilih");
     await filter.click();
     await page.getByRole("option", { name: "Belum disetup", exact: true }).click();
     await expect(page.getByText("Halaman 1 dari 2 · 28 SKU", { exact: true })).toBeVisible();
@@ -298,16 +295,18 @@ test("aksi dari selection membuka dialog, review kenaikan jujur, hasil dapat dib
   await page
     .getByRole("searchbox", { name: "Cari SKU atau nama produk" })
     .fill(skus[0]);
-  await page.getByRole("button", { name: "Cari SKU", exact: true }).click();
+  await page
+    .getByRole("searchbox", { name: "Cari SKU atau nama produk" })
+    .press("Enter");
   await page.getByRole("checkbox", { name: `Pilih SKU ${skus[0]}` }).check();
   const trigger = page.getByRole("button", {
-    name: "Ubah massal (% dari base)",
+    name: "Diskon (%)",
     exact: true,
   });
   await trigger.click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("Ubah massal harga coret");
-  await page.getByLabel("Diskon (%) dari base").fill("20");
+  await expect(dialog).toContainText("Ubah diskon massal");
+  await page.getByLabel("Diskon (%) dari harga dasar").fill("20");
   await dialog
     .getByRole("button", { name: "Lihat review", exact: true })
     .click();
@@ -334,22 +333,24 @@ test("aksi dari selection membuka dialog, review kenaikan jujur, hasil dapat dib
     .getByRole("row")
     .filter({ hasText: skus[0] });
   await expect(row).toContainText("Rp 240.000");
-  await row.getByRole("button", { name: "Riwayat", exact: true }).click();
-  await expect(dialog).toContainText("Histori harga");
+  await row.getByRole("button", { name: `Aksi lainnya untuk ${skus[0]}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "Riwayat harga", exact: true }).click();
+  await expect(dialog).toContainText("Riwayat harga");
   await expect(dialog).toContainText("Rp 240.000");
   await dialog.getByRole("button", { name: "Tutup", exact: true }).click();
-  await row.getByRole("button", { name: "Restore", exact: true }).click();
-  await expect(dialog).toContainText("Markdown terbaru akan dilepas");
+  await row.getByRole("button", { name: `Aksi lainnya untuk ${skus[0]}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "Hapus harga coret", exact: true }).click();
+  await expect(dialog).toContainText("Harga coret akan dihapus");
   await dialog
     .getByRole("button", { name: "Lihat review", exact: true })
     .click();
-  await expect(dialog).toContainText("melepas Markdown");
+  await expect(dialog).toContainText("hapus harga coret");
   await page.getByTestId("bulk-apply").click();
   await expect(page.getByTestId("bulk-status")).toContainText(
     "1 baris diterapkan.",
   );
   await dialog.getByRole("button", { name: "Tutup", exact: true }).click();
-  await expect(row).toContainText("Tanpa markdown");
+  await expect(row).toContainText("Belum disetup");
   await page.close();
 });
 
@@ -362,11 +363,11 @@ test("selection terpadu, export dan hasil import bertahan saat pindah tampilan",
   await page.getByTestId("bulk-next-page").click();
   await page.getByRole("checkbox", { name: `Pilih SKU ${skus[29]}` }).check();
   await expect(page.getByTestId("bulk-selection-count")).toHaveText(
-    "Terpilih: 2 SKU",
+    "2 SKU terpilih",
   );
-  await page.getByRole("button", { name: "Import Excel", exact: true }).click();
+  await page.getByRole("tab", { name: "Import Excel", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Import harga Excel", exact: true }),
+    page.getByRole("heading", { name: "Import harga dari Excel", exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("table", { name: "Harga coret SKU", exact: true }),
@@ -378,7 +379,7 @@ test("selection terpadu, export dan hasil import bertahan saat pindah tampilan",
   );
   const download = page.waitForEvent("download");
   await page
-    .getByRole("button", { name: "Export terpilih", exact: true })
+    .getByRole("button", { name: "Export Excel", exact: true })
     .click();
   expect((await request).postDataJSON()).toEqual({
     variantIds: [variants[1], variants[29]],
@@ -408,15 +409,15 @@ test("selection terpadu, export dan hasil import bertahan saat pindah tampilan",
     });
   await page.getByTestId("excel-upload").click();
   await expect(page.getByTestId("excel-batch-summary")).toContainText(
-    "1 pending",
+    "1 siap diterapkan",
   );
   await page.getByRole("tab", { name: "Harga coret", exact: true }).click();
   await expect(page.getByTestId("bulk-selection-count")).toHaveText(
-    "Terpilih: 2 SKU",
+    "2 SKU terpilih",
   );
   await page.getByRole("button", { name: "Hasil import", exact: true }).click();
   await expect(page.getByTestId("excel-batch-summary")).toContainText(
-    "1 pending",
+    "1 siap diterapkan",
   );
   await page.getByTestId("excel-apply").click();
   await expect(page.getByTestId("excel-batch-summary")).toContainText(
@@ -430,7 +431,7 @@ test("selection terpadu, export dan hasil import bertahan saat pindah tampilan",
     .filter({ hasText: skus[1] });
   await expect(updated).toContainText("Rp 150.000");
   await page
-    .getByRole("button", { name: "Restore terpilih", exact: true })
+    .getByRole("button", { name: "Hapus harga coret", exact: true })
     .click();
   await expect(page.getByRole("dialog")).toContainText(skus[1]);
   await expect(page.getByRole("dialog")).toContainText(skus[29]);
@@ -442,7 +443,7 @@ test("respons apply hilang: hasil dan request key tetap tersedia tanpa menghapus
   const page = await context.newPage();
   await page.goto(`${ADMIN_URL}/admin/products/harga`);
   await page.getByTestId("bulk-search").fill("E2E Parity");
-  await page.getByRole("button", { name: "Cari SKU", exact: true }).click();
+  await page.getByTestId("bulk-search").press("Enter");
   await page.getByRole("checkbox", { name: `Pilih SKU ${skus[1]}` }).check();
   const row = page
     .getByRole("table", { name: "Harga coret SKU", exact: true })
@@ -462,10 +463,10 @@ test("respons apply hilang: hasil dan request key tetap tersedia tanpa menghapus
   await expect(page.getByRole("dialog").getByRole("alert")).toBeVisible();
   await page.getByRole("button", { name: "Tutup", exact: true }).click();
   await expect(
-    page.getByRole("button", { name: "Ubah manual", exact: true }),
+    page.getByRole("button", { name: "Ubah nominal", exact: true }),
   ).toBeDisabled();
   await page
-    .getByRole("button", { name: "Hasil perubahan", exact: true })
+    .getByRole("button", { name: "Lanjutkan review", exact: true })
     .click();
   await page.unroute("**/price-changes/*/apply");
   const replay = page.waitForRequest(
@@ -479,7 +480,7 @@ test("respons apply hilang: hasil dan request key tetap tersedia tanpa menghapus
   );
   await page.getByRole("button", { name: "Tutup", exact: true }).click();
   await expect(page.getByTestId("bulk-selection-count")).toHaveText(
-    "Terpilih: 1 SKU",
+    "1 SKU terpilih",
   );
   await expect(
     page.getByRole("checkbox", { name: `Pilih SKU ${skus[1]}` }),

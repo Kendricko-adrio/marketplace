@@ -161,6 +161,7 @@ function FieldRow({
           size="icon"
           onClick={onCopy}
           className="shrink-0"
+          aria-label={copied ? "Tersalin" : `Salin ${label}`}
         >
           {copied ? (
             <Check className="h-4 w-4 text-green-600" />

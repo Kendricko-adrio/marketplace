@@ -1,6 +1,7 @@
 "use client";
-import { useCallback, useState, useEffect } from "react";
+import { Suspense, useCallback, useState, useEffect } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Search, Loader2, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/table";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
+import { toStoreUrl } from "@/lib/store-url";
 import {
   Card,
   CardContent,
@@ -38,46 +40,81 @@ interface Product {
 }
 
 export default function AdminProductsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      }
+    >
+      <ProductsList />
+    </Suspense>
+  );
+}
+
+function ProductsList() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const urlSearch = searchParams.get("search") ?? "";
+  const page = Math.max(1, Number(searchParams.get("page") ?? 1) || 1);
+
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [page, setPage] = useState(1);
+  const [error, setError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState(urlSearch);
   const [totalPages, setTotalPages] = useState(1);
 
-  // Debounce the search input so we only hit the DB after the user stops typing.
   useEffect(() => {
-    const handle = setTimeout(() => {
-      setDebouncedSearch(searchTerm.trim());
-    }, 400);
-    return () => clearTimeout(handle);
-  }, [searchTerm]);
+    setSearchTerm(urlSearch);
+  }, [urlSearch]);
 
-  // Reset to the first page whenever the (debounced) search term changes.
+  // Debounce search input and sync to URL searchParams, resetting page to 1.
   useEffect(() => {
-    setPage(1);
-  }, [debouncedSearch]);
+    const trimmed = searchTerm.trim();
+    if (trimmed === urlSearch) return;
+    const handle = setTimeout(() => {
+      const next = new URLSearchParams(searchParams.toString());
+      if (trimmed) next.set("search", trimmed);
+      else next.delete("search");
+      next.delete("page");
+      const qs = next.toString();
+      router.replace(qs ? `/admin/products?${qs}` : "/admin/products");
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [searchTerm, urlSearch, searchParams, router]);
+
+  const setPageInUrl = (nextPage: number) => {
+    const next = new URLSearchParams(searchParams.toString());
+    if (nextPage > 1) next.set("page", String(nextPage));
+    else next.delete("page");
+    const qs = next.toString();
+    router.replace(qs ? `/admin/products?${qs}` : "/admin/products");
+  };
 
   const fetchProducts = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const params = new URLSearchParams({
         page: String(page),
         limit: "10",
       });
-      if (debouncedSearch) params.set("search", debouncedSearch);
+      if (urlSearch) params.set("search", urlSearch);
       const res = await fetch(`/api/admin/products?${params.toString()}`);
       const data = await res.json();
-      if (data.success) {
-        setProducts(data.data);
-        setTotalPages(data.pagination.totalPages);
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Gagal memuat daftar produk.");
       }
-    } catch (error) {
-      console.error("Error fetching products:", error);
+      setProducts(data.data);
+      setTotalPages(Math.max(1, data.pagination.totalPages));
+    } catch {
+      setProducts([]);
+      setError("Gagal memuat daftar produk.");
     } finally {
       setLoading(false);
     }
-  }, [page, debouncedSearch]);
+  }, [page, urlSearch]);
 
   useEffect(() => {
     void fetchProducts();
@@ -116,8 +153,24 @@ export default function AdminProductsPage() {
           </div>
 
           {loading ? (
-            <div className="flex items-center justify-center py-16">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin text-primary" aria-hidden />
+              <span>Memuat produk...</span>
+            </div>
+          ) : error ? (
+            <div
+              role="alert"
+              className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-destructive/40 bg-destructive/10 p-4 text-sm text-destructive"
+            >
+              <span>{error}</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void fetchProducts()}
+              >
+                Coba lagi
+              </Button>
             </div>
           ) : (
             <>
@@ -145,13 +198,14 @@ export default function AdminProductsPage() {
                       filteredProducts.map((product) => (
                         <TableRow key={product.id}>
                           <TableCell className="font-medium">
-                            <Link
-                              href={`/products/${product.slug}`}
+                            <a
+                              href={toStoreUrl(`/products/${product.slug}`)}
                               className="hover:text-primary"
                               target="_blank"
+                              rel="noopener noreferrer"
                             >
                               {product.name}
-                            </Link>
+                            </a>
                           </TableCell>
                           <TableCell>
                             {product.categories.length > 0
@@ -186,11 +240,11 @@ export default function AdminProductsPage() {
                             </StatusBadge>
                           </TableCell>
                           <TableCell className="text-right">
-                            <Link href={`/admin/products/${product.id}`}>
-                              <Button variant="ghost" className="h-8 gap-2">
-                                <Eye className="h-4 w-4" /> Detail
-                              </Button>
-                            </Link>
+                            <Button asChild variant="ghost" className="h-8 gap-2">
+                              <Link href={`/admin/products/${product.id}`}>
+                                <Eye className="h-4 w-4" aria-hidden /> Detail
+                              </Link>
+                            </Button>
                           </TableCell>
                         </TableRow>
                       ))
@@ -204,20 +258,20 @@ export default function AdminProductsPage() {
                   variant="outline"
                   size="sm"
                   disabled={page <= 1}
-                  onClick={() => setPage(page - 1)}
+                  onClick={() => setPageInUrl(page - 1)}
                 >
-                  Previous
+                  Sebelumnya
                 </Button>
                 <span className="text-sm text-muted-foreground">
-                  Page {page} of {totalPages}
+                  Halaman {page} / {totalPages}
                 </span>
                 <Button
                   variant="outline"
                   size="sm"
                   disabled={page >= totalPages}
-                  onClick={() => setPage(page + 1)}
+                  onClick={() => setPageInUrl(page + 1)}
                 >
-                  Next
+                  Berikutnya
                 </Button>
               </div>
             </>

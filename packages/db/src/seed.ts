@@ -33,7 +33,7 @@ function calculateSeedPpn(subtotal: number, ratePercent = 11): number {
   return Number((subtotalCents * rateScaled + denominator - BigInt(1)) / denominator);
 }
 
-// Generates 40 additional products so the storefront /products page has
+// Generates 40 additional products so the ADFSport /products page has
 // enough data (50 total) to exercise its infinite-scroll UI. Produces the
 // same shape as the hand-authored `productsData` entries below; the existing
 // insertion loop (products → categories → variants → images) handles the rest.
@@ -840,7 +840,7 @@ async function seed() {
       },
     ];
 
-    // Append 40 generated products (50 total) so the storefront has enough
+    // Append 40 generated products (50 total) so ADFSport has enough
     // data to exercise the /products infinite-scroll UI. Generated before the
     // brand/gender dimension loop so any new brands/genders they reference
     // are created below.
@@ -1063,7 +1063,7 @@ async function seed() {
     }
 
     // The first seeded product ("AirRunner Pro Running Shoes") intentionally
-    // has NO stock in any branch — the storefront greys out its card
+    // has NO stock in any branch — ADFSport greys out its card
     // (opacity + disabled link, "Stok Habis" badge). Deterministic fixture for
     // the products E2E spec; the product still exists in the DB.
     const noStockProductId = allProductIds[0];
@@ -2055,11 +2055,11 @@ async function seed() {
         title: "Tentang Kami",
         content: `# Tentang Kami
 
-Selamat datang di **StoreFront** — destinasi belanja online terpercaya untuk kebutuhan sehari-hari.
+Selamat datang di **ADFSport** — destinasi belanja online terpercaya untuk kebutuhan sehari-hari.
 
 ## Cerita Kami
 
-StoreFront didirikan pada tahun 2024 dengan misi sederhana: memberikan pengalaman belanja yang **mudah, aman, dan terpercaya** bagi semua orang di Indonesia.
+ADFSport didirikan pada tahun 2024 dengan misi sederhana: memberikan pengalaman belanja yang **mudah, aman, dan terpercaya** bagi semua orang di Indonesia.
 
 Kami percaya bahwa teknologi seharusnya membuat hidup lebih mudah, bukan lebih rumit. Itulah sebabnya kami membangun platform yang fokus pada:
 
@@ -2080,7 +2080,7 @@ Kami percaya bahwa teknologi seharusnya membuat hidup lebih mudah, bukan lebih r
 
 Tim kami terdiri dari profesional yang berpengalaman di bidang e-commerce, teknologi, dan layanan pelanggan. Kami berkomitmen untuk terus berinovasi memberikan yang terbaik untuk Anda.
 
-Terima kasih telah memilih StoreFront. Selamat belanja!`,
+Terima kasih telah memilih ADFSport. Selamat belanja!`,
         isPublished: true,
         displayOrder: 1,
       },
@@ -2097,12 +2097,12 @@ Kami selalu siap membantu Anda. Berikut adalah cara untuk menghubungi kami.
 | Kanal | Detail | Jam Operasional |
 | - | - | - |
 | WhatsApp | 0812-3456-7890 | Senin–Sabtu, 09.00–21.00 WIB |
-| Email | support@storefront.id | Senin–Jumat, 09.00–18.00 WIB |
+| Email | support@adfsport.id | Senin–Jumat, 09.00–18.00 WIB |
 | Live Chat | Tersedia di pojok kanan bawah | 24/7 |
 
 ## Kantor Pusat
 
-**StoreFront HQ**
+**ADFSport HQ**
 
 Jl. Sudirman No. 45, Gambir
 
@@ -2138,7 +2138,7 @@ Dengan mengakses dan menggunakan situs ini, Anda menyetujui syarat dan ketentuan
 
 ## 1. Definisi
 
-- **"Kami"**, **"Toko"** merujuk pada StoreFront.
+- **"Kami"**, **"Toko"** merujuk pada ADFSport.
 - **"Anda"**, **"Pengguna"** merujuk pada pelanggan yang mengakses situs ini.
 - **"Layanan"** merujuk pada platform e-commerce yang disediakan.
 
@@ -2192,7 +2192,7 @@ Ketentuan ini diatur berdasarkan hukum Republik Indonesia.`,
 
 Terakhir diperbarui: 2026
 
-StoreFront menghormati privasi Anda. Kebijakan ini menjelaskan bagaimana kami mengumpulkan, menggunakan, dan melindungi data pribadi Anda.
+ADFSport menghormati privasi Anda. Kebijakan ini menjelaskan bagaimana kami mengumpulkan, menggunakan, dan melindungi data pribadi Anda.
 
 ## Data yang Kami Kumpulkan
 
@@ -2237,9 +2237,9 @@ Kami menerapkan langkah teknis dan organisasi yang wajar untuk melindungi data A
 
 | Hak | Cara Mengajukan |
 | - | - |
-| Akses data | Email ke privacy@storefront.id |
+| Akses data | Email ke privacy@adfsport.id |
 | Koreksi data | Melalui pengaturan akun atau email |
-| Penghapusan akun | Email ke privacy@storefront.id |
+| Penghapusan akun | Email ke privacy@adfsport.id |
 | Penolakan pemasaran | Berhenti berlangganan via email |
 
 ## Cookie
@@ -2252,7 +2252,7 @@ Kebijakan ini dapat diperbarui sewaktu-waktu. Perubahan akan dipublikasikan di h
 
 ## Hubungi Kami
 
-Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan subject **Permintaan Privasi**.`,
+Untuk pertanyaan terkait privasi, hubungi email **privacy@adfsport.id** dengan subject **Permintaan Privasi**.`,
         isPublished: true,
         displayOrder: 4,
       },
@@ -2265,7 +2265,7 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
     await db.insert(schema.footerConfig).values({
       id: generateId(),
       data: {
-        brandName: "StoreFront",
+        brandName: "ADFSport",
         tagline:
           "Belanja aman, nyaman, dan terpercaya. Temukan produk terbaik dengan harga terbaik hanya di sini.",
         columns: [
@@ -2288,21 +2288,21 @@ Untuk pertanyaan terkait privasi, hubungi email **privacy@storefront.id** dengan
             ],
           },
         ],
-        copyrightText: "© 2026 StoreFront. All rights reserved.",
+        copyrightText: "© 2026 ADFSport. All rights reserved.",
         socialMedia: [
           {
             platform: "instagram",
-            url: "https://instagram.com/storefront",
+            url: "https://instagram.com/adfsport",
             enabled: true,
           },
           {
             platform: "facebook",
-            url: "https://facebook.com/storefront",
+            url: "https://facebook.com/adfsport",
             enabled: true,
           },
           {
             platform: "tiktok",
-            url: "https://tiktok.com/@storefront",
+            url: "https://tiktok.com/@adfsport",
             enabled: true,
           },
           {

@@ -1,8 +1,8 @@
 import { test, expect } from "@playwright/test";
 
-// Static pages (CMS markdown) + footer rendering on the storefront.
+// Static pages (CMS markdown) + footer rendering on ADFSport.
 
-test.describe("storefront static pages & footer", () => {
+test.describe("ADFSport static pages & footer", () => {
   test("renders a published static page with title and markdown content", async ({
     page,
   }) => {
@@ -13,7 +13,7 @@ test.describe("storefront static pages & footer", () => {
       page.getByRole("heading", { name: "Tentang Kami" }).first()
     ).toBeVisible();
     // Markdown content is rendered (seeded about page has a paragraph).
-    await expect(page.getByText(/StoreFront/i).first()).toBeVisible();
+    await expect(page.getByText(/ADFSport/i).first()).toBeVisible();
   });
 
   test("renders the footer with brand, columns, and copyright on every page", async ({
@@ -24,9 +24,9 @@ test.describe("storefront static pages & footer", () => {
     const footer = page.locator("footer");
     await expect(footer).toBeVisible();
     // Seeded footer config: brand name + copyright.
-    await expect(footer.getByText("StoreFront").first()).toBeVisible();
+    await expect(footer.getByText("ADFSport").first()).toBeVisible();
     await expect(
-      footer.getByText("© 2026 StoreFront. All rights reserved.")
+      footer.getByText("© 2026 ADFSport. All rights reserved.")
     ).toBeVisible();
     // Footer link columns (Layanan / Bantuan / Katalog) render.
     await expect(footer.getByText("Layanan")).toBeVisible();

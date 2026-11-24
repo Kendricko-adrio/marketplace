@@ -84,8 +84,8 @@ rel="noopener noreferrer">` and internal ones as `<Link>`.
 
 ## Storefront rendering
 
-- `apps/store/src/app/layout.tsx` passes `<FooterWrapper />` as the footer
-  slot of `LayoutWrapper`.
+- `apps/store/src/app/layout.tsx` renders `<FooterWrapper />` directly inside
+  the root Server Component shell (`<Header />`, `<main>`, `<FooterWrapper />`).
 - `FooterWrapper` (`apps/store/src/components/FooterWrapper.tsx`) is an async
   Server Component with `export const dynamic = "force-dynamic"` — it fetches
   the row fresh on every request so admin edits appear immediately (without

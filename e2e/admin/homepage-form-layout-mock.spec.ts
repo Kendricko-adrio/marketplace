@@ -82,7 +82,7 @@ const CARDS = {
   content: { name: "Konten Section" },
   status: {
     name: "Status Section",
-    description: "Section nonaktif tidak tampil di storefront.",
+    description: "Section nonaktif tidak tampil di ADFSport.",
   },
 } as const;
 

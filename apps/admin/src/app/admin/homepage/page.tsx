@@ -355,6 +355,7 @@ function SortableSectionRow({
           variant="ghost"
           size="icon"
           className="h-8 w-8"
+          aria-label={`Edit seksi ${section.title || section.type}`}
           onClick={() => router.push(`/admin/homepage/${section.id}/edit`)}
         >
           <Edit className="h-4 w-4" />
@@ -366,6 +367,7 @@ function SortableSectionRow({
           variant="ghost"
           size="icon"
           className="h-8 w-8 text-destructive hover:text-destructive"
+          aria-label={`Hapus seksi ${section.title || section.type}`}
           onClick={() => onDelete(section.id)}
         >
           <Trash2 className="h-4 w-4" />

@@ -50,19 +50,6 @@ export default async function ProductsPage({
       </Suspense>
 
       <div className="flex-1">
-        <div className="mb-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-4 border-b">
-          <h1 className="text-2xl font-bold">
-            {params.search
-              ? `Hasil pencarian: "${params.search}"`
-              : "Semua Produk"}
-          </h1>
-          <div className="flex items-center gap-4 w-full sm:w-auto">
-            <span className="text-muted-foreground whitespace-nowrap">
-              Menampilkan {products.length} dari {pagination.total} produk
-            </span>
-          </div>
-        </div>
-
         {/* key resets the grid state whenever filters/sort change so the
             accumulated list and pagination start fresh from the new SSR page. */}
         <InfiniteProductGrid
@@ -70,6 +57,11 @@ export default async function ProductsPage({
           initialProducts={products}
           initialPagination={pagination}
           searchParams={params}
+          heading={
+            params.search
+              ? `Hasil pencarian: "${params.search}"`
+              : "Semua Produk"
+          }
         />
       </div>
     </div>

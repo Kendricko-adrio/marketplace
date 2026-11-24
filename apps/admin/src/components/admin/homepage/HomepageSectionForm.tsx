@@ -404,7 +404,7 @@ export default function HomepageSectionForm({
             <h3>Status Section</h3>
           </CardTitle>
           <CardDescription>
-            Section nonaktif tidak tampil di storefront.
+            Section nonaktif tidak tampil di ADFSport.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex items-center gap-3">

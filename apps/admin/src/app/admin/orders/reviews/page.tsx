@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
+import { getStatusToneClassName } from "@marketplace/ui/src/lib/status-styles";
 import {
   Card,
   CardContent,
@@ -146,8 +147,8 @@ export default function SalesReviewQueuePage() {
       </div>
 
       {error && (
-        <Card className="border-red-200 bg-red-50">
-          <CardContent className="flex items-center gap-2 py-3 text-sm text-red-700">
+        <Card className="border-destructive/40 bg-destructive/10">
+          <CardContent className="flex items-center gap-2 py-3 text-sm text-destructive">
             <AlertTriangle className="h-4 w-4" /> {error}
           </CardContent>
         </Card>
@@ -192,7 +193,7 @@ export default function SalesReviewQueuePage() {
                     {formatDate(attempt.expiresAt)}
                   </div>
                   {attempt.failureCode && (
-                    <div className="mt-2 rounded bg-amber-50 p-2 text-xs text-amber-800">
+                    <div className={`mt-2 rounded border p-2 text-xs ${getStatusToneClassName("progress")}`}>
                       Kode kegagalan: {attempt.failureCode}
                     </div>
                   )}
@@ -256,7 +257,7 @@ export default function SalesReviewQueuePage() {
                     </div>
                   </div>
                   {op.lastError && (
-                    <div className="rounded bg-amber-50 p-2 text-xs text-amber-800">
+                    <div className={`rounded border p-2 text-xs ${getStatusToneClassName("progress")}`}>
                       {op.lastError}
                     </div>
                   )}
@@ -314,7 +315,7 @@ export default function SalesReviewQueuePage() {
                     {order.jubelioInvoiceId ?? "—"} · Payment{" "}
                     {order.jubelioPaymentId ?? "—"}
                   </div>
-                  <div className="rounded bg-amber-50 p-2 text-xs text-amber-800">
+                  <div className={`rounded border p-2 text-xs ${getStatusToneClassName("progress")}`}>
                     {order.fulfillmentBlockedReason ??
                       "Settlement belum diverifikasi (invoice/pembayaran belum dikonfirmasi)."}
                   </div>

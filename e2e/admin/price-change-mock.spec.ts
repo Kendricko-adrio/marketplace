@@ -156,7 +156,7 @@ test("HQ stage → review → apply, source tidak berubah dan histori tercatat",
   const page = await hqContext.newPage();
   await page.goto(`${ADMIN_BASE_URL}/admin/products/harga`);
   await page.getByRole("searchbox", { name: "Cari SKU atau nama produk" }).fill("E2E Price Change");
-  await page.getByRole("button", { name: "Cari SKU", exact: true }).click();
+  await page.getByRole("searchbox", { name: "Cari SKU atau nama produk" }).press("Enter");
   const skuRow = page.getByRole("table", { name: "Harga coret SKU", exact: true }).getByRole("row").filter({ hasText: SKU });
   await skuRow.getByRole("button", { name: "Ubah", exact: true }).click();
 
@@ -164,7 +164,7 @@ test("HQ stage → review → apply, source tidak berubah dan histori tercatat",
   await page.getByRole("button", { name: "Lihat review", exact: true }).click();
 
   // Review shows the independent literals, including the impact.
-  await expect(page.getByRole("dialog")).toContainText("Review & hasil perubahan harga");
+  await expect(page.getByRole("dialog")).toContainText("Review perubahan harga");
   await expect(page.getByText("Rp 300.000").first()).toBeVisible();
   await expect(page.getByText("Rp 150.000").first()).toBeVisible();
   await expect(page.getByText(/Turun Rp 150\.000/)).toBeVisible();
@@ -172,8 +172,9 @@ test("HQ stage → review → apply, source tidak berubah dan histori tercatat",
   await page.getByTestId("bulk-apply").click();
   await expect(page.getByTestId("bulk-status")).toContainText("1 baris diterapkan.");
   await page.getByRole("button", { name: "Tutup", exact: true }).click();
-  await skuRow.getByRole("button", { name: "Riwayat", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText("Histori harga");
+  await skuRow.getByRole("button", { name: `Aksi lainnya untuk ${SKU}`, exact: true }).click();
+  await page.getByRole("menuitem", { name: "Riwayat harga", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("Riwayat harga");
   await expect(page.getByRole("cell", { name: "Set", exact: true })).toBeVisible();
 
   const variant = await pool.query<{ price: string }>(

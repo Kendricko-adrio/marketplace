@@ -30,12 +30,12 @@ let homeStatusLabelCounts: Record<string, number> = {};
 let homeStockReviewCount = 0;
 
 const STATUS_LABELS: Record<string, string> = {
-  pending_payment: "Pending Payment",
-  processing: "Processing",
-  ready_for_pickup: "Ready for Pickup",
-  completed: "Completed",
-  cancelled: "Cancelled",
-  failed_payment: "Payment Failed",
+  pending_payment: "Menunggu Pembayaran",
+  processing: "Diproses",
+  ready_for_pickup: "Siap Diambil",
+  completed: "Selesai",
+  cancelled: "Dibatalkan",
+  failed_payment: "Pembayaran Gagal",
 };
 
 test.beforeAll(async () => {
@@ -168,11 +168,11 @@ test.describe("admin orders", () => {
       }
     }
     if (homeStockReviewCount > 0) {
-      await expect(body.getByText("Stock review")).toHaveCount(
+      await expect(body.getByText("Review stok")).toHaveCount(
         homeStockReviewCount
       );
     } else {
-      await expect(body.getByText("Stock review")).toHaveCount(0);
+      await expect(body.getByText("Review stok")).toHaveCount(0);
     }
   });
 

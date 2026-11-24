@@ -5,8 +5,8 @@ import { footerConfigSchema } from "./footer-config";
 describe("footerConfigSchema", () => {
   it("accepts a minimal valid config", () => {
     const parsed = footerConfigSchema.parse({
-      brandName: "StoreFront",
-      copyrightText: "© 2026 StoreFront",
+      brandName: "ADFSport",
+      copyrightText: "© 2026 ADFSport",
     });
     expect(parsed.columns).toEqual([]);
     expect(parsed.socialMedia).toEqual([]);
@@ -20,7 +20,7 @@ describe("footerConfigSchema", () => {
 
   it("rejects an empty copyright", () => {
     expect(() =>
-      footerConfigSchema.parse({ brandName: "StoreFront", copyrightText: "" })
+      footerConfigSchema.parse({ brandName: "ADFSport", copyrightText: "" })
     ).toThrow();
   });
 

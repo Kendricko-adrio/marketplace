@@ -3,7 +3,7 @@ import { relations } from "drizzle-orm";
 import { users } from "./auth";
 
 // Social platforms supported by the footer CMS.
-// Each platform renders with a dedicated icon in the storefront footer.
+// Each platform renders with a dedicated icon in the ADFSport footer.
 export type SocialPlatform =
   | "instagram"
   | "facebook"
@@ -33,7 +33,7 @@ export interface SocialMediaLink {
 }
 
 // Shape of the jsonb `data` column on `footerConfig`.
-// The storefront renders this. Admin edits this via /admin/footer (HQ-only).
+// ADFSport renders this. Admin edits this via /admin/footer (HQ-only).
 export interface FooterConfigData {
   brandName: string;
   tagline: string;
@@ -42,11 +42,11 @@ export interface FooterConfigData {
   socialMedia: SocialMediaLink[];
 }
 
-// Hardcoded fallback used by the storefront when the DB has no footer row
+// Hardcoded fallback used by ADFSport when the DB has no footer row
 // (e.g. before seeding). Identical to the original hardcoded Footer.tsx so
-// the storefront looks the same before/after migration.
+// ADFSport looks the same before/after migration.
 export const DEFAULT_FOOTER_CONFIG: FooterConfigData = {
-  brandName: "StoreFront",
+  brandName: "ADFSport",
   tagline:
     "Belanja aman, nyaman, dan terpercaya. Temukan produk terbaik dengan harga terbaik hanya di sini.",
   columns: [
@@ -69,7 +69,7 @@ export const DEFAULT_FOOTER_CONFIG: FooterConfigData = {
       ],
     },
   ],
-  copyrightText: "Â© 2026 StoreFront. All rights reserved.",
+  copyrightText: "© 2026 ADFSport. All rights reserved.",
   socialMedia: [
     {
       platform: "whatsapp",

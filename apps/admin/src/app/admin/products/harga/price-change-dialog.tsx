@@ -100,14 +100,14 @@ export function PriceChangeDialog(props: Props) {
   const isForm = kind === "manual" || kind === "bulk" || kind === "restore";
   const title =
     kind === "manual"
-      ? "Ubah harga coret manual"
+      ? "Ubah harga coret"
       : kind === "bulk"
-        ? "Ubah massal harga coret"
+        ? "Ubah diskon massal"
         : kind === "restore"
-          ? "Restore harga coret"
+          ? "Hapus harga coret"
           : kind === "history"
-            ? "Histori harga"
-            : "Review & hasil perubahan harga";
+            ? "Riwayat harga"
+            : "Review perubahan harga";
   const accepted = rows.filter(
     (row) =>
       row.preview.warnings.every((warning) => warning === "MARKDOWN_ABSENT") &&
@@ -139,10 +139,10 @@ export function PriceChangeDialog(props: Props) {
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {kind === "history"
-              ? `${history?.sku ?? targets[0]?.sku ?? "SKU"} · histori immutable`
+              ? `${history?.sku ?? targets[0]?.sku ?? "SKU"} · Riwayat perubahan harga`
               : isForm
-                ? `${targets.length} SKU · berlaku untuk seluruh cabang`
-                : "Periksa perubahan sebelum diterapkan. Apply menggunakan base dan Markdown terbaru; target fixed tidak dihitung ulang."}
+                ? `${targets.length} SKU · Berlaku untuk semua cabang`
+                : "Periksa dampak harga sebelum diterapkan. Harga dasar terbaru akan dicek kembali saat penerapan."}
           </DialogDescription>
         </DialogHeader>
         {error && (
@@ -177,8 +177,8 @@ export function PriceChangeDialog(props: Props) {
                 <TableHeader>
                   <TableRow>
                     <TableHead>SKU</TableHead>
-                    <TableHead>Base Jubelio</TableHead>
-                    <TableHead>Website kini</TableHead>
+                    <TableHead>Harga dasar</TableHead>
+                    <TableHead>Harga website</TableHead>
                     <TableHead>Target tersimpan</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -205,11 +205,11 @@ export function PriceChangeDialog(props: Props) {
             {kind === "restore" ? (
               <div className="rounded-md border bg-muted/40 p-3 text-sm">
                 <p>
-                  Markdown terbaru akan dilepas. Harga website kembali mengikuti
-                  base terbaru.
+                  Harga coret akan dihapus dan harga website kembali mengikuti
+                  harga dasar Jubelio.
                 </p>
                 {skipped > 0 && (
-                  <p>
+                  <p className="mt-1 text-muted-foreground">
                     {skipped} SKU tanpa target dilewati; {targets.length} SKU
                     disertakan.
                   </p>
@@ -219,7 +219,7 @@ export function PriceChangeDialog(props: Props) {
               <div className="max-w-md space-y-2">
                 <Label htmlFor={kind === "bulk" ? "percent" : "target"}>
                   {kind === "bulk"
-                    ? "Diskon (%) dari base"
+                    ? "Diskon (%) dari harga dasar"
                     : "Target harga website (Rp)"}
                 </Label>
                 <Input
@@ -241,8 +241,8 @@ export function PriceChangeDialog(props: Props) {
                 />
                 <p className="text-xs text-muted-foreground">
                   {kind === "bulk"
-                    ? "Persentase dihitung dari Base Price, lalu dibekukan menjadi target harga tetap oleh server."
-                    : "Harga akhir tetap harus lebih dari 0 dan di bawah base terbaru. Kenaikan dari harga website kini ditampilkan pada review."}
+                    ? "Diskon dihitung dari harga dasar Jubelio saat ini dan disimpan sebagai target tetap."
+                    : "Harus lebih dari Rp 0 dan di bawah harga dasar Jubelio."}
                 </p>
               </div>
             )}
@@ -313,12 +313,12 @@ export function PriceChangeDialog(props: Props) {
               >
                 <TableHeader>
                   <TableRow>
-                    <TableHead>SKU / variant</TableHead>
-                    <TableHead>Base</TableHead>
-                    <TableHead>Website kini</TableHead>
+                    <TableHead>SKU / Varian</TableHead>
+                    <TableHead>Harga dasar</TableHead>
+                    <TableHead>Harga website</TableHead>
                     <TableHead>Target</TableHead>
                     <TableHead>Dampak</TableHead>
-                    <TableHead>Status / alasan</TableHead>
+                    <TableHead>Status</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -338,7 +338,7 @@ export function PriceChangeDialog(props: Props) {
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         {row.action === "restore_base"
-                          ? "Lepas Markdown"
+                          ? "Hapus harga coret"
                           : rupiah(row.targetUnitPrice)}
                       </TableCell>
                       <TableCell
@@ -362,8 +362,7 @@ export function PriceChangeDialog(props: Props) {
             </div>
             {!applied && (
               <p className="text-sm text-muted-foreground">
-                Stage/review belum mengubah harga. Baris sukses langsung live
-                saat apply, bukan satu transaksi atomik penuh.
+                Harga belum berubah. Saat diterapkan, setiap SKU yang valid akan langsung aktif di toko.
               </p>
             )}
             {applied && (

@@ -52,7 +52,7 @@ test("shows 10/10/3 rows, preserves global summary, and resets search to page 1 
     await expect(rows(page)).toHaveCount(10);
     await expect(page.getByText("Page 1 of 3")).toBeVisible();
     await expect(page.getByRole("button", { name: "Previous" })).toBeDisabled();
-    const summary = page.getByText("Registered customers", { exact: true }).locator("..");
+    const summary = page.getByText("Customer terdaftar", { exact: true }).locator("..");
     const globalSummary = await summary.textContent();
     await page.getByRole("button", { name: "Next", exact: true }).click();
     await expect(page.getByText("Page 2 of 3")).toBeVisible();

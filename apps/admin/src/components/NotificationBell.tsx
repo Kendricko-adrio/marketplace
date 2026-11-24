@@ -68,6 +68,7 @@ export default function NotificationBell() {
               className="h-7 w-7"
               onClick={toggleMute}
               title={isMuted ? "Nyalakan suara" : "Matikan suara"}
+              aria-label={isMuted ? "Nyalakan suara notifikasi" : "Matikan suara notifikasi"}
             >
               {isMuted ? (
                 <BellOff className="h-4 w-4" />
@@ -81,6 +82,7 @@ export default function NotificationBell() {
               className="h-7 w-7"
               onClick={() => markAllRead()}
               title="Tandai semua dibaca"
+              aria-label="Tandai semua notifikasi dibaca"
             >
               <CheckCheck className="h-4 w-4" />
             </Button>
@@ -130,6 +132,7 @@ export default function NotificationBell() {
                     className="h-6 w-6 shrink-0 text-muted-foreground hover:text-destructive"
                     onClick={() => handleDelete(n.id)}
                     disabled={deletingId === n.id}
+                    aria-label={`Hapus notifikasi ${n.title}`}
                   >
                     {deletingId === n.id ? (
                       <Loader2 className="h-3 w-3 animate-spin" />
@@ -144,15 +147,15 @@ export default function NotificationBell() {
         </div>
 
         <div className="border-t p-2">
-          <Link href="/admin/notifications" passHref>
-            <Button
-              variant="ghost"
-              className="w-full justify-center text-xs"
-              onClick={() => setOpen(false)}
-            >
+          <Button
+            asChild
+            variant="ghost"
+            className="w-full justify-center text-xs"
+          >
+            <Link href="/admin/notifications" onClick={() => setOpen(false)}>
               Lihat semua notifikasi
-            </Button>
-          </Link>
+            </Link>
+          </Button>
         </div>
       </PopoverContent>
     </Popover>

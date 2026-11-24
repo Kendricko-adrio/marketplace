@@ -48,7 +48,7 @@ export default function NewBranchPage() {
         <h2 className="text-2xl font-bold tracking-tight">Tambah Cabang</h2>
         <p className="text-muted-foreground text-sm mt-1">
           Lengkapi data cabang dan wilayah pengirimannya. Cabang berstatus
-          aktif langsung tampil di storefront setelah disimpan.
+          aktif langsung tampil di ADFSport setelah disimpan.
         </p>
       </div>
       <BranchForm mode="create" onSubmit={handleSubmit} />

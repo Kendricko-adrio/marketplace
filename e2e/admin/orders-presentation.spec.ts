@@ -35,9 +35,9 @@ test("Orders uses the standard admin table styling without changing Pickup conte
   await expect(row.locator("td").first()).toHaveCSS("padding", referencePadding);
   await row.hover();
   await expect(row).toHaveCSS("background-color", referenceHover);
-  await expect(page.getByRole("columnheader")).toHaveText(["Referensi / tanggal", "Customer", "Asal kirim", "Payment", "Status", "Langkah berikutnya", "Detail"]);
-  await expect(page.getByRole("tab", { name: "Pickup", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByLabel("Status order")).toHaveValue("ready_for_pickup");
+  await expect(page.getByRole("columnheader")).toHaveText(["Referensi / tanggal", "Customer", "Asal kirim", "Pembayaran", "Status", "Langkah berikutnya", "Detail"]);
+  await expect(page.getByRole("tab", { name: "Ambil di Toko", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel("Status pesanan")).toHaveValue("ready_for_pickup");
   await expect(page.getByLabel("Cari pesanan")).toHaveValue("style");
   await expect(page.getByRole("link", { name: "Verifikasi Pickup", exact: true })).toHaveAttribute("href", "/admin/orders/style-order?verify=1&returnTo=%2Fadmin%2Forders%3Ftab%3Dpickup%26status%3Dready_for_pickup%26search%3Dstyle");
   await page.setViewportSize({ width: 390, height: 844 });
@@ -49,7 +49,7 @@ test("Review Jubelio highlights only its own sidebar menu and ordinary order rou
   await page.route("**/api/admin/reviews/sales-operations", (route) => route.fulfill({ json: { success: true, data: { operations: [], blockedOrders: [] } } }));
   await page.route(/\/api\/admin\/orders\/(?:sidebar-fixture|reviews-extra)$/, (route) => route.fulfill({ status: 404, json: { success: false, error: "Order not found" } }));
   await page.goto("/admin/orders");
-  await expect(page.getByRole("heading", { name: "Orders", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Pesanan", exact: true })).toBeVisible();
   const nav = page.getByRole("navigation");
   const orders = nav.getByRole("button", { name: "Pesanan", exact: true });
   const review = nav.getByRole("button", { name: "Review Jubelio", exact: true });

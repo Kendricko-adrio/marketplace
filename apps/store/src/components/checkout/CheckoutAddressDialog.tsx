@@ -149,15 +149,20 @@ function CheckoutRegion({
   triggerRef?: Ref<HTMLButtonElement>;
   onPick: (value: string, postalCode?: string) => void;
 }) {
-  const [options, setOptions] = useState<ShipmentRegion[]>([]);
-  const [error, setError] = useState(false);
+  const [regionState, setRegionState] = useState<{
+    key: string;
+    items: ShipmentRegion[];
+    error: boolean;
+  }>({ key: "", items: [], error: false });
   const [retry, setRetry] = useState(0);
+  const missingParent = index > 0 && !parentId;
+  const currentKey = `${index}:${parentId ?? ""}:${retry}`;
+
   useEffect(() => {
-    const controller = new AbortController();
-    if (index > 0 && !parentId) {
-      setOptions([]);
-      return () => controller.abort();
+    if (missingParent) {
+      return;
     }
+    const controller = new AbortController();
     fetch(
       `/api/shipment/regions?level=${regionLevels[index]}${parentId ? `&parentId=${encodeURIComponent(parentId)}` : ""}`,
       { signal: controller.signal }
@@ -168,15 +173,21 @@ function CheckoutRegion({
       })
       .then((body) => {
         if (!controller.signal.aborted) {
-          setOptions(body.data);
-          setError(false);
+          setRegionState({ key: currentKey, items: body.data, error: false });
         }
       })
       .catch(() => {
-        if (!controller.signal.aborted) setError(true);
+        if (!controller.signal.aborted) {
+          setRegionState({ key: currentKey, items: [], error: true });
+        }
       });
     return () => controller.abort();
-  }, [index, parentId, retry]);
+  }, [index, parentId, missingParent, currentKey]);
+
+  const options =
+    !missingParent && regionState.key === currentKey ? regionState.items : [];
+  const error =
+    !missingParent && regionState.key === currentKey && regionState.error;
   return (
     <div className="space-y-1">
       <Label
@@ -188,7 +199,7 @@ function CheckoutRegion({
       </Label>
       <Select
         value={value}
-        disabled={disabled || (index > 0 && !parentId) || error}
+        disabled={disabled || missingParent || error}
         onValueChange={(id) =>
           onPick(id, options.find((row) => row.id === id)?.postalCode)
         }
@@ -227,52 +238,60 @@ function CheckoutRegion({
   );
 }
 
-export default function CheckoutAddressDialog({
-  open,
+interface CheckoutAddressDialogBodyProps {
+  mode: "create" | "edit";
+  initialAddress: ClientAddressView | null;
+  descriptionId: string;
+  onRecipientNode(node: HTMLInputElement | null): void;
+  onOpenChange(open: boolean): void;
+  onBusyChange(busy: boolean): void;
+  onInFlightChange(inFlight: boolean): void;
+  onSaved(address: ClientAddressView, kind: "created" | "updated"): void;
+}
+
+function CheckoutAddressDialogBody({
   mode,
   initialAddress,
-  triggerElement,
+  descriptionId,
+  onRecipientNode,
   onOpenChange,
   onBusyChange,
+  onInFlightChange,
   onSaved,
-}: CheckoutAddressDialogProps) {
-  const [draft, setDraft] = useState<ClientAddressInput>(emptyDraft);
-  const [requestKey, setRequestKey] = useState(() => crypto.randomUUID());
+}: CheckoutAddressDialogBodyProps) {
+  // Satu sesi buka modal menghasilkan satu key; hanya mount baru (pembukaan
+  // modal berikutnya) yang memulai key baru, bukan retry dari status unknown.
+  const [draft, setDraft] = useState<ClientAddressInput>(() =>
+    mode === "edit" && initialAddress ? draftOf(initialAddress) : emptyDraft()
+  );
+  const [requestKey] = useState(() => crypto.randomUUID());
   const [phase, setPhase] = useState<Phase>("idle");
   const [errors, setErrors] = useState<DraftErrors>({});
   const [summary, setSummary] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const recipientRef = useRef<HTMLInputElement | null>(null);
+  const internalRecipientRef = useRef<HTMLInputElement | null>(null);
   const phoneRef = useRef<HTMLInputElement | null>(null);
   const streetRef = useRef<HTMLInputElement | null>(null);
   const provinceRef = useRef<HTMLButtonElement | null>(null);
-  const previousOpen = useRef(false);
-  const descriptionId = useId();
-
-  // Satu konfirmasi menghasilkan satu key; hanya penutupan sukses/awal modal
-  // yang memulai key baru, bukan retry dari status yang belum pasti.
-  useEffect(() => {
-    if (open && !previousOpen.current) {
-      setDraft(
-        mode === "edit" && initialAddress ? draftOf(initialAddress) : emptyDraft()
-      );
-      setRequestKey(crypto.randomUUID());
-      setPhase("idle");
-      setErrors({});
-      setSummary(null);
-      setNotice(null);
-    }
-    previousOpen.current = open;
-  }, [open, mode, initialAddress]);
 
   const inFlight = phase === "saving" || phase === "checking";
   const unresolved = phase === "unknown";
 
   useEffect(() => {
-    // Hanya dialog yang terbuka boleh menahan langkah berikutnya; setelah
-    // ditutup, status "tidak pasti" tetap terlihat di modal saat dibuka lagi.
-    onBusyChange(open && (inFlight || unresolved));
-  }, [open, inFlight, unresolved, onBusyChange]);
+    onInFlightChange(inFlight);
+    return () => onInFlightChange(false);
+  }, [inFlight, onInFlightChange]);
+
+  useEffect(() => {
+    // Hanya dialog yang terbuka boleh menahan langkah berikutnya.
+    onBusyChange(inFlight || unresolved);
+    return () => onBusyChange(false);
+  }, [inFlight, unresolved, onBusyChange]);
+
+  function setRecipientInputRef(node: HTMLInputElement | null) {
+    internalRecipientRef.current = node;
+    onRecipientNode(node);
+  }
 
   function close() {
     // Saving/checking: close is held (not a rollback). Unknown: close is allowed
@@ -282,7 +301,7 @@ export default function CheckoutAddressDialog({
   }
 
   function focusFirstError(next: DraftErrors) {
-    if (next.recipientName) recipientRef.current?.focus();
+    if (next.recipientName) internalRecipientRef.current?.focus();
     else if (next.phone) phoneRef.current?.focus();
     else if (next.region) provinceRef.current?.focus();
     else if (next.fullAddress) streetRef.current?.focus();
@@ -430,54 +449,24 @@ export default function CheckoutAddressDialog({
             : "Simpan perubahan";
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) {
-          close();
-          return;
-        }
-        onOpenChange(next);
-      }}
-    >
-      <DialogContent
-        closeButtonSize="comfortable"
-        aria-describedby={descriptionId}
-        className="max-h-[90dvh] gap-0 overflow-hidden p-0 sm:max-w-2xl"
-        onEscapeKeyDown={(event) => {
-          if (inFlight) event.preventDefault();
-        }}
-        onInteractOutside={(event) => {
-          if (inFlight) event.preventDefault();
-        }}
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          recipientRef.current?.focus();
-        }}
-        onCloseAutoFocus={(event) => {
-          // Fokus kembali ke tombol pembuka, bukan hilang ke body.
-          event.preventDefault();
-          triggerElement?.focus();
-        }}
-      >
-        <div className="flex max-h-[90dvh] min-h-0 flex-col">
-          <DialogHeader className="p-6 pb-3">
-            <DialogTitle>{title}</DialogTitle>
-            <DialogDescription id={descriptionId}>{description}</DialogDescription>
-          </DialogHeader>
-          {/* Body scrolls; aksi utama tetap terlihat di footer (mobile 390px). */}
-          <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
-            <p className="mb-3 text-xs text-muted-foreground">
-              <span aria-hidden="true">*</span> Wajib diisi
-            </p>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
-                <Label htmlFor="checkout-recipient" required>
-                  Nama Penerima
-                </Label>
-                <Input
-                  id="checkout-recipient"
-                  ref={recipientRef}
+    <div className="flex max-h-[90dvh] min-h-0 flex-col">
+      <DialogHeader className="p-6 pb-3">
+        <DialogTitle>{title}</DialogTitle>
+        <DialogDescription id={descriptionId}>{description}</DialogDescription>
+      </DialogHeader>
+      {/* Body scrolls; aksi utama tetap terlihat di footer (mobile 390px). */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-4">
+        <p className="mb-3 text-xs text-muted-foreground">
+          <span aria-hidden="true">*</span> Wajib diisi
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-2">
+            <Label htmlFor="checkout-recipient" required>
+              Nama Penerima
+            </Label>
+            <Input
+              id="checkout-recipient"
+              ref={setRecipientInputRef}
                   required
                   disabled={disabled}
                   autoComplete="shipping name"
@@ -660,6 +649,70 @@ export default function CheckoutAddressDialog({
             </Button>
           </DialogFooter>
         </div>
+  );
+}
+
+export default function CheckoutAddressDialog({
+  open,
+  mode,
+  initialAddress,
+  triggerElement,
+  onOpenChange,
+  onBusyChange,
+  onSaved,
+}: CheckoutAddressDialogProps) {
+  const recipientRef = useRef<HTMLInputElement | null>(null);
+  const inFlightRef = useRef(false);
+  const descriptionId = useId();
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) {
+          if (inFlightRef.current) return;
+          onOpenChange(false);
+          return;
+        }
+        onOpenChange(next);
+      }}
+    >
+      <DialogContent
+        closeButtonSize="comfortable"
+        aria-describedby={descriptionId}
+        className="max-h-[90dvh] gap-0 overflow-hidden p-0 sm:max-w-2xl"
+        onEscapeKeyDown={(event) => {
+          if (inFlightRef.current) event.preventDefault();
+        }}
+        onInteractOutside={(event) => {
+          if (inFlightRef.current) event.preventDefault();
+        }}
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          recipientRef.current?.focus();
+        }}
+        onCloseAutoFocus={(event) => {
+          // Fokus kembali ke tombol pembuka, bukan hilang ke body.
+          event.preventDefault();
+          triggerElement?.focus();
+        }}
+      >
+        {open ? (
+          <CheckoutAddressDialogBody
+            mode={mode}
+            initialAddress={initialAddress}
+            descriptionId={descriptionId}
+            onRecipientNode={(node) => {
+              recipientRef.current = node;
+            }}
+            onOpenChange={onOpenChange}
+            onBusyChange={onBusyChange}
+            onInFlightChange={(busy) => {
+              inFlightRef.current = busy;
+            }}
+            onSaved={onSaved}
+          />
+        ) : null}
       </DialogContent>
     </Dialog>
   );

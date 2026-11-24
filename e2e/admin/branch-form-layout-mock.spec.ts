@@ -89,7 +89,7 @@ const SECTIONS = [
   {
     name: "Informasi Cabang",
     description:
-      "Nama, kode, alamat, dan koordinat cabang yang tampil di storefront.",
+      "Nama, kode, alamat, dan koordinat cabang yang tampil di ADFSport.",
   },
   {
     name: "Asal Pengiriman",

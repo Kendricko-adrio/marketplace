@@ -365,7 +365,9 @@ export default function OrderDetailPage() {
           {codeFeedback && (
             <span
               className={
-                codeFeedback.ok ? "text-green-700" : "text-destructive"
+                codeFeedback.ok
+                  ? "text-[color:var(--status-success-foreground)]"
+                  : "text-destructive"
               }
             >
               {codeFeedback.message}
@@ -429,7 +431,9 @@ export default function OrderDetailPage() {
           {codeFeedback && (
             <span
               className={
-                codeFeedback.ok ? "text-green-700" : "text-destructive"
+                codeFeedback.ok
+                  ? "text-[color:var(--status-success-foreground)]"
+                  : "text-destructive"
               }
             >
               {codeFeedback.message}
@@ -527,7 +531,11 @@ export default function OrderDetailPage() {
         <p role="status" aria-live="polite" className="text-xs">
           {idFeedback && (
             <span
-              className={idFeedback.ok ? "text-green-700" : "text-destructive"}
+              className={
+                idFeedback.ok
+                  ? "text-[color:var(--status-success-foreground)]"
+                  : "text-destructive"
+              }
             >
               {idFeedback.message}
             </span>
@@ -539,7 +547,7 @@ export default function OrderDetailPage() {
       <Card
         className={
           isBlocked
-            ? "mb-6 border-amber-300 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/50"
+            ? `mb-6 ${getStatusToneClassName("progress")}`
             : "mb-6"
         }
       >
@@ -550,17 +558,13 @@ export default function OrderDetailPage() {
             <StatusIcon className="h-5 w-5" aria-hidden />
           </div>
           <div className="min-w-0 space-y-1">
-            <p
-              className={`text-lg font-semibold ${
-                isBlocked ? "text-amber-900 dark:text-amber-100" : ""
-              }`}
-            >
+            <p className="text-lg font-semibold">
               {isBlocked
                 ? "Pembayaran diterima, pesanan menunggu verifikasi"
                 : statusLabel}
             </p>
             {isBlocked && (
-              <p className="text-sm text-amber-900 dark:text-amber-100">
+              <p className="text-sm">
                 Pembayaran Anda sudah tercatat. Pesanan belum dapat diproses
                 sampai tim kami menyelesaikan verifikasi. Tidak perlu membayar
                 ulang.

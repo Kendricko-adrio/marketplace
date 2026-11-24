@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/select";
 import { InfoHint } from "@/components/ui/info-hint";
 import { ReadOnlyInput } from "@/components/ui/read-only-input";
+import { getStatusToneClassName } from "@marketplace/ui/src/lib/status-styles";
 import {
   AlertCircle,
   ArrowLeft,
@@ -1552,12 +1553,12 @@ export default function CheckoutPage() {
           </Button>
         )}
         {lookupNotice && (
-          <p role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
+          <p role="alert" className={`rounded-lg border p-3 text-sm ${getStatusToneClassName("progress")}`}>
             {lookupNotice}
           </p>
         )}
         {legacyPendingBody && (
-          <div role="alert" className="space-y-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
+          <div role="alert" className={`space-y-3 rounded-lg border p-3 text-sm ${getStatusToneClassName("progress")}`}>
             <p className="font-medium">
               Alamat checkout perlu dipilih ulang. Pilih alamat tersimpan dan periksa kembali pesanan.
             </p>
@@ -1598,7 +1599,7 @@ export default function CheckoutPage() {
 
       <h1 className="text-3xl font-bold mb-6">Checkout</h1>
       {stockAdjustmentMessage && (
-        <p role="alert" className="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium text-amber-900 dark:bg-amber-950/50 dark:text-amber-100">
+        <p role="alert" className={`mb-6 rounded-lg border p-3 text-sm font-medium ${getStatusToneClassName("progress")}`}>
           {stockAdjustmentMessage}
         </p>
       )}
@@ -1696,7 +1697,7 @@ export default function CheckoutPage() {
                 {legacyPendingBody && (
                   <div
                     role="alert"
-                    className="mb-6 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100"
+                    className={`mb-6 rounded-lg border p-4 text-sm ${getStatusToneClassName("progress")}`}
                   >
                     <p className="font-medium">
                       Alamat checkout perlu dipilih ulang. Pilih alamat tersimpan dan
@@ -1748,7 +1749,7 @@ export default function CheckoutPage() {
                 {fulfillmentMethod === "delivery" && (
                   <>
                     {step === 1 && repriceShown && (
-                      <p className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium text-amber-900 dark:bg-amber-950/50 dark:text-amber-100">
+                      <p className={`mb-4 rounded-lg border p-3 text-sm font-medium ${getStatusToneClassName("progress")}`}>
                         {REPRICE_MESSAGE}
                       </p>
                     )}
@@ -2108,11 +2109,11 @@ export default function CheckoutPage() {
           {step === 2 && (
             <Card>
               <CardContent className="p-6">
-                {fulfillmentMethod === "delivery" && repriceShown && <p role="alert" className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium text-amber-900">{REPRICE_MESSAGE}</p>}
+                {fulfillmentMethod === "delivery" && repriceShown && <p role="alert" className={`mb-4 rounded-lg border p-3 text-sm font-medium ${getStatusToneClassName("progress")}`}>{REPRICE_MESSAGE}</p>}
                 {needsRereview && (
-                  <div role="alert" className="mb-4 space-y-2 rounded-lg border border-amber-300 border-l-4 border-l-amber-500 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:border-l-amber-500 dark:bg-amber-950/50">
-                    <p className="font-medium text-amber-900 dark:text-amber-100">Rincian pesanan perlu diperiksa ulang</p>
-                    <p className="text-amber-900/90 dark:text-amber-100/90">
+                  <div role="alert" className={`mb-4 space-y-2 rounded-lg border border-l-4 border-l-[color:var(--status-progress-foreground)] p-3 text-sm ${getStatusToneClassName("progress")}`}>
+                    <p className="font-medium">Rincian pesanan perlu diperiksa ulang</p>
+                    <p className="opacity-90">
                       {promoInvalidation?.message ? `${promoInvalidation.message} ` : ""}
                       Periksa ulang untuk memakai total terbaru sebelum membayar.
                     </p>
@@ -2279,7 +2280,7 @@ export default function CheckoutPage() {
                   {Number(pricing.discount) > 0 && (
                     <div className="flex flex-wrap justify-between gap-x-3 text-sm">
                       <span className="text-muted-foreground">Diskon promo</span>
-                      <span className="text-green-600">
+                      <span className="text-[color:var(--status-success-foreground)]">
                         - Rp {Number(pricing.discount).toLocaleString("id-ID")}
                       </span>
                     </div>
@@ -2301,7 +2302,7 @@ export default function CheckoutPage() {
                   {Number(pricing.shippingSubsidy ?? 0) > 0 && (
                     <div className="flex flex-wrap justify-between gap-x-3 text-sm">
                       <span className="text-muted-foreground">Subsidi ongkir</span>
-                      <span className="text-green-600">
+                      <span className="text-[color:var(--status-success-foreground)]">
                         - Rp {Number(pricing.shippingSubsidy).toLocaleString("id-ID")}
                       </span>
                     </div>
@@ -2322,7 +2323,7 @@ export default function CheckoutPage() {
                     </span>
                   </div>
                   {promoDelta && (
-                    <p role="status" className="text-sm font-medium text-green-700 dark:text-green-400">
+                    <p role="status" className="text-sm font-medium text-[color:var(--status-success-foreground)]">
                       Total turun Rp{promoDelta.amount.toLocaleString("id-ID")} menjadi Rp{promoDelta.total.toLocaleString("id-ID")}.
                     </p>
                   )}
@@ -2377,7 +2378,7 @@ export default function CheckoutPage() {
                   />
                 ) : null}
                 {lookupNotice && (
-                  <p role="alert" className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm font-medium text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-100">
+                  <p role="alert" className={`mb-4 rounded-lg border p-3 text-sm font-medium ${getStatusToneClassName("progress")}`}>
                     {lookupNotice}
                   </p>
                 )}

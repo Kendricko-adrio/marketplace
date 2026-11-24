@@ -34,7 +34,7 @@ export default async function AdminFooterPage() {
       <div>
         <h2 className="text-2xl font-bold tracking-tight">Footer</h2>
         <p className="text-muted-foreground text-sm mt-1">
-          Atur konten footer yang tampil di seluruh halaman storefront. Hanya HQ
+          Atur konten footer yang tampil di seluruh halaman ADFSport. Hanya HQ
           yang dapat mengubah pengaturan ini.
         </p>
       </div>
@@ -44,7 +44,7 @@ export default async function AdminFooterPage() {
           <CardTitle>Konfigurasi Footer</CardTitle>
           <CardDescription>
             Brand, kolom link, social media, dan teks copyright. Perubahan
-            langsung tampil di storefront setelah disimpan.
+            langsung tampil di ADFSport setelah disimpan.
           </CardDescription>
         </CardHeader>
         <CardContent>

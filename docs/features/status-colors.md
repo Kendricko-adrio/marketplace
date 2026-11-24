@@ -1,6 +1,6 @@
 # Warna status semantik (store & admin)
 
-Satu bahasa warna untuk status di storefront dan admin dashboard. Dokumen ini
+Satu bahasa warna untuk status di ADFSport dan admin dashboard. Dokumen ini
 adalah referensi permanen kontraknya: token, mapping domain, aturan fallback,
 komponen, dan cara menambah status baru.
 

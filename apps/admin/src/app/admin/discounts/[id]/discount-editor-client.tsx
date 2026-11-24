@@ -183,6 +183,7 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
     shipping: "0",
   });
   const [confirmState, setConfirmState] = useState<"enabled" | "paused" | "archived" | null>(null);
+  const [confirmReloadOpen, setConfirmReloadOpen] = useState(false);
   const running = useRef(false);
   const reviewTrigger = useRef<HTMLButtonElement>(null);
 
@@ -576,7 +577,10 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
             variant="outline"
             size="sm"
             onClick={() => {
-              if (state.dirty && !window.confirm("Buang input lokal dan muat versi terbaru?")) return;
+              if (state.dirty) {
+                setConfirmReloadOpen(true);
+                return;
+              }
               void load();
             }}
           >
@@ -741,6 +745,19 @@ export function DiscountOfferEditorClient({ offerId }: { offerId: string }) {
         confirmLabel="Ya, lanjutkan"
         onConfirm={() => {
           if (confirmState) return changeState(confirmState);
+        }}
+      />
+
+      <ConfirmDialog
+        open={confirmReloadOpen}
+        onOpenChange={setConfirmReloadOpen}
+        title="Muat ulang versi terbaru?"
+        description="Perubahan yang belum disimpan akan hilang. Lanjutkan memuat versi terbaru?"
+        cancelLabel="Batal"
+        confirmLabel="Muat ulang"
+        onConfirm={() => {
+          setConfirmReloadOpen(false);
+          void load();
         }}
       />
     </div>

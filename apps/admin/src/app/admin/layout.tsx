@@ -1,4 +1,4 @@
-import AdminSidebar from "@/components/AdminSidebar";
+import AdminSidebar, { AdminMobileNavTrigger } from "@/components/AdminSidebar";
 import NotificationBell from "@/components/NotificationBell";
 import { NotificationProvider } from "@/providers/notification-provider";
 import { auth } from "@/lib/auth";
@@ -59,7 +59,8 @@ export default async function AdminLayout({
       <div className="flex min-h-dvh flex-col bg-muted/20 md:h-dvh md:min-h-0 md:flex-row md:overflow-hidden">
         <AdminSidebar />
         <div className="min-w-0 flex-1 flex flex-col transition-all duration-300 ease-in-out pl-0 md:min-h-0">
-          <header className="z-30 flex h-16 shrink-0 items-center border-b bg-background px-6 shadow-sm">
+          <header className="z-30 flex h-16 shrink-0 items-center gap-3 border-b bg-background px-4 md:px-6 shadow-sm">
+            <AdminMobileNavTrigger />
             <h1 className="text-xl font-bold text-foreground">Admin Dashboard</h1>
             <div className="ml-auto flex items-center gap-4">
               <NotificationBell />

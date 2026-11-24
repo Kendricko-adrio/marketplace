@@ -1,17 +1,16 @@
 "use client";
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useState, useEffect } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 import {
   User,
   Package,
+  MapPin,
   LogOut,
-  Camera,
-  Search,
-  Filter,
   Loader2,
   PackageOpen,
 } from "lucide-react";
+import { AddressBookPanel } from "@/components/account/AddressBookPanel";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -21,11 +20,11 @@ import {
   CardDescription,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
+import { getStatusToneClassName } from "@marketplace/ui/src/lib/status-styles";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { useSession, authClient } from "@/lib/auth-client";
+import { useSession, authClient, signOut } from "@/lib/auth-client";
 import type { User as AuthUser } from "@/lib/auth";
 
 interface OrderItem {
@@ -91,13 +90,21 @@ function validatePhone(phone: string): string | null {
   return null;
 }
 
-export default function AccountPage() {
+function AccountContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get("tab");
+  const activeTab =
+    tabParam === "orders"
+      ? "orders"
+      : tabParam === "addresses"
+        ? "addresses"
+        : "profile";
   const { data: session } = useSession();
-  const [activeTab, setActiveTab] = useState("orders");
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ordersRetryKey, setOrdersRetryKey] = useState(0);
 
   // Profile form state
   const [profileName, setProfileName] = useState("");
@@ -177,6 +184,13 @@ export default function AccountPage() {
     }
   }
 
+  async function handleLogout() {
+    await signOut();
+    document.cookie = "client.onboarding=; path=/; max-age=0";
+    router.push("/");
+    router.refresh();
+  }
+
   useEffect(() => {
     if (activeTab !== "orders") return;
 
@@ -188,7 +202,7 @@ export default function AccountPage() {
         const res = await fetch("/api/orders");
         const data = await res.json();
         if (cancelled) return;
-        if (data.success) {
+        if (res.ok && data.success) {
           setOrders(data.data);
         } else {
           setError(data.error || "Gagal memuat pesanan");
@@ -203,7 +217,7 @@ export default function AccountPage() {
     return () => {
       cancelled = true;
     };
-  }, [activeTab]);
+  }, [activeTab, ordersRetryKey]);
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -219,23 +233,11 @@ export default function AccountPage() {
                     {initials}
                   </AvatarFallback>
                 </Avatar>
-                <Button
-                  size="icon"
-                  variant="secondary"
-                  className="absolute bottom-0 right-0 rounded-full h-8 w-8 shadow-sm"
-                >
-                  <Camera className="h-4 w-4" />
-                </Button>
               </div>
               <h2 className="font-bold text-lg">{user?.name ?? "Memuat..."}</h2>
               <p className="text-sm text-muted-foreground">
                 {user?.email ?? ""}
               </p>
-              <div className="mt-4 flex gap-2">
-                <Badge variant="outline" className="bg-background/50">
-                  Member Silver
-                </Badge>
-              </div>
             </CardContent>
           </Card>
 
@@ -243,24 +245,29 @@ export default function AccountPage() {
             <Button
               variant={activeTab === "profile" ? "secondary" : "ghost"}
               className="w-full justify-start gap-3"
-              onClick={() => setActiveTab("profile")}
+              onClick={() => router.replace("/account")}
             >
               <User className="h-4 w-4" /> Profil Saya
             </Button>
             <Button
               variant={activeTab === "orders" ? "secondary" : "ghost"}
               className="w-full justify-start gap-3"
-              onClick={() => setActiveTab("orders")}
+              onClick={() => router.replace("/account?tab=orders")}
             >
               <Package className="h-4 w-4" /> Pesanan Saya
             </Button>
-            <Button variant="ghost" className="w-full justify-start gap-3" onClick={() => router.push("/account/addresses")}>
-              <PackageOpen className="h-4 w-4" /> Buku Alamat
+            <Button
+              variant={activeTab === "addresses" ? "secondary" : "ghost"}
+              className="w-full justify-start gap-3"
+              onClick={() => router.replace("/account?tab=addresses")}
+            >
+              <MapPin className="h-4 w-4" /> Buku Alamat
             </Button>
             <div className="pt-4 mt-4 border-t">
               <Button
                 variant="ghost"
                 className="w-full justify-start gap-3 text-destructive hover:text-destructive hover:bg-destructive/10"
+                onClick={handleLogout}
               >
                 <LogOut className="h-4 w-4" /> Keluar
               </Button>
@@ -270,23 +277,12 @@ export default function AccountPage() {
 
         {/* Main Content */}
         <main className="flex-1">
+          {activeTab === "addresses" && <AddressBookPanel />}
+
           {activeTab === "orders" && (
             <div className="space-y-6">
               <div className="flex items-center justify-between">
                 <h1 className="text-2xl font-bold">Riwayat Pesanan</h1>
-                <div className="flex gap-2">
-                  <div className="relative w-64">
-                    <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      type="search"
-                      placeholder="Cari pesanan..."
-                      className="pl-8"
-                    />
-                  </div>
-                  <Button variant="outline" size="icon">
-                    <Filter className="h-4 w-4" />
-                  </Button>
-                </div>
               </div>
 
               {/* Loading */}
@@ -302,7 +298,7 @@ export default function AccountPage() {
                   <p className="text-muted-foreground">{error}</p>
                   <Button
                     variant="outline"
-                    onClick={() => setActiveTab("orders")}
+                    onClick={() => setOrdersRetryKey((k) => k + 1)}
                   >
                     Coba Lagi
                   </Button>
@@ -412,10 +408,10 @@ export default function AccountPage() {
               <CardContent className="space-y-4">
                 {profileMessage && (
                   <div
-                    className={`text-sm rounded-md px-3 py-2 ${
+                    className={`text-sm rounded-md px-3 py-2 border ${
                       profileMessage.type === "success"
-                        ? "bg-green-50 text-green-700 border border-green-200"
-                        : "bg-destructive/10 text-destructive border border-destructive/20"
+                        ? getStatusToneClassName("success")
+                        : getStatusToneClassName("error")
                     }`}
                   >
                     {profileMessage.text}
@@ -499,5 +495,19 @@ export default function AccountPage() {
         </main>
       </div>
     </div>
+  );
+}
+
+export default function AccountPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="container mx-auto px-4 py-8 text-muted-foreground">
+          Memuat...
+        </div>
+      }
+    >
+      <AccountContent />
+    </Suspense>
   );
 }

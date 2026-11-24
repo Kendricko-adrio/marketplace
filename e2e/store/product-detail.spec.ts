@@ -8,8 +8,11 @@ test.describe("storefront product detail", () => {
     page,
   }) => {
     // Seeded product with brand/gender/collection/season/articleNumber/category.
-    await page.goto("/products/classic-leather-oxford-formal");
+    const response = await page.goto("/products/classic-leather-oxford-formal");
+    expect(response?.status()).toBe(200);
     await page.waitForLoadState("networkidle");
+
+    await expect(page).toHaveTitle(/Classic Leather Oxford.*\| ADF Sports/i);
 
     // Title + price (net) + RRP strikethrough + discount badge.
     await expect(

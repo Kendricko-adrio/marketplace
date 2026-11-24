@@ -1,6 +1,6 @@
 # Marketplace Monorepo
 
-Monorepo marketplace dengan storefront pelanggan, admin dashboard, dan
+Monorepo marketplace dengan aplikasi ADFSport pelanggan, admin dashboard, dan
 shared packages, dikelola menggunakan npm workspaces.
 
 ## Tech Stack
@@ -16,7 +16,7 @@ shared packages, dikelola menggunakan npm workspaces.
 
 | Path | Role |
 |---|---|
-| `apps/store` | Storefront, http://localhost:3000 |
+| `apps/store` | ADFSport, http://localhost:3000 |
 | `apps/admin` | Admin dashboard, http://localhost:3001 |
 | `packages/db` | 🏛️ Shared schema owner (`@marketplace/db`) |
 | `packages/ui` | Shared UI components |
@@ -28,7 +28,7 @@ shared packages, dikelola menggunakan npm workspaces.
 3. `npm install` — installs workspace deps (hoists to root)
 4. `npm run db:push` — pushes schema to DB (runs in packages/db)
 5. `npm run db:seed` — seeds sample data (runs in packages/db)
-6. `npm run dev:store` — storefront on http://localhost:3000
+6. `npm run dev:store` — ADFSport on http://localhost:3000
 7. `npm run dev:admin` — admin on http://localhost:3001
 
 Commands development mendukung Windows dan Linux dengan **Node.js 24 LTS + npm**,

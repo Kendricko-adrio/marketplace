@@ -233,7 +233,7 @@ export default function BranchForm({
         <CardHeader>
           <CardTitle><h3>Informasi Cabang</h3></CardTitle>
           <CardDescription>
-            Nama, kode, alamat, dan koordinat cabang yang tampil di storefront.
+            Nama, kode, alamat, dan koordinat cabang yang tampil di ADFSport.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2">

@@ -2,14 +2,14 @@
 
 ## 1. Project Overview & Architecture
 
-**Marketplace** is an e-commerce monorepo: a storefront for customers, an
+**Marketplace** is an e-commerce monorepo: the ADFSport web app for customers, an
 admin dashboard for operations, and a shared database package, managed with npm
 workspaces. Products, stock, and branch data are synced from **Jubelio**
 (master-data API, see `docs/features/jubelio-sync.md`).
 
 | Path | Role |
 |---|---|
-| `apps/store` | Storefront (customers) — http://localhost:3000 |
+| `apps/store` | ADFSport (customers) — http://localhost:3000 |
 | `apps/admin` | Admin dashboard (ops) — http://localhost:3001 |
 | `packages/db` | 🏛️ Shared schema owner (`@marketplace/db`) |
 | `.scratch/<feature>/` | Workflow artifacts: research, plans, wayfinding, tickets + per-feature `index.md` |
@@ -42,7 +42,7 @@ Run all `db:*` scripts from the **root** (they `cd` into `packages/db`).
 3. `npm install` — installs workspace deps (hoisted to root)
 4. `npm run db:push` — apply schema
 5. `npm run db:seed` — seed sample data
-6. `npm run dev:store` — storefront on http://localhost:3000
+6. `npm run dev:store` — ADFSport on http://localhost:3000
 7. `npm run dev:admin` — admin on http://localhost:3001
 
 ### Common scripts
@@ -478,6 +478,6 @@ store client. Reusing the admin session in the store would violate that boundary
 **Example — asking with context:** "The new stock display needs a source of
 truth. The schema is owned by `packages/db/src/schema/`, and the apps consume it
 (see [`docs/architecture/database.md`](docs/architecture/database.md)). Should
-the storefront show stock per branch (more precise, more UI complexity) or an
+ADFSport show stock per branch (more precise, more UI complexity) or an
 aggregate across branches (simpler, hides branch availability)? I recommend per
 branch if customers choose a pickup location; which behavior do you want?"

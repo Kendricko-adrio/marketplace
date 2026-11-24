@@ -10,30 +10,30 @@ export default async function CustomersPage() {
 
   const summary = [
     {
-      label: "Registered customers",
+      label: "Customer terdaftar",
       value: registered,
       icon: UsersRound,
-      tone: "bg-sky-50 text-sky-700",
+      tone: "bg-primary/10 text-primary",
     },
     {
-      label: "Onboarding completed",
+      label: "Onboarding selesai",
       value: onboarded,
       icon: CheckCircle2,
       tone: getStatusToneClassName(getStatusTone("onboarding", "completed")),
       statusTone: getStatusTone("onboarding", "completed"),
     },
     {
-      label: "Pending onboarding",
+      label: "Menunggu onboarding",
       value: pending,
       icon: Clock3,
       tone: getStatusToneClassName(getStatusTone("onboarding", "pending")),
       statusTone: getStatusTone("onboarding", "pending"),
     },
     {
-      label: "Total orders",
+      label: "Total pesanan",
       value: totalOrders,
       icon: ShoppingBag,
-      tone: "bg-violet-50 text-violet-700",
+      tone: getStatusToneClassName("info"),
     },
   ];
 
@@ -41,12 +41,12 @@ export default async function CustomersPage() {
     <div className="space-y-7">
       <div>
         <p className="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-primary">
-          Customer directory
+          Direktori customer
         </p>
         <h2 className="text-3xl font-bold tracking-tight">Customer</h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          View every customer registered on the storefront and open their
-          purchase history.
+          Lihat seluruh customer terdaftar di ADFSport dan buka riwayat
+          pembelian mereka.
         </p>
       </div>
 

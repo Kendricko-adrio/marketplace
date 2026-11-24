@@ -7,6 +7,7 @@ import { ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { sanitizeProductHtml } from "@marketplace/ui";
 import { getStatusTone } from "@marketplace/ui/src/lib/status-presentation";
 import {
   Card,
@@ -138,11 +139,11 @@ export default function ProductDetailPage() {
   if (!product) {
     return (
       <div className="space-y-4">
-        <Link href="/admin/products">
-          <Button variant="ghost" className="gap-2">
-            <ArrowLeft className="h-4 w-4" /> Kembali
-          </Button>
-        </Link>
+        <Button asChild variant="ghost" className="gap-2">
+          <Link href="/admin/products">
+            <ArrowLeft className="h-4 w-4" aria-hidden /> Kembali
+          </Link>
+        </Button>
         <p className="text-muted-foreground">Produk tidak ditemukan.</p>
       </div>
     );
@@ -159,11 +160,11 @@ export default function ProductDetailPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
-        <Link href="/admin/products">
-          <Button variant="ghost" className="gap-2">
-            <ArrowLeft className="h-4 w-4" /> Kembali
-          </Button>
-        </Link>
+        <Button asChild variant="ghost" className="gap-2">
+          <Link href="/admin/products">
+            <ArrowLeft className="h-4 w-4" aria-hidden /> Kembali
+          </Link>
+        </Button>
         {product.jubelioItemGroupId && (
           <Button onClick={handleSync} disabled={syncing} className="gap-2">
             {syncing ? (
@@ -240,7 +241,9 @@ export default function ProductDetailPage() {
                 <span className="text-muted-foreground">Deskripsi:</span>
                 <div
                   className="prose prose-sm mt-1 max-w-none text-foreground"
-                  dangerouslySetInnerHTML={{ __html: product.description }}
+                  dangerouslySetInnerHTML={{
+                    __html: sanitizeProductHtml(product.description),
+                  }}
                 />
               </div>
             )}
